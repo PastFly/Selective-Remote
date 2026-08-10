@@ -187,6 +187,10 @@ struct ContentView: View {
                     Image(systemName: "paintpalette")
                 }
                 .buttonStyle(.borderless)
+                // This is an auxiliary mouse action, not the primary action of
+                // the window. Excluding it from the key-view loop prevents
+                // macOS from painting it as selected immediately after launch.
+                .focusable(false)
                 .help("Оформление приложения и терминала")
                 .popover(isPresented: $showsAppearanceSettings, arrowEdge: .top) {
                     TerminalAppearanceView(

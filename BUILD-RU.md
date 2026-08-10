@@ -1,13 +1,13 @@
-# Сборка Selective Remote 0.17.2
+# Сборка Selective Remote 0.17.3
 
 Архив с исходниками создаёт отдельный каталог
-`SelectiveRemote-0.17.2-source-public-v9.6`, не затрагивая прежние
+`SelectiveRemote-0.17.3-source-public-v9.7`, не затрагивая прежние
 распаковки.
 
 ```bash
 cd ~/Downloads
-unzip -q SelectiveRemote-0.17.2-source-public-v9.6.zip
-cd SelectiveRemote-0.17.2-source-public-v9.6
+unzip -q SelectiveRemote-0.17.3-source-public-v9.7.zip
+cd SelectiveRemote-0.17.3-source-public-v9.7
 ./scripts/build_and_install.sh
 ```
 
@@ -17,8 +17,8 @@ cd SelectiveRemote-0.17.2-source-public-v9.6
 После успешной сборки будут созданы:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.2-arm64.dmg` на Apple Silicon;
-- `dist/SelectiveRemote-0.17.2-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.17.3-arm64.dmg` на Apple Silicon;
+- `dist/SelectiveRemote-0.17.3-arm64.dmg.sha256`.
 
 Откройте DMG и перетащите **Selective Remote** в `Applications`.
 Пакет, интерфейс и системные диалоги используют одно имя — **Selective Remote**.
