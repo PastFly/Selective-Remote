@@ -15,7 +15,7 @@ README, `.gitignore` и MIT License уже находятся в проекте.
 пустого репозитория выполните в Terminal:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.3-source-public-v9.7
+cd ~/Downloads/SelectiveRemote-0.17.3-source-public-v9.8
 git init
 git add .
 git commit -m "Initial public release"

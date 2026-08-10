@@ -12,6 +12,19 @@
 https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
 ```
 
+Добавьте в начало `CHANGELOG.md` раздел с точным публичным номером:
+
+```markdown
+## 0.17.3
+
+- первое изменение;
+- второе изменение.
+```
+
+Workflow извлекает этот раздел через `scripts/release_notes.py` и использует
+его как описание GitHub Release. При отсутствующем или пустом разделе выпуск
+будет остановлен до публикации.
+
 ## 2. Commit и тег
 
 После успешного CI создайте тег на том же commit:
@@ -32,6 +45,14 @@ git push origin v0.17.3
 тег и запустите workflow. ARM64 runner установит зависимости, выполнит все
 проверки `build_app.sh`, соберёт DMG и SHA-256, создаст отдельный стабильный
 Release и отметит его **Latest**. Существующий Release workflow не перезаписывает.
+
+Если DMG уже опубликован, но описание старого Release осталось пустым, его
+можно заполнить без пересборки приложения:
+
+```bash
+python3 scripts/release_notes.py 0.17.3 > /tmp/selective-remote-notes.md
+gh release edit v0.17.3 --notes-file /tmp/selective-remote-notes.md
+```
 
 Пока Apple Secrets не настроены, создаётся ad-hoc подписанная preview-сборка:
 её можно скачать одним DMG, но первый запуск нужно подтвердить в настройках

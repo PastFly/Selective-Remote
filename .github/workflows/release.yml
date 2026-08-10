@@ -144,9 +144,15 @@ jobs:
             echo "Release $TAG already exists. Increase VERSION and publish a new tag." >&2
             exit 1
           fi
+          notes="$RUNNER_TEMP/release-notes.md"
+          python3 scripts/release_notes.py "${TAG#v}" > "$notes"
+          if [[ ! -s "$notes" ]]; then
+            echo "Release notes for $TAG are empty." >&2
+            exit 1
+          fi
           gh release create "$TAG" "${dmgs[0]}" "${hashes[0]}" \
             --verify-tag \
             --title "Selective Remote ${TAG#v}" \
-            --generate-notes \
+            --notes-file "$notes" \
             --fail-on-no-commits \
             --latest
