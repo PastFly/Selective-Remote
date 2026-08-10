@@ -1,6 +1,6 @@
 # Selective Remote
 
-[![CI](https://github.com/LeonidKadaev/Selective-Remote/actions/workflows/ci.yml/badge.svg)](https://github.com/LeonidKadaev/Selective-Remote/actions/workflows/ci.yml)
+[![CI](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml/badge.svg)](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](https://support.apple.com/macos)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -25,7 +25,7 @@ SSH-терминал, двухпанельный SFTP и SSH-туннели в �
 
 ```bash
 brew install freerdp sdl3
-git clone https://github.com/LeonidKadaev/Selective-Remote.git
+git clone https://github.com/PastFly/Selective-Remote.git
 cd Selective-Remote
 ./scripts/build_and_install.sh
 ```

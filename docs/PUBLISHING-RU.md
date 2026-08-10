@@ -20,7 +20,7 @@ git init
 git add .
 git commit -m "Initial public release"
 git branch -M main
-git remote add origin https://github.com/LeonidKadaev/Selective-Remote.git
+git remote add origin https://github.com/PastFly/Selective-Remote.git
 git push -u origin main
 ```
 
