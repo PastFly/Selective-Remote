@@ -121,6 +121,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var pageReady = false
         private var pendingBase64: [String] = []
         private var writeInFlight = false
+        private var navigationGeneration = 0
 
         init(
             session: TerminalSessionModel,
@@ -219,6 +220,22 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             webView.evaluateJavaScript("window.selectiveTerminalFocus?.()")
         }
 
+        func webView(
+            _ webView: WKWebView,
+            didStartProvisionalNavigation navigation: WKNavigation!
+        ) {
+            // Reloading the internal WebView must not require reconnecting SSH.
+            // Reattach the observer so TerminalSessionModel replays its retained
+            // ANSI stream into the new xterm.js page after navigation finishes.
+            navigationGeneration += 1
+            pageReady = false
+            writeInFlight = false
+            appliedHistoryVisibility = nil
+            pendingBase64.removeAll(keepingCapacity: true)
+            detachObserver()
+            observeSession()
+        }
+
         private func observeSession() {
             guard let session else { return }
             observerID = session.addOutputObserver { [weak self] data in
@@ -258,12 +275,15 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             else { return }
 
             let base64 = pendingBase64.removeFirst()
+            let generation = navigationGeneration
             writeInFlight = true
             webView.evaluateJavaScript(
                 "window.selectiveTerminalWriteBase64?.('\(base64)')"
             ) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self,
+                          self.navigationGeneration == generation
+                    else { return }
                     self.writeInFlight = false
                     self.drainOutputQueue()
                 }

@@ -186,19 +186,49 @@ func terminalIncludesHistoryInterface() throws {
         contentsOf: resources.appendingPathComponent("terminal-host.js"),
         encoding: .utf8
     )
+    let catalog = try String(
+        contentsOf: resources.appendingPathComponent("terminal-command-catalog.js"),
+        encoding: .utf8
+    )
 
     #expect(html.contains("id=\"terminal-suggestions\""))
     #expect(html.contains("id=\"terminal-history\""))
     #expect(html.contains("id=\"history-query\""))
     #expect(html.contains("data-section=\"catalog\""))
+    #expect(html.contains("terminal-command-catalog.js"))
     #expect(script.contains("selectiveTerminalSetHistory"))
     #expect(script.contains("isAlternateScreen"))
     #expect(script.contains("outputContainsEchoedCommand"))
     #expect(script.contains("outputEndsInShellPrompt"))
     #expect(script.contains("alternateScreenWasActive"))
-    #expect(script.contains("sudo systemctl restart "))
-    #expect(script.contains("nano /etc/ssh/sshd_config"))
     #expect(script.contains("matchingCatalog"))
+    #expect(catalog.contains("sudo systemctl restart "))
+    #expect(catalog.contains("nano /etc/ssh/sshd_config"))
+    #expect(catalog.contains("kubectl rollout restart deployment/"))
+    #expect(catalog.contains("docker compose logs --tail 100 -f"))
+    #expect(catalog.components(separatedBy: "],").count >= 200)
+}
+
+@Test("Перезагрузка WebView повторно выводит активную SSH-сессию")
+func terminalReloadReplaysActiveSession() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let sourceURL = projectRoot
+        .appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift")
+    let source = try String(contentsOf: sourceURL, encoding: .utf8)
+    let sessionURL = projectRoot
+        .appendingPathComponent("Sources/SelectiveRemote/PTYSession.swift")
+    let sessionSource = try String(contentsOf: sessionURL, encoding: .utf8)
+
+    #expect(source.contains("didStartProvisionalNavigation"))
+    #expect(source.contains("navigationGeneration"))
+    #expect(source.contains("detachObserver()"))
+    #expect(source.contains("observeSession()"))
+    #expect(source.contains("TerminalSessionModel replays its retained"))
+    #expect(sessionSource.contains("observer(Data(\"\\u{001B}c\".utf8))"))
+    #expect(sessionSource.contains("observer(replayBuffer)"))
 }
 
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")

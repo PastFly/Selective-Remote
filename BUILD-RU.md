@@ -1,13 +1,13 @@
-# Сборка Selective Remote 0.17.5
+# Сборка Selective Remote 0.17.6
 
 Архив с исходниками создаёт отдельный каталог
-`SelectiveRemote-0.17.5-source-public`, не затрагивая прежние
+`SelectiveRemote-0.17.6-source-public`, не затрагивая прежние
 распаковки.
 
 ```bash
 cd ~/Downloads
-unzip -q SelectiveRemote-0.17.5-source-public.zip
-cd SelectiveRemote-0.17.5-source-public
+unzip -q SelectiveRemote-0.17.6-source-public.zip
+cd SelectiveRemote-0.17.6-source-public
 ./scripts/build_and_install.sh
 ```
 
@@ -17,8 +17,8 @@ cd SelectiveRemote-0.17.5-source-public
 После успешной сборки будут созданы:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.5-arm64.dmg` на Apple Silicon;
-- `dist/SelectiveRemote-0.17.5-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.17.6-arm64.dmg` на Apple Silicon;
+- `dist/SelectiveRemote-0.17.6-arm64.dmg.sha256`.
 
 Откройте DMG и перетащите **Selective Remote** в `Applications`.
 Пакет, интерфейс и системные диалоги используют одно имя — **Selective Remote**.
@@ -58,12 +58,14 @@ cd SelectiveRemote-0.17.5-source-public
    Убедитесь, что введённый пароль в истории отсутствует.
 6. Откройте и закройте `nano` или `vim`: внутри программы подсказки не должны
    перекрывать управление, а после выхода должны снова работать.
-7. Для нового ключа нажмите **Создать ключ…**, выберите Ed25519 или RSA 4096,
+7. Вызовите **Reload** для внутренней страницы терминала: экран и приглашение
+   активной SSH-сессии должны восстановиться без отключения.
+8. Для нового ключа нажмите **Создать ключ…**, выберите Ed25519 или RSA 4096,
    путь и введите passphrase в отдельном встроенном терминале. Основную
    SSH-сессию завершать не требуется.
-8. Выберите созданный ключ и нажмите **Установить на сервер**. Введите текущий
+9. Выберите созданный ключ и нажмите **Установить на сервер**. Введите текущий
    пароль сервера, затем переподключитесь по ключу.
-9. Для SFTP и forwarding выберите ключ в профиле. Если системный `ssh-agent`
+10. Для SFTP и forwarding выберите ключ в профиле. Если системный `ssh-agent`
    недоступен приложению из Finder, Selective Remote автоматически создаст
    собственный агент и покажет безопасный запрос passphrase.
 

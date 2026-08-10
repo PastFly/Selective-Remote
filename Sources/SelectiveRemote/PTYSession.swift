@@ -308,6 +308,7 @@ final class TerminalSessionModel: ObservableObject {
         let id = UUID()
         outputObservers[id] = observer
         if !replayBuffer.isEmpty {
+            observer(Data("\u{001B}c".utf8))
             observer(replayBuffer)
         }
         return id

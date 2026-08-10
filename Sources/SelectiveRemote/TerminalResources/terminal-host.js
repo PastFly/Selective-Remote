@@ -56,46 +56,8 @@
     terminal.loadAddon(fitAddon);
     terminal.open(terminalHost);
 
-    const builtInCommandCatalog = [
-        { command: "sudo systemctl status ", description: "Показать состояние службы", category: "Службы", keywords: "service состояние статус" },
-        { command: "sudo systemctl restart ", description: "Перезапустить службу", category: "Службы", keywords: "service рестарт перезапуск" },
-        { command: "sudo systemctl start ", description: "Запустить службу", category: "Службы", keywords: "service запуск" },
-        { command: "sudo systemctl stop ", description: "Остановить службу", category: "Службы", keywords: "service остановка" },
-        { command: "sudo systemctl enable --now ", description: "Включить автозапуск и запустить службу", category: "Службы", keywords: "service автозапуск" },
-        { command: "sudo systemctl daemon-reload", description: "Перечитать unit-файлы systemd", category: "Службы", keywords: "systemd units reload" },
-        { command: "journalctl -u  -n 100 --no-pager", description: "Последние записи журнала службы", category: "Журналы", keywords: "service logs логи журнал" },
-        { command: "journalctl -u  -f", description: "Следить за журналом службы", category: "Журналы", keywords: "service logs follow логи" },
-        { command: "journalctl -p err -b --no-pager", description: "Ошибки с момента загрузки", category: "Журналы", keywords: "errors ошибки boot" },
-        { command: "tail -f /var/log/", description: "Следить за файлом журнала", category: "Журналы", keywords: "logs логи файл" },
-        { command: "sudo apt update", description: "Обновить индекс пакетов", category: "Пакеты", keywords: "debian ubuntu пакеты" },
-        { command: "sudo apt upgrade", description: "Установить доступные обновления", category: "Пакеты", keywords: "debian ubuntu обновить" },
-        { command: "sudo apt install ", description: "Установить пакет", category: "Пакеты", keywords: "debian ubuntu package" },
-        { command: "sudo apt remove ", description: "Удалить пакет", category: "Пакеты", keywords: "debian ubuntu package" },
-        { command: "sudo dnf update", description: "Обновить пакеты системы", category: "Пакеты", keywords: "fedora rocky alma" },
-        { command: "sudo dnf install ", description: "Установить пакет", category: "Пакеты", keywords: "fedora rocky alma" },
-        { command: "ip addr", description: "Показать сетевые адреса", category: "Сеть", keywords: "network интерфейсы ip" },
-        { command: "ip route", description: "Показать таблицу маршрутизации", category: "Сеть", keywords: "network маршруты gateway" },
-        { command: "ss -tulpn", description: "Показать слушающие порты", category: "Сеть", keywords: "network ports сокеты" },
-        { command: "ping -c 4 ", description: "Проверить доступность узла", category: "Сеть", keywords: "network host сеть" },
-        { command: "curl -I ", description: "Получить HTTP-заголовки", category: "Сеть", keywords: "http headers сайт" },
-        { command: "dig +short ", description: "Проверить DNS-запись", category: "Сеть", keywords: "dns domain домен" },
-        { command: "ls -la", description: "Подробный список файлов", category: "Файлы", keywords: "directory каталог" },
-        { command: "cd /etc/", description: "Перейти в каталог конфигурации", category: "Файлы", keywords: "directory config каталог" },
-        { command: "nano /etc/ssh/sshd_config", description: "Открыть конфигурацию SSH-сервера", category: "Файлы", keywords: "editor редактор ssh" },
-        { command: "nano /etc/hosts", description: "Открыть локальные имена узлов", category: "Файлы", keywords: "editor редактор dns" },
-        { command: "nano /etc/fstab", description: "Открыть настройки монтирования", category: "Файлы", keywords: "editor редактор disks" },
-        { command: "find / -name \"имя\" 2>/dev/null", description: "Найти файл по имени", category: "Файлы", keywords: "search поиск" },
-        { command: "grep -Rni \"текст\" /etc/", description: "Найти текст в конфигурации", category: "Файлы", keywords: "search поиск" },
-        { command: "df -h", description: "Показать свободное место", category: "Система", keywords: "disk диск место" },
-        { command: "du -sh *", description: "Показать размеры объектов", category: "Система", keywords: "disk каталог размер" },
-        { command: "free -h", description: "Показать использование памяти", category: "Система", keywords: "memory ram память" },
-        { command: "uptime", description: "Показать время работы и нагрузку", category: "Система", keywords: "load нагрузка" },
-        { command: "ps aux --sort=-%mem | head", description: "Процессы с наибольшим расходом памяти", category: "Система", keywords: "process memory процессы" },
-        { command: "docker ps --format \"table {{.Names}}\\t{{.Status}}\\t{{.Ports}}\"", description: "Показать запущенные контейнеры", category: "Docker", keywords: "containers контейнеры" },
-        { command: "docker compose ps", description: "Состояние сервисов Compose", category: "Docker", keywords: "containers контейнеры" },
-        { command: "docker compose logs --tail 100 -f", description: "Следить за журналом Compose", category: "Docker", keywords: "containers logs логи" },
-        { command: "docker compose restart ", description: "Перезапустить сервис Compose", category: "Docker", keywords: "containers service рестарт" }
-    ].map((entry, index) => ({
+    const builtInCommandCatalog = (window.selectiveTerminalCommandCatalog || [])
+        .map((entry, index) => ({
         ...entry,
         id: `catalog-${index}`,
         source: "catalog",
@@ -431,7 +393,7 @@
             : matchingHistory(query);
         commandPanelTitle.textContent = showsCatalog ? "Общие команды" : "История команд";
         commandPanelSubtitle.textContent = showsCatalog
-            ? "Готовые команды и шаблоны"
+            ? `${builtInCommandCatalog.length} готовых команд и шаблонов`
             : "Сохранена только на этом Mac";
         historyOptions.hidden = showsCatalog;
         commandTabs.forEach((button) => {
