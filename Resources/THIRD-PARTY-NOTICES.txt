@@ -1,0 +1,21 @@
+SelectiveRemote includes the SDL-FreeRDP client and its recursively linked runtime
+libraries when a distributable application is built.
+
+FreeRDP is licensed under the Apache License 2.0:
+https://github.com/FreeRDP/FreeRDP/blob/master/LICENSE
+
+The SelectiveRemote source distribution also contains the RDPECAM client sources
+from FreeRDP 3.30.0 under Native/Camera/FreeRDP. They retain their original
+copyright and Apache-2.0 license headers.
+
+SDL is licensed under the zlib license:
+https://github.com/libsdl-org/SDL/blob/main/LICENSE.txt
+
+The build script copies license and notice files installed by Homebrew for each
+bundled formula into SelectiveRemote.app/Contents/Resources/ThirdPartyLicenses.
+Redistributors are responsible for reviewing those files and satisfying the
+licenses of the exact dependency versions in their build.
+
+xterm.js 6.0.0 and @xterm/addon-fit 0.11.0 are bundled as local terminal
+resources. They are licensed under the MIT License. The complete license texts
+are included in SelectiveRemote.app/Contents/Resources/TerminalResources.

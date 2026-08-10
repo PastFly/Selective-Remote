@@ -1,0 +1,7 @@
+{
+  "version": "0.17.1",
+  "build": 62,
+  "downloadURL": "https://example.com/SelectiveRemote-0.17.1-community-arm64.dmg",
+  "releaseNotesURL": "https://example.com/SelectiveRemote/releases/0.17.1",
+  "minimumMacOS": "14.0"
+}

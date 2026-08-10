@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Swift tests on macOS
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Environment
+        run: swift --version
+
+      - name: Validate shell scripts
+        run: |
+          bash -n scripts/build_app.sh
+          bash -n scripts/build_and_install.sh
+
+      - name: Test
+        run: swift test
+
+      - name: Release build
+        run: swift build -c release

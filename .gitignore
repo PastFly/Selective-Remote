@@ -1,0 +1,16 @@
+.build/
+.swiftpm/
+dist/
+.DS_Store
+xcuserdata/
+DerivedData/
+*.dmg
+*.dmg.sha256
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+.idea/
+.vscode/
+*.log
+*.swp
+*~

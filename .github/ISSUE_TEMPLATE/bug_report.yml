@@ -1,0 +1,53 @@
+name: Сообщить об ошибке
+description: Воспроизводимая проблема Selective Remote
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Не прикладывайте пароли, ключи и необработанные журналы реальной инфраструктуры.
+  - type: input
+    id: version
+    attributes:
+      label: Версия приложения
+      placeholder: 0.17.1 (65)
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: Версия macOS и модель Mac
+    validations:
+      required: true
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Раздел
+      options: [RDP, SSH, SFTP, Туннели, Интерфейс, Сборка, Другое]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактическое поведение
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Конфиденциальность
+      options:
+        - label: Я удалил из материалов пароли, ключи, IP/DNS и личные данные.
+          required: true
