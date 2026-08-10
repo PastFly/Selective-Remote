@@ -205,8 +205,8 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             ) { [weak self] _, _ in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    writeInFlight = false
-                    drainOutputQueue()
+                    self.writeInFlight = false
+                    self.drainOutputQueue()
                 }
             }
         }
