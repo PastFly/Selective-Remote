@@ -2,6 +2,16 @@
     "use strict";
 
     const terminalHost = document.getElementById("terminal");
+    const terminalShell = document.getElementById("terminal-shell");
+    const suggestionsElement = document.getElementById("terminal-suggestions");
+    const historyPanel = document.getElementById("terminal-history");
+    const historyQuery = document.getElementById("history-query");
+    const historyList = document.getElementById("history-list");
+    const historyEmpty = document.getElementById("history-empty");
+    const historyEnabledInput = document.getElementById("history-enabled");
+    const historyClearButton = document.getElementById("history-clear");
+    const historyCloseButton = document.getElementById("history-close");
+
     const terminal = new Terminal({
         allowProposedApi: false,
         convertEol: false,
@@ -40,6 +50,446 @@
     terminal.loadAddon(fitAddon);
     terminal.open(terminalHost);
 
+    let historyEntries = [];
+    let historyEnabled = true;
+    let currentLine = [];
+    let inputCursor = 0;
+    let lineTrackingReliable = true;
+    let currentSuggestions = [];
+    let selectedSuggestionIndex = -1;
+    let echoCapture = "";
+    let lineInputStarted = false;
+    let pendingHistoryCandidates = [];
+    const outputTextDecoder = new TextDecoder("utf-8");
+
+    const postHistory = (payload) => {
+        window.webkit?.messageHandlers?.terminalHistory?.postMessage(payload);
+    };
+
+    const isAlternateScreen = () => terminal.buffer.active.type === "alternate";
+
+    const visibleOutputText = (value) => value
+        .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+        .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\u001b[@-_]/g, "");
+
+    const outputContainsEchoedCommand = (output, command) => {
+        if (command.length < 2) {
+            return false;
+        }
+        return visibleOutputText(output)
+            .split(/[\r\n]+/)
+            .some((line) => line.trimEnd().endsWith(command));
+    };
+
+    const finishHistoryCandidate = (candidate) => {
+        window.clearTimeout(candidate.timeout);
+        pendingHistoryCandidates = pendingHistoryCandidates.filter(
+            (item) => item !== candidate
+        );
+        postHistory({ action: "record", command: candidate.command });
+    };
+
+    const inspectPendingHistoryCandidates = () => {
+        pendingHistoryCandidates.slice().forEach((candidate) => {
+            if (outputContainsEchoedCommand(candidate.output, candidate.command)) {
+                finishHistoryCandidate(candidate);
+            }
+        });
+    };
+
+    const observeTerminalOutput = (bytes) => {
+        const text = outputTextDecoder.decode(bytes, { stream: true });
+        if (!text) {
+            return;
+        }
+        if (lineInputStarted) {
+            echoCapture = (echoCapture + text).slice(-16_384);
+        }
+        pendingHistoryCandidates.forEach((candidate) => {
+            candidate.output = (candidate.output + text).slice(-16_384);
+        });
+        inspectPendingHistoryCandidates();
+    };
+
+    const queueHistoryCandidate = (command) => {
+        const candidate = {
+            command,
+            output: echoCapture,
+            timeout: 0
+        };
+        pendingHistoryCandidates.push(candidate);
+        candidate.timeout = window.setTimeout(() => {
+            pendingHistoryCandidates = pendingHistoryCandidates.filter(
+                (item) => item !== candidate
+            );
+        }, 1_500);
+        inspectPendingHistoryCandidates();
+    };
+
+    const appendHighlightedText = (target, text, query) => {
+        const normalizedQuery = query.trim().toLocaleLowerCase();
+        if (!normalizedQuery) {
+            target.textContent = text;
+            return;
+        }
+        const index = text.toLocaleLowerCase().indexOf(normalizedQuery);
+        if (index < 0) {
+            target.textContent = text;
+            return;
+        }
+        target.append(document.createTextNode(text.slice(0, index)));
+        const match = document.createElement("span");
+        match.className = "match";
+        match.textContent = text.slice(index, index + normalizedQuery.length);
+        target.append(match, document.createTextNode(text.slice(index + normalizedQuery.length)));
+    };
+
+    const matchingHistory = (query, limit = Number.POSITIVE_INFINITY) => {
+        const normalized = query.trim().toLocaleLowerCase();
+        if (!normalized) {
+            return historyEntries.slice(0, limit);
+        }
+        return historyEntries
+            .map((entry, order) => {
+                const command = entry.command.toLocaleLowerCase();
+                const matchIndex = command.indexOf(normalized);
+                return { entry, order, matchIndex };
+            })
+            .filter((candidate) => candidate.matchIndex >= 0)
+            .sort((left, right) => {
+                const leftPrefix = left.matchIndex === 0 ? 0 : 1;
+                const rightPrefix = right.matchIndex === 0 ? 0 : 1;
+                if (leftPrefix !== rightPrefix) {
+                    return leftPrefix - rightPrefix;
+                }
+                if (left.entry.useCount !== right.entry.useCount) {
+                    return right.entry.useCount - left.entry.useCount;
+                }
+                return left.order - right.order;
+            })
+            .slice(0, limit)
+            .map((candidate) => candidate.entry);
+    };
+
+    const inputPrefix = () => currentLine.slice(0, inputCursor).join("").trimStart();
+
+    const hideSuggestions = () => {
+        suggestionsElement.hidden = true;
+        currentSuggestions = [];
+        selectedSuggestionIndex = -1;
+    };
+
+    const positionSuggestions = () => {
+        const screen = terminalHost.querySelector(".xterm-screen");
+        if (!screen || terminal.rows <= 0 || terminal.cols <= 0) {
+            return;
+        }
+        const shellRect = terminalShell.getBoundingClientRect();
+        const screenRect = screen.getBoundingClientRect();
+        const cellWidth = screenRect.width / terminal.cols;
+        const cellHeight = screenRect.height / terminal.rows;
+        const desiredLeft = screenRect.left - shellRect.left
+            + terminal.buffer.active.cursorX * cellWidth;
+        const left = Math.max(12, Math.min(desiredLeft, terminalShell.clientWidth - 220));
+        const belowCursor = screenRect.top - shellRect.top
+            + (terminal.buffer.active.cursorY + 1) * cellHeight + 7;
+        const estimatedHeight = Math.min(268, currentSuggestions.length * 43 + 16);
+        const top = belowCursor + estimatedHeight < terminalShell.clientHeight
+            ? belowCursor
+            : Math.max(8, belowCursor - estimatedHeight - cellHeight - 8);
+        suggestionsElement.style.left = `${left}px`;
+        suggestionsElement.style.top = `${top}px`;
+    };
+
+    const updateSelectedSuggestion = () => {
+        suggestionsElement.querySelectorAll(".suggestion-row").forEach((row, index) => {
+            const selected = index === selectedSuggestionIndex;
+            row.classList.toggle("is-selected", selected);
+            row.setAttribute("aria-selected", selected ? "true" : "false");
+            if (selected) {
+                row.scrollIntoView({ block: "nearest" });
+            }
+        });
+    };
+
+    const replaceCurrentLine = (command, closeHistory = false) => {
+        if (isAlternateScreen()) {
+            return;
+        }
+        window.webkit.messageHandlers.terminalInput.postMessage(`\u0015${command}`);
+        currentLine = Array.from(command);
+        inputCursor = currentLine.length;
+        lineTrackingReliable = true;
+        echoCapture = "";
+        lineInputStarted = true;
+        hideSuggestions();
+        if (closeHistory) {
+            window.selectiveTerminalSetHistoryVisible(false, true);
+        }
+        terminal.focus();
+    };
+
+    const renderSuggestions = () => {
+        const prefix = inputPrefix();
+        if (!historyEnabled
+            || !lineTrackingReliable
+            || isAlternateScreen()
+            || prefix.length < 2) {
+            hideSuggestions();
+            return;
+        }
+
+        currentSuggestions = matchingHistory(prefix, 6)
+            .filter((entry) => entry.command !== currentLine.join(""));
+        selectedSuggestionIndex = -1;
+        suggestionsElement.replaceChildren();
+        if (currentSuggestions.length === 0) {
+            hideSuggestions();
+            return;
+        }
+
+        currentSuggestions.forEach((entry, index) => {
+            const row = document.createElement("button");
+            row.type = "button";
+            row.className = "suggestion-row";
+            row.setAttribute("role", "option");
+            row.setAttribute("aria-selected", "false");
+
+            const symbol = document.createElement("span");
+            symbol.className = "history-symbol";
+            symbol.textContent = "◷";
+            symbol.setAttribute("aria-hidden", "true");
+            const command = document.createElement("span");
+            command.className = "command";
+            appendHighlightedText(command, entry.command, prefix);
+            row.append(symbol, command);
+            row.addEventListener("pointerdown", (event) => event.preventDefault());
+            row.addEventListener("click", () => replaceCurrentLine(entry.command));
+            row.addEventListener("mousemove", () => {
+                selectedSuggestionIndex = index;
+                updateSelectedSuggestion();
+            });
+            suggestionsElement.append(row);
+        });
+        suggestionsElement.hidden = false;
+        positionSuggestions();
+    };
+
+    const formatHistoryDate = (milliseconds) => {
+        const date = new Date(milliseconds);
+        if (Number.isNaN(date.valueOf())) {
+            return "";
+        }
+        return new Intl.DateTimeFormat("ru-RU", {
+            day: "numeric",
+            month: "short",
+            hour: "2-digit",
+            minute: "2-digit"
+        }).format(date);
+    };
+
+    const renderHistoryPanel = () => {
+        const query = historyQuery.value;
+        const filtered = matchingHistory(query);
+        historyList.replaceChildren();
+
+        filtered.forEach((entry) => {
+            const row = document.createElement("div");
+            row.className = "history-row";
+            row.setAttribute("role", "listitem");
+
+            const useButton = document.createElement("button");
+            useButton.type = "button";
+            useButton.className = "history-use";
+            useButton.title = "Подставить команду в терминал";
+            const command = document.createElement("span");
+            command.className = "history-command";
+            appendHighlightedText(command, entry.command, query);
+            const meta = document.createElement("span");
+            meta.className = "history-meta";
+            const used = entry.useCount > 1 ? ` · запусков: ${entry.useCount}` : "";
+            meta.textContent = `${formatHistoryDate(entry.lastUsedAt)}${used}`;
+            useButton.append(command, meta);
+            useButton.addEventListener("click", () => replaceCurrentLine(entry.command, true));
+
+            const removeButton = document.createElement("button");
+            removeButton.type = "button";
+            removeButton.className = "history-remove";
+            removeButton.title = "Удалить из истории";
+            removeButton.setAttribute("aria-label", `Удалить команду ${entry.command}`);
+            removeButton.textContent = "×";
+            removeButton.addEventListener("click", () => {
+                postHistory({ action: "remove", id: entry.id });
+            });
+            row.append(useButton, removeButton);
+            historyList.append(row);
+        });
+
+        const empty = filtered.length === 0;
+        historyList.hidden = empty;
+        historyEmpty.hidden = !empty;
+        historyClearButton.disabled = historyEntries.length === 0;
+        historyEnabledInput.checked = historyEnabled;
+    };
+
+    const resetTrackedLine = () => {
+        currentLine = [];
+        inputCursor = 0;
+        lineTrackingReliable = true;
+        echoCapture = "";
+        lineInputStarted = false;
+        hideSuggestions();
+    };
+
+    const removeWordBeforeCursor = () => {
+        while (inputCursor > 0 && /\s/.test(currentLine[inputCursor - 1])) {
+            currentLine.splice(inputCursor - 1, 1);
+            inputCursor -= 1;
+        }
+        while (inputCursor > 0 && !/\s/.test(currentLine[inputCursor - 1])) {
+            currentLine.splice(inputCursor - 1, 1);
+            inputCursor -= 1;
+        }
+    };
+
+    const recordTrackedLine = () => {
+        if (lineTrackingReliable) {
+            const command = currentLine.join("");
+            if (command.trim().length > 0) {
+                queueHistoryCandidate(command);
+            }
+        }
+        resetTrackedLine();
+    };
+
+    const trackTerminalInput = (data) => {
+        if (isAlternateScreen()) {
+            resetTrackedLine();
+            lineTrackingReliable = false;
+            return;
+        }
+
+        const navigation = {
+            "\u001b[D": -1,
+            "\u001bOD": -1,
+            "\u001b[C": 1,
+            "\u001bOC": 1
+        };
+        if (Object.hasOwn(navigation, data)) {
+            inputCursor = Math.max(0, Math.min(currentLine.length, inputCursor + navigation[data]));
+            renderSuggestions();
+            return;
+        }
+        if (["\u001b[H", "\u001bOH", "\u0001"].includes(data)) {
+            inputCursor = 0;
+            renderSuggestions();
+            return;
+        }
+        if (["\u001b[F", "\u001bOF", "\u0005"].includes(data)) {
+            inputCursor = currentLine.length;
+            renderSuggestions();
+            return;
+        }
+        if (data.startsWith("\u001b")) {
+            lineTrackingReliable = false;
+            hideSuggestions();
+            return;
+        }
+
+        for (const character of Array.from(data)) {
+            switch (character) {
+            case "\r":
+            case "\n":
+                recordTrackedLine();
+                break;
+            case "\u0003":
+                resetTrackedLine();
+                break;
+            case "\u0001":
+                inputCursor = 0;
+                break;
+            case "\u0005":
+                inputCursor = currentLine.length;
+                break;
+            case "\u0015":
+                currentLine.splice(0, inputCursor);
+                inputCursor = 0;
+                break;
+            case "\u000b":
+                currentLine.splice(inputCursor);
+                break;
+            case "\u0017":
+                removeWordBeforeCursor();
+                break;
+            case "\b":
+            case "\u007f":
+                if (inputCursor > 0) {
+                    currentLine.splice(inputCursor - 1, 1);
+                    inputCursor -= 1;
+                }
+                break;
+            case "\t":
+                lineTrackingReliable = false;
+                break;
+            default:
+                if (character >= " " && character !== "\u007f") {
+                    if (!lineInputStarted) {
+                        echoCapture = "";
+                        lineInputStarted = true;
+                    }
+                    currentLine.splice(inputCursor, 0, character);
+                    inputCursor += 1;
+                } else {
+                    lineTrackingReliable = false;
+                }
+                break;
+            }
+        }
+        renderSuggestions();
+    };
+
+    terminal.attachCustomKeyEventHandler((event) => {
+        if (event.type !== "keydown") {
+            return true;
+        }
+        if (event.metaKey && event.shiftKey && event.key.toLocaleLowerCase() === "y") {
+            window.selectiveTerminalSetHistoryVisible(historyPanel.hidden, true);
+            return false;
+        }
+        if (!historyPanel.hidden && event.key === "Escape") {
+            window.selectiveTerminalSetHistoryVisible(false, true);
+            return false;
+        }
+        if (suggestionsElement.hidden) {
+            return true;
+        }
+        if (event.key === "Escape") {
+            hideSuggestions();
+            return false;
+        }
+        if (event.key === "ArrowDown") {
+            selectedSuggestionIndex = Math.min(
+                currentSuggestions.length - 1,
+                selectedSuggestionIndex + 1
+            );
+            updateSelectedSuggestion();
+            return false;
+        }
+        if (event.key === "ArrowUp") {
+            selectedSuggestionIndex = selectedSuggestionIndex < 0
+                ? currentSuggestions.length - 1
+                : Math.max(0, selectedSuggestionIndex - 1);
+            updateSelectedSuggestion();
+            return false;
+        }
+        if (event.key === "Enter" && selectedSuggestionIndex >= 0) {
+            replaceCurrentLine(currentSuggestions[selectedSuggestionIndex].command);
+            return false;
+        }
+        return true;
+    });
+
     let resizeTimer = 0;
     let lastColumns = 0;
     let lastRows = 0;
@@ -62,17 +512,20 @@
     const fitAndReport = () => {
         window.clearTimeout(resizeTimer);
         resizeTimer = window.setTimeout(() => {
-            // Waiting for two animation frames makes the measurement happen
-            // after SwiftUI, WKWebView and the selected terminal font have all
-            // settled on their final geometry.
             window.requestAnimationFrame(() => {
                 fitAddon.fit();
-                window.requestAnimationFrame(reportSize);
+                window.requestAnimationFrame(() => {
+                    reportSize();
+                    if (!suggestionsElement.hidden) {
+                        positionSuggestions();
+                    }
+                });
             });
         }, 60);
     };
 
     terminal.onData((data) => {
+        trackTerminalInput(data);
         window.webkit.messageHandlers.terminalInput.postMessage(data);
     });
     terminal.onResize(reportSize);
@@ -85,8 +538,14 @@
         }
         outputWriteActive = true;
         const bytes = outputQueue.shift();
+        observeTerminalOutput(bytes);
         terminal.write(bytes, () => {
             outputWriteActive = false;
+            if (isAlternateScreen()) {
+                hideSuggestions();
+            } else if (!suggestionsElement.hidden) {
+                positionSuggestions();
+            }
             drainOutputQueue();
         });
     };
@@ -127,6 +586,10 @@
                     const green = Number.parseInt(hex.slice(2, 4), 16);
                     const blue = Number.parseInt(hex.slice(4, 6), 16);
                     const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+                    document.documentElement.classList.toggle(
+                        "terminal-theme-light",
+                        luminance > 160
+                    );
                     document.documentElement.style.colorScheme =
                         luminance > 160 ? "light" : "dark";
                 }
@@ -145,6 +608,57 @@
         }
         fitAndReport();
     };
+
+    window.selectiveTerminalSetHistory = (payload) => {
+        if (!payload || typeof payload !== "object") {
+            return;
+        }
+        historyEnabled = payload.enabled !== false;
+        historyEntries = Array.isArray(payload.entries)
+            ? payload.entries.filter((entry) => (
+                entry
+                && typeof entry.id === "string"
+                && typeof entry.command === "string"
+            ))
+            : [];
+        renderHistoryPanel();
+        renderSuggestions();
+    };
+
+    window.selectiveTerminalSetHistoryVisible = (visible, notifySwift = false) => {
+        const nextVisible = Boolean(visible);
+        historyPanel.hidden = !nextVisible;
+        hideSuggestions();
+        if (nextVisible) {
+            renderHistoryPanel();
+            window.setTimeout(() => historyQuery.focus(), 0);
+        } else {
+            terminal.focus();
+        }
+        if (notifySwift) {
+            postHistory({ action: "visibility", visible: nextVisible });
+        }
+    };
+
+    historyQuery.addEventListener("input", renderHistoryPanel);
+    historyEnabledInput.addEventListener("change", () => {
+        postHistory({ action: "setEnabled", enabled: historyEnabledInput.checked });
+    });
+    historyClearButton.addEventListener("click", () => {
+        if (historyEntries.length > 0
+            && window.confirm("Очистить историю команд для этого подключения?")) {
+            postHistory({ action: "clear" });
+        }
+    });
+    historyCloseButton.addEventListener("click", () => {
+        window.selectiveTerminalSetHistoryVisible(false, true);
+    });
+    historyPanel.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            window.selectiveTerminalSetHistoryVisible(false, true);
+        }
+    });
 
     window.selectiveTerminalClear = () => terminal.clear();
     window.selectiveTerminalFocus = () => terminal.focus();

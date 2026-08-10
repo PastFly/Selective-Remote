@@ -7,12 +7,17 @@
 
 html,
 body,
+#terminal-shell,
 #terminal {
     width: 100%;
     height: 100%;
     margin: 0;
     overflow: hidden;
     background: var(--terminal-background);
+}
+
+#terminal-shell {
+    position: relative;
 }
 
 #terminal {
@@ -26,4 +31,307 @@ body,
 
 .xterm .xterm-viewport {
     background-color: var(--terminal-background) !important;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+button,
+input {
+    font: inherit;
+}
+
+.terminal-popover {
+    position: absolute;
+    z-index: 20;
+    width: min(620px, calc(100% - 32px));
+    max-height: 268px;
+    overflow-y: auto;
+    padding: 8px;
+    box-sizing: border-box;
+    color: #dce6f5;
+    background: color-mix(in srgb, var(--terminal-background) 78%, #3b4660 22%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 13px;
+    box-shadow: 0 16px 42px rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(18px);
+}
+
+.suggestion-row {
+    display: grid;
+    grid-template-columns: 22px minmax(0, 1fr);
+    gap: 9px;
+    align-items: center;
+    width: 100%;
+    padding: 8px 10px;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    text-align: left;
+    cursor: default;
+}
+
+.suggestion-row:hover,
+.suggestion-row.is-selected {
+    background: rgba(70, 180, 136, 0.18);
+}
+
+.suggestion-row .history-symbol {
+    color: #36d399;
+    font-size: 17px;
+}
+
+.suggestion-row .command,
+.history-command {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-family: "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+.match {
+    color: #69e5b4;
+    background: rgba(54, 211, 153, 0.16);
+    border-radius: 3px;
+}
+
+#terminal-history {
+    position: absolute;
+    z-index: 30;
+    inset: 10px 10px 10px auto;
+    display: flex;
+    flex-direction: column;
+    width: min(390px, calc(100% - 20px));
+    box-sizing: border-box;
+    color: #dce6f5;
+    background: color-mix(in srgb, var(--terminal-background) 82%, #343e57 18%);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 16px;
+    box-shadow: -16px 0 48px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(22px);
+    overflow: hidden;
+}
+
+.history-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 18px 18px 12px;
+}
+
+.history-header h2 {
+    margin: 0 0 3px;
+    font: 600 17px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.history-header p,
+#terminal-history footer {
+    margin: 0;
+    color: #8f9ab0;
+    font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.icon-button,
+#history-clear {
+    color: #aab5c8;
+    background: rgba(255, 255, 255, 0.07);
+    border: 0;
+    border-radius: 8px;
+    cursor: default;
+}
+
+.icon-button {
+    width: 30px;
+    height: 30px;
+    font-size: 22px;
+    line-height: 26px;
+}
+
+.history-search {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0 18px 12px;
+    padding: 9px 11px;
+    background: rgba(255, 255, 255, 0.075);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+}
+
+.history-search span {
+    color: #8f9ab0;
+    font-size: 22px;
+    line-height: 1;
+}
+
+.history-search input {
+    min-width: 0;
+    flex: 1;
+    color: #e8eef8;
+    background: transparent;
+    border: 0;
+    outline: 0;
+}
+
+.history-search input::placeholder {
+    color: #7f899e;
+}
+
+.history-options {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0 18px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.history-options label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+}
+
+#history-clear {
+    padding: 6px 9px;
+}
+
+#history-clear:disabled {
+    opacity: 0.45;
+}
+
+#history-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.history-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 26px;
+    gap: 8px;
+    align-items: center;
+    padding: 9px 10px;
+    border-radius: 9px;
+}
+
+.history-row:hover {
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.history-use {
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    cursor: default;
+}
+
+.history-meta {
+    display: block;
+    margin-top: 4px;
+    color: #7f899e;
+    font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.history-remove {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    color: #8f9ab0;
+    background: transparent;
+    border: 0;
+    border-radius: 6px;
+    opacity: 0;
+    cursor: default;
+}
+
+.history-row:hover .history-remove,
+.history-remove:focus-visible {
+    opacity: 1;
+}
+
+#history-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 28px;
+    color: #8f9ab0;
+    text-align: center;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+#history-empty strong {
+    color: #cbd5e6;
+    font-size: 14px;
+}
+
+#terminal-history footer {
+    padding: 11px 18px 14px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.terminal-theme-light .terminal-popover,
+.terminal-theme-light #terminal-history {
+    color: #1f2a3a;
+    background: color-mix(in srgb, var(--terminal-background) 90%, #e7edf5 10%);
+    border-color: rgba(31, 42, 58, 0.15);
+    box-shadow: 0 16px 42px rgba(31, 42, 58, 0.20);
+}
+
+.terminal-theme-light .suggestion-row:hover,
+.terminal-theme-light .suggestion-row.is-selected {
+    background: rgba(19, 133, 91, 0.14);
+}
+
+.terminal-theme-light .history-header p,
+.terminal-theme-light #terminal-history footer,
+.terminal-theme-light .history-meta,
+.terminal-theme-light .history-search span {
+    color: #637083;
+}
+
+.terminal-theme-light .history-search,
+.terminal-theme-light .icon-button,
+.terminal-theme-light #history-clear {
+    background: rgba(31, 42, 58, 0.07);
+}
+
+.terminal-theme-light .history-search input,
+.terminal-theme-light #history-empty strong {
+    color: #1f2a3a;
+}
+
+.terminal-theme-light .history-search input::placeholder,
+.terminal-theme-light #history-empty,
+.terminal-theme-light .history-remove {
+    color: #6d7889;
+}
+
+.terminal-theme-light .history-options,
+.terminal-theme-light #terminal-history footer {
+    border-color: rgba(31, 42, 58, 0.10);
+}
+
+.terminal-theme-light .history-row:hover {
+    background: rgba(31, 42, 58, 0.055);
+}
+
+@media (max-width: 620px) {
+    #terminal-history {
+        inset: 6px;
+        width: auto;
+    }
 }

@@ -18,9 +18,28 @@ private enum TerminalResourceLocator {
 struct EmbeddedTerminalWebView: NSViewRepresentable {
     @ObservedObject var session: TerminalSessionModel
     let appearance: TerminalAppearanceSnapshot
+    let historyContext: TerminalHistoryContext?
+    @Binding var historyVisible: Bool
+
+    init(
+        session: TerminalSessionModel,
+        appearance: TerminalAppearanceSnapshot,
+        historyContext: TerminalHistoryContext? = nil,
+        historyVisible: Binding<Bool> = .constant(false)
+    ) {
+        self.session = session
+        self.appearance = appearance
+        self.historyContext = historyContext
+        _historyVisible = historyVisible
+    }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(session: session, appearance: appearance)
+        Coordinator(
+            session: session,
+            appearance: appearance,
+            historyContext: historyContext,
+            historyVisible: _historyVisible
+        )
     }
 
     func makeNSView(context: Context) -> WKWebView {
@@ -34,6 +53,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         configuration.userContentController.add(
             context.coordinator,
             name: Coordinator.resizeMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Coordinator.historyMessageName
         )
 
         let webView = TerminalWKWebView(frame: .zero, configuration: configuration)
@@ -61,8 +84,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
+        context.coordinator.updateHistoryContext(historyContext)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
+        context.coordinator.updateHistoryVisibility(historyVisible)
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -74,6 +99,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.resizeMessageName
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Coordinator.historyMessageName
+        )
         webView.navigationDelegate = nil
     }
 
@@ -81,21 +109,29 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         static let inputMessageName = "terminalInput"
         static let resizeMessageName = "terminalResize"
+        static let historyMessageName = "terminalHistory"
 
         private weak var session: TerminalSessionModel?
         private weak var webView: WKWebView?
         private var observerID: UUID?
         private var appearance: TerminalAppearanceSnapshot
+        private var historyContext: TerminalHistoryContext?
+        private var historyVisible: Binding<Bool>
+        private var appliedHistoryVisibility: Bool?
         private var pageReady = false
         private var pendingBase64: [String] = []
         private var writeInFlight = false
 
         init(
             session: TerminalSessionModel,
-            appearance: TerminalAppearanceSnapshot
+            appearance: TerminalAppearanceSnapshot,
+            historyContext: TerminalHistoryContext?,
+            historyVisible: Binding<Bool>
         ) {
             self.session = session
             self.appearance = appearance
+            self.historyContext = historyContext
+            self.historyVisible = historyVisible
         }
 
         func attach(to webView: WKWebView) {
@@ -120,12 +156,31 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             applyAppearance()
         }
 
+        func updateHistoryContext(_ updated: TerminalHistoryContext?) {
+            guard historyContext != updated else { return }
+            historyContext = updated
+            refreshHistory()
+        }
+
+        func updateHistoryVisibility(_ visible: Bool) {
+            guard pageReady else {
+                appliedHistoryVisibility = nil
+                return
+            }
+            guard appliedHistoryVisibility != visible else { return }
+            appliedHistoryVisibility = visible
+            webView?.evaluateJavaScript(
+                "window.selectiveTerminalSetHistoryVisible?.(\(visible ? "true" : "false"))"
+            )
+        }
+
         func detach() {
             detachObserver()
             webView = nil
             pageReady = false
             writeInFlight = false
             pendingBase64.removeAll()
+            appliedHistoryVisibility = nil
         }
 
         func requestFit() {
@@ -147,6 +202,8 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                       let rows = (value["rows"] as? NSNumber)?.intValue
                 else { return }
                 session?.resize(columns: columns, rows: rows)
+            case Self.historyMessageName:
+                handleHistoryMessage(message.body)
             default:
                 break
             }
@@ -157,6 +214,8 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             applyAppearance()
             requestFit()
             drainOutputQueue()
+            refreshHistory()
+            updateHistoryVisibility(historyVisible.wrappedValue)
             webView.evaluateJavaScript("window.selectiveTerminalFocus?.()")
         }
 
@@ -220,6 +279,54 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 "window.selectiveTerminalApplySettings?.(\(json))"
             )
         }
+
+        private func handleHistoryMessage(_ body: Any) {
+            guard let context = historyContext,
+                  let payload = body as? [String: Any],
+                  let action = payload["action"] as? String
+            else { return }
+
+            let store = TerminalCommandHistoryStore.shared
+            switch action {
+            case "record":
+                guard let command = payload["command"] as? String else { return }
+                _ = store.record(command: command, profileID: context.profileID)
+                refreshHistory()
+            case "remove":
+                guard let value = payload["id"] as? String,
+                      let id = UUID(uuidString: value)
+                else { return }
+                store.remove(entryID: id, profileID: context.profileID)
+                refreshHistory()
+            case "clear":
+                store.clear(profileID: context.profileID)
+                refreshHistory()
+            case "setEnabled":
+                guard let enabled = (payload["enabled"] as? NSNumber)?.boolValue
+                else { return }
+                store.isEnabled = enabled
+                refreshHistory()
+            case "visibility":
+                guard let visible = (payload["visible"] as? NSNumber)?.boolValue
+                else { return }
+                appliedHistoryVisibility = visible
+                historyVisible.wrappedValue = visible
+            default:
+                break
+            }
+        }
+
+        private func refreshHistory() {
+            guard pageReady,
+                  let context = historyContext,
+                  let json = TerminalCommandHistoryStore.shared.webPayload(
+                      for: context.profileID
+                  )
+            else { return }
+            webView?.evaluateJavaScript(
+                "window.selectiveTerminalSetHistory?.(\(json))"
+            )
+        }
     }
 }
 
@@ -245,6 +352,7 @@ struct SSHTerminalView: View {
     let toggleFocusMode: () -> Void
 
     @State private var showsAppearance = false
+    @State private var showsHistory = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -257,6 +365,15 @@ struct SSHTerminalView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button {
+                    showsHistory.toggle()
+                } label: {
+                    Image(systemName: "clock.arrow.circlepath")
+                }
+                .help("История команд — поиск, повторный ввод и очистка")
+                .accessibilityLabel("История команд")
+                .keyboardShortcut("y", modifiers: [.command, .shift])
+
                 Button {
                     showsAppearance.toggle()
                 } label: {
@@ -317,7 +434,11 @@ struct SSHTerminalView: View {
 
             EmbeddedTerminalWebView(
                 session: session,
-                appearance: appearance.snapshot
+                appearance: appearance.snapshot,
+                historyContext: TerminalHistoryContext(
+                    profileID: profile.id
+                ),
+                historyVisible: $showsHistory
             )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 360)
@@ -332,7 +453,9 @@ struct SSHTerminalView: View {
             Text(
                 "Соединение выполняет системный /usr/bin/ssh внутри \(AppBrand.name). "
                     + "Пароль сервера и passphrase ключа вводятся непосредственно в терминале "
-                    + "и приложением не сохраняются."
+                    + "и приложением не сохраняются. История команд хранится только на этом Mac; "
+                    + "строки с пробелом в начале и распространёнными признаками секретов "
+                    + "автоматически пропускаются."
             )
             .font(.caption)
             .foregroundStyle(.secondary)

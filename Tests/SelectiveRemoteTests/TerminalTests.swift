@@ -112,6 +112,89 @@ func terminalContentSecurityPolicySupportsXtermLayout() throws {
     #expect(!html.contains("script-src 'self' 'unsafe-inline'"))
 }
 
+@Test("История команд сохраняется отдельно для каждого SSH-профиля")
+@MainActor
+func persistsTerminalCommandHistoryPerProfile() throws {
+    let suiteName = "SelectiveRemote.CommandHistoryTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let firstProfile = UUID()
+    let secondProfile = UUID()
+    let firstDate = Date(timeIntervalSince1970: 100)
+    let secondDate = Date(timeIntervalSince1970: 200)
+
+    let original = TerminalCommandHistoryStore(defaults: defaults)
+    #expect(original.record(command: "uname -a", profileID: firstProfile, now: firstDate))
+    #expect(original.record(command: "df -h", profileID: secondProfile, now: secondDate))
+    #expect(original.record(command: "uname -a", profileID: firstProfile, now: secondDate))
+
+    let restored = TerminalCommandHistoryStore(defaults: defaults)
+    let firstEntries = restored.entries(for: firstProfile)
+    #expect(firstEntries.count == 1)
+    #expect(firstEntries.first?.command == "uname -a")
+    #expect(firstEntries.first?.useCount == 2)
+    #expect(restored.entries(for: secondProfile).map(\.command) == ["df -h"])
+}
+
+@Test("История не сохраняет приватные и служебные строки")
+@MainActor
+func filtersSensitiveTerminalHistory() throws {
+    let suiteName = "SelectiveRemote.CommandPrivacyTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = TerminalCommandHistoryStore(defaults: defaults)
+    let profileID = UUID()
+
+    #expect(!store.record(command: " export TOKEN=secret", profileID: profileID))
+    #expect(!store.record(command: "export TOKEN=secret", profileID: profileID))
+    #expect(!store.record(command: "curl -H 'Authorization: Bearer value'", profileID: profileID))
+    #expect(store.record(command: "systemctl status ssh", profileID: profileID))
+    #expect(store.entries(for: profileID).map(\.command) == ["systemctl status ssh"])
+}
+
+@Test("История команд ограничивает размер и поддерживает очистку")
+@MainActor
+func limitsAndClearsTerminalHistory() throws {
+    let suiteName = "SelectiveRemote.CommandLimitTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = TerminalCommandHistoryStore(defaults: defaults, maximumEntries: 2)
+    let profileID = UUID()
+
+    #expect(store.record(command: "one", profileID: profileID, now: Date(timeIntervalSince1970: 1)))
+    #expect(store.record(command: "two", profileID: profileID, now: Date(timeIntervalSince1970: 2)))
+    #expect(store.record(command: "three", profileID: profileID, now: Date(timeIntervalSince1970: 3)))
+    #expect(store.entries(for: profileID).map(\.command) == ["three", "two"])
+
+    store.clear(profileID: profileID)
+    #expect(store.entries(for: profileID).isEmpty)
+}
+
+@Test("Интерфейс терминала содержит подсказки и панель истории")
+func terminalIncludesHistoryInterface() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let resources = projectRoot
+        .appendingPathComponent("Sources/SelectiveRemote/TerminalResources")
+    let html = try String(
+        contentsOf: resources.appendingPathComponent("terminal.html"),
+        encoding: .utf8
+    )
+    let script = try String(
+        contentsOf: resources.appendingPathComponent("terminal-host.js"),
+        encoding: .utf8
+    )
+
+    #expect(html.contains("id=\"terminal-suggestions\""))
+    #expect(html.contains("id=\"terminal-history\""))
+    #expect(html.contains("id=\"history-query\""))
+    #expect(script.contains("selectiveTerminalSetHistory"))
+    #expect(script.contains("isAlternateScreen"))
+    #expect(script.contains("outputContainsEchoedCommand"))
+}
+
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")
 func terminalPaletteAvoidsSwift63ColorBridge() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)

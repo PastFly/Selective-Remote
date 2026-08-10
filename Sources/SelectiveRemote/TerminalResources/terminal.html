@@ -12,7 +12,52 @@
     <title>Selective Remote Terminal</title>
 </head>
 <body>
-    <div id="terminal" aria-label="SSH-терминал"></div>
+    <main id="terminal-shell">
+        <div id="terminal" aria-label="SSH-терминал"></div>
+        <div
+            id="terminal-suggestions"
+            class="terminal-popover"
+            role="listbox"
+            aria-label="Подсказки из истории команд"
+            hidden
+        ></div>
+        <aside id="terminal-history" aria-label="История команд" hidden>
+            <header class="history-header">
+                <div>
+                    <h2>История команд</h2>
+                    <p>Сохранена только на этом Mac</p>
+                </div>
+                <button id="history-close" class="icon-button" type="button" title="Закрыть">
+                    ×
+                </button>
+            </header>
+            <label class="history-search">
+                <span aria-hidden="true">⌕</span>
+                <input
+                    id="history-query"
+                    type="search"
+                    placeholder="Поиск по истории"
+                    autocomplete="off"
+                    spellcheck="false"
+                >
+            </label>
+            <div class="history-options">
+                <label>
+                    <input id="history-enabled" type="checkbox" checked>
+                    <span>Сохранять команды</span>
+                </label>
+                <button id="history-clear" type="button">Очистить</button>
+            </div>
+            <div id="history-list" role="list"></div>
+            <div id="history-empty" hidden>
+                <strong>История пока пуста</strong>
+                <span>Выполненные команды появятся здесь автоматически.</span>
+            </div>
+            <footer>
+                Строки с пробелом в начале и признаками секретов не сохраняются.
+            </footer>
+        </aside>
+    </main>
     <script src="xterm.js"></script>
     <script src="addon-fit.js"></script>
     <script src="terminal-host.js"></script>
