@@ -96,9 +96,10 @@ swift run SelectiveRemote
 
 ## Последние изменения
 
-Текущая публичная версия — **0.17.4**. В ней SSH-терминал получил локальную историю,
-поиск и контекстные подсказки команд, а ввод паролей и passphrase по-прежнему
-не сохраняется.
+Текущая публичная версия — **0.17.5**. В ней исправлено сохранение истории
+SSH-команд, добавлен встроенный каталог общих команд и восстановление подсказок
+после выхода из полноэкранных терминальных программ. Пароли и passphrase
+по-прежнему не сохраняются.
 
 Полный список исправлений и новых возможностей вынесен в отдельный
 [CHANGELOG.md](CHANGELOG.md).
@@ -245,7 +246,7 @@ XQuartz не нужен: используется SDL-клиент `sdl-freerdp`
 На вашем Mac выполните:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.4-source
+cd ~/Downloads/SelectiveRemote-0.17.5-source
 chmod +x scripts/build_app.sh
 ./scripts/build_app.sh
 ```
@@ -253,8 +254,8 @@ chmod +x scripts/build_app.sh
 Успешная сборка создаёт:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.4-arm64.dmg`;
-- `dist/SelectiveRemote-0.17.4-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.17.5-arm64.dmg`;
+- `dist/SelectiveRemote-0.17.5-arm64.dmg.sha256`.
 
 Именно два последних файла можно распространять. Получателю не передаются исходники и не требуется запускать `build_app.sh`.
 
@@ -266,7 +267,7 @@ chmod +x scripts/build_app.sh
 
 ```bash
 cd ~/Downloads
-shasum -a 256 SelectiveRemote-0.17.4-arm64.dmg
+shasum -a 256 SelectiveRemote-0.17.5-arm64.dmg
 ```
 
 Результат должен полностью совпасть с опубликованным. SHA-256 подтверждает совпадение файла с выложенной вами копией, но не заменяет удостоверение издателя Apple.
