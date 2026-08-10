@@ -1205,7 +1205,9 @@ final class SFTPBrowserModel: ObservableObject {
                 forTypeIdentifier: SFTPDragType.remoteEntry.identifier,
                 visibility: NSItemProviderRepresentationVisibility.all
             ) { completion in
-                completion(data, nil)
+                Task { @MainActor in
+                    completion(data, nil)
+                }
                 return nil
             }
         }
