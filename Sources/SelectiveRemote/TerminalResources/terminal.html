@@ -18,14 +18,14 @@
             id="terminal-suggestions"
             class="terminal-popover"
             role="listbox"
-            aria-label="Подсказки из истории команд"
+            aria-label="Подсказки команд"
             hidden
         ></div>
-        <aside id="terminal-history" aria-label="История команд" hidden>
+        <aside id="terminal-history" aria-label="История и подсказки команд" hidden>
             <header class="history-header">
                 <div>
-                    <h2>История команд</h2>
-                    <p>Сохранена только на этом Mac</p>
+                    <h2 id="command-panel-title">История команд</h2>
+                    <p id="command-panel-subtitle">Сохранена только на этом Mac</p>
                 </div>
                 <button id="history-close" class="icon-button" type="button" title="Закрыть">
                     ×
@@ -36,12 +36,20 @@
                 <input
                     id="history-query"
                     type="search"
-                    placeholder="Поиск по истории"
+                    placeholder="Поиск команд"
                     autocomplete="off"
                     spellcheck="false"
                 >
             </label>
-            <div class="history-options">
+            <nav id="command-tabs" aria-label="Раздел подсказок">
+                <button type="button" data-section="history" class="is-selected">
+                    История
+                </button>
+                <button type="button" data-section="catalog">
+                    Общие команды
+                </button>
+            </nav>
+            <div id="history-options" class="history-options">
                 <label>
                     <input id="history-enabled" type="checkbox" checked>
                     <span>Сохранять команды</span>
@@ -50,8 +58,10 @@
             </div>
             <div id="history-list" role="list"></div>
             <div id="history-empty" hidden>
-                <strong>История пока пуста</strong>
-                <span>Выполненные команды появятся здесь автоматически.</span>
+                <strong id="command-empty-title">История пока пуста</strong>
+                <span id="command-empty-message">
+                    Выполненные команды появятся здесь автоматически.
+                </span>
             </div>
             <footer>
                 Строки с пробелом в начале и признаками секретов не сохраняются.

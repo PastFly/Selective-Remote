@@ -92,6 +92,20 @@ input {
     font-family: "SF Mono", SFMono-Regular, Menlo, monospace;
 }
 
+.suggestion-content {
+    min-width: 0;
+}
+
+.suggestion-description {
+    display: block;
+    margin-top: 3px;
+    overflow: hidden;
+    color: #8f9ab0;
+    font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
 .match {
     color: #69e5b4;
     background: rgba(54, 211, 153, 0.16);
@@ -191,6 +205,30 @@ input {
     font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+#command-tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin: 0 18px 12px;
+    padding: 3px;
+    background: rgba(255, 255, 255, 0.055);
+    border-radius: 9px;
+}
+
+#command-tabs button {
+    padding: 7px 8px;
+    color: #8f9ab0;
+    background: transparent;
+    border: 0;
+    border-radius: 7px;
+    cursor: default;
+}
+
+#command-tabs button.is-selected {
+    color: #e8eef8;
+    background: rgba(54, 211, 153, 0.18);
+}
+
 .history-options label {
     display: flex;
     align-items: center;
@@ -219,6 +257,10 @@ input {
     align-items: center;
     padding: 9px 10px;
     border-radius: 9px;
+}
+
+.history-row.catalog-row {
+    grid-template-columns: minmax(0, 1fr);
 }
 
 .history-row:hover {
@@ -303,10 +345,24 @@ input {
     color: #637083;
 }
 
+.terminal-theme-light .suggestion-description {
+    color: #637083;
+}
+
 .terminal-theme-light .history-search,
 .terminal-theme-light .icon-button,
-.terminal-theme-light #history-clear {
+.terminal-theme-light #history-clear,
+.terminal-theme-light #command-tabs {
     background: rgba(31, 42, 58, 0.07);
+}
+
+.terminal-theme-light #command-tabs button {
+    color: #637083;
+}
+
+.terminal-theme-light #command-tabs button.is-selected {
+    color: #1f2a3a;
+    background: rgba(19, 133, 91, 0.14);
 }
 
 .terminal-theme-light .history-search input,

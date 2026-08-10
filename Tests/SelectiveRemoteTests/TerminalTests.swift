@@ -190,9 +190,15 @@ func terminalIncludesHistoryInterface() throws {
     #expect(html.contains("id=\"terminal-suggestions\""))
     #expect(html.contains("id=\"terminal-history\""))
     #expect(html.contains("id=\"history-query\""))
+    #expect(html.contains("data-section=\"catalog\""))
     #expect(script.contains("selectiveTerminalSetHistory"))
     #expect(script.contains("isAlternateScreen"))
     #expect(script.contains("outputContainsEchoedCommand"))
+    #expect(script.contains("outputEndsInShellPrompt"))
+    #expect(script.contains("alternateScreenWasActive"))
+    #expect(script.contains("sudo systemctl restart "))
+    #expect(script.contains("nano /etc/ssh/sshd_config"))
+    #expect(script.contains("matchingCatalog"))
 }
 
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")

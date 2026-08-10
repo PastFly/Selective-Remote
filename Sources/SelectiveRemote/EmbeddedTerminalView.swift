@@ -370,8 +370,8 @@ struct SSHTerminalView: View {
                 } label: {
                     Image(systemName: "clock.arrow.circlepath")
                 }
-                .help("История команд — поиск, повторный ввод и очистка")
-                .accessibilityLabel("История команд")
+                .help("История, поиск и общие подсказки команд")
+                .accessibilityLabel("История и подсказки команд")
                 .keyboardShortcut("y", modifiers: [.command, .shift])
 
                 Button {
