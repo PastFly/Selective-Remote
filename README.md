@@ -59,8 +59,9 @@ cd Selective-Remote
 
 Приложение проверяет канал GitHub при запуске не чаще одного раза в сутки.
 Ручная проверка доступна в меню **Selective Remote → Проверить обновления…**.
-При наличии новой сборки кнопка **Скачать DMG** открывает соответствующий файл
-из GitHub Release. Feed публикуется в `Resources/updates.json`.
+При наличии новой версии кнопка **Скачать DMG** открывает соответствующий файл
+из GitHub Release, а **Что нового** — страницу этого выпуска. Feed публикуется
+в `Resources/updates.json`. Технический номер сборки в интерфейсе не показывается.
 
 ## Разработка
 
@@ -93,10 +94,9 @@ swift run SelectiveRemote
 
 ## Последние изменения
 
-Текущая публичная сборка — **0.17.1 (build 68)**. В GitHub-DMG теперь
-упаковывается OpenSSL legacy provider, необходимый FreeRDP для NTLM/CredSSP.
-Production-сборка автоматически проверяет его загрузку и не публикует DMG,
-в котором RDP-аутентификация заведомо не работает.
+Текущая публичная версия — **0.17.2**. В ней исправлена упаковка OpenSSL для
+NTLM/CredSSP-аутентификации FreeRDP, упрощено отображение версии и настроена
+публикация каждого обновления как отдельного стабильного GitHub Release.
 
 Полный список исправлений и новых возможностей вынесен в отдельный
 [CHANGELOG.md](CHANGELOG.md).
@@ -240,10 +240,10 @@ XQuartz не нужен: используется SDL-клиент `sdl-freerdp`
 
 ## Сборка community DMG
 
-На вашем M4 Pro выполните:
+На вашем Mac выполните:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.1-source
+cd ~/Downloads/SelectiveRemote-0.17.2-source
 chmod +x scripts/build_app.sh
 ./scripts/build_app.sh
 ```
@@ -251,8 +251,8 @@ chmod +x scripts/build_app.sh
 Успешная сборка создаёт:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.1-arm64.dmg`;
-- `dist/SelectiveRemote-0.17.1-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.17.2-arm64.dmg`;
+- `dist/SelectiveRemote-0.17.2-arm64.dmg.sha256`.
 
 Именно два последних файла можно распространять. Получателю не передаются исходники и не требуется запускать `build_app.sh`.
 
@@ -264,41 +264,10 @@ chmod +x scripts/build_app.sh
 
 ```bash
 cd ~/Downloads
-shasum -a 256 SelectiveRemote-0.17.1-arm64.dmg
+shasum -a 256 SelectiveRemote-0.17.2-arm64.dmg
 ```
 
 Результат должен полностью совпасть с опубликованным. SHA-256 подтверждает совпадение файла с выложенной вами копией, но не заменяет удостоверение издателя Apple.
-
-## Подпись и notarization в будущем
-
-Приоритет сертификатов: явно заданный `SELECTIVEREMOTE_CODESIGN_IDENTITY`, затем **Developer ID Application**, затем **Apple Development**, затем ad-hoc подпись.
-
-```bash
-security find-identity -v -p codesigning
-
-SELECTIVEREMOTE_CODESIGN_IDENTITY="Apple Development: Ваше имя (…)" \
-  ./scripts/build_app.sh
-```
-
-Для доверенного публичного релиза после получения Developer ID один раз сохраните credentials:
-
-```bash
-xcrun notarytool store-credentials "SelectiveRemote-notary" \
-  --apple-id "APPLE_ID" \
-  --team-id "TEAM_ID" \
-  --password "APP_SPECIFIC_PASSWORD"
-```
-
-Затем:
-
-```bash
-SELECTIVEREMOTE_CODESIGN_IDENTITY="Developer ID Application: Имя (TEAM_ID)" \
-SELECTIVEREMOTE_NOTARY_PROFILE="SelectiveRemote-notary" \
-SELECTIVEREMOTE_UPDATE_FEED_URL="https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json" \
-  ./scripts/build_app.sh
-```
-
-Скрипт включает Hardened Runtime, отправляет DMG через `notarytool --wait`, прикрепляет ticket командой `stapler` и проверяет Gatekeeper.
 
 ## Пароли и Keychain
 

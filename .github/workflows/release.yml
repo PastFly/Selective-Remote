@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing version tag to publish
         required: true
-        default: v0.17.1
+        default: v0.17.2
         type: string
 
 permissions:
@@ -40,8 +40,23 @@ jobs:
         run: |
           set -euo pipefail
           version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          build="$(sed -nE 's/^BUILD_NUMBER="([^"]+)"/\1/p' scripts/build_app.sh)"
+          manifest_version="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["version"])')"
+          manifest_build="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["build"])')"
+          manifest_download="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["downloadURL"])')"
+          manifest_notes="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["releaseNotesURL"])')"
           if [[ "${{ inputs.tag }}" != "v${version}" ]]; then
             echo "Tag ${{ inputs.tag }} does not match VERSION=${version}." >&2
+            exit 1
+          fi
+          if [[ "$manifest_version" != "$version" || "$manifest_build" != "$build" ]]; then
+            echo "Resources/updates.json does not match VERSION/BUILD_NUMBER." >&2
+            exit 1
+          fi
+          expected_download="https://github.com/PastFly/Selective-Remote/releases/download/v${version}/SelectiveRemote-${version}-arm64.dmg"
+          expected_notes="https://github.com/PastFly/Selective-Remote/releases/tag/v${version}"
+          if [[ "$manifest_download" != "$expected_download" || "$manifest_notes" != "$expected_notes" ]]; then
+            echo "Resources/updates.json points to a different GitHub Release." >&2
             exit 1
           fi
 
@@ -126,11 +141,12 @@ jobs:
             exit 1
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" "${dmgs[0]}" "${hashes[0]}" --clobber
-          else
-            gh release create "$TAG" "${dmgs[0]}" "${hashes[0]}" \
-              --verify-tag \
-              --title "Selective Remote ${TAG#v}" \
-              --generate-notes \
-              --prerelease
+            echo "Release $TAG already exists. Increase VERSION and publish a new tag." >&2
+            exit 1
           fi
+          gh release create "$TAG" "${dmgs[0]}" "${hashes[0]}" \
+            --verify-tag \
+            --title "Selective Remote ${TAG#v}" \
+            --generate-notes \
+            --fail-on-no-commits \
+            --latest

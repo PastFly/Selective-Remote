@@ -15,7 +15,7 @@ README, `.gitignore` и MIT License уже находятся в проекте.
 пустого репозитория выполните в Terminal:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.1-source-public-v9.5
+cd ~/Downloads/SelectiveRemote-0.17.2-source-public-v9.6
 git init
 git add .
 git commit -m "Initial public release"
@@ -42,13 +42,12 @@ git rebase --root --exec 'git commit --amend --no-edit --reset-author'
 git push --force-with-lease origin main
 ```
 
-После переписывания истории удалите и создайте тег заново, иначе он останется
-на старом commit:
+После переписывания истории создайте первый публичный тег. Для каждого
+следующего выпуска используйте новый номер версии и новый тег:
 
 ```bash
-git tag -d v0.17.1
-git tag -a v0.17.1 -m "Selective Remote 0.17.1 public preview"
-git push --force origin v0.17.1
+git tag -a v0.17.2 -m "Selective Remote 0.17.2"
+git push origin v0.17.2
 ```
 
 Force push меняет commit ID. Не выполняйте его после того, как другие

@@ -2,8 +2,10 @@
 
 ## 1. Версия и канал обновлений
 
-Перед релизом увеличьте `BUILD_NUMBER` в `scripts/build_app.sh` и синхронно
-обновите `version`, `build`, `downloadURL` и `releaseNotesURL` в
+Перед каждым публичным релизом увеличьте `VERSION` в `scripts/build_app.sh`,
+например `0.17.1` → `0.17.2`. `BUILD_NUMBER` тоже должен монотонно расти, но
+это только внутренний идентификатор macOS: пользователь его не видит.
+Синхронно обновите `version`, `build`, `downloadURL` и `releaseNotesURL` в
 `Resources/updates.json`. Обычная сборка уже содержит адрес официального feed:
 
 ```text
@@ -15,18 +17,21 @@ https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/update
 После успешного CI создайте тег на том же commit:
 
 ```bash
-git tag -a v0.17.1 -m "Selective Remote 0.17.1"
-git push origin v0.17.1
+git tag -a v0.17.2 -m "Selective Remote 0.17.2"
+git push origin v0.17.2
 ```
 
-GitHub автоматически предложит архивы исходного кода, но пользователю нужен
-только прикреплённый DMG.
+Для каждого выпуска создавайте новый тег. Не перемещайте опубликованный тег и
+не перезаписывайте его DMG: Release должен оставаться воспроизводимым. GitHub
+автоматически предложит архивы исходного кода, но пользователю нужен только
+прикреплённый DMG.
 
 ## 3. Автоматический Release
 
 Откройте на GitHub **Actions → Release DMG → Run workflow**, укажите существующий
 тег и запустите workflow. ARM64 runner установит зависимости, выполнит все
-проверки `build_app.sh`, соберёт DMG и SHA-256 и прикрепит оба файла к Release.
+проверки `build_app.sh`, соберёт DMG и SHA-256, создаст отдельный стабильный
+Release и отметит его **Latest**. Существующий Release workflow не перезаписывает.
 
 Пока Apple Secrets не настроены, создаётся ad-hoc подписанная preview-сборка:
 её можно скачать одним DMG, но первый запуск нужно подтвердить в настройках
@@ -71,7 +76,7 @@ production-релиз.
 Перед релизом проверьте:
 
 - `swift test` и GitHub Actions завершились успешно;
-- номер сборки увеличен в `scripts/build_app.sh`;
+- публичная `VERSION` и внутренний `BUILD_NUMBER` увеличены в `scripts/build_app.sh`;
 - приложение запускается на чистом профиле macOS;
 - RDP, SSH, SFTP, туннели и отказы в необязательных разрешениях проверены;
 - SHA-256 из `dist/*.sha256` приложен к релизу;

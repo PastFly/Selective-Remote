@@ -272,6 +272,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published var updateMessage: String?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var availableUpdateURL: URL?
+    @Published private(set) var availableReleaseNotesURL: URL?
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
@@ -1484,6 +1485,7 @@ final class AppModel: NSObject, ObservableObject {
         isCheckingForUpdates = true
         updateMessage = nil
         availableUpdateURL = nil
+        availableReleaseNotesURL = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isCheckingForUpdates = false }
@@ -1508,10 +1510,12 @@ final class AppModel: NSObject, ObservableObject {
                     }
                 case let .available(manifest):
                     availableUpdateURL = manifest.downloadURL
-                    updateMessage = "Доступна \(AppBrand.name) \(manifest.version) (\(manifest.build))."
+                    availableReleaseNotesURL = manifest.releaseNotesURL
+                    updateMessage = "Доступна новая версия \(AppBrand.name) \(manifest.version)."
                 case let .incompatible(manifest):
+                    availableReleaseNotesURL = manifest.releaseNotesURL
                     let minimum = manifest.minimumMacOS ?? "более новая версия macOS"
-                    updateMessage = "Доступна \(AppBrand.name) \(manifest.version) (\(manifest.build)), "
+                    updateMessage = "Доступна \(AppBrand.name) \(manifest.version), "
                         + "но для неё требуется macOS \(minimum) или новее."
                 }
             } catch {
@@ -1525,6 +1529,11 @@ final class AppModel: NSObject, ObservableObject {
     func openAvailableUpdate() {
         guard let availableUpdateURL else { return }
         NSWorkspace.shared.open(availableUpdateURL)
+    }
+
+    func openAvailableReleaseNotes() {
+        guard let availableReleaseNotesURL else { return }
+        NSWorkspace.shared.open(availableReleaseNotesURL)
     }
 
     private func connectProfile(

@@ -102,6 +102,9 @@ struct ContentView: View {
             if model.availableUpdateURL != nil {
                 Button("Скачать DMG") { model.openAvailableUpdate() }
             }
+            if model.availableReleaseNotesURL != nil {
+                Button("Что нового") { model.openAvailableReleaseNotes() }
+            }
             Button("OK", role: .cancel) { model.updateMessage = nil }
         } message: {
             Text(model.updateMessage ?? "")

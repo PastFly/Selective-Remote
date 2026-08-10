@@ -12,11 +12,7 @@ enum AppBuildInfo {
             ?? "Development"
     }
 
-    static var build: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "–"
-    }
-
-    static var displayText: String { "v\(version) (\(build))" }
+    static var displayText: String { "v\(version)" }
     static var fullText: String { "\(AppBrand.name) \(displayText) · Community" }
 }
 
