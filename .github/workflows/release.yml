@@ -1,0 +1,128 @@
+name: Release DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish
+        required: true
+        default: v0.17.1
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish ARM64 DMG
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag }}
+
+      - name: Validate tag and source version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          if [[ "${{ inputs.tag }}" != "v${version}" ]]; then
+            echo "Tag ${{ inputs.tag }} does not match VERSION=${version}." >&2
+            exit 1
+          fi
+
+      - name: Install build dependencies
+        run: brew install freerdp sdl3
+
+      - name: Configure Developer ID signing when secrets are present
+        id: signing
+        shell: bash
+        env:
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$P12_BASE64$P12_PASSWORD$API_KEY_BASE64$API_KEY_ID$API_ISSUER_ID" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Apple secrets are absent; the Release will contain an ad-hoc signed community DMG."
+            exit 0
+          fi
+          for value in "$P12_BASE64" "$P12_PASSWORD" "$API_KEY_BASE64" "$API_KEY_ID" "$API_ISSUER_ID"; do
+            if [[ -z "$value" ]]; then
+              echo "Apple signing secrets are only partially configured." >&2
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/selective-remote.keychain-db"
+          keychain_password="$(uuidgen)"
+          certificate="$RUNNER_TEMP/developer-id.p12"
+          api_key="$RUNNER_TEMP/AuthKey_${API_KEY_ID}.p8"
+          export P12_BASE64 API_KEY_BASE64 certificate api_key
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          Path(os.environ["certificate"]).write_bytes(base64.b64decode(os.environ["P12_BASE64"]))
+          Path(os.environ["api_key"]).write_bytes(base64.b64decode(os.environ["API_KEY_BASE64"]))
+          PY
+
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -d user -s "$keychain"
+          security import "$certificate" -k "$keychain" -P "$P12_PASSWORD" -A -t cert -f pkcs12
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$keychain_password" "$keychain"
+          xcrun notarytool store-credentials "SelectiveRemote-notary" \
+            --key "$api_key" \
+            --key-id "$API_KEY_ID" \
+            --issuer "$API_ISSUER_ID"
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build, sign and notarize DMG
+        shell: bash
+        env:
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+        run: |
+          set -euo pipefail
+          if [[ "$SIGNING_ENABLED" == "true" ]]; then
+            export SELECTIVEREMOTE_NOTARY_PROFILE="SelectiveRemote-notary"
+          fi
+          ./scripts/build_app.sh
+
+      - name: Publish GitHub Release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=(dist/*.dmg)
+          hashes=(dist/*.dmg.sha256)
+          if [[ ${#dmgs[@]} -ne 1 || ${#hashes[@]} -ne 1 ]]; then
+            echo "Expected exactly one DMG and one SHA-256 file." >&2
+            exit 1
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${dmgs[0]}" "${hashes[0]}" --clobber
+          else
+            gh release create "$TAG" "${dmgs[0]}" "${hashes[0]}" \
+              --verify-tag \
+              --title "Selective Remote ${TAG#v}" \
+              --generate-notes \
+              --prerelease
+          fi

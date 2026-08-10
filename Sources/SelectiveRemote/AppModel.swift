@@ -293,6 +293,7 @@ final class AppModel: NSObject, ObservableObject {
     private let sshKeysKey = "SelectiveRemote.sshKeys.v1"
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
+    private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
     private var managedSessions: [UUID: ManagedRDPSession] = [:]
     private var lastSessionLogURLs: [UUID: URL] = [:]
     private var managedSSHTunnels: [UUID: RunningSSHTunnel] = [:]
@@ -355,6 +356,10 @@ final class AppModel: NSObject, ObservableObject {
         refreshDisplays(configureEmptyProfile: true)
         refreshCameras(announce: false)
         installNotifications()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            self?.checkForUpdatesAutomatically()
+        }
     }
 
     var selectedProfile: ConnectionProfile {
@@ -1463,7 +1468,20 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func checkForUpdates() {
-        updateMessage = "Проверяем обновления…"
+        checkForUpdates(announcesUpToDate: true)
+    }
+
+    private func checkForUpdatesAutomatically() {
+        let lastCheck = UserDefaults.standard.double(forKey: lastSuccessfulUpdateCheckKey)
+        let day: TimeInterval = 24 * 60 * 60
+        guard Date().timeIntervalSince1970 - lastCheck >= day else { return }
+        checkForUpdates(announcesUpToDate: false)
+    }
+
+    private func checkForUpdates(announcesUpToDate: Bool) {
+        if announcesUpToDate {
+            updateMessage = "Проверяем обновления…"
+        }
         availableUpdateURL = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
@@ -1477,9 +1495,15 @@ final class AppModel: NSObject, ObservableObject {
                     currentVersion: version,
                     currentBuild: build
                 )
+                UserDefaults.standard.set(
+                    Date().timeIntervalSince1970,
+                    forKey: lastSuccessfulUpdateCheckKey
+                )
                 switch result {
                 case .upToDate:
-                    updateMessage = "Установлена актуальная версия \(AppBrand.name) \(version)."
+                    if announcesUpToDate {
+                        updateMessage = "Установлена актуальная версия \(AppBrand.name) \(version)."
+                    }
                 case let .available(manifest):
                     availableUpdateURL = manifest.downloadURL
                     updateMessage = "Доступна \(AppBrand.name) \(manifest.version) (\(manifest.build))."
@@ -1489,7 +1513,9 @@ final class AppModel: NSObject, ObservableObject {
                         + "но для неё требуется macOS \(minimum) или новее."
                 }
             } catch {
-                updateMessage = error.localizedDescription
+                if announcesUpToDate {
+                    updateMessage = error.localizedDescription
+                }
             }
         }
     }

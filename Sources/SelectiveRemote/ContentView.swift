@@ -100,7 +100,7 @@ struct ContentView: View {
             set: { if !$0 { model.updateMessage = nil } }
         )) {
             if model.availableUpdateURL != nil {
-                Button("Открыть загрузку") { model.openAvailableUpdate() }
+                Button("Скачать DMG") { model.openAvailableUpdate() }
             }
             Button("OK", role: .cancel) { model.updateMessage = nil }
         } message: {

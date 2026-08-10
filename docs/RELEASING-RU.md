@@ -1,17 +1,63 @@
-# Публикация релизов
+# Публикация DMG и обновлений
 
-## Исходный код
+## 1. Версия и канал обновлений
 
-Создайте тег после успешного CI:
+Перед релизом увеличьте `BUILD_NUMBER` в `scripts/build_app.sh` и синхронно
+обновите `version`, `build`, `downloadURL` и `releaseNotesURL` в
+`Resources/updates.json`. Обычная сборка уже содержит адрес официального feed:
+
+```text
+https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+```
+
+## 2. Commit и тег
+
+После успешного CI создайте тег на том же commit:
 
 ```bash
 git tag -a v0.17.1 -m "Selective Remote 0.17.1"
 git push origin v0.17.1
 ```
 
-GitHub автоматически предложит архивы исходного кода на странице Release.
+GitHub автоматически предложит архивы исходного кода, но пользователю нужен
+только прикреплённый DMG.
 
-## Готовое приложение
+## 3. Автоматический Release
+
+Откройте на GitHub **Actions → Release DMG → Run workflow**, укажите существующий
+тег и запустите workflow. ARM64 runner установит зависимости, выполнит все
+проверки `build_app.sh`, соберёт DMG и SHA-256 и прикрепит оба файла к Release.
+
+Пока Apple Secrets не настроены, создаётся ad-hoc подписанная preview-сборка:
+её можно скачать одним DMG, но первый запуск нужно подтвердить в настройках
+безопасности macOS.
+
+## 4. Developer ID и нотариализация
+
+Для обычного запуска на чужих Mac без обхода Gatekeeper нужен активный Apple
+Developer Program, сертификат **Developer ID Application** и ключ App Store
+Connect API. Добавьте в **Settings → Secrets and variables → Actions**:
+
+- `DEVELOPER_ID_APPLICATION_P12_BASE64` — экспортированный сертификат `.p12`
+  в Base64;
+- `DEVELOPER_ID_APPLICATION_P12_PASSWORD` — пароль `.p12`;
+- `APPLE_API_KEY_P8_BASE64` — содержимое `AuthKey_….p8` в Base64;
+- `APPLE_API_KEY_ID` — Key ID;
+- `APPLE_API_ISSUER_ID` — Issuer ID.
+
+После этого `Release DMG` автоматически импортирует сертификат во временный
+Keychain, включает Hardened Runtime, отправляет DMG через `notarytool`, выполняет
+`stapler` и публикует уже нотариализованный файл. Секреты в DMG и журналах не
+сохраняются.
+
+Получить Base64 без переносов строк можно на Mac:
+
+```bash
+base64 -i DeveloperIDApplication.p12 | tr -d '\n' | pbcopy
+base64 -i AuthKey_XXXXXXXXXX.p8 | tr -d '\n' | pbcopy
+```
+
+## Локальная проверка пакета
 
 ```bash
 ./scripts/build_app.sh
@@ -19,7 +65,7 @@ GitHub автоматически предложит архивы исходно
 
 Результат находится в `dist/`. Для публичного распространения без системного
 предупреждения macOS нужен сертификат **Developer ID Application** и
-нотариализация Apple. Не публикуйте ad-hoc подписанный DMG как доверенный
+нотариализация Apple. Ad-hoc DMG помечайте как preview, а не как доверенный
 production-релиз.
 
 Перед релизом проверьте:
@@ -29,4 +75,5 @@ production-релиз.
 - приложение запускается на чистом профиле macOS;
 - RDP, SSH, SFTP, туннели и отказы в необязательных разрешениях проверены;
 - SHA-256 из `dist/*.sha256` приложен к релизу;
+- `Resources/updates.json` ссылается ровно на опубликованный DMG;
 - журналы, профили и реальные адреса серверов не попали в архив.

@@ -19,9 +19,20 @@ SSH-терминал, двухпанельный SFTP и SSH-туннели в �
   POSIX-прав и сохранением подключения между вкладками;
 - профили хранятся локально, секреты — в macOS Keychain.
 
-## Быстрая установка из исходников
+## Установка
 
-Требуются macOS 14 или новее, Xcode Command Line Tools и Homebrew.
+Для Apple Silicon (M1 и новее) скачайте готовый DMG из
+[последнего GitHub Release](https://github.com/PastFly/Selective-Remote/releases/latest),
+откройте его и перетащите **Selective Remote** в `Applications`. Homebrew,
+FreeRDP, SDL и исходники пользователю не нужны.
+
+Если DMG собран без сертификата Developer ID, macOS один раз потребует
+подтвердить запуск в **Системные настройки → Конфиденциальность и безопасность**.
+Подписанный и нотариализованный релиз открывается штатно.
+
+### Сборка из исходников
+
+Требуются macOS 14 или новее, Xcode Command Line Tools и Homebrew:
 
 ```bash
 brew install freerdp sdl3
@@ -32,6 +43,13 @@ cd Selective-Remote
 
 Скрипт запускает тесты, собирает приложение, сохраняет предыдущую установленную
 версию в Корзине и устанавливает `Selective Remote.app` в `/Applications`.
+
+## Обновления
+
+Приложение проверяет канал GitHub при запуске не чаще одного раза в сутки.
+Ручная проверка доступна в меню **Selective Remote → Проверить обновления…**.
+При наличии новой сборки кнопка **Скачать DMG** открывает соответствующий файл
+из GitHub Release. Feed публикуется в `Resources/updates.json`.
 
 ## Разработка
 
@@ -63,6 +81,17 @@ swift run SelectiveRemote
 [уведомления о сторонних компонентах](Resources/THIRD-PARTY-NOTICES.txt).
 
 ## История изменений
+
+### Добавлено в GitHub release v9.3
+
+- обычные сборки используют официальный канал обновлений
+  `PastFly/Selective-Remote` без дополнительной переменной окружения;
+- добавлена тихая автоматическая проверка обновлений раз в сутки и прямая
+  кнопка скачивания DMG;
+- GitHub Actions собирает ARM64-DMG и публикует его вместе с SHA-256 в Release;
+- при наличии Apple Secrets тот же workflow подписывает приложение сертификатом
+  Developer ID, нотариализует DMG и прикрепляет ticket;
+- версия приложения: **0.17.1 (build 66)**.
 
 ### Исправлено в Public preview v9.2
 
@@ -504,8 +533,8 @@ Community-сборка использует ad-hoc подпись либо ло�
 
 Сборка переносима между Mac одной архитектуры:
 
-- Mac с Apple Silicon (включая M1–M4) создаёт `community-arm64.dmg`;
-- Intel Mac создаёт `community-x86_64.dmg`.
+- Mac с Apple Silicon создаёт `arm64.dmg`;
+- Intel Mac создаёт `x86_64.dmg`.
 
 Нельзя выдавать arm64 DMG за Intel-сборку. Если нужны обе платформы, соберите и опубликуйте два DMG с понятными именами. Модели, количество, разрешения и частоты мониторов при этом не зашиты в код.
 
@@ -537,8 +566,8 @@ chmod +x scripts/build_app.sh
 Успешная сборка создаёт:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.1-community-arm64.dmg`;
-- `dist/SelectiveRemote-0.17.1-community-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.17.1-arm64.dmg`;
+- `dist/SelectiveRemote-0.17.1-arm64.dmg.sha256`.
 
 Именно два последних файла можно распространять. Получателю не передаются исходники и не требуется запускать `build_app.sh`.
 
@@ -550,7 +579,7 @@ chmod +x scripts/build_app.sh
 
 ```bash
 cd ~/Downloads
-shasum -a 256 SelectiveRemote-0.17.1-community-arm64.dmg
+shasum -a 256 SelectiveRemote-0.17.1-arm64.dmg
 ```
 
 Результат должен полностью совпасть с опубликованным. SHA-256 подтверждает совпадение файла с выложенной вами копией, но не заменяет удостоверение издателя Apple.
@@ -580,7 +609,7 @@ xcrun notarytool store-credentials "SelectiveRemote-notary" \
 ```bash
 SELECTIVEREMOTE_CODESIGN_IDENTITY="Developer ID Application: Имя (TEAM_ID)" \
 SELECTIVEREMOTE_NOTARY_PROFILE="SelectiveRemote-notary" \
-SELECTIVEREMOTE_UPDATE_FEED_URL="https://example.com/updates.json" \
+SELECTIVEREMOTE_UPDATE_FEED_URL="https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json" \
   ./scripts/build_app.sh
 ```
 

@@ -15,7 +15,7 @@ README, `.gitignore` и MIT License уже находятся в проекте.
 пустого репозитория выполните в Terminal:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.1-source-public-v9.2
+cd ~/Downloads/SelectiveRemote-0.17.1-source-public-v9.3
 git init
 git add .
 git commit -m "Initial public release"
@@ -24,12 +24,35 @@ git remote add origin https://github.com/PastFly/Selective-Remote.git
 git push -u origin main
 ```
 
-Если Git попросит имя автора:
+Перед первым commit задайте публичную подпись только для этого репозитория.
+Точный `noreply`-адрес скопируйте из **GitHub → Settings → Emails**:
 
 ```bash
-git config --global user.name "Leonid Kadaev"
-git config --global user.email "EMAIL_ИЗ_GITHUB"
+git config user.name "PastFly"
+git config user.email "ТОЧНЫЙ_NOREPLY_ИЗ_GITHUB"
 ```
+
+Имя на странице commit берётся не из файлов проекта, а из полей Author и
+Committer внутри истории Git. Если ранние commit уже опубликованы под прежним
+именем и репозиторий ещё никто не клонировал, перепишите их после настройки
+публичной подписи:
+
+```bash
+git rebase --root --exec 'git commit --amend --no-edit --reset-author'
+git push --force-with-lease origin main
+```
+
+После переписывания истории удалите и создайте тег заново, иначе он останется
+на старом commit:
+
+```bash
+git tag -d v0.17.1
+git tag -a v0.17.1 -m "Selective Remote 0.17.1 public preview"
+git push --force origin v0.17.1
+```
+
+Force push меняет commit ID. Не выполняйте его после того, как другие
+разработчики начали работать со своими клонами репозитория.
 
 После публикации включите **Settings → Security → Private vulnerability
 reporting** и защиту ветки `main` с обязательным прохождением CI.

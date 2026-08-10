@@ -5,19 +5,19 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="0.17.1"
-BUILD_NUMBER="65"
+BUILD_NUMBER="66"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
 BUILD_ARCH="$(uname -m)"
 APP="$ROOT/dist/$APP_NAME.app"
-DMG="$ROOT/dist/$ARTIFACT_NAME-$VERSION-community-$BUILD_ARCH.dmg"
+DMG="$ROOT/dist/$ARTIFACT_NAME-$VERSION-$BUILD_ARCH.dmg"
 DMG_HASH="$DMG.sha256"
 DMG_STAGE="$ROOT/.build/dmg-stage"
-DMG_RW="$ROOT/.build/$ARTIFACT_NAME-$VERSION-community-$BUILD_ARCH-rw.dmg"
+DMG_RW="$ROOT/.build/$ARTIFACT_NAME-$VERSION-$BUILD_ARCH-rw.dmg"
 DMG_ATTACH_PLIST="$ROOT/.build/dmg-attach.plist"
 DMG_BACKGROUND="$DMG_STAGE/.background/installer-background.png"
-DMG_VOLUME_NAME="$APP_NAME $VERSION Community"
+DMG_VOLUME_NAME="$APP_NAME $VERSION"
 BIN_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
 HELPERS_DIR="$APP/Contents/Helpers"
@@ -32,7 +32,7 @@ SESSION_BIN="$SESSION_BIN_DIR/SelectiveRemoteSession"
 APP_ENTITLEMENTS="$ROOT/Resources/SelectiveRemote.entitlements"
 SESSION_ENTITLEMENTS="$ROOT/Resources/SelectiveRemoteSession.entitlements"
 LICENSES_DIR="$RES_DIR/ThirdPartyLicenses"
-UPDATE_FEED_URL="${SELECTIVEREMOTE_UPDATE_FEED_URL:-}"
+UPDATE_FEED_URL="${SELECTIVEREMOTE_UPDATE_FEED_URL:-https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json}"
 NOTARY_PROFILE="${SELECTIVEREMOTE_NOTARY_PROFILE:-}"
 
 DMG_MOUNTED=false
@@ -1121,7 +1121,7 @@ BUNDLE_MINIMUM_MACOS="$(/usr/bin/awk -F. '
 /usr/bin/plutil -replace build -integer "$BUILD_NUMBER" "$RES_DIR/updates.example.json"
 /usr/bin/plutil -replace minimumMacOS -string "$BUNDLE_MINIMUM_MACOS" "$RES_DIR/updates.example.json"
 /usr/bin/plutil -replace downloadURL -string \
-    "https://example.com/$ARTIFACT_NAME-$VERSION-community-$BUILD_ARCH.dmg" \
+    "https://github.com/PastFly/Selective-Remote/releases/download/v$VERSION/$ARTIFACT_NAME-$VERSION-$BUILD_ARCH.dmg" \
     "$RES_DIR/updates.example.json"
 echo "Минимальная macOS готового пакета: $BUNDLE_MINIMUM_MACOS"
 
@@ -1404,7 +1404,7 @@ fi
 )
 
 if [[ "$SIGN_IDENTITY" == "-" ]]; then
-    echo "Примечание: community-сборка использует временную ad-hoc подпись."
+    echo "Примечание: эта сборка использует временную ad-hoc подпись."
     echo "Получателю потребуется один раз явно разрешить запуск в macOS."
 elif [[ "$DISTRIBUTION_SIGNING" == "true" ]]; then
     echo "Подпись для распространения: $SIGN_IDENTITY"
