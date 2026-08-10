@@ -523,6 +523,19 @@ final class FreeRDPService {
                 frameworks.path,
                 to: environment["DYLD_LIBRARY_PATH"]
             )
+
+            // OpenSSL 3 implements MD4 in the loadable legacy provider.
+            // FreeRDP requires it for NTLM/CredSSP. The provider's compiled-in
+            // Homebrew path is not present on a recipient Mac, so portable
+            // builds always resolve providers from the nested session bundle.
+            let modules = frameworks.appendingPathComponent(
+                "ossl-modules",
+                isDirectory: true
+            )
+            let legacyProvider = modules.appendingPathComponent("legacy.dylib")
+            if fileManager.fileExists(atPath: legacyProvider.path) {
+                environment["OPENSSL_MODULES"] = modules.path
+            }
         }
 
         // Homebrew's CA bundle is copied into portable builds. Do not replace

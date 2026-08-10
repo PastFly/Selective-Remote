@@ -1,13 +1,13 @@
 # Сборка Selective Remote 0.17.1
 
 Архив с исходниками создаёт отдельный каталог
-`SelectiveRemote-0.17.1-source-public-v9.4`, не затрагивая прежние
+`SelectiveRemote-0.17.1-source-public-v9.5`, не затрагивая прежние
 распаковки.
 
 ```bash
 cd ~/Downloads
-unzip -q SelectiveRemote-0.17.1-source-public-v9.4.zip
-cd SelectiveRemote-0.17.1-source-public-v9.4
+unzip -q SelectiveRemote-0.17.1-source-public-v9.5.zip
+cd SelectiveRemote-0.17.1-source-public-v9.5
 ./scripts/build_and_install.sh
 ```
 

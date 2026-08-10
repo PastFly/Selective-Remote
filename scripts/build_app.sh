@@ -5,7 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 VERSION="0.17.1"
-BUILD_NUMBER="67"
+BUILD_NUMBER="68"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
@@ -26,6 +26,7 @@ SESSION_APP="$HELPERS_DIR/Selective Remote Session.app"
 SESSION_BIN_DIR="$SESSION_APP/Contents/MacOS"
 SESSION_RES_DIR="$SESSION_APP/Contents/Resources"
 FRAMEWORKS_DIR="$SESSION_APP/Contents/Frameworks"
+OPENSSL_MODULES_DIR="$FRAMEWORKS_DIR/ossl-modules"
 CAMERA_ADDIN_DIR="$FRAMEWORKS_DIR/lib/freerdp3"
 CAMERA_ADDIN=""
 SESSION_BIN="$SESSION_BIN_DIR/SelectiveRemoteSession"
@@ -186,6 +187,9 @@ FREERDP_INCLUDE="$FREERDP_PREFIX/include/freerdp3"
 WINPR_INCLUDE="$FREERDP_PREFIX/include/winpr3"
 SDL_PREFIX="$(brew --prefix sdl3)"
 SDL_INCLUDE="$SDL_PREFIX/include"
+OPENSSL_PREFIX="$(brew --prefix openssl@3 2>/dev/null || true)"
+OPENSSL_LEGACY_SOURCE="$OPENSSL_PREFIX/lib/ossl-modules/legacy.dylib"
+OPENSSL_LEGACY_MODULE="$OPENSSL_MODULES_DIR/legacy.dylib"
 INTERPOSER="$FRAMEWORKS_DIR/SelectiveRemoteMonitorInterposer.dylib"
 INTERPOSER_CPP_OBJECT="$ROOT/.build/MonitorTopologyInterposer.o"
 FN_SHORTCUT="$FRAMEWORKS_DIR/SelectiveRemoteFnShortcut.dylib"
@@ -207,6 +211,10 @@ if [[ ! -x "$SDL_FREERDP" ]]; then
 fi
 if [[ ! -f "$SDL_INCLUDE/SDL3/SDL.h" ]]; then
     echo "Ошибка: заголовки SDL3 не найдены. Выполните: brew reinstall sdl3" >&2
+    exit 1
+fi
+if [[ -z "$OPENSSL_PREFIX" || ! -f "$OPENSSL_LEGACY_SOURCE" ]]; then
+    echo "Ошибка: модуль OpenSSL legacy не найден. Выполните: brew reinstall openssl@3 freerdp" >&2
     exit 1
 fi
 if [[ ! -f "$SESSION_ENTITLEMENTS" ]]; then
@@ -529,6 +537,7 @@ run_monitor_smoke() {
     local log="$3"
     local frameworks="${4:-}"
     local ca_bundle="${5:-}"
+    local openssl_modules="${6:-}"
     local smoke_pid
     local smoke_finished=false
     local smoke_environment=(
@@ -545,6 +554,9 @@ run_monitor_smoke() {
     fi
     if [[ -n "$ca_bundle" && -f "$ca_bundle" ]]; then
         smoke_environment+=("SSL_CERT_FILE=$ca_bundle")
+    fi
+    if [[ -n "$openssl_modules" && -d "$openssl_modules" ]]; then
+        smoke_environment+=("OPENSSL_MODULES=$openssl_modules")
     fi
 
     "${smoke_environment[@]}" \
@@ -894,6 +906,9 @@ relative_reference_for() {
                 printf '@loader_path/%s%s\n' "$upward" "$basename_only"
             fi
             ;;
+        "$OPENSSL_MODULES_DIR/"*)
+            printf '@loader_path/../%s\n' "$basename_only"
+            ;;
         "$FRAMEWORKS_DIR/"*)
             printf '@loader_path/%s\n' "$basename_only"
             ;;
@@ -987,6 +1002,20 @@ bundle_dependencies "$INTERPOSER" "$INTERPOSER" "$SESSION_BIN_DIR"
 bundle_dependencies "$FN_SHORTCUT" "$FN_SHORTCUT" "$SESSION_BIN_DIR"
 bundle_dependencies "$PRIVACY_PREFLIGHT" "$PRIVACY_PREFLIGHT" "$SESSION_BIN_DIR"
 bundle_dependencies "$CAMERA_ADDIN" "$CAMERA_ADDIN" "$SESSION_BIN_DIR"
+
+# OpenSSL 3 keeps MD4 in its loadable legacy provider. FreeRDP needs MD4 for
+# NTLM/CredSSP authentication, but a copied libcrypto still points at the
+# builder's Homebrew MODULESDIR unless the provider is bundled explicitly.
+# Keep the provider next to the portable libraries and rewrite its own
+# dependencies through the same relocation pass.
+mkdir -p "$OPENSSL_MODULES_DIR"
+cp -L "$OPENSSL_LEGACY_SOURCE" "$OPENSSL_LEGACY_MODULE"
+chmod u+w "$OPENSSL_LEGACY_MODULE"
+copy_formula_notices "$OPENSSL_LEGACY_SOURCE"
+bundle_dependencies \
+    "$OPENSSL_LEGACY_MODULE" \
+    "$OPENSSL_LEGACY_SOURCE" \
+    "$SESSION_BIN_DIR"
 
 BUNDLED_FREERDP_LIB="$(/usr/bin/find "$FRAMEWORKS_DIR" -maxdepth 1 -type f \
     -name 'libfreerdp3*.dylib' -print | /usr/bin/head -n 1)"
@@ -1167,6 +1196,10 @@ verify_portable_binary "$FN_SHORTCUT"
 verify_portable_binary "$PRIVACY_PREFLIGHT"
 verify_portable_binary "$BIN_DIR/$EXECUTABLE_NAME"
 verify_portable_binary "$SSH_ASKPASS_HELPER"
+if [[ ! -f "$OPENSSL_LEGACY_MODULE" ]]; then
+    echo "Ошибка: portable-пакет не содержит OpenSSL legacy provider" >&2
+    exit 1
+fi
 while IFS= read -r framework_binary; do
     verify_portable_binary "$framework_binary"
 done < <(/usr/bin/find "$FRAMEWORKS_DIR" -type f -print | /usr/bin/sort)
@@ -1237,7 +1270,14 @@ run_monitor_smoke \
     "$PRIVACY_PREFLIGHT:$FN_SHORTCUT:$INTERPOSER" \
     "$PORTABLE_SMOKE_LOG" \
     "$FRAMEWORKS_DIR" \
-    "$RES_DIR/cacert.pem"
+    "$RES_DIR/cacert.pem" \
+    "$OPENSSL_MODULES_DIR"
+if grep -Eqi 'LEGACY provider failed|no md4 support|md4: NTLM support not available' \
+        "$PORTABLE_SMOKE_LOG"; then
+    echo "Ошибка: portable OpenSSL не загрузил legacy provider; NTLM/CredSSP работать не будет" >&2
+    echo "Журнал: $PORTABLE_SMOKE_LOG" >&2
+    exit 1
+fi
 echo "Portable SDL-FreeRDP launch smoke test passed"
 
 # Build a conventional macOS drag-and-drop image. Finder stores the icon
