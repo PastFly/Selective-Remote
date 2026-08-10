@@ -66,6 +66,7 @@ struct SelectiveRemoteApp: App {
                 Button("Экспортировать все профили…") { model.exportAllProfiles() }
                 Divider()
                 Button("Проверить обновления…") { model.checkForUpdates() }
+                    .disabled(model.isCheckingForUpdates)
                 Divider()
                 Text(AppBuildInfo.fullText)
             }
@@ -149,6 +150,7 @@ struct SelectiveRemoteApp: App {
             Text("Правый Shift + D — отключить RDP")
             Divider()
             Button("Проверить обновления…") { model.checkForUpdates() }
+                .disabled(model.isCheckingForUpdates)
             Text(AppBuildInfo.fullText)
             Divider()
             Button("Завершить \(AppBrand.name)") { model.quitApplication() }

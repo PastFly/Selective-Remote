@@ -512,10 +512,16 @@ struct ContentView: View {
             }
             Spacer()
             Button { model.checkForUpdates() } label: {
-                Image(systemName: "arrow.triangle.2.circlepath")
+                if model.isCheckingForUpdates {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
             }
             .buttonStyle(.bordered)
-            .help("Проверить обновления")
+            .disabled(model.isCheckingForUpdates)
+            .help(model.isCheckingForUpdates ? "Проверяем обновления…" : "Проверить обновления")
             Button { model.toggleFavorite() } label: {
                 Label(
                     profile.isFavorite ? "В избранном" : "В избранное",

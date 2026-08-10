@@ -270,6 +270,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published var statusMessage = ""
     @Published var errorMessage: String?
     @Published var updateMessage: String?
+    @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var availableUpdateURL: URL?
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
@@ -1479,12 +1480,13 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func checkForUpdates(announcesUpToDate: Bool) {
-        if announcesUpToDate {
-            updateMessage = "Проверяем обновления…"
-        }
+        guard !isCheckingForUpdates else { return }
+        isCheckingForUpdates = true
+        updateMessage = nil
         availableUpdateURL = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
+            defer { self.isCheckingForUpdates = false }
             do {
                 let feedURL = try UpdateService.configuredFeedURL()
                 let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -1514,7 +1516,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
             } catch {
                 if announcesUpToDate {
-                    updateMessage = error.localizedDescription
+                    updateMessage = "Не удалось проверить обновления: \(error.localizedDescription)"
                 }
             }
         }
