@@ -99,6 +99,9 @@
     const postHistory = (payload) => {
         window.webkit?.messageHandlers?.terminalHistory?.postMessage(payload);
     };
+    const notifyHostFocus = () => {
+        window.webkit?.messageHandlers?.terminalFocus?.postMessage(true);
+    };
 
     const isAlternateScreen = () => terminal.buffer.active.type === "alternate";
 
@@ -819,6 +822,8 @@
         window.webkit.messageHandlers.terminalInput.postMessage(data);
     });
     terminal.onResize(reportSize);
+    terminalHost.addEventListener("pointerdown", notifyHostFocus, true);
+    terminalHost.addEventListener("focusin", notifyHostFocus, true);
 
     const outputQueue = [];
     let outputWriteActive = false;

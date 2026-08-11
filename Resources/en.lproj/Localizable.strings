@@ -74,6 +74,8 @@
 "Разделить слева направо" = "Split side by side";
 "Разделить сверху вниз" = "Split top and bottom";
 "Сетка до четырёх панелей" = "Grid up to four panes";
+"Компоновка терминалов" = "Terminal Layout";
+"Порядок панелей можно менять перетаскиванием." = "Drag panes or tabs to change their order.";
 "Вторая панель" = "Second pane";
 "Независимые SSH-сессии, вкладки и разделённые панели" = "Independent SSH sessions, tabs, and split panes";
 "SSH не запущен" = "SSH not started";

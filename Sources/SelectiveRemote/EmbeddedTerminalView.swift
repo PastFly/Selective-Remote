@@ -20,6 +20,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let appearance: TerminalAppearanceSnapshot
     let historyContext: TerminalHistoryContext?
     let remoteContext: TerminalRemoteContextSnapshot
+    let onFocus: () -> Void
     @Binding var historyVisible: Bool
 
     init(
@@ -27,12 +28,14 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         appearance: TerminalAppearanceSnapshot,
         historyContext: TerminalHistoryContext? = nil,
         remoteContext: TerminalRemoteContextSnapshot = .empty,
+        onFocus: @escaping () -> Void = {},
         historyVisible: Binding<Bool> = .constant(false)
     ) {
         self.session = session
         self.appearance = appearance
         self.historyContext = historyContext
         self.remoteContext = remoteContext
+        self.onFocus = onFocus
         _historyVisible = historyVisible
     }
 
@@ -42,6 +45,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             appearance: appearance,
             historyContext: historyContext,
             remoteContext: remoteContext,
+            onFocus: onFocus,
             historyVisible: _historyVisible
         )
     }
@@ -61,6 +65,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         configuration.userContentController.add(
             context.coordinator,
             name: Coordinator.historyMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Coordinator.focusMessageName
         )
 
         let webView = TerminalWKWebView(frame: .zero, configuration: configuration)
@@ -90,6 +98,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.updateHistoryContext(historyContext)
         context.coordinator.updateRemoteContext(remoteContext)
+        context.coordinator.updateFocusHandler(onFocus)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
         context.coordinator.updateHistoryVisibility(historyVisible)
@@ -107,6 +116,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.historyMessageName
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Coordinator.focusMessageName
+        )
         webView.navigationDelegate = nil
     }
 
@@ -115,6 +127,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         static let inputMessageName = "terminalInput"
         static let resizeMessageName = "terminalResize"
         static let historyMessageName = "terminalHistory"
+        static let focusMessageName = "terminalFocus"
 
         private weak var session: TerminalSessionModel?
         private weak var webView: WKWebView?
@@ -122,6 +135,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var appearance: TerminalAppearanceSnapshot
         private var historyContext: TerminalHistoryContext?
         private var remoteContext: TerminalRemoteContextSnapshot
+        private var onFocus: () -> Void
         private var historyVisible: Binding<Bool>
         private var appliedHistoryVisibility: Bool?
         private var pageReady = false
@@ -134,12 +148,14 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             appearance: TerminalAppearanceSnapshot,
             historyContext: TerminalHistoryContext?,
             remoteContext: TerminalRemoteContextSnapshot,
+            onFocus: @escaping () -> Void,
             historyVisible: Binding<Bool>
         ) {
             self.session = session
             self.appearance = appearance
             self.historyContext = historyContext
             self.remoteContext = remoteContext
+            self.onFocus = onFocus
             self.historyVisible = historyVisible
         }
 
@@ -175,6 +191,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             guard remoteContext != updated else { return }
             remoteContext = updated
             refreshHistory()
+        }
+
+        func updateFocusHandler(_ updated: @escaping () -> Void) {
+            onFocus = updated
         }
 
         func updateHistoryVisibility(_ visible: Bool) {
@@ -219,6 +239,8 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 session?.resize(columns: columns, rows: rows)
             case Self.historyMessageName:
                 handleHistoryMessage(message.body)
+            case Self.focusMessageName:
+                onFocus()
             default:
                 break
             }
@@ -420,6 +442,7 @@ struct SSHTerminalView: View {
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
     @State private var connectionEditorRequest: TerminalConnectionEditorRequest?
+    @State private var showsLayoutPicker = false
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
 
@@ -670,6 +693,10 @@ struct SSHTerminalView: View {
                                 }
                             }
                         }
+                        .draggable(tab.id.uuidString)
+                        .dropDestination(for: String.self) { items, _ in
+                            reorderTabs(items, to: tab.id)
+                        }
                     }
                 }
             }
@@ -687,61 +714,107 @@ struct SSHTerminalView: View {
             .disabled(workspace.tabs.count >= 8)
             .help("Новая независимая SSH-вкладка")
 
-            Menu {
-                ForEach(TerminalWorkspaceLayout.allCases) { layout in
-                    Button {
-                        workspace.setLayout(layout)
-                    } label: {
-                        if workspace.layout == layout {
-                            Label {
-                                Text(LocalizedStringKey(layout.title))
-                            } icon: {
-                                Image(systemName: "checkmark")
-                            }
-                        } else {
-                            Text(LocalizedStringKey(layout.title))
-                        }
-                    }
-                }
-                if workspace.layout != .single {
-                    Divider()
-                    Menu("Вторая панель") {
-                        ForEach(workspace.tabs.filter { $0.id != workspace.selectedTabID }) { tab in
-                            Button(tab.title) { workspace.selectSecondary(tab.id) }
-                        }
-                    }
-                }
+            Button {
+                showsLayoutPicker.toggle()
             } label: {
-                Image(systemName: "rectangle.split.2x1")
+                Image(systemName: workspace.layout.systemImage)
+                    .frame(width: 20, height: 20)
             }
-            .help("Разделение терминала")
+            .buttonStyle(.bordered)
+            .fixedSize()
+            .help("Компоновка терминалов")
+            .popover(isPresented: $showsLayoutPicker, arrowEdge: .bottom) {
+                terminalLayoutPicker
+            }
         }
+    }
+
+    private var terminalLayoutPicker: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Компоновка терминалов")
+                .font(.headline)
+            Text("Порядок панелей можно менять перетаскиванием.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            ForEach(TerminalWorkspaceLayout.allCases) { layout in
+                Button {
+                    workspace.setLayout(layout)
+                    showsLayoutPicker = false
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: layout.systemImage)
+                            .frame(width: 22)
+                        Text(LocalizedStringKey(layout.title))
+                        Spacer(minLength: 12)
+                        if workspace.layout == layout {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(
+                    workspace.layout == layout
+                        ? Color.accentColor.opacity(0.12)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                )
+            }
+        }
+        .padding(14)
+        .frame(width: 300)
     }
 
     @ViewBuilder
     private var terminalWorkspace: some View {
-        if workspace.layout == .splitHorizontal, let secondary = workspace.secondaryTab {
+        if workspace.layout == .splitHorizontal {
             HStack(spacing: 8) {
-                terminalPane(workspace.selectedTab)
-                terminalPane(secondary)
+                ForEach(workspace.orderedSplitTabs()) { tab in
+                    terminalPane(tab)
+                }
             }
-        } else if workspace.layout == .splitVertical, let secondary = workspace.secondaryTab {
+        } else if workspace.layout == .splitVertical {
             VStack(spacing: 8) {
-                terminalPane(workspace.selectedTab)
-                terminalPane(secondary)
+                ForEach(workspace.orderedSplitTabs()) { tab in
+                    terminalPane(tab)
+                }
             }
         } else if workspace.layout == .grid {
-            LazyVGrid(
-                columns: [
-                    GridItem(.flexible(), spacing: 8),
-                    GridItem(.flexible(), spacing: 8)
-                ],
-                spacing: 8
-            ) {
-                ForEach(workspace.visibleTabs()) { tab in
-                    terminalPane(tab)
-                        .frame(minHeight: 260)
+            GeometryReader { proxy in
+                let tabs = workspace.visibleTabs()
+                let gap: CGFloat = 8
+                let columnCount = tabs.count == 1 ? 1 : 2
+                let rowCount = max(1, Int(ceil(Double(tabs.count) / Double(columnCount))))
+                let paneWidth = max(
+                    1,
+                    (proxy.size.width - gap * CGFloat(columnCount - 1))
+                        / CGFloat(columnCount)
+                )
+                let paneHeight = max(
+                    1,
+                    (proxy.size.height - gap * CGFloat(rowCount - 1))
+                        / CGFloat(rowCount)
+                )
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.fixed(paneWidth), spacing: gap),
+                        count: columnCount
+                    ),
+                    spacing: gap
+                ) {
+                    ForEach(tabs) { tab in
+                        terminalPane(tab)
+                            .frame(width: paneWidth, height: paneHeight)
+                    }
                 }
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .topLeading
+                )
             }
         } else {
             terminalPane(workspace.selectedTab)
@@ -749,25 +822,35 @@ struct SSHTerminalView: View {
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
-        VStack(spacing: 0) {
+        let color = paneColor(for: tab)
+        return VStack(spacing: 0) {
             if workspace.layout != .single {
-                HStack {
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(color)
                     VStack(alignment: .leading, spacing: 1) {
                         Text(tab.title).font(.caption.weight(.semibold))
                         Text(connectionLabel(for: tab))
                             .font(.caption2)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white.opacity(0.62))
                     }
                     Spacer()
                     Text(tab.session.phase.title)
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.white.opacity(0.62))
                         .lineLimit(1)
                 }
                 .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .padding(.vertical, 7)
+                .foregroundStyle(.white)
+                .background(color.opacity(tab.id == workspace.selectedTabID ? 0.28 : 0.16))
                 .contentShape(Rectangle())
-                .onTapGesture { workspace.selectedTabID = tab.id }
+                .onTapGesture { selectTabIfNeeded(tab.id) }
+                .draggable(tab.id.uuidString)
+                .dropDestination(for: String.self) { items, _ in
+                    reorderTabs(items, to: tab.id)
+                }
             }
             EmbeddedTerminalWebView(
                 session: tab.session,
@@ -776,6 +859,7 @@ struct SSHTerminalView: View {
                     profileID: historyContextID(for: tab)
                 ),
                 remoteContext: remoteContexts[tab.id] ?? .empty,
+                onFocus: { selectTabIfNeeded(tab.id) },
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
@@ -784,14 +868,43 @@ struct SSHTerminalView: View {
                     }
                 )
             )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .overlay(alignment: .topLeading) {
-            if workspace.layout != .single, tab.id == workspace.selectedTabID {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 2)
-                    .allowsHitTesting(false)
-            }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(TerminalColorCodecView.color(appearance.palette.background))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    tab.id == workspace.selectedTabID
+                        ? Color.accentColor
+                        : color.opacity(0.65),
+                    lineWidth: tab.id == workspace.selectedTabID ? 3 : 1
+                )
+                .allowsHitTesting(false)
         }
+    }
+
+    private func paneColor(for tab: TerminalWorkspaceTab) -> Color {
+        let colors: [Color] = [.blue, .teal, .orange, .purple, .pink, .green]
+        let index = tab.id.uuidString.utf8.reduce(0) {
+            ($0 + Int($1)) % colors.count
+        }
+        return colors[index % colors.count]
+    }
+
+    private func reorderTabs(_ items: [String], to targetID: UUID) -> Bool {
+        guard let value = items.first,
+              let draggedID = UUID(uuidString: value),
+              workspace.tabs.contains(where: { $0.id == draggedID })
+        else { return false }
+        workspace.moveTab(draggedID, to: targetID)
+        return true
+    }
+
+    private func selectTabIfNeeded(_ id: UUID) {
+        guard workspace.selectedTabID != id else { return }
+        workspace.selectedTabID = id
     }
 
     private func refreshRemoteContext() {

@@ -263,6 +263,12 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(workspace.contains("isValidCustomConnection"))
     #expect(source.contains("if let tab = workspace.addTab"))
     #expect(source.contains("connect(tab)"))
+    #expect(source.contains("terminalFocus"))
+    #expect(source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("GeometryReader"))
+    #expect(source.contains("showsLayoutPicker"))
+    #expect(workspace.contains("func moveTab"))
+    #expect(workspace.contains("Array(tabs.prefix"))
 }
 
 @Test("Приложение содержит глобальные Terminal и Forwarding")

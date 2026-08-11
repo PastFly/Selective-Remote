@@ -17,6 +17,15 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
         case .grid: "Сетка до четырёх панелей"
         }
     }
+
+    var systemImage: String {
+        switch self {
+        case .single: "rectangle"
+        case .splitHorizontal: "rectangle.split.2x1"
+        case .splitVertical: "rectangle.split.1x2"
+        case .grid: "square.grid.2x2"
+        }
+    }
 }
 
 struct TerminalTabConnection: Codable, Equatable {
@@ -188,6 +197,16 @@ final class TerminalWorkspaceModel: ObservableObject {
                 )
             )
         }
+        if let storedOrder = stored?.tabs.map(\.id) {
+            let positions = Dictionary(
+                uniqueKeysWithValues: storedOrder.enumerated().map {
+                    ($0.element, $0.offset)
+                }
+            )
+            restoredTabs.sort {
+                positions[$0.id, default: Int.max] < positions[$1.id, default: Int.max]
+            }
+        }
         tabs = restoredTabs
         selectedTabID = stored?.selectedTabID.flatMap { id in
             restoredTabs.contains(where: { $0.id == id }) ? id : nil
@@ -220,9 +239,25 @@ final class TerminalWorkspaceModel: ObservableObject {
     var hasRunningSession: Bool { runningSessionCount > 0 }
 
     func visibleTabs(limit: Int = 4) -> [TerminalWorkspaceTab] {
-        var result = [selectedTab]
-        result.append(contentsOf: tabs.filter { $0.id != selectedTabID })
-        return Array(result.prefix(max(1, limit)))
+        Array(tabs.prefix(max(1, limit)))
+    }
+
+    func orderedSplitTabs() -> [TerminalWorkspaceTab] {
+        guard let secondaryTab else { return [selectedTab] }
+        let visibleIDs = Set([selectedTab.id, secondaryTab.id])
+        return tabs.filter { visibleIDs.contains($0.id) }
+    }
+
+    func moveTab(_ draggedID: UUID, to targetID: UUID) {
+        guard draggedID != targetID,
+              let sourceIndex = tabs.firstIndex(where: { $0.id == draggedID }),
+              let targetIndex = tabs.firstIndex(where: { $0.id == targetID })
+        else { return }
+        let draggedTab = tabs.remove(at: sourceIndex)
+        let destinationIndex = min(targetIndex, tabs.endIndex)
+        tabs.insert(draggedTab, at: destinationIndex)
+        persist()
+        objectWillChange.send()
     }
 
     @discardableResult

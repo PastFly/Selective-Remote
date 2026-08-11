@@ -85,6 +85,20 @@ func exposesFourPaneTerminalGrid() throws {
     #expect(workspace.layout == .grid)
     #expect(workspace.visibleTabs().count == 4)
     #expect(Set(workspace.visibleTabs().map(\.connection.normalizedHost)).count == 4)
+
+    let originalOrder = workspace.visibleTabs().map(\.id)
+    workspace.selectedTabID = originalOrder[2]
+    #expect(workspace.visibleTabs().map(\.id) == originalOrder)
+
+    workspace.moveTab(originalOrder[2], to: originalOrder[0])
+    #expect(workspace.visibleTabs().first?.id == originalOrder[2])
+
+    let restored = TerminalWorkspaceModel(
+        profileID: workspace.profileID,
+        primarySession: TerminalSessionModel(),
+        defaults: defaults
+    )
+    #expect(restored.tabs.first?.id == originalOrder[2])
 }
 
 @Test("Независимый туннель сохраняет собственную SSH-цель")

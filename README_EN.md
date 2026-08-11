@@ -20,7 +20,8 @@ General → Language & Region → Applications**.
 - macOS-friendly keyboard mapping, clipboard, audio, microphone, camera, printer,
   and folder redirection;
 - an independent SSH workspace with up to eight tabs and one, two, or four-pane
-  layouts, where every tab can connect to a different server;
+  layouts, where every tab can connect to a different server; panes fill the
+  available workspace and can be reordered with drag and drop;
 - local command history, searchable suggestions, favorites, templates, and
   server-aware service and container commands;
 - dual-pane SFTP with search, transfer queue, drag and drop, remote text editing,

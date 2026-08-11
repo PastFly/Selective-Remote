@@ -102,7 +102,7 @@ swift run SelectiveRemote
 
 ## Последние изменения
 
-Текущая публичная версия — **0.18.0**. В ней терминал и forwarding вынесены в
+Текущая публичная версия — **0.18.1**. В ней терминал и forwarding вынесены в
 самостоятельные разделы: вкладки и панели могут подключаться к разным серверам,
 а каждый туннель хранит собственную SSH-цель. Добавлена английская локализация,
 которая автоматически выбирается по языку macOS.
@@ -252,7 +252,7 @@ XQuartz не нужен: используется SDL-клиент `sdl-freerdp`
 На вашем Mac выполните:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.18.0-source
+cd ~/Downloads/SelectiveRemote-0.18.1-source
 chmod +x scripts/build_app.sh
 ./scripts/build_app.sh
 ```
@@ -260,8 +260,8 @@ chmod +x scripts/build_app.sh
 Успешная сборка создаёт:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.18.0-arm64.dmg`;
-- `dist/SelectiveRemote-0.18.0-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.18.1-arm64.dmg`;
+- `dist/SelectiveRemote-0.18.1-arm64.dmg.sha256`.
 
 Именно два последних файла можно распространять. Получателю не передаются исходники и не требуется запускать `build_app.sh`.
 
@@ -273,7 +273,7 @@ chmod +x scripts/build_app.sh
 
 ```bash
 cd ~/Downloads
-shasum -a 256 SelectiveRemote-0.18.0-arm64.dmg
+shasum -a 256 SelectiveRemote-0.18.1-arm64.dmg
 ```
 
 Результат должен полностью совпасть с опубликованным. SHA-256 подтверждает совпадение файла с выложенной вами копией, но не заменяет удостоверение издателя Apple.
