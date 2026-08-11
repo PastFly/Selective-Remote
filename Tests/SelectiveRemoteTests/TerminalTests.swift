@@ -270,7 +270,8 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(source.contains("GeometryReader"))
     #expect(source.contains("showsLayoutPicker"))
     #expect(workspace.contains("func moveTab"))
-    #expect(workspace.contains("Array(tabs.prefix"))
+    #expect(workspace.contains("var displayedTabs"))
+    #expect(workspace.contains("Array(displayedTabs.prefix"))
 }
 
 @Test("Приложение содержит глобальные Terminal, SFTP и Forwarding")
