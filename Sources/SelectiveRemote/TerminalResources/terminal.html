@@ -48,6 +48,15 @@
                 <button type="button" data-section="catalog">
                     Общие команды
                 </button>
+                <button type="button" data-section="remote">
+                    Сервер
+                </button>
+                <button type="button" data-section="favorites">
+                    Избранное
+                </button>
+                <button type="button" data-section="templates">
+                    Шаблоны
+                </button>
             </nav>
             <div id="history-options" class="history-options">
                 <label>
@@ -55,6 +64,10 @@
                     <span>Сохранять команды</span>
                 </label>
                 <button id="history-clear" type="button">Очистить</button>
+            </div>
+            <div id="template-options" class="history-options" hidden>
+                <span>Поля вида ${service} запрашиваются при вставке</span>
+                <button id="template-add" type="button">Добавить</button>
             </div>
             <div id="history-list" role="list"></div>
             <div id="history-empty" hidden>
@@ -67,6 +80,29 @@
                 Строки с пробелом в начале и признаками секретов не сохраняются.
             </footer>
         </aside>
+        <dialog id="template-dialog" aria-labelledby="template-dialog-title">
+            <form id="template-form" method="dialog">
+                <h3 id="template-dialog-title">Шаблон команды</h3>
+                <input id="template-id" type="hidden">
+                <label>
+                    <span>Название</span>
+                    <input id="template-title" maxlength="80" required autocomplete="off">
+                </label>
+                <label>
+                    <span>Категория</span>
+                    <input id="template-category" maxlength="60" value="Мои команды" autocomplete="off">
+                </label>
+                <label>
+                    <span>Команда</span>
+                    <textarea id="template-command" maxlength="8192" rows="5" required spellcheck="false" placeholder="sudo systemctl restart ${service}"></textarea>
+                </label>
+                <p>Шаблон только подставляется в терминал и не запускается автоматически.</p>
+                <menu>
+                    <button id="template-cancel" type="button">Отмена</button>
+                    <button type="submit" class="primary">Сохранить</button>
+                </menu>
+            </form>
+        </dialog>
     </main>
     <script src="xterm.js"></script>
     <script src="addon-fit.js"></script>

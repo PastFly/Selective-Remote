@@ -118,7 +118,7 @@ input {
     inset: 10px 10px 10px auto;
     display: flex;
     flex-direction: column;
-    width: min(390px, calc(100% - 20px));
+    width: min(520px, calc(100% - 20px));
     box-sizing: border-box;
     color: #dce6f5;
     background: color-mix(in srgb, var(--terminal-background) 82%, #343e57 18%);
@@ -207,7 +207,7 @@ input {
 
 #command-tabs {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 4px;
     margin: 0 18px 12px;
     padding: 3px;
@@ -222,6 +222,9 @@ input {
     border: 0;
     border-radius: 7px;
     cursor: default;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 #command-tabs button.is-selected {
@@ -252,15 +255,11 @@ input {
 
 .history-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 26px;
+    grid-template-columns: minmax(0, 1fr) auto;
     gap: 8px;
     align-items: center;
     padding: 9px 10px;
     border-radius: 9px;
-}
-
-.history-row.catalog-row {
-    grid-template-columns: minmax(0, 1fr);
 }
 
 .history-row:hover {
@@ -285,6 +284,13 @@ input {
     font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
+.history-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.history-action,
 .history-remove {
     width: 26px;
     height: 26px;
@@ -297,9 +303,97 @@ input {
     cursor: default;
 }
 
+.favorite-action {
+    color: #f9c74f;
+    opacity: 0.82;
+}
+
+.history-row:hover .history-action,
+.history-action:focus-visible,
 .history-row:hover .history-remove,
 .history-remove:focus-visible {
     opacity: 1;
+}
+
+#template-add {
+    padding: 6px 9px;
+    color: #dce6f5;
+    background: rgba(54, 211, 153, 0.18);
+    border: 0;
+    border-radius: 8px;
+}
+
+#template-dialog {
+    width: min(560px, calc(100% - 36px));
+    padding: 0;
+    color: #dce6f5;
+    background: color-mix(in srgb, var(--terminal-background) 76%, #3b4660 24%);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 16px;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.52);
+}
+
+#template-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.52);
+    backdrop-filter: blur(3px);
+}
+
+#template-form {
+    display: grid;
+    gap: 13px;
+    padding: 20px;
+    font: 13px -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+#template-form h3,
+#template-form p,
+#template-form menu {
+    margin: 0;
+}
+
+#template-form label {
+    display: grid;
+    gap: 6px;
+}
+
+#template-form input,
+#template-form textarea {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 9px 10px;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.075);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 9px;
+    outline: 0;
+    resize: vertical;
+}
+
+#template-form textarea {
+    font-family: "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+#template-form p {
+    color: #8f9ab0;
+}
+
+#template-form menu {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 0;
+}
+
+#template-form menu button {
+    padding: 8px 13px;
+    color: inherit;
+    background: rgba(255, 255, 255, 0.08);
+    border: 0;
+    border-radius: 9px;
+}
+
+#template-form menu button.primary {
+    background: #168bc0;
 }
 
 #history-empty {
@@ -376,6 +470,19 @@ input {
     color: #6d7889;
 }
 
+.terminal-theme-light #template-dialog {
+    color: #1f2a3a;
+    background: color-mix(in srgb, var(--terminal-background) 88%, #e7edf5 12%);
+    border-color: rgba(31, 42, 58, 0.15);
+}
+
+.terminal-theme-light #template-form input,
+.terminal-theme-light #template-form textarea,
+.terminal-theme-light #template-form menu button {
+    background: rgba(31, 42, 58, 0.07);
+    border-color: rgba(31, 42, 58, 0.12);
+}
+
 .terminal-theme-light .history-options,
 .terminal-theme-light #terminal-history footer {
     border-color: rgba(31, 42, 58, 0.10);
@@ -389,5 +496,9 @@ input {
     #terminal-history {
         inset: 6px;
         width: auto;
+    }
+
+    #command-tabs {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 }

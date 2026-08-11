@@ -441,17 +441,21 @@ struct ContentView: View {
 
     private var terminalPanel: some View {
         SSHTerminalView(
-            session: model.terminalSession(profileID: profile.id),
+            workspace: model.terminalWorkspace(profileID: profile.id),
             appearance: terminalAppearance,
             appAppearance: appAppearance,
             profile: profile,
             hasInstallableKey: model.selectedSSHKey?.publicKeyPath != nil,
             isFocusMode: terminalFocusMode,
-            connect: model.connect,
-            disconnect: model.disconnect,
+            connect: { session in
+                model.connectSSHTerminal(profileID: profile.id, session: session)
+            },
             installKey: model.installSelectedSSHPublicKey,
             toggleFocusMode: {
                 setTerminalFocusMode(!terminalFocusMode)
+            },
+            discoverContext: {
+                try await model.discoverTerminalContext(profileID: profile.id)
             }
         )
     }

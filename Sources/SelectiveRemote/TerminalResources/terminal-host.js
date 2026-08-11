@@ -12,6 +12,15 @@
     const historyClearButton = document.getElementById("history-clear");
     const historyCloseButton = document.getElementById("history-close");
     const historyOptions = document.getElementById("history-options");
+    const templateOptions = document.getElementById("template-options");
+    const templateAddButton = document.getElementById("template-add");
+    const templateDialog = document.getElementById("template-dialog");
+    const templateForm = document.getElementById("template-form");
+    const templateID = document.getElementById("template-id");
+    const templateTitle = document.getElementById("template-title");
+    const templateCategory = document.getElementById("template-category");
+    const templateCommand = document.getElementById("template-command");
+    const templateCancel = document.getElementById("template-cancel");
     const commandPanelTitle = document.getElementById("command-panel-title");
     const commandPanelSubtitle = document.getElementById("command-panel-subtitle");
     const commandEmptyTitle = document.getElementById("command-empty-title");
@@ -67,6 +76,11 @@
 
     let historyEntries = [];
     let historyEnabled = true;
+    let favoriteCommands = new Set();
+    let commandTemplates = [];
+    let remoteCommandEntries = [];
+    let remoteContextMessage = "Подключите SSH и обновите сведения о сервере";
+    let remoteSystemLabel = "";
     let currentLine = [];
     let inputCursor = 0;
     let lineTrackingReliable = true;
@@ -231,8 +245,51 @@
             .map((candidate) => candidate.entry);
     };
 
+    const matchingEntries = (entries, query, limit = Number.POSITIVE_INFINITY) => {
+        const normalized = query.trim().toLocaleLowerCase();
+        if (!normalized) {
+            return entries.slice(0, limit);
+        }
+        return entries
+            .map((entry, order) => {
+                const command = entry.command.toLocaleLowerCase();
+                const details = `${entry.title || ""} ${entry.description || ""} ${entry.category || ""} ${entry.keywords || ""}`
+                    .toLocaleLowerCase();
+                const commandIndex = command.indexOf(normalized);
+                const detailsIndex = details.indexOf(normalized);
+                const rank = commandIndex === 0 ? 0
+                    : commandIndex > 0 ? 1
+                        : detailsIndex === 0 ? 2
+                            : detailsIndex > 0 ? 3 : 4;
+                return { entry, order, rank };
+            })
+            .filter((candidate) => candidate.rank < 4)
+            .sort((left, right) => left.rank - right.rank || left.order - right.order)
+            .slice(0, limit)
+            .map((candidate) => candidate.entry);
+    };
+
+    const favoriteEntries = () => {
+        const sources = [
+            ...historyEntries,
+            ...commandTemplates,
+            ...remoteCommandEntries,
+            ...builtInCommandCatalog
+        ];
+        const known = new Map(sources.map((entry) => [entry.command, entry]));
+        return Array.from(favoriteCommands).map((command, index) => ({
+            ...(known.get(command) || {}),
+            id: known.get(command)?.id || `favorite-${index}`,
+            command,
+            source: "favorite",
+            category: known.get(command)?.category || "Избранное",
+            description: known.get(command)?.description || "Сохранённая команда"
+        }));
+    };
+
     const matchingSuggestions = (query, limit = 6) => {
         const combined = [];
+        matchingEntries(favoriteEntries(), query).forEach((entry) => combined.push(entry));
         if (historyEnabled) {
             matchingHistory(query).forEach((entry) => {
                 combined.push({
@@ -245,6 +302,8 @@
                 });
             });
         }
+        matchingEntries(remoteCommandEntries, query).forEach((entry) => combined.push(entry));
+        matchingEntries(commandTemplates, query).forEach((entry) => combined.push(entry));
         matchingCatalog(query).forEach((entry) => combined.push(entry));
 
         const unique = [];
@@ -319,6 +378,31 @@
         terminal.focus();
     };
 
+    const resolveTemplate = (command) => {
+        const names = Array.from(new Set(
+            Array.from(command.matchAll(/\$\{([A-Za-z][A-Za-z0-9_-]{0,39})\}/g))
+                .map((match) => match[1])
+        ));
+        let resolved = command;
+        for (const name of names) {
+            const value = window.prompt(`Значение для ${name}:`, "");
+            if (value === null) {
+                return null;
+            }
+            resolved = resolved.replaceAll(`\${${name}}`, value);
+        }
+        return resolved;
+    };
+
+    const useCommandEntry = (entry, closeHistory = false) => {
+        const command = /\$\{[A-Za-z][A-Za-z0-9_-]{0,39}\}/.test(entry.command)
+            ? resolveTemplate(entry.command)
+            : entry.command;
+        if (command !== null) {
+            replaceCurrentLine(command, closeHistory);
+        }
+    };
+
     const renderSuggestions = () => {
         const prefix = inputPrefix();
         if (!lineTrackingReliable
@@ -346,7 +430,10 @@
 
             const symbol = document.createElement("span");
             symbol.className = "history-symbol";
-            symbol.textContent = entry.source === "history" ? "◷" : "›";
+            symbol.textContent = entry.source === "history" ? "◷"
+                : entry.source === "favorite" ? "★"
+                    : entry.source === "remote" ? "⌁"
+                        : entry.source === "template" ? "◆" : "›";
             symbol.setAttribute("aria-hidden", "true");
             const content = document.createElement("span");
             content.className = "suggestion-content";
@@ -357,11 +444,11 @@
             description.className = "suggestion-description";
             description.textContent = entry.source === "history"
                 ? entry.description
-                : `${entry.category} · ${entry.description}`;
+                : `${entry.category} · ${entry.description || entry.title || "Команда"}`;
             content.append(command, description);
             row.append(symbol, content);
             row.addEventListener("pointerdown", (event) => event.preventDefault());
-            row.addEventListener("click", () => replaceCurrentLine(entry.command));
+            row.addEventListener("click", () => useCommandEntry(entry));
             row.addEventListener("mousemove", () => {
                 selectedSuggestionIndex = index;
                 updateSelectedSuggestion();
@@ -385,17 +472,60 @@
         }).format(date);
     };
 
+    const openTemplateEditor = (entry = null) => {
+        templateID.value = entry?.id || "";
+        templateTitle.value = entry?.title || "";
+        templateCategory.value = entry?.category || "Мои команды";
+        templateCommand.value = entry?.command || "";
+        templateDialog.showModal();
+        window.setTimeout(() => templateTitle.focus(), 0);
+    };
+
     const renderHistoryPanel = () => {
         const query = historyQuery.value;
-        const showsCatalog = activePanelSection === "catalog";
-        const filtered = showsCatalog
-            ? matchingCatalog(query)
-            : matchingHistory(query);
-        commandPanelTitle.textContent = showsCatalog ? "Общие команды" : "История команд";
-        commandPanelSubtitle.textContent = showsCatalog
-            ? `${builtInCommandCatalog.length} готовых команд и шаблонов`
-            : "Сохранена только на этом Mac";
-        historyOptions.hidden = showsCatalog;
+        const sections = {
+            history: {
+                title: "История команд",
+                subtitle: "Сохранена только на этом Mac",
+                entries: matchingHistory(query),
+                emptyTitle: "История пока пуста",
+                emptyMessage: "Выполненные команды появятся здесь автоматически."
+            },
+            catalog: {
+                title: "Общие команды",
+                subtitle: `${builtInCommandCatalog.length} готовых команд и шаблонов`,
+                entries: matchingCatalog(query),
+                emptyTitle: "Команды не найдены",
+                emptyMessage: "Измените запрос или выберите другой раздел."
+            },
+            remote: {
+                title: "Команды сервера",
+                subtitle: remoteSystemLabel || remoteContextMessage,
+                entries: matchingEntries(remoteCommandEntries, query),
+                emptyTitle: "Контекст сервера пока пуст",
+                emptyMessage: remoteContextMessage
+            },
+            favorites: {
+                title: "Избранное",
+                subtitle: "Часто используемые команды этого подключения",
+                entries: matchingEntries(favoriteEntries(), query),
+                emptyTitle: "В избранном пока пусто",
+                emptyMessage: "Нажмите звезду рядом с любой командой."
+            },
+            templates: {
+                title: "Мои шаблоны",
+                subtitle: "Параметризованные команды этого подключения",
+                entries: matchingEntries(commandTemplates, query),
+                emptyTitle: "Шаблонов пока нет",
+                emptyMessage: "Создайте команду с параметрами вида ${service}."
+            }
+        };
+        const section = sections[activePanelSection] || sections.history;
+        const filtered = section.entries;
+        commandPanelTitle.textContent = section.title;
+        commandPanelSubtitle.textContent = section.subtitle;
+        historyOptions.hidden = activePanelSection !== "history";
+        templateOptions.hidden = activePanelSection !== "templates";
         commandTabs.forEach((button) => {
             button.classList.toggle(
                 "is-selected",
@@ -418,40 +548,68 @@
             appendHighlightedText(command, entry.command, query);
             const meta = document.createElement("span");
             meta.className = "history-meta";
-            if (showsCatalog) {
-                meta.textContent = `${entry.category} · ${entry.description}`;
-            } else {
+            if (activePanelSection === "history") {
                 const used = entry.useCount > 1 ? ` · запусков: ${entry.useCount}` : "";
                 meta.textContent = `${formatHistoryDate(entry.lastUsedAt)}${used}`;
+            } else if (activePanelSection === "templates") {
+                meta.textContent = `${entry.category} · ${entry.title}`;
+            } else {
+                meta.textContent = `${entry.category} · ${entry.description}`;
             }
             useButton.append(command, meta);
-            useButton.addEventListener("click", () => replaceCurrentLine(entry.command, true));
+            useButton.addEventListener("click", () => useCommandEntry(entry, true));
 
-            if (showsCatalog) {
-                row.append(useButton);
-                row.classList.add("catalog-row");
-            } else {
+            const actions = document.createElement("span");
+            actions.className = "history-actions";
+            const favoriteButton = document.createElement("button");
+            favoriteButton.type = "button";
+            favoriteButton.className = "history-action favorite-action";
+            const isFavorite = favoriteCommands.has(entry.command);
+            favoriteButton.textContent = isFavorite ? "★" : "☆";
+            favoriteButton.title = isFavorite ? "Убрать из избранного" : "Добавить в избранное";
+            favoriteButton.setAttribute("aria-label", favoriteButton.title);
+            favoriteButton.addEventListener("click", () => {
+                postHistory({ action: "toggleFavorite", command: entry.command });
+            });
+            actions.append(favoriteButton);
+
+            if (activePanelSection === "history") {
                 const removeButton = document.createElement("button");
                 removeButton.type = "button";
-                removeButton.className = "history-remove";
+                removeButton.className = "history-action";
                 removeButton.title = "Удалить из истории";
                 removeButton.setAttribute("aria-label", `Удалить команду ${entry.command}`);
                 removeButton.textContent = "×";
                 removeButton.addEventListener("click", () => {
                     postHistory({ action: "remove", id: entry.id });
                 });
-                row.append(useButton, removeButton);
+                actions.append(removeButton);
+            } else if (activePanelSection === "templates") {
+                const editButton = document.createElement("button");
+                editButton.type = "button";
+                editButton.className = "history-action";
+                editButton.textContent = "✎";
+                editButton.title = "Изменить шаблон";
+                editButton.addEventListener("click", () => openTemplateEditor(entry));
+                const removeButton = document.createElement("button");
+                removeButton.type = "button";
+                removeButton.className = "history-action";
+                removeButton.textContent = "×";
+                removeButton.title = "Удалить шаблон";
+                removeButton.addEventListener("click", () => {
+                    if (window.confirm(`Удалить шаблон «${entry.title}»?`)) {
+                        postHistory({ action: "removeTemplate", id: entry.id });
+                    }
+                });
+                actions.append(editButton, removeButton);
             }
+            row.append(useButton, actions);
             historyList.append(row);
         });
 
         const empty = filtered.length === 0;
-        commandEmptyTitle.textContent = showsCatalog
-            ? "Команды не найдены"
-            : "История пока пуста";
-        commandEmptyMessage.textContent = showsCatalog
-            ? "Измените запрос или выберите другой раздел."
-            : "Выполненные команды появятся здесь автоматически.";
+        commandEmptyTitle.textContent = section.emptyTitle;
+        commandEmptyMessage.textContent = section.emptyMessage;
         historyList.hidden = empty;
         historyEmpty.hidden = !empty;
         historyClearButton.disabled = historyEntries.length === 0;
@@ -616,7 +774,7 @@
             return false;
         }
         if (event.key === "Enter" && selectedSuggestionIndex >= 0) {
-            replaceCurrentLine(currentSuggestions[selectedSuggestionIndex].command);
+            useCommandEntry(currentSuggestions[selectedSuggestionIndex]);
             return false;
         }
         return true;
@@ -762,6 +920,35 @@
                 && typeof entry.command === "string"
             ))
             : [];
+        favoriteCommands = new Set(
+            Array.isArray(payload.favorites)
+                ? payload.favorites.filter((command) => typeof command === "string")
+                : []
+        );
+        commandTemplates = Array.isArray(payload.templates)
+            ? payload.templates
+                .filter((entry) => entry && typeof entry.command === "string")
+                .map((entry) => ({
+                    ...entry,
+                    source: "template",
+                    description: entry.title || "Пользовательский шаблон",
+                    keywords: `${entry.title || ""} ${entry.category || ""}`
+                }))
+            : [];
+        const remote = payload.remote && typeof payload.remote === "object"
+            ? payload.remote
+            : {};
+        remoteCommandEntries = Array.isArray(remote.suggestions)
+            ? remote.suggestions
+                .filter((entry) => entry && typeof entry.command === "string")
+                .map((entry) => ({ ...entry, source: "remote" }))
+            : [];
+        remoteContextMessage = typeof remote.message === "string"
+            ? remote.message
+            : "Подключите SSH и обновите сведения о сервере";
+        remoteSystemLabel = typeof remote.systemLabel === "string"
+            ? remote.systemLabel
+            : "";
         renderHistoryPanel();
         renderSuggestions();
     };
@@ -784,9 +971,7 @@
     historyQuery.addEventListener("input", renderHistoryPanel);
     commandTabs.forEach((button) => {
         button.addEventListener("click", () => {
-            activePanelSection = button.dataset.section === "catalog"
-                ? "catalog"
-                : "history";
+            activePanelSection = button.dataset.section || "history";
             renderHistoryPanel();
             historyQuery.focus();
         });
@@ -799,6 +984,19 @@
             && window.confirm("Очистить историю команд для этого подключения?")) {
             postHistory({ action: "clear" });
         }
+    });
+    templateAddButton.addEventListener("click", () => openTemplateEditor());
+    templateCancel.addEventListener("click", () => templateDialog.close());
+    templateForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        postHistory({
+            action: "saveTemplate",
+            id: templateID.value || null,
+            title: templateTitle.value,
+            category: templateCategory.value,
+            command: templateCommand.value
+        });
+        templateDialog.close();
     });
     historyCloseButton.addEventListener("click", () => {
         window.selectiveTerminalSetHistoryVisible(false, true);

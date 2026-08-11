@@ -303,6 +303,8 @@ final class AppModel: NSObject, ObservableObject {
     private var stoppingSSHTunnelIDs: Set<UUID> = []
     private var sshTerminalSessions: [UUID: TerminalSessionModel] = [:]
     private var sshTerminalObservers: [UUID: AnyCancellable] = [:]
+    private var terminalWorkspaces: [UUID: TerminalWorkspaceModel] = [:]
+    private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
@@ -425,7 +427,14 @@ final class AppModel: NSObject, ObservableObject {
     var runningSessionCount: Int { sessions.count }
     var runningSSHTunnelCount: Int { sshTunnels.count }
     var runningSSHTerminalCount: Int {
-        sshTerminalSessions.values.filter(\.isRunning).count
+        let workspaceProfileIDs = Set(terminalWorkspaces.keys)
+        let workspaceCount = terminalWorkspaces.values.reduce(0) {
+            $0 + $1.runningSessionCount
+        }
+        let legacyCount = sshTerminalSessions
+            .filter { !workspaceProfileIDs.contains($0.key) && $0.value.isRunning }
+            .count
+        return workspaceCount + legacyCount
     }
     var isSelectedSessionRunning: Bool { isSessionRunning(profileID: selectedProfile.id) }
     var selectedProfileHasActiveTunnels: Bool {
@@ -471,7 +480,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func isSSHTerminalRunning(profileID: UUID) -> Bool {
-        sshTerminalSessions[profileID]?.isRunning == true
+        terminalWorkspaces[profileID]?.hasRunningSession == true
+            || sshTerminalSessions[profileID]?.isRunning == true
     }
 
     func terminalSession(profileID: UUID) -> TerminalSessionModel {
@@ -486,6 +496,24 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
         return session
+    }
+
+    func terminalWorkspace(profileID: UUID) -> TerminalWorkspaceModel {
+        if let existing = terminalWorkspaces[profileID] {
+            return existing
+        }
+        let workspace = TerminalWorkspaceModel(
+            profileID: profileID,
+            primarySession: terminalSession(profileID: profileID)
+        )
+        terminalWorkspaces[profileID] = workspace
+        terminalWorkspaceObservers[profileID] = workspace.objectWillChange.sink {
+            [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
+        return workspace
     }
 
     func consumeSSHConsoleNavigationRequest() {
@@ -630,6 +658,11 @@ final class AppModel: NSObject, ObservableObject {
         reconnectCandidateProfileIDs.remove(id)
         sshTerminalSessions.removeValue(forKey: id)
         sshTerminalObservers.removeValue(forKey: id)
+        terminalWorkspaces.removeValue(forKey: id)
+        terminalWorkspaceObservers.removeValue(forKey: id)
+        UserDefaults.standard.removeObject(
+            forKey: "SelectiveRemote.terminal.workspace.v1.\(id.uuidString)"
+        )
         profiles.removeAll { $0.id == id }
         if profiles.isEmpty {
             var replacement = ConnectionProfile()
@@ -1035,15 +1068,24 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func selectedSSHConnectionSettings() -> SSHConnectionSettings? {
-        guard selectedProfile.connectionType == .ssh else { return nil }
-        if selectedProfile.sshIdentityID != nil, selectedSSHKey == nil {
+        sshConnectionSettings(profileID: selectedProfile.id)
+    }
+
+    func sshConnectionSettings(profileID: UUID) -> SSHConnectionSettings? {
+        guard let profile = profiles.first(where: { $0.id == profileID }),
+              profile.connectionType == .ssh
+        else { return nil }
+        let identity = profile.sshIdentityID.flatMap { keyID in
+            sshKeys.first(where: { $0.id == keyID })
+        }
+        if profile.sshIdentityID != nil, identity == nil {
             errorMessage = "Выбранный SSH-ключ больше недоступен. Выберите другой ключ."
             return nil
         }
         do {
             let settings = try SSHConnectionSettings(
-                profile: selectedProfile,
-                identity: selectedSSHKey
+                profile: profile,
+                identity: identity
             )
             errorMessage = nil
             return settings
@@ -1307,36 +1349,57 @@ final class AppModel: NSObject, ObservableObject {
                 automatic: false
             )
         case .ssh:
-            guard let settings = selectedSSHConnectionSettings() else { return }
-            let terminal = terminalSession(profileID: settings.profileID)
-            guard !terminal.isRunning else {
-                requestedSSHConsoleProfileID = settings.profileID
-                statusMessage = "SSH уже открыт во встроенном терминале"
-                return
-            }
-            do {
-                try terminal.start(
-                    executable: "/usr/bin/ssh",
-                    arguments: SSHService.interactiveSSHArguments(settings: settings),
-                    title: "SSH · \(settings.profileName)",
-                    environment: SSHKeyService.processEnvironment()
-                ) { [weak self] exitCode in
-                    guard let self else { return }
-                    statusMessage = exitCode == 0
-                        ? "SSH-сессия завершена"
-                        : "SSH-сессия завершилась с кодом \(exitCode)"
-                }
-                if let index = profiles.firstIndex(where: { $0.id == settings.profileID }) {
-                    profiles[index].lastConnectedAt = Date()
-                }
-                requestedSSHConsoleProfileID = settings.profileID
-                statusMessage = "SSH запускается во встроенном терминале"
-                errorMessage = nil
-            } catch {
-                errorMessage = error.localizedDescription
-                statusMessage = "SSH не запущен"
-            }
+            let workspace = terminalWorkspace(profileID: selectedProfile.id)
+            connectSSHTerminal(
+                profileID: selectedProfile.id,
+                session: workspace.selectedTab.session
+            )
         }
+    }
+
+    func connectSSHTerminal(profileID: UUID, session: TerminalSessionModel) {
+        guard let settings = sshConnectionSettings(profileID: profileID) else { return }
+        guard !session.isRunning else {
+            requestedSSHConsoleProfileID = settings.profileID
+            statusMessage = "Эта вкладка SSH уже подключена"
+            return
+        }
+        do {
+            try session.start(
+                executable: "/usr/bin/ssh",
+                arguments: SSHService.interactiveSSHArguments(settings: settings),
+                title: "SSH · \(settings.profileName)",
+                environment: SSHKeyService.processEnvironment()
+            ) { [weak self] exitCode in
+                guard let self else { return }
+                statusMessage = exitCode == 0
+                    ? "SSH-сессия завершена"
+                    : "SSH-сессия завершилась с кодом \(exitCode)"
+            }
+            if let index = profiles.firstIndex(where: { $0.id == settings.profileID }) {
+                profiles[index].lastConnectedAt = Date()
+            }
+            requestedSSHConsoleProfileID = settings.profileID
+            statusMessage = "SSH запускается во встроенном терминале"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            statusMessage = "SSH не запущен"
+        }
+    }
+
+    func discoverTerminalContext(
+        profileID: UUID
+    ) async throws -> TerminalRemoteContextSnapshot {
+        guard let settings = sshConnectionSettings(profileID: profileID) else {
+            throw TerminalRemoteContextError.commandFailed(
+                "профиль SSH больше недоступен"
+            )
+        }
+        return try await TerminalRemoteContextService.discover(
+            settings: settings,
+            environment: SSHKeyService.processEnvironment()
+        )
     }
 
     func reconnectSelectedProfile() {
@@ -1424,8 +1487,13 @@ final class AppModel: NSObject, ObservableObject {
 
     func disconnect(profileID: UUID) {
         if isSSHTerminalRunning(profileID: profileID) {
-            sshTerminalSessions[profileID]?.stop()
-            statusMessage = "Завершаем SSH-сессию…"
+            if let workspace = terminalWorkspaces[profileID] {
+                workspace.stopAll()
+                statusMessage = "Завершаем SSH-сессии профиля…"
+            } else {
+                sshTerminalSessions[profileID]?.stop()
+                statusMessage = "Завершаем SSH-сессию…"
+            }
         } else {
             requestDisconnect(profileID: profileID, interruptionReason: nil)
         }
@@ -1438,6 +1506,7 @@ final class AppModel: NSObject, ObservableObject {
         for terminal in sshTerminalSessions.values where terminal.isRunning {
             terminal.stop()
         }
+        terminalWorkspaces.values.forEach { $0.stopAll() }
     }
 
     func stopAllSSHTunnels() {
@@ -1450,6 +1519,7 @@ final class AppModel: NSObject, ObservableObject {
         for terminal in sshTerminalSessions.values where terminal.isRunning {
             terminal.stop()
         }
+        terminalWorkspaces.values.forEach { $0.stopAll() }
     }
 
     func showMainWindow() {
