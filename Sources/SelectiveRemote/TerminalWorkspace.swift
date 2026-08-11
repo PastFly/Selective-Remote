@@ -110,7 +110,7 @@ struct TerminalWorkspaceTab: Identifiable {
     let id: UUID
     var title: String
     let session: TerminalSessionModel
-    let isPrimary: Bool
+    var isPrimary: Bool
     var connection: TerminalTabConnection
 }
 
@@ -163,6 +163,7 @@ final class TerminalWorkspaceModel: ObservableObject {
         let stored = defaults.data(forKey: initialStorageKey)
             .flatMap { try? JSONDecoder().decode(StoredTerminalWorkspace.self, from: $0) }
         let primaryMetadata = stored?.tabs.first(where: \.isPrimary)
+            ?? stored?.tabs.first
             ?? StoredTerminalWorkspace.Tab(
                 id: UUID(),
                 title: "Терминал 1",
@@ -181,7 +182,7 @@ final class TerminalWorkspaceModel: ObservableObject {
             )
         ]
         let additionalMetadata = Array(
-            (stored?.tabs.filter { !$0.isPrimary } ?? []).prefix(7)
+            (stored?.tabs.filter { $0.id != primaryMetadata.id } ?? []).prefix(7)
         )
         for metadata in additionalMetadata {
             restoredTabs.append(
@@ -287,11 +288,15 @@ final class TerminalWorkspaceModel: ObservableObject {
 
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }),
-              !tabs[index].isPrimary
+              tabs.count > 1
         else { return }
+        let wasPrimary = tabs[index].isPrimary
         tabs[index].session.stop()
         sessionObservers[id] = nil
         tabs.remove(at: index)
+        if wasPrimary {
+            tabs[0].isPrimary = true
+        }
         if selectedTabID == id {
             selectedTabID = tabs[min(index, tabs.count - 1)].id
         }

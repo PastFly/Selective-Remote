@@ -15,7 +15,7 @@ README, `.gitignore` и MIT License уже находятся в проекте.
 пустого репозитория выполните в Terminal:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.18.2-source-public
+cd ~/Downloads/SelectiveRemote-0.18.3-source-public
 git init
 git add .
 git commit -m "Initial public release"
@@ -46,8 +46,8 @@ git push --force-with-lease origin main
 следующего выпуска используйте новый номер версии и новый тег:
 
 ```bash
-git tag -a v0.18.2 -m "Selective Remote 0.18.2"
-git push origin v0.18.2
+git tag -a v0.18.3 -m "Selective Remote 0.18.3"
+git push origin v0.18.3
 ```
 
 Force push меняет commit ID. Не выполняйте его после того, как другие

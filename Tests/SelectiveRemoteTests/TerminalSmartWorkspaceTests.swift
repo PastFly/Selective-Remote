@@ -117,6 +117,32 @@ func exposesFourPaneTerminalGrid() throws {
     #expect(restored.tabs.first?.id == originalOrder[2])
 }
 
+@Test("Первую вкладку независимого терминала можно закрыть")
+@MainActor
+func closesAndPromotesPrimaryTerminalTab() throws {
+    let suiteName = "TerminalPrimaryCloseTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let workspace = TerminalWorkspaceModel(
+        profileID: UUID(),
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .custom(host: "first.example.test", username: "root"),
+        defaults: defaults
+    )
+    let firstID = workspace.tabs[0].id
+    let second = try #require(workspace.addTab(
+        connection: .custom(host: "second.example.test", username: "admin")
+    ))
+
+    workspace.closeTab(firstID)
+
+    #expect(workspace.tabs.count == 1)
+    #expect(workspace.tabs[0].id == second.id)
+    #expect(workspace.tabs[0].isPrimary)
+    workspace.closeTab(second.id)
+    #expect(workspace.tabs.count == 1)
+}
+
 @Test("Независимый туннель сохраняет собственную SSH-цель")
 func persistsIndependentForwardingTarget() throws {
     let original = IndependentPortForward(

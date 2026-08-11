@@ -263,6 +263,8 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(workspace.contains("isValidCustomConnection"))
     #expect(source.contains("if let tab = workspace.addTab"))
     #expect(source.contains("connect(tab)"))
+    #expect(source.contains("requestConnection(for: workspace.selectedTab)"))
+    #expect(source.contains("requestConnection(for: tab)"))
     #expect(source.contains("terminalFocus"))
     #expect(source.contains(".dropDestination(for: String.self)"))
     #expect(source.contains("GeometryReader"))

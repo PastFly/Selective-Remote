@@ -553,7 +553,7 @@ struct SSHTerminalView: View {
                     .buttonStyle(.borderedProminent)
                 } else {
                     Button("Подключиться", systemImage: "play.fill") {
-                        connect(workspace.selectedTab)
+                        requestConnection(for: workspace.selectedTab)
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -652,7 +652,8 @@ struct SSHTerminalView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            if !tab.isPrimary {
+                            if (!tab.isPrimary || !locksPrimaryConnection),
+                               workspace.tabs.count > 1 {
                                 Button {
                                     workspace.closeTab(tab.id)
                                 } label: {
@@ -686,7 +687,8 @@ struct SSHTerminalView: View {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
-                            if !tab.isPrimary {
+                            if (!tab.isPrimary || !locksPrimaryConnection),
+                               workspace.tabs.count > 1 {
                                 Divider()
                                 Button("Закрыть", role: .destructive) {
                                     workspace.closeTab(tab.id)
@@ -884,7 +886,7 @@ struct SSHTerminalView: View {
                             .lineLimit(1)
                         Button("Подключиться", systemImage: "play.fill") {
                             selectTabIfNeeded(tab.id)
-                            connect(tab)
+                            requestConnection(for: tab)
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -915,6 +917,17 @@ struct SSHTerminalView: View {
             ($0 + Int($1)) % colors.count
         }
         return colors[index % colors.count]
+    }
+
+    private func requestConnection(for tab: TerminalWorkspaceTab) {
+        if tab.isPrimary, locksPrimaryConnection {
+            connect(tab)
+            return
+        }
+        connectionEditorRequest = TerminalConnectionEditorRequest(
+            tabID: tab.id,
+            initialConnection: tab.connection
+        )
     }
 
     private func reorderTabs(_ items: [String], to targetID: UUID) -> Bool {
