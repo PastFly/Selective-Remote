@@ -195,7 +195,9 @@ final class TerminalWorkspaceModel: ObservableObject {
     }
 
     private func observeSessions() {
-        tabs.forEach(observe)
+        for tab in tabs {
+            observe(tab)
+        }
     }
 
     private func observe(_ tab: TerminalWorkspaceTab) {
