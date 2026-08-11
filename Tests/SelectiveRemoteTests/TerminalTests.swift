@@ -325,6 +325,29 @@ func includesEnglishLocalizationAndDocumentation() throws {
     #expect(readme.contains("## Independent forwarding"))
 }
 
+@Test("Защищённый SSH-запрос поддерживает вставку пароля")
+func sshAskPassSupportsPaste() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let helper = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Native/SSHKeychainAskPass.swift"
+        ),
+        encoding: .utf8
+    )
+    let readme = try String(
+        contentsOf: projectRoot.appendingPathComponent("README.md"),
+        encoding: .utf8
+    )
+
+    #expect(helper.contains("#selector(NSText.paste(_:))"))
+    #expect(helper.contains("keyEquivalent: \"v\""))
+    #expect(helper.contains("field.menu = fieldMenu"))
+    #expect(!readme.contains("Почему камера не работала в 0.7.1"))
+}
+
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")
 func terminalPaletteAvoidsSwift63ColorBridge() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)

@@ -86,7 +86,8 @@ in the remote pane, select a saved SSH profile or enter a temporary hostname/IP,
 username, and port. Use **Change Server** to switch the remote endpoint without
 opening a connection card. SFTP can reuse an active SSH session, use an SSH key
 or system agent, or request a password/passphrase in a separate secure window.
-Passwords are never stored by the application.
+The secure prompt supports paste with `⌘V` and its context menu. Passwords are
+never stored by the application.
 
 ## Independent forwarding
 

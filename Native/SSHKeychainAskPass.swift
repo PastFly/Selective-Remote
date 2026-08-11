@@ -16,6 +16,31 @@ struct SSHKeychainAskPass {
         let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
         let usesEnglish = Locale.preferredLanguages.first?
             .lowercased().hasPrefix("en") == true
+
+        let editTitle = usesEnglish ? "Edit" : "Правка"
+        let pasteTitle = usesEnglish ? "Paste" : "Вставить"
+        let selectAllTitle = usesEnglish ? "Select All" : "Выбрать всё"
+        let mainMenu = NSMenu()
+        let editMenuItem = NSMenuItem(
+            title: editTitle,
+            action: nil,
+            keyEquivalent: ""
+        )
+        let editMenu = NSMenu(title: editTitle)
+        editMenu.addItem(
+            withTitle: pasteTitle,
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: "v"
+        )
+        editMenu.addItem(
+            withTitle: selectAllTitle,
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+        application.mainMenu = mainMenu
+
         alert.messageText = isPasswordPrompt
             ? (usesEnglish ? "SSH Server Password" : "Пароль SSH-сервера")
             : (usesEnglish ? "SSH Key Passphrase" : "Passphrase SSH-ключа")
@@ -29,6 +54,19 @@ struct SSHKeychainAskPass {
         field.placeholderString = isPasswordPrompt
             ? (usesEnglish ? "Password" : "Пароль")
             : "Passphrase"
+        let fieldMenu = NSMenu()
+        fieldMenu.addItem(
+            withTitle: pasteTitle,
+            action: #selector(NSText.paste(_:)),
+            keyEquivalent: ""
+        )
+        fieldMenu.addItem(.separator())
+        fieldMenu.addItem(
+            withTitle: selectAllTitle,
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: ""
+        )
+        field.menu = fieldMenu
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
 

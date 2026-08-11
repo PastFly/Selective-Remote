@@ -3,7 +3,7 @@
 ## 1. Версия и канал обновлений
 
 Перед каждым публичным релизом увеличьте `VERSION` в `scripts/build_app.sh`,
-например `0.18.3` → `0.19.0`. `BUILD_NUMBER` тоже должен монотонно расти, но
+например `0.19.0` → `0.19.1`. `BUILD_NUMBER` тоже должен монотонно расти, но
 это только внутренний идентификатор macOS: пользователь его не видит.
 Синхронно обновите `version`, `build`, `downloadURL` и `releaseNotesURL` в
 `Resources/updates.json`. Обычная сборка уже содержит адрес официального feed:
@@ -15,7 +15,7 @@ https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/update
 Добавьте в начало `CHANGELOG.md` раздел с точным публичным номером:
 
 ```markdown
-## 0.19.0
+## 0.19.1
 
 - первое изменение;
 - второе изменение.
@@ -30,8 +30,8 @@ Workflow извлекает этот раздел через `scripts/release_no
 После успешного CI создайте тег на том же commit:
 
 ```bash
-git tag -a v0.19.0 -m "Selective Remote 0.19.0"
-git push origin v0.19.0
+git tag -a v0.19.1 -m "Selective Remote 0.19.1"
+git push origin v0.19.1
 ```
 
 Для каждого выпуска создавайте новый тег. Не перемещайте опубликованный тег и
