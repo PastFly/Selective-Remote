@@ -50,8 +50,6 @@ private final class SFTPRightClickSelectionView: NSView {
         }
     }
 
-    deinit { removeMonitor() }
-
     private func removeMonitor() {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
@@ -1403,8 +1401,7 @@ struct SFTPBrowserView: View {
             "«\(entry.name)» будет перемещён в Корзину и сможет быть восстановлен."
         case let .remote(entry):
             if entry.isDirectory {
-                "Удалённая папка «\(entry.name)» будет удалена безвозвратно. "
-                    + "SFTP разрешает удалить только пустую папку."
+                "Удалённая папка «\(entry.name)» и всё её содержимое будут удалены безвозвратно."
             } else {
                 "Удалённый файл «\(entry.name)» будет удалён безвозвратно."
             }

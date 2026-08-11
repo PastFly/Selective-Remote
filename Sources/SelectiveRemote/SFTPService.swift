@@ -435,9 +435,40 @@ enum SFTPService {
         remotePath: String,
         isDirectory: Bool
     ) throws {
+        if isDirectory {
+            try removeDirectoryRecursively(settings: settings, remotePath: remotePath)
+        } else {
+            _ = try runBatch(
+                settings: settings,
+                commands: [try removeCommand(remotePath: remotePath, isDirectory: false)]
+            )
+        }
+    }
+
+    /// OpenSSH sftp's `rmdir` only removes empty directories and `rm` has no
+    /// portable recursive flag. Walk the tree through SFTP, remove children
+    /// first, then remove the directory itself. Symlinks are listed as files,
+    /// so they are unlinked rather than followed.
+    private static func removeDirectoryRecursively(
+        settings: SSHConnectionSettings,
+        remotePath: String
+    ) throws {
+        let children = try list(settings: settings, directory: remotePath)
+        for child in children {
+            guard child.name != ".", child.name != ".." else { continue }
+            let childPath = joinedRemotePath(remotePath, child.name)
+            if child.isDirectory {
+                try removeDirectoryRecursively(settings: settings, remotePath: childPath)
+            } else {
+                _ = try runBatch(
+                    settings: settings,
+                    commands: [try removeCommand(remotePath: childPath, isDirectory: false)]
+                )
+            }
+        }
         _ = try runBatch(
             settings: settings,
-            commands: [try removeCommand(remotePath: remotePath, isDirectory: isDirectory)]
+            commands: [try removeCommand(remotePath: remotePath, isDirectory: true)]
         )
     }
 
