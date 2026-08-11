@@ -764,8 +764,8 @@ final class SFTPBrowserModel: ObservableObject {
             guard currentPath == directory else { return }
             switch result {
             case let .success(values):
-                let knownSizes = Dictionary(
-                    uniqueKeysWithValues: rawEntries.compactMap { entry in
+                let knownSizes: [String: Int64] = Dictionary(
+                    uniqueKeysWithValues: rawEntries.compactMap { entry -> (String, Int64)? in
                         guard entry.isDirectory, let size = entry.size else { return nil }
                         return (entry.name, size)
                     }
