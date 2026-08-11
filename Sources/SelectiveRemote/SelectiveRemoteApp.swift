@@ -13,11 +13,14 @@ struct SelectiveRemoteApp: App {
     @NSApplicationDelegateAdaptor(SelectiveRemoteApplicationDelegate.self)
     private var appDelegate
     @StateObject private var model = AppModel()
+    @StateObject private var language = AppLanguageStore()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
+                .environmentObject(language)
+                .environment(\.locale, language.locale)
                 .frame(minWidth: 1050, minHeight: 700)
         }
         .windowResizability(.contentMinSize)
@@ -165,5 +168,6 @@ struct SelectiveRemoteApp: App {
             )
         }
         .menuBarExtraStyle(.menu)
+        .environment(\.locale, language.locale)
     }
 }

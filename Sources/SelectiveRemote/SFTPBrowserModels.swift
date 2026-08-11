@@ -1398,7 +1398,6 @@ final class SFTPBrowserSession: ObservableObject {
     }
 
     func connect(_ settings: SSHConnectionSettings) {
-        profileID = settings.profileID
         self.settings = settings
         remote.load(settings: settings, directory: settings.initialDirectory)
     }

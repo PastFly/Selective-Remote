@@ -39,9 +39,21 @@ struct SFTPBrowserView: View {
     @State private var showsTransferQueue = true
 
     let profile: ConnectionProfile
+    let requestConnection: (() -> Void)?
+    let openTerminal: (() -> Void)?
+    let activeSSHSession: (() -> Bool)?
 
-    init(profile: ConnectionProfile, session: SFTPBrowserSession) {
+    init(
+        profile: ConnectionProfile,
+        session: SFTPBrowserSession,
+        requestConnection: (() -> Void)? = nil,
+        openTerminal: (() -> Void)? = nil,
+        activeSSHSession: (() -> Bool)? = nil
+    ) {
         self.profile = profile
+        self.requestConnection = requestConnection
+        self.openTerminal = openTerminal
+        self.activeSSHSession = activeSSHSession
         _session = ObservedObject(wrappedValue: session)
         _remote = ObservedObject(wrappedValue: session.remote)
         _local = ObservedObject(wrappedValue: session.local)
@@ -65,14 +77,16 @@ struct SFTPBrowserView: View {
                     remotePanel
                         .frame(minWidth: 470)
                 }
-                .frame(minHeight: 540)
+                .frame(minHeight: 540, maxHeight: .infinity)
 
                 transferBar
                 transferQueuePanel
                 statusBar
             }
             .padding(8)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var lifecycleContent: some View {
@@ -194,14 +208,19 @@ struct SFTPBrowserView: View {
     }
 
     private var connectionBar: some View {
-        HStack(spacing: 10) {
-            Button("Подключить SFTP", systemImage: "network") {
-                connect()
+        let hasActiveSSHSession = activeSSHSession?()
+            ?? appModel.isSSHTerminalRunning(profileID: profile.id)
+        return HStack(spacing: 10) {
+            Button(
+                settings == nil ? "Подключить SFTP" : "Сменить сервер",
+                systemImage: settings == nil ? "network" : "arrow.triangle.2.circlepath"
+            ) {
+                performConnectionRequest()
             }
             .buttonStyle(.borderedProminent)
             .disabled(remote.isBusy)
 
-            if appModel.isSSHTerminalRunning(profileID: profile.id) {
+            if hasActiveSSHSession {
                 Label(
                     "Используется активная SSH-сессия",
                     systemImage: "link.circle.fill"
@@ -217,8 +236,14 @@ struct SFTPBrowserView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Открыть терминал", systemImage: "terminal") {
-                appModel.connect()
+            if requestConnection == nil || openTerminal != nil {
+                Button("Открыть терминал", systemImage: "terminal") {
+                    if let openTerminal {
+                        openTerminal()
+                    } else {
+                        appModel.connect()
+                    }
+                }
             }
         }
     }
@@ -740,12 +765,23 @@ struct SFTPBrowserView: View {
                     )
                     .allowsHitTesting(false)
                 } else if settings == nil {
-                    ContentUnavailableView(
-                        "SFTP не подключён",
-                        systemImage: "network.slash",
-                        description: Text("Нажмите «Подключить SFTP»")
-                    )
-                    .allowsHitTesting(false)
+                    VStack(spacing: 12) {
+                        Image(systemName: "folder.badge.questionmark")
+                            .font(.system(size: 34, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                        Text("SFTP не подключён")
+                            .font(.title3.weight(.semibold))
+                        Text("Выберите сохранённый сервер или укажите hostname/IP вручную.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        Button("Выбрать сервер", systemImage: "server.rack") {
+                            performConnectionRequest()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(28)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
                 }
             }
             .dropDestination(for: URL.self) { urls, _ in
@@ -1180,6 +1216,14 @@ struct SFTPBrowserView: View {
     private func connect() {
         guard let prepared = appModel.prepareSelectedSSHConnection() else { return }
         session.connect(prepared)
+    }
+
+    private func performConnectionRequest() {
+        if let requestConnection {
+            requestConnection()
+        } else {
+            connect()
+        }
     }
 
     private func promptForLocalFile() {

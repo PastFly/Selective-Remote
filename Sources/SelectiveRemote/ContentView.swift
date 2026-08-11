@@ -29,6 +29,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connections = "Подключения"
     case terminal = "Терминал"
+    case sftp = "SFTP"
     case forwarding = "Forwarding"
 
     var id: String { rawValue }
@@ -37,12 +38,17 @@ private enum MainArea: String, CaseIterable, Identifiable {
         switch self {
         case .connections: "rectangle.stack"
         case .terminal: "terminal"
+        case .sftp: "folder.badge.gearshape"
         case .forwarding: "arrow.left.arrow.right"
         }
     }
 }
 
 struct ContentView: View {
+    private static let globalSFTPScopeID = UUID(
+        uuidString: "9C99721B-CFF3-48B7-A0A4-22E627A7D56C"
+    )!
+
     @EnvironmentObject private var model: AppModel
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
@@ -54,6 +60,8 @@ struct ContentView: View {
     @State private var showsCredentialVault = false
     @State private var showsSSHKeyGenerator = false
     @State private var showsAppearanceSettings = false
+    @State private var showsGlobalSFTPConnectionEditor = false
+    @State private var globalSFTPConnection: TerminalTabConnection?
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var sftpSession: SFTPBrowserSession { model.sftpSession }
@@ -145,6 +153,24 @@ struct ContentView: View {
             SSHKeyGenerationView { request, session in
                 model.generateSSHKey(request, session: session)
             }
+        }
+        .sheet(isPresented: $showsGlobalSFTPConnectionEditor) {
+            TerminalConnectionEditor(
+                profiles: sortedSSHProfiles,
+                initialConnection: globalSFTPConnection
+                    ?? sortedSSHProfiles.first.map {
+                        .savedProfile($0.id)
+                    }
+                    ?? .custom(host: "", username: ""),
+                allowsInteractivePassword: false,
+                actionTitle: "Подключить SFTP",
+                heading: "Подключение SFTP",
+                message: "Выберите сохранённый сервер или укажите временный SFTP-адрес.",
+                onSave: { connection, _ in
+                    globalSFTPConnection = connection
+                    connectGlobalSFTP(connection)
+                }
+            )
         }
         .onChange(of: profile.id) { _, _ in
             setTerminalFocusMode(false)
@@ -276,6 +302,12 @@ struct ContentView: View {
                                model.runningSSHTerminalCount > 0 {
                                 Text("\(model.runningSSHTerminalCount)")
                                     .font(.caption.bold())
+                                    .foregroundStyle(.green)
+                            }
+                            if area == .sftp,
+                               model.globalSFTPSession.settings != nil {
+                                Image(systemName: "circle.fill")
+                                    .font(.system(size: 7))
                                     .foregroundStyle(.green)
                             }
                             if area == .forwarding,
@@ -426,6 +458,8 @@ struct ContentView: View {
                 profileDetail
             case .terminal:
                 globalTerminalDetail
+            case .sftp:
+                globalSFTPDetail
             case .forwarding:
                 IndependentForwardingView()
             }
@@ -503,6 +537,67 @@ struct ContentView: View {
         }
         .groupBoxStyle(ModernGroupBoxStyle())
         .controlSize(.large)
+    }
+
+    private var globalSFTPDetail: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("SFTP")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("Независимый файловый менеджер для сохранённых и временных серверов")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 16)
+
+            SFTPBrowserView(
+                profile: globalSFTPProfile,
+                session: model.globalSFTPSession,
+                requestConnection: {
+                    showsGlobalSFTPConnectionEditor = true
+                },
+                activeSSHSession: {
+                    guard let profileID = globalSFTPConnection?.profileID else {
+                        return false
+                    }
+                    return model.isSSHTerminalRunning(profileID: profileID)
+                }
+            )
+            .padding(.horizontal, 28)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
+    }
+
+    private var sortedSSHProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType == .ssh }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+    }
+
+    private var globalSFTPProfile: ConnectionProfile {
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.id = Self.globalSFTPScopeID
+        profile.friendlyName = "SFTP"
+        return profile
+    }
+
+    private func connectGlobalSFTP(_ connection: TerminalTabConnection) {
+        guard let settings = model.prepareSSHConnection(
+            connection: connection,
+            clientID: Self.globalSFTPScopeID
+        ) else { return }
+        model.globalSFTPSession.prepare(for: Self.globalSFTPScopeID)
+        model.globalSFTPSession.connect(settings)
     }
 
     private var profileTabPicker: some View {

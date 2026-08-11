@@ -38,7 +38,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Create GitHub Release notes from a CHANGELOG.md section."
     )
-    parser.add_argument("version", help="Public version, for example 0.18.1 or v0.18.1")
+    parser.add_argument("version", help="Public version, for example 0.18.2 or v0.18.2")
     parser.add_argument(
         "--changelog",
         default="CHANGELOG.md",

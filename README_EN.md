@@ -11,8 +11,8 @@ dual-pane SFTP, independent terminal workspaces, and SSH port forwarding into a
 single application.
 
 The interface is available in English and Russian. It follows the macOS
-language by default; a per-app language can be selected in **System Settings →
-General → Language & Region → Applications**.
+language by default, or you can explicitly select System Default, Russian, or
+English in the application's appearance settings.
 
 ## Highlights
 
@@ -24,8 +24,9 @@ General → Language & Region → Applications**.
   available workspace and can be reordered with drag and drop;
 - local command history, searchable suggestions, favorites, templates, and
   server-aware service and container commands;
-- dual-pane SFTP with search, transfer queue, drag and drop, remote text editing,
-  POSIX permissions, and persistent sessions;
+- standalone dual-pane SFTP with a saved profile or a temporary hostname/IP,
+  plus search, transfer queue, drag and drop, remote text editing, POSIX
+  permissions, and persistent sessions;
 - independent local, remote, and SOCKS forwarding rules, each with its own SSH
   target;
 - local profiles with passwords and passphrases stored only in macOS Keychain.
@@ -74,6 +75,14 @@ suggestions, and detected server context.
 Temporary sessions use `/usr/bin/ssh`, the system `ssh-agent`, and
 `~/.ssh/config`. Password and key passphrases are entered directly into the
 terminal and are not stored by the application.
+
+## Standalone SFTP
+
+Open **SFTP** in the main sidebar. The local Mac pane is available immediately;
+in the remote pane, select a saved SSH profile or enter a temporary hostname/IP,
+username, and port. Use **Change Server** to switch the remote endpoint without
+opening a connection card. Background SFTP authentication uses an SSH key, an
+authenticated system agent, or suitable `~/.ssh/config` settings.
 
 ## Independent forwarding
 

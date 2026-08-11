@@ -2,6 +2,22 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+@Test("Выбранный язык приложения сохраняется между запусками")
+@MainActor
+func persistsApplicationLanguage() throws {
+    let suiteName = "AppLanguageTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+
+    let original = AppLanguageStore(defaults: defaults)
+    #expect(original.selection == .system)
+    original.selection = .english
+
+    let restored = AppLanguageStore(defaults: defaults)
+    #expect(restored.selection == .english)
+    #expect(restored.locale.identifier == "en")
+}
+
 @Test("Рабочая область терминала восстанавливает вкладки без автоподключения")
 @MainActor
 func restoresTerminalWorkspaceWithoutStartingSessions() throws {

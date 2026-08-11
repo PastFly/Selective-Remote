@@ -248,6 +248,7 @@ private final class ManagedRDPSession {
 @MainActor
 final class AppModel: NSObject, ObservableObject {
     let sftpSession = SFTPBrowserSession()
+    let globalSFTPSession = SFTPBrowserSession()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -1131,10 +1132,28 @@ final class AppModel: NSObject, ObservableObject {
     func prepareSelectedSSHConnection(
         requiresIndependentAuthentication: Bool = false
     ) -> SSHConnectionSettings? {
-        guard let settings = selectedSSHConnectionSettings() else { return nil }
+        prepareSSHConnection(
+            connection: .savedProfile(selectedProfile.id),
+            clientID: selectedProfile.id,
+            requiresIndependentAuthentication: requiresIndependentAuthentication
+        )
+    }
+
+    func prepareSSHConnection(
+        connection: TerminalTabConnection,
+        clientID: UUID,
+        requiresIndependentAuthentication: Bool = false
+    ) -> SSHConnectionSettings? {
+        guard let settings = sshConnectionSettings(
+            connection: connection,
+            tabID: clientID
+        ) else { return nil }
         do {
+            let matchingTerminalIsRunning = connection.profileID.map {
+                isSSHTerminalRunning(profileID: $0)
+            } ?? false
             let hasActiveControlSession = !requiresIndependentAuthentication
-                && isSSHTerminalRunning(profileID: settings.profileID)
+                && matchingTerminalIsRunning
             if let key = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,

@@ -130,6 +130,13 @@
 "На сервер" = "To Server";
 "На этот Mac" = "To This Mac";
 "Подключить SFTP" = "Connect SFTP";
+"Сменить сервер" = "Change Server";
+"SFTP не подключён" = "SFTP is not connected";
+"Выбрать сервер" = "Select Server";
+"Подключение SFTP" = "SFTP Connection";
+"Выберите сохранённый сервер или укажите hostname/IP вручную." = "Choose a saved server or enter a hostname/IP manually.";
+"Выберите сохранённый сервер или укажите временный SFTP-адрес." = "Choose a saved server or enter a temporary SFTP address.";
+"Независимый файловый менеджер для сохранённых и временных серверов" = "Independent file manager for saved and temporary servers";
 "Локальная папка пуста" = "Local folder is empty";
 "Ничего не найдено" = "Nothing found";
 "Измените или очистите фильтр" = "Change or clear the filter";
@@ -137,6 +144,11 @@
 "POSIX-права и владелец" = "POSIX Permissions & Ownership";
 "Восьмеричный режим" = "Octal mode";
 "Оформление приложения и терминала" = "Application & Terminal Appearance";
+"Язык приложения" = "Application Language";
+"Язык" = "Language";
+"Системный" = "System Default";
+"Русский" = "Russian";
+"Интерфейс переключается сразу. Системный режим использует язык macOS." = "The interface switches immediately. System mode follows the macOS language.";
 "Прозрачное окно" = "Transparent Window";
 "Непрозрачность" = "Opacity";
 "Тема" = "Theme";
@@ -153,3 +165,5 @@
 "Избранное" = "Favorites";
 "Шаблоны" = "Templates";
 "Команды сервера" = "Server Commands";
+"Терминал не подключён" = "Terminal is not connected";
+"Фоновое подключение не может запросить пароль в терминале. Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config." = "A background connection cannot request a terminal password. Use an SSH key, the system ssh-agent, or ~/.ssh/config.";

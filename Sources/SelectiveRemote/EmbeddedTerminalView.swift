@@ -869,6 +869,30 @@ struct SSHTerminalView: View {
                 )
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay {
+                if !tab.session.isRunning {
+                    VStack(spacing: 12) {
+                        Image(systemName: "terminal.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(color)
+                        Text("Терминал не подключён")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                        Text(connectionLabel(for: tab))
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.white.opacity(0.62))
+                            .lineLimit(1)
+                        Button("Подключиться", systemImage: "play.fill") {
+                            selectTabIfNeeded(tab.id)
+                            connect(tab)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.horizontal, 26)
+                    .padding(.vertical, 22)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                }
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(TerminalColorCodecView.color(appearance.palette.background))
@@ -957,6 +981,8 @@ struct TerminalConnectionEditor: View {
     let onSave: (TerminalTabConnection, String) -> Void
     let allowsInteractivePassword: Bool
     let actionTitle: String
+    let heading: String
+    let message: String
 
     @State private var kind: TerminalTabConnection.Kind
     @State private var selectedProfileID: UUID?
@@ -969,12 +995,16 @@ struct TerminalConnectionEditor: View {
         initialConnection: TerminalTabConnection,
         allowsInteractivePassword: Bool = true,
         actionTitle: String = "Подключить",
+        heading: String = "Подключение вкладки",
+        message: String = "Выберите сохранённый профиль или укажите временный SSH-адрес.",
         onSave: @escaping (TerminalTabConnection, String) -> Void
     ) {
         self.profiles = profiles
         self.onSave = onSave
         self.allowsInteractivePassword = allowsInteractivePassword
         self.actionTitle = actionTitle
+        self.heading = heading
+        self.message = message
         _kind = State(initialValue: initialConnection.kind)
         _selectedProfileID = State(
             initialValue: initialConnection.profileID ?? profiles.first?.id
@@ -987,9 +1017,9 @@ struct TerminalConnectionEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Подключение вкладки")
+                Text(LocalizedStringKey(heading))
                     .font(.title2.weight(.semibold))
-                Text("Выберите сохранённый профиль или укажите временный SSH-адрес.")
+                Text(LocalizedStringKey(message))
                     .foregroundStyle(.secondary)
             }
 
@@ -1021,7 +1051,7 @@ struct TerminalConnectionEditor: View {
                     allowsInteractivePassword
                         ? "Пароль будет запрошен непосредственно в терминале. "
                             + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
-                        : "Фоновый туннель не может запросить пароль в терминале. "
+                        : "Фоновое подключение не может запросить пароль в терминале. "
                             + "Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config."
                 )
                 .font(.caption)

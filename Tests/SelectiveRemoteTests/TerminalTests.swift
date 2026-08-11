@@ -271,7 +271,7 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(workspace.contains("Array(tabs.prefix"))
 }
 
-@Test("Приложение содержит глобальные Terminal и Forwarding")
+@Test("Приложение содержит глобальные Terminal, SFTP и Forwarding")
 func exposesGlobalSSHWorkspaces() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -290,8 +290,11 @@ func exposesGlobalSSHWorkspaces() throws {
         encoding: .utf8
     )
     #expect(content.contains("case terminal = \"Терминал\""))
+    #expect(content.contains("case sftp = \"SFTP\""))
     #expect(content.contains("case forwarding = \"Forwarding\""))
     #expect(content.contains("model.globalTerminalWorkspace()"))
+    #expect(content.contains("model.globalSFTPSession"))
+    #expect(content.contains("showsGlobalSFTPConnectionEditor"))
     #expect(forwarding.contains("model.startIndependentPortForward"))
 }
 
@@ -313,6 +316,8 @@ func includesEnglishLocalizationAndDocumentation() throws {
     )
     #expect(localization.contains("\"Подключения\" = \"Connections\""))
     #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
+    #expect(localization.contains("\"Язык приложения\" = \"Application Language\""))
+    #expect(localization.contains("\"SFTP не подключён\" = \"SFTP is not connected\""))
     #expect(readme.contains("## SSH terminal workspace"))
     #expect(readme.contains("## Independent forwarding"))
 }

@@ -573,11 +573,23 @@ final class TerminalAppearanceStore: ObservableObject {
 }
 
 struct TerminalAppearanceView: View {
+    @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var store: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
 
     var body: some View {
         Form {
+            Section("Язык приложения") {
+                Picker("Язык", selection: $language.selection) {
+                    ForEach(AppLanguage.allCases) { item in
+                        Text(LocalizedStringKey(item.title)).tag(item)
+                    }
+                }
+                Text("Интерфейс переключается сразу. Системный режим использует язык macOS.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             AppAppearanceSettingsSection(store: appAppearance)
 
             Section("Терминал") {
@@ -671,7 +683,7 @@ struct TerminalAppearanceView: View {
         }
         .formStyle(.grouped)
         .padding(12)
-        .frame(width: 460, height: 640)
+        .frame(width: 460, height: 720)
     }
 }
 
