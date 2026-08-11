@@ -267,7 +267,13 @@ final class SFTPTransferQueue: ObservableObject {
                 try request.operation(isResume, control)
             }
             while !operationState.isFinished {
-                updateProgress(next, request: request, started: started)
+                // Progress probes may perform filesystem or SFTP I/O. Never run
+                // them on MainActor: a slow stat/list request used to freeze row
+                // selection and make the progress UI appear stuck.
+                let measured = await Task.detached(priority: .utility) {
+                    request.progressProbe()
+                }.value
+                updateProgress(next, request: request, started: started, measured: measured)
                 try? await Task.sleep(for: .milliseconds(800))
             }
 
@@ -277,7 +283,7 @@ final class SFTPTransferQueue: ObservableObject {
                     controls.removeValue(forKey: next)
                     continue
                 }
-                updateProgress(next, request: request, started: started, completed: true)
+                updateProgress(next, request: request, started: started, measured: nil, completed: true)
                 items[current].phase = .completed
                 items[current].errorMessage = nil
                 request.completion()
@@ -296,10 +302,11 @@ final class SFTPTransferQueue: ObservableObject {
         _ id: UUID,
         request: SFTPTransferRequest,
         started: Date,
+        measured: Int64?,
         completed: Bool = false
     ) {
         guard let index = index(of: id) else { return }
-        let measured = request.progressProbe() ?? items[index].transferredBytes
+        let measured = measured ?? items[index].transferredBytes
         if completed, let total = items[index].totalBytes {
             items[index].transferredBytes = total
         } else {

@@ -12,6 +12,54 @@ private enum SFTPDeleteTarget {
     case remote(SFTPRemoteEntry)
 }
 
+/// Keeps SwiftUI List selection in sync with AppKit context-click semantics.
+/// A background NSView observes rightMouseDown without consuming the event, so
+/// the row is selected before SwiftUI opens its context menu.
+private struct SFTPRightClickSelector: NSViewRepresentable {
+    let action: @MainActor () -> Void
+
+    func makeNSView(context: Context) -> SFTPRightClickSelectionView {
+        let view = SFTPRightClickSelectionView()
+        view.action = action
+        return view
+    }
+
+    func updateNSView(_ nsView: SFTPRightClickSelectionView, context: Context) {
+        nsView.action = action
+    }
+}
+
+private final class SFTPRightClickSelectionView: NSView {
+    var action: (@MainActor () -> Void)?
+    private var eventMonitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        removeMonitor()
+        guard window != nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard let self, let window = self.window, event.window === window else {
+                return event
+            }
+            let point = self.convert(event.locationInWindow, from: nil)
+            guard self.bounds.contains(point) else { return event }
+            Task { @MainActor [weak self] in
+                self?.action?()
+            }
+            return event
+        }
+    }
+
+    deinit { removeMonitor() }
+
+    private func removeMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
 struct SFTPBrowserView: View {
     @EnvironmentObject private var appModel: AppModel
     @ObservedObject private var session: SFTPBrowserSession
@@ -542,11 +590,14 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .highPriorityGesture(
-                        TapGesture(count: 2).onEnded {
-                            local.open(entry)
+                    .onTapGesture(count: 2) {
+                        local.open(entry)
+                    }
+                    .background {
+                        SFTPRightClickSelector {
+                            local.selectedEntryID = entry.id
                         }
-                    )
+                    }
                     .contextMenu {
                         localContextMenu(for: entry)
                     }
@@ -716,16 +767,19 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .highPriorityGesture(
-                        TapGesture(count: 2).onEnded {
-                            guard let settings else { return }
-                            if entry.isDirectory {
-                                remote.open(entry, settings: settings)
-                            } else {
-                                remote.edit(entry, settings: settings)
-                            }
+                    .onTapGesture(count: 2) {
+                        guard let settings else { return }
+                        if entry.isDirectory {
+                            remote.open(entry, settings: settings)
+                        } else {
+                            remote.edit(entry, settings: settings)
                         }
-                    )
+                    }
+                    .background {
+                        SFTPRightClickSelector {
+                            remote.selectedEntryID = entry.id
+                        }
+                    }
                     .contextMenu {
                         remoteContextMenu(for: entry)
                     }
