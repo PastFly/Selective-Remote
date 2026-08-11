@@ -1,7 +1,7 @@
 {
-  "version": "0.19.5",
-  "build": 85,
-  "downloadURL": "https://github.com/PastFly/Selective-Remote/releases/download/v0.19.5/SelectiveRemote-0.19.5-arm64.dmg",
-  "releaseNotesURL": "https://github.com/PastFly/Selective-Remote/releases/tag/v0.19.5",
+  "version": "0.19.6",
+  "build": 86,
+  "downloadURL": "https://github.com/PastFly/Selective-Remote/releases/download/v0.19.6/SelectiveRemote-0.19.6-arm64.dmg",
+  "releaseNotesURL": "https://github.com/PastFly/Selective-Remote/releases/tag/v0.19.6",
   "minimumMacOS": "14.0"
 }

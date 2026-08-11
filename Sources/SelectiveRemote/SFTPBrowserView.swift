@@ -8,54 +8,8 @@ private enum SFTPRenameTarget {
 }
 
 private enum SFTPDeleteTarget {
-    case local(SFTPLocalEntry)
-    case remote(SFTPRemoteEntry)
-}
-
-/// Keeps SwiftUI List selection in sync with AppKit context-click semantics.
-/// A background NSView observes rightMouseDown without consuming the event, so
-/// the row is selected before SwiftUI opens its context menu.
-private struct SFTPRightClickSelector: NSViewRepresentable {
-    let action: @MainActor () -> Void
-
-    func makeNSView(context: Context) -> SFTPRightClickSelectionView {
-        let view = SFTPRightClickSelectionView()
-        view.action = action
-        return view
-    }
-
-    func updateNSView(_ nsView: SFTPRightClickSelectionView, context: Context) {
-        nsView.action = action
-    }
-}
-
-private final class SFTPRightClickSelectionView: NSView {
-    var action: (@MainActor () -> Void)?
-    private var eventMonitor: Any?
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        removeMonitor()
-        guard window != nil else { return }
-        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
-            guard let self, let window = self.window, event.window === window else {
-                return event
-            }
-            let point = self.convert(event.locationInWindow, from: nil)
-            guard self.bounds.contains(point) else { return event }
-            Task { @MainActor [weak self] in
-                self?.action?()
-            }
-            return event
-        }
-    }
-
-    private func removeMonitor() {
-        if let eventMonitor {
-            NSEvent.removeMonitor(eventMonitor)
-            self.eventMonitor = nil
-        }
-    }
+    case local([SFTPLocalEntry])
+    case remote([SFTPRemoteEntry])
 }
 
 struct SFTPBrowserView: View {
@@ -307,7 +261,7 @@ struct SFTPBrowserView: View {
                 settings == nil
                     || remote.isBusy
                     || local.isBusy
-                    || local.selectedEntry == nil
+                    || local.selectedEntries.isEmpty
             )
 
             Button("← На этот Mac", systemImage: "arrow.left") {
@@ -317,7 +271,7 @@ struct SFTPBrowserView: View {
                 settings == nil
                     || remote.isBusy
                     || local.isBusy
-                    || remote.selectedEntry == nil
+                    || remote.selectedEntries.isEmpty
             )
 
             Spacer()
@@ -558,7 +512,8 @@ struct SFTPBrowserView: View {
             pathField(
                 title: "Локальный путь",
                 text: $localPathInput,
-                disabled: local.isBusy
+                disabled: local.isBusy,
+                suggestions: localPathSuggestions
             ) {
                 navigateLocalPath()
             }
@@ -575,7 +530,7 @@ struct SFTPBrowserView: View {
                 local.selectSort(field)
             }
 
-            List(selection: $local.selectedEntryID) {
+            List(selection: $local.selectedEntryIDs) {
                 ForEach(local.entries) { entry in
                     fileRow(
                         name: entry.name,
@@ -588,14 +543,11 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        local.open(entry)
-                    }
-                    .background {
-                        SFTPRightClickSelector {
-                            local.selectedEntryID = entry.id
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            local.open(entry)
                         }
-                    }
+                    )
                     .contextMenu {
                         localContextMenu(for: entry)
                     }
@@ -734,7 +686,8 @@ struct SFTPBrowserView: View {
             pathField(
                 title: "Путь на сервере",
                 text: $remotePathInput,
-                disabled: settings == nil || remote.isBusy
+                disabled: settings == nil || remote.isBusy,
+                suggestions: remotePathSuggestions
             ) {
                 navigateRemotePath()
             }
@@ -752,7 +705,7 @@ struct SFTPBrowserView: View {
                 remote.selectSort(field)
             }
 
-            List(selection: $remote.selectedEntryID) {
+            List(selection: $remote.selectedEntryIDs) {
                 ForEach(remote.entries) { entry in
                     fileRow(
                         name: entry.name,
@@ -765,19 +718,16 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .onTapGesture(count: 2) {
-                        guard let settings else { return }
-                        if entry.isDirectory {
-                            remote.open(entry, settings: settings)
-                        } else {
-                            remote.edit(entry, settings: settings)
+                    .simultaneousGesture(
+                        TapGesture(count: 2).onEnded {
+                            guard let settings else { return }
+                            if entry.isDirectory {
+                                remote.open(entry, settings: settings)
+                            } else {
+                                remote.edit(entry, settings: settings)
+                            }
                         }
-                    }
-                    .background {
-                        SFTPRightClickSelector {
-                            remote.selectedEntryID = entry.id
-                        }
-                    }
+                    )
                     .contextMenu {
                         remoteContextMenu(for: entry)
                     }
@@ -915,7 +865,10 @@ struct SFTPBrowserView: View {
         if settings != nil {
             Button("Скопировать на сервер", systemImage: "arrow.right") {
                 guard let settings else { return }
-                remote.upload(localURLs: [entry.url], settings: settings)
+                remote.upload(
+                    localURLs: localActionEntries(for: entry).map(\.url),
+                    settings: settings
+                )
             }
         }
 
@@ -926,15 +879,17 @@ struct SFTPBrowserView: View {
             renameText = entry.name
             showsRenamePrompt = true
         }
+        .disabled(localActionEntries(for: entry).count != 1)
 
         Button("Свойства…", systemImage: "info.circle") {
             propertiesTarget = .local(entry)
         }
+        .disabled(localActionEntries(for: entry).count != 1)
 
         Divider()
 
         Button("Переместить в Корзину", systemImage: "trash", role: .destructive) {
-            deleteTarget = .local(entry)
+            deleteTarget = .local(localActionEntries(for: entry))
             showsDeleteConfirmation = true
         }
     }
@@ -972,7 +927,9 @@ struct SFTPBrowserView: View {
 
         Button("Скопировать на этот Mac", systemImage: "arrow.left") {
             guard let settings else { return }
-            remote.download(entry, to: local.currentDirectory, settings: settings)
+            for selected in remoteActionEntries(for: entry) {
+                remote.download(selected, to: local.currentDirectory, settings: settings)
+            }
         }
         Button("Скопировать путь", systemImage: "doc.on.doc") {
             copyPath(
@@ -987,15 +944,17 @@ struct SFTPBrowserView: View {
             renameText = entry.name
             showsRenamePrompt = true
         }
+        .disabled(remoteActionEntries(for: entry).count != 1)
 
         Button("Свойства и доступ…", systemImage: "info.circle") {
             propertiesTarget = .remote(entry, directory: remote.currentPath)
         }
+        .disabled(remoteActionEntries(for: entry).count != 1)
 
         Divider()
 
         Button("Удалить", systemImage: "trash", role: .destructive) {
-            deleteTarget = .remote(entry)
+            deleteTarget = .remote(remoteActionEntries(for: entry))
             showsDeleteConfirmation = true
         }
     }
@@ -1185,6 +1144,7 @@ struct SFTPBrowserView: View {
         title: String,
         text: Binding<String>,
         disabled: Bool,
+        suggestions: [String],
         onSubmit: @escaping () -> Void
     ) -> some View {
         HStack(spacing: 6) {
@@ -1195,6 +1155,20 @@ struct SFTPBrowserView: View {
                 .textFieldStyle(.roundedBorder)
                 .font(.caption.monospaced())
                 .onSubmit(onSubmit)
+            if !suggestions.isEmpty {
+                Menu {
+                    ForEach(suggestions.prefix(15), id: \.self) { suggestion in
+                        Button(suggestion) {
+                            text.wrappedValue = suggestion
+                        }
+                    }
+                } label: {
+                    Image(systemName: "text.insert")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Подсказки путей из текущей папки")
+            }
             Button("Перейти", systemImage: "arrow.right.circle", action: onSubmit)
                 .labelStyle(.iconOnly)
                 .help("Перейти по указанному пути")
@@ -1327,6 +1301,53 @@ struct SFTPBrowserView: View {
         NSPasteboard.general.setString(path, forType: .string)
     }
 
+    private var localPathSuggestions: [String] {
+        let typed = localPathInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        let directory = local.currentDirectory.standardizedFileURL.path
+        var candidates = local.entries.filter(\.isDirectory).map { $0.url.path }
+        candidates.append(local.currentDirectory.deletingLastPathComponent().path)
+        candidates.append(FileManager.default.homeDirectoryForCurrentUser.path)
+        return pathSuggestions(candidates, matching: typed, current: directory)
+    }
+
+    private var remotePathSuggestions: [String] {
+        let typed = remotePathInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates = remote.entries.filter(\.isDirectory).map {
+            SFTPService.joinedRemotePath(remote.currentPath, $0.name)
+        }
+        candidates.append(SFTPService.parentRemotePath(remote.currentPath))
+        candidates.append("~")
+        candidates.append("/")
+        return pathSuggestions(candidates, matching: typed, current: remote.currentPath)
+    }
+
+    private func pathSuggestions(
+        _ candidates: [String],
+        matching typed: String,
+        current: String
+    ) -> [String] {
+        let unique = Array(Set(candidates)).filter { !$0.isEmpty && $0 != current }
+        guard !typed.isEmpty else { return unique.sorted().prefix(15).map { $0 } }
+        let last = typed.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? typed
+        return unique.filter { candidate in
+            candidate.localizedCaseInsensitiveHasPrefix(typed)
+                || URL(fileURLWithPath: candidate).lastPathComponent.localizedCaseInsensitiveHasPrefix(last)
+        }
+        .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private func localActionEntries(for entry: SFTPLocalEntry) -> [SFTPLocalEntry] {
+        local.selectedEntryIDs.contains(entry.id) && !local.selectedEntries.isEmpty
+            ? local.selectedEntries
+            : [entry]
+    }
+
+    private func remoteActionEntries(for entry: SFTPRemoteEntry) -> [SFTPRemoteEntry] {
+        remote.selectedEntryIDs.contains(entry.id) && !remote.selectedEntries.isEmpty
+            ? remote.selectedEntries
+            : [entry]
+    }
+
     private func navigateLocalPath() {
         let path = NSString(
             string: localPathInput.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1348,17 +1369,22 @@ struct SFTPBrowserView: View {
     }
 
     private func uploadSelectedLocalEntry() {
-        guard let settings, let entry = local.selectedEntry else { return }
-        remote.upload(localURLs: [entry.url], settings: settings)
+        guard let settings, !local.selectedEntries.isEmpty else { return }
+        remote.upload(
+            localURLs: local.selectedEntries.map(\.url),
+            settings: settings
+        )
     }
 
     private func downloadSelectedRemoteEntry() {
-        guard let settings, let entry = remote.selectedEntry else { return }
-        remote.download(
-            entry,
-            to: local.currentDirectory,
-            settings: settings
-        )
+        guard let settings, !remote.selectedEntries.isEmpty else { return }
+        for entry in remote.selectedEntries {
+            remote.download(
+                entry,
+                to: local.currentDirectory,
+                settings: settings
+            )
+        }
     }
 
     private func performRename() {
@@ -1377,11 +1403,11 @@ struct SFTPBrowserView: View {
     private func performDelete() {
         defer { deleteTarget = nil }
         switch deleteTarget {
-        case let .local(entry):
-            local.moveToTrash(entry)
-        case let .remote(entry):
+        case let .local(entries):
+            local.moveToTrash(entries)
+        case let .remote(entries):
             guard let settings else { return }
-            remote.remove(entry, settings: settings)
+            remote.remove(entries, settings: settings)
         case nil:
             break
         }
@@ -1397,14 +1423,18 @@ struct SFTPBrowserView: View {
 
     private var deleteConfirmationText: String {
         switch deleteTarget {
-        case let .local(entry):
-            "«\(entry.name)» будет перемещён в Корзину и сможет быть восстановлен."
-        case let .remote(entry):
-            if entry.isDirectory {
-                "Удалённая папка «\(entry.name)» и всё её содержимое будут удалены безвозвратно."
-            } else {
-                "Удалённый файл «\(entry.name)» будет удалён безвозвратно."
+        case let .local(entries):
+            entries.count == 1
+                ? "«\(entries[0].name)» будет перемещён в Корзину и сможет быть восстановлен."
+                : "Выбранные объекты (\(entries.count)) будут перемещены в Корзину."
+        case let .remote(entries):
+            if entries.count == 1 {
+                let entry = entries[0]
+                return entry.isDirectory
+                    ? "Удалённая папка «\(entry.name)» и всё её содержимое будут удалены безвозвратно."
+                    : "Удалённый файл «\(entry.name)» будет удалён безвозвратно."
             }
+            return "Выбранные удалённые объекты (\(entries.count)) и содержимое папок будут удалены безвозвратно."
         case nil:
             "Выбранный объект будет удалён."
         }

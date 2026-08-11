@@ -111,7 +111,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = ""
     @Published var errorMessage: String?
-    @Published var selectedEntryID: String?
+    @Published var selectedEntryIDs: Set<String> = []
     @Published var sortField: SFTPFileSortField = .name {
         didSet { applySort() }
     }
@@ -137,8 +137,12 @@ final class SFTPLocalBrowserModel: ObservableObject {
         reload()
     }
 
+    var selectedEntries: [SFTPLocalEntry] {
+        entries.filter { selectedEntryIDs.contains($0.id) }
+    }
+
     var selectedEntry: SFTPLocalEntry? {
-        entries.first(where: { $0.id == selectedEntryID })
+        selectedEntries.count == 1 ? selectedEntries[0] : nil
     }
 
     var canGoBack: Bool { !backStack.isEmpty }
@@ -174,7 +178,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 guard reloadID == token, currentDirectory == directory else { return }
                 rawEntries = values
                 applySort()
-                selectedEntryID = nil
+                selectedEntryIDs.removeAll()
                 isReloading = false
                 updateBusy()
                 statusMessage = "Объектов: \(values.count)"
@@ -204,7 +208,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
         if entry.isDirectory {
             navigate(to: entry.url)
         } else {
-            selectedEntryID = entry.id
+            selectedEntryIDs = [entry.id]
             NSWorkspace.shared.open(entry.url)
         }
     }
@@ -334,6 +338,32 @@ final class SFTPLocalBrowserModel: ObservableObject {
                     self.errorMessage = error.localizedDescription
                 } else {
                     self.statusMessage = "«\(entry.name)» перемещён в Корзину"
+                    self.errorMessage = nil
+                    self.reload()
+                }
+            }
+        }
+    }
+
+    func moveToTrash(_ entries: [SFTPLocalEntry]) {
+        guard !entries.isEmpty else { return }
+        if entries.count == 1 {
+            moveToTrash(entries[0])
+            return
+        }
+        isTransferring = true
+        updateBusy()
+        statusMessage = "Перемещаем в Корзину: \(entries.count)…"
+        NSWorkspace.shared.recycle(entries.map(\.url)) { [weak self] _, error in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isTransferring = false
+                self.updateBusy()
+                if let error {
+                    self.statusMessage = "Удаление не выполнено"
+                    self.errorMessage = error.localizedDescription
+                } else {
+                    self.statusMessage = "Перемещено в Корзину: \(entries.count)"
                     self.errorMessage = nil
                     self.reload()
                 }
@@ -541,9 +571,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 ? comparison == .orderedAscending
                 : comparison == .orderedDescending
         }
-        if selectedEntryID != nil, selectedEntry == nil {
-            selectedEntryID = nil
-        }
+        selectedEntryIDs.formIntersection(Set(entries.map(\.id)))
     }
 
     private func compare<T: Comparable>(_ left: T, _ right: T) -> ComparisonResult {
@@ -564,7 +592,7 @@ final class SFTPBrowserModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = "SFTP ещё не подключён"
     @Published var errorMessage: String?
-    @Published var selectedEntryID: String?
+    @Published var selectedEntryIDs: Set<String> = []
     @Published var editorDocument: SFTPRemoteTextDocument?
     @Published var sortField: SFTPFileSortField = .name {
         didSet { applySort() }
@@ -592,8 +620,12 @@ final class SFTPBrowserModel: ObservableObject {
         self.transfers = transfers
     }
 
+    var selectedEntries: [SFTPRemoteEntry] {
+        entries.filter { selectedEntryIDs.contains($0.id) }
+    }
+
     var selectedEntry: SFTPRemoteEntry? {
-        entries.first(where: { $0.id == selectedEntryID })
+        selectedEntries.count == 1 ? selectedEntries[0] : nil
     }
 
     var canGoBack: Bool { !backStack.isEmpty }
@@ -608,7 +640,7 @@ final class SFTPBrowserModel: ObservableObject {
         isBusy = false
         statusMessage = "SFTP ещё не подключён"
         errorMessage = nil
-        selectedEntryID = nil
+        selectedEntryIDs.removeAll()
         editorDocument = nil
         filterText = ""
         backStack = []
@@ -658,7 +690,7 @@ final class SFTPBrowserModel: ObservableObject {
                 rawEntries = values
                 applySort()
                 currentPath = target
-                selectedEntryID = nil
+                selectedEntryIDs.removeAll()
                 isBusy = false
                 statusMessage = "Объектов: \(values.count)"
                 completion?(true)
@@ -702,7 +734,7 @@ final class SFTPBrowserModel: ObservableObject {
 
     func open(_ entry: SFTPRemoteEntry, settings: SSHConnectionSettings) {
         guard entry.isDirectory else {
-            selectedEntryID = entry.id
+            selectedEntryIDs = [entry.id]
             return
         }
         load(
@@ -956,6 +988,33 @@ final class SFTPBrowserModel: ObservableObject {
             )
         } completion: {
             self.statusMessage = "«\(entry.name)» удалён"
+            self.load(
+                settings: settings,
+                directory: self.currentPath,
+                recordHistory: false
+            )
+        }
+    }
+
+    func remove(
+        _ entries: [SFTPRemoteEntry],
+        settings: SSHConnectionSettings
+    ) {
+        guard !entries.isEmpty else { return }
+        if entries.count == 1 {
+            remove(entries[0], settings: settings)
+            return
+        }
+        let items = entries.map { entry in
+            (
+                path: SFTPService.joinedRemotePath(currentPath, entry.name),
+                isDirectory: entry.isDirectory
+            )
+        }
+        runTransfer(status: "Удаляем объектов: \(entries.count)…") {
+            try SFTPService.removeMany(settings: settings, items: items)
+        } completion: {
+            self.statusMessage = "Удалено объектов: \(entries.count)"
             self.load(
                 settings: settings,
                 directory: self.currentPath,
@@ -1339,9 +1398,7 @@ final class SFTPBrowserModel: ObservableObject {
             by: sortField,
             direction: sortDirection
         )
-        if selectedEntryID != nil, selectedEntry == nil {
-            selectedEntryID = nil
-        }
+        selectedEntryIDs.formIntersection(Set(entries.map(\.id)))
     }
 
     private static func availableRemoteName(

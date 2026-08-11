@@ -268,6 +268,25 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         }
 
         ownedProcesses.removeValue(forKey: controlPath)
+
+        // With ControlPersist OpenSSH may successfully detach the master and
+        // terminate the bootstrap process with status 0 a fraction of a second
+        // before the control socket becomes observable.  Treat that as a
+        // successful bootstrap once the socket answers instead of showing a
+        // false “code 0” error on the first connection attempt.
+        if process.terminationStatus == 0 {
+            for _ in 0..<20 {
+                if controlSocketIsAlive(
+                    settings: settings,
+                    executable: executable,
+                    controlPath: controlPath
+                ) {
+                    return
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+        }
+
         if process.terminationStatus == 255 {
             throw SFTPServiceError.authenticationRequired
         }
@@ -435,13 +454,39 @@ enum SFTPService {
         remotePath: String,
         isDirectory: Bool
     ) throws {
-        if isDirectory {
-            try removeDirectoryRecursively(settings: settings, remotePath: remotePath)
-        } else {
-            _ = try runBatch(
-                settings: settings,
-                commands: [try removeCommand(remotePath: remotePath, isDirectory: false)]
-            )
+        try removeMany(
+            settings: settings,
+            items: [(path: remotePath, isDirectory: isDirectory)]
+        )
+    }
+
+    static func removeMany(
+        settings: SSHConnectionSettings,
+        items: [(path: String, isDirectory: Bool)]
+    ) throws {
+        guard !items.isEmpty else { return }
+        for item in items { try validateRemovalTarget(item.path) }
+
+        // Standard SSH servers can remove a whole tree in one remote process.
+        // This is dramatically faster than starting an SFTP batch for every
+        // child (thousands of round trips for a directory with many files).
+        // If the account is restricted to internal-sftp, fall back to the
+        // portable recursive SFTP implementation below.
+        do {
+            let args = try items.map { try shellQuoted($0.path) }.joined(separator: " ")
+            try runRemoteShellCommand(settings: settings, command: "rm -rf -- \(args)")
+            return
+        } catch {
+            for item in items {
+                if item.isDirectory {
+                    try removeDirectoryRecursively(settings: settings, remotePath: item.path)
+                } else {
+                    _ = try runBatch(
+                        settings: settings,
+                        commands: [try removeCommand(remotePath: item.path, isDirectory: false)]
+                    )
+                }
+            }
         }
     }
 
@@ -470,6 +515,58 @@ enum SFTPService {
             settings: settings,
             commands: [try removeCommand(remotePath: remotePath, isDirectory: true)]
         )
+    }
+
+
+    private static func validateRemovalTarget(_ path: String) throws {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "/", trimmed != ".", trimmed != "~" else {
+            throw SFTPServiceError.unsupportedPath
+        }
+    }
+
+    private static func shellQuoted(_ path: String) throws -> String {
+        guard !path.contains("\0"), !path.contains(where: \.isNewline) else {
+            throw SFTPServiceError.unsupportedPath
+        }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
+    private static func runRemoteShellCommand(
+        settings: SSHConnectionSettings,
+        command: String
+    ) throws {
+        guard FileManager.default.isExecutableFile(atPath: sshExecutable) else {
+            throw SFTPServiceError.executableUnavailable
+        }
+        try masterManager.ensureMaster(settings: settings, executable: sshExecutable)
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: sshExecutable)
+        var arguments = [
+            "-p", String(settings.port),
+            "-o", "BatchMode=yes",
+            "-o", "ControlPath=\(SSHService.controlPath(settings: settings))",
+            "-o", "ControlMaster=no"
+        ]
+        if !settings.username.isEmpty { arguments += ["-o", "User=\(settings.username)"] }
+        arguments += [settings.host, command]
+        process.arguments = arguments
+        process.environment = SSHKeyService.processEnvironment()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+        process.standardError = output
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            let text = String(data: data, encoding: .utf8) ?? ""
+            throw SFTPServiceError.commandFailed(
+                text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? "удалённая команда завершилась с кодом \(process.terminationStatus)"
+                    : String(text.suffix(4_000))
+            )
+        }
     }
 
     static func updateAttributes(
