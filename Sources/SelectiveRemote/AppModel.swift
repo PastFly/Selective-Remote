@@ -1350,17 +1350,57 @@ final class AppModel: NSObject, ObservableObject {
             )
         case .ssh:
             let workspace = terminalWorkspace(profileID: selectedProfile.id)
+            let tab = workspace.tabs.first(where: \.isPrimary) ?? workspace.selectedTab
             connectSSHTerminal(
-                profileID: selectedProfile.id,
-                session: workspace.selectedTab.session
+                connection: tab.connection,
+                tabID: tab.id,
+                session: tab.session
             )
+            requestedSSHConsoleProfileID = selectedProfile.id
         }
     }
 
-    func connectSSHTerminal(profileID: UUID, session: TerminalSessionModel) {
-        guard let settings = sshConnectionSettings(profileID: profileID) else { return }
+    func sshConnectionSettings(
+        connection: TerminalTabConnection,
+        tabID: UUID
+    ) -> SSHConnectionSettings? {
+        switch connection.kind {
+        case .savedProfile:
+            guard let profileID = connection.profileID else {
+                errorMessage = "Сохранённый SSH-профиль больше недоступен"
+                return nil
+            }
+            return sshConnectionSettings(profileID: profileID)
+        case .custom:
+            var profile = ConnectionProfile(connectionType: .ssh)
+            profile.id = tabID
+            profile.friendlyName = connection.normalizedUsername.isEmpty
+                ? connection.normalizedHost
+                : "\(connection.normalizedUsername)@\(connection.normalizedHost)"
+            profile.host = connection.normalizedHost
+            profile.username = connection.normalizedUsername
+            profile.sshPort = connection.port
+            do {
+                let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+                errorMessage = nil
+                return settings
+            } catch {
+                errorMessage = error.localizedDescription
+                return nil
+            }
+        }
+    }
+
+    func connectSSHTerminal(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel
+    ) {
+        guard let settings = sshConnectionSettings(
+            connection: connection,
+            tabID: tabID
+        ) else { return }
         guard !session.isRunning else {
-            requestedSSHConsoleProfileID = settings.profileID
             statusMessage = "Эта вкладка SSH уже подключена"
             return
         }
@@ -1376,11 +1416,12 @@ final class AppModel: NSObject, ObservableObject {
                     ? "SSH-сессия завершена"
                     : "SSH-сессия завершилась с кодом \(exitCode)"
             }
-            if let index = profiles.firstIndex(where: { $0.id == settings.profileID }) {
+            if connection.kind == .savedProfile,
+               let profileID = connection.profileID,
+               let index = profiles.firstIndex(where: { $0.id == profileID }) {
                 profiles[index].lastConnectedAt = Date()
             }
-            requestedSSHConsoleProfileID = settings.profileID
-            statusMessage = "SSH запускается во встроенном терминале"
+            statusMessage = "SSH подключается к \(settings.host)"
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1389,11 +1430,15 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func discoverTerminalContext(
-        profileID: UUID
+        connection: TerminalTabConnection,
+        tabID: UUID
     ) async throws -> TerminalRemoteContextSnapshot {
-        guard let settings = sshConnectionSettings(profileID: profileID) else {
+        guard let settings = sshConnectionSettings(
+            connection: connection,
+            tabID: tabID
+        ) else {
             throw TerminalRemoteContextError.commandFailed(
-                "профиль SSH больше недоступен"
+                "подключение SSH больше недоступно"
             )
         }
         return try await TerminalRemoteContextService.discover(

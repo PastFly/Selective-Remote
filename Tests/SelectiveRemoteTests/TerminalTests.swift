@@ -237,6 +237,32 @@ func terminalReloadReplaysActiveSession() throws {
     #expect(sessionSource.contains("observer(replayBuffer)"))
 }
 
+@Test("Каждая вкладка SSH может использовать собственное подключение")
+func terminalTabsExposeIndependentConnectionEditor() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/EmbeddedTerminalView.swift"
+        ),
+        encoding: .utf8
+    )
+    let workspace = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/TerminalWorkspace.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("TerminalConnectionEditor"))
+    #expect(workspace.contains("Из сохранённых"))
+    #expect(workspace.contains("Другой сервер"))
+    #expect(workspace.contains("var connection: TerminalTabConnection"))
+    #expect(workspace.contains("isValidCustomConnection"))
+}
+
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")
 func terminalPaletteAvoidsSwift63ColorBridge() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)

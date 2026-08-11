@@ -17,11 +17,73 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+struct TerminalTabConnection: Codable, Equatable {
+    enum Kind: String, Codable, CaseIterable, Identifiable {
+        case savedProfile
+        case custom
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .savedProfile: "Из сохранённых"
+            case .custom: "Другой сервер"
+            }
+        }
+    }
+
+    var kind: Kind
+    var profileID: UUID?
+    var host: String
+    var username: String
+    var port: Int
+
+    static func savedProfile(_ id: UUID) -> TerminalTabConnection {
+        TerminalTabConnection(
+            kind: .savedProfile,
+            profileID: id,
+            host: "",
+            username: "",
+            port: 22
+        )
+    }
+
+    static func custom(
+        host: String,
+        username: String,
+        port: Int = 22
+    ) -> TerminalTabConnection {
+        TerminalTabConnection(
+            kind: .custom,
+            profileID: nil,
+            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+            username: username.trimmingCharacters(in: .whitespacesAndNewlines),
+            port: port
+        )
+    }
+
+    var normalizedHost: String {
+        host.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var normalizedUsername: String {
+        username.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var isValidCustomConnection: Bool {
+        kind == .custom
+            && !normalizedHost.isEmpty
+            && (1...65_535).contains(port)
+            && !normalizedUsername.contains(where: { $0.isWhitespace || $0.isNewline })
+    }
+}
+
 struct TerminalWorkspaceTab: Identifiable {
     let id: UUID
     var title: String
     let session: TerminalSessionModel
     let isPrimary: Bool
+    var connection: TerminalTabConnection
 }
 
 private struct StoredTerminalWorkspace: Codable {
@@ -29,6 +91,7 @@ private struct StoredTerminalWorkspace: Codable {
         let id: UUID
         var title: String
         let isPrimary: Bool
+        var connection: TerminalTabConnection?
     }
 
     var tabs: [Tab]
@@ -71,13 +134,19 @@ final class TerminalWorkspaceModel: ObservableObject {
         let stored = defaults.data(forKey: initialStorageKey)
             .flatMap { try? JSONDecoder().decode(StoredTerminalWorkspace.self, from: $0) }
         let primaryMetadata = stored?.tabs.first(where: \.isPrimary)
-            ?? StoredTerminalWorkspace.Tab(id: UUID(), title: "Терминал 1", isPrimary: true)
+            ?? StoredTerminalWorkspace.Tab(
+                id: UUID(),
+                title: "Терминал 1",
+                isPrimary: true,
+                connection: nil
+            )
         var restoredTabs = [
             TerminalWorkspaceTab(
                 id: primaryMetadata.id,
                 title: Self.normalizedTitle(primaryMetadata.title, fallback: "Терминал 1"),
                 session: primarySession,
-                isPrimary: true
+                isPrimary: true,
+                connection: .savedProfile(profileID)
             )
         ]
         let additionalMetadata = Array(
@@ -92,7 +161,8 @@ final class TerminalWorkspaceModel: ObservableObject {
                         fallback: "Терминал \(restoredTabs.count + 1)"
                     ),
                     session: TerminalSessionModel(),
-                    isPrimary: false
+                    isPrimary: false,
+                    connection: metadata.connection ?? .savedProfile(profileID)
                 )
             )
         }
@@ -128,13 +198,21 @@ final class TerminalWorkspaceModel: ObservableObject {
     var hasRunningSession: Bool { runningSessionCount > 0 }
 
     @discardableResult
-    func addTab(select: Bool = true) -> TerminalWorkspaceTab? {
+    func addTab(
+        connection: TerminalTabConnection? = nil,
+        title: String? = nil,
+        select: Bool = true
+    ) -> TerminalWorkspaceTab? {
         guard tabs.count < 8 else { return nil }
         let tab = TerminalWorkspaceTab(
             id: UUID(),
-            title: "Терминал \(tabs.count + 1)",
+            title: Self.normalizedTitle(
+                title ?? "Терминал \(tabs.count + 1)",
+                fallback: "Терминал \(tabs.count + 1)"
+            ),
             session: TerminalSessionModel(),
-            isPrimary: false
+            isPrimary: false,
+            connection: connection ?? .savedProfile(profileID)
         )
         tabs.append(tab)
         observe(tab)
@@ -167,6 +245,25 @@ final class TerminalWorkspaceModel: ObservableObject {
         )
         persist()
         objectWillChange.send()
+    }
+
+    @discardableResult
+    func updateConnection(
+        tabID: UUID,
+        connection: TerminalTabConnection,
+        suggestedTitle: String
+    ) -> Bool {
+        guard let index = tabs.firstIndex(where: { $0.id == tabID }),
+              !tabs[index].session.isRunning
+        else { return false }
+        tabs[index].connection = connection
+        tabs[index].title = Self.normalizedTitle(
+            suggestedTitle,
+            fallback: "Терминал \(index + 1)"
+        )
+        persist()
+        objectWillChange.send()
+        return true
     }
 
     func setLayout(_ newLayout: TerminalWorkspaceLayout) {
@@ -235,7 +332,8 @@ final class TerminalWorkspaceModel: ObservableObject {
                 StoredTerminalWorkspace.Tab(
                     id: $0.id,
                     title: $0.title,
-                    isPrimary: $0.isPrimary
+                    isPrimary: $0.isPrimary,
+                    connection: $0.connection
                 )
             },
             selectedTabID: selectedTabID,

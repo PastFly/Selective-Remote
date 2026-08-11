@@ -15,7 +15,9 @@ func restoresTerminalWorkspaceWithoutStartingSessions() throws {
         defaults: defaults
     )
 
-    let second = try #require(workspace.addTab())
+    let second = try #require(workspace.addTab(
+        connection: .custom(host: "logs.example.test", username: "operator", port: 2222)
+    ))
     workspace.renameTab(second.id, to: "Журналы")
     workspace.setLayout(.splitHorizontal)
 
@@ -27,6 +29,34 @@ func restoresTerminalWorkspaceWithoutStartingSessions() throws {
     #expect(restored.tabs.map(\.title) == ["Терминал 1", "Журналы"])
     #expect(restored.layout == .splitHorizontal)
     #expect(!restored.tabs.contains(where: { $0.session.isRunning }))
+    #expect(restored.tabs[1].connection.kind == .custom)
+    #expect(restored.tabs[1].connection.host == "logs.example.test")
+    #expect(restored.tabs[1].connection.username == "operator")
+    #expect(restored.tabs[1].connection.port == 2222)
+}
+
+@Test("Временное подключение SSH проверяет host, login и port")
+func validatesCustomTerminalConnection() {
+    #expect(TerminalTabConnection.custom(
+        host: "server.example.test",
+        username: "admin",
+        port: 22
+    ).isValidCustomConnection)
+    #expect(!TerminalTabConnection.custom(
+        host: "",
+        username: "admin",
+        port: 22
+    ).isValidCustomConnection)
+    #expect(!TerminalTabConnection.custom(
+        host: "server.example.test",
+        username: "bad user",
+        port: 22
+    ).isValidCustomConnection)
+    #expect(!TerminalTabConnection.custom(
+        host: "server.example.test",
+        username: "admin",
+        port: 70_000
+    ).isValidCustomConnection)
 }
 
 @Test("Избранное и шаблоны команд изолированы по SSH-профилям")

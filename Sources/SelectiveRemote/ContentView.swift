@@ -445,17 +445,30 @@ struct ContentView: View {
             appearance: terminalAppearance,
             appAppearance: appAppearance,
             profile: profile,
+            sshProfiles: model.profiles
+                .filter { $0.connectionType == .ssh }
+                .sorted {
+                    $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                        == .orderedAscending
+                },
             hasInstallableKey: model.selectedSSHKey?.publicKeyPath != nil,
             isFocusMode: terminalFocusMode,
-            connect: { session in
-                model.connectSSHTerminal(profileID: profile.id, session: session)
+            connect: { tab in
+                model.connectSSHTerminal(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session
+                )
             },
             installKey: model.installSelectedSSHPublicKey,
             toggleFocusMode: {
                 setTerminalFocusMode(!terminalFocusMode)
             },
-            discoverContext: {
-                try await model.discoverTerminalContext(profileID: profile.id)
+            discoverContext: { tab in
+                try await model.discoverTerminalContext(
+                    connection: tab.connection,
+                    tabID: tab.id
+                )
             }
         )
     }

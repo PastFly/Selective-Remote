@@ -403,19 +403,21 @@ struct SSHTerminalView: View {
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
     let profile: ConnectionProfile
+    let sshProfiles: [ConnectionProfile]
     let hasInstallableKey: Bool
     let isFocusMode: Bool
-    let connect: (TerminalSessionModel) -> Void
+    let connect: (TerminalWorkspaceTab) -> Void
     let installKey: () -> Void
     let toggleFocusMode: () -> Void
-    let discoverContext: () async throws -> TerminalRemoteContextSnapshot
+    let discoverContext: (TerminalWorkspaceTab) async throws -> TerminalRemoteContextSnapshot
 
     @State private var showsAppearance = false
     @State private var showsHistory = false
-    @State private var remoteContext = TerminalRemoteContextSnapshot.empty
-    @State private var isRefreshingContext = false
+    @State private var remoteContexts: [UUID: TerminalRemoteContextSnapshot] = [:]
+    @State private var refreshingContextTabIDs: Set<UUID> = []
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
+    @State private var connectionEditorRequest: TerminalConnectionEditorRequest?
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
 
@@ -425,21 +427,40 @@ struct SSHTerminalView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Label("Встроенный SSH-терминал", systemImage: "terminal.fill")
                         .font(.headline)
-                    Text("\(session.phase.title) · \(session.terminalColumns)×\(session.terminalRows)")
+                    Text(
+                        "\(connectionLabel(for: workspace.selectedTab)) · "
+                            + "\(session.phase.title) · "
+                            + "\(session.terminalColumns)×\(session.terminalRows)"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
+                    connectionEditorRequest = TerminalConnectionEditorRequest(
+                        tabID: workspace.selectedTab.id,
+                        initialConnection: workspace.selectedTab.connection
+                    )
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .disabled(session.isRunning || workspace.selectedTab.isPrimary)
+                .help("Выбрать другой сервер для этой вкладки")
+                .accessibilityLabel("Изменить подключение вкладки")
+
+                Button {
                     refreshRemoteContext()
                 } label: {
-                    if isRefreshingContext {
+                    if refreshingContextTabIDs.contains(workspace.selectedTabID) {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "server.rack")
                     }
                 }
-                .disabled(isRefreshingContext || !workspace.hasRunningSession)
+                .disabled(
+                    refreshingContextTabIDs.contains(workspace.selectedTabID)
+                        || !session.isRunning
+                )
                 .help("Обновить безопасные подсказки по службам и контейнерам сервера")
                 .accessibilityLabel("Обновить команды сервера")
 
@@ -504,7 +525,7 @@ struct SSHTerminalView: View {
                     .buttonStyle(.borderedProminent)
                 } else {
                     Button("Подключиться", systemImage: "play.fill") {
-                        connect(session)
+                        connect(workspace.selectedTab)
                     }
                     .buttonStyle(.borderedProminent)
                 }
@@ -549,12 +570,34 @@ struct SSHTerminalView: View {
                 renameTabID = nil
             }
         }
-        .task(id: workspace.hasRunningSession) {
-            guard workspace.hasRunningSession,
-                  remoteContext.refreshedAt == nil
+        .sheet(item: $connectionEditorRequest) { request in
+            TerminalConnectionEditor(
+                profiles: sshProfiles,
+                initialConnection: request.initialConnection,
+                onSave: { connection, suggestedTitle in
+                    if let tabID = request.tabID {
+                        _ = workspace.updateConnection(
+                            tabID: tabID,
+                            connection: connection,
+                            suggestedTitle: suggestedTitle
+                        )
+                        remoteContexts[tabID] = nil
+                    } else {
+                        _ = workspace.addTab(
+                            connection: connection,
+                            title: suggestedTitle
+                        )
+                    }
+                }
+            )
+        }
+        .task(id: "\(workspace.selectedTabID.uuidString)-\(session.isRunning)") {
+            let tab = workspace.selectedTab
+            guard tab.session.isRunning,
+                  remoteContexts[tab.id]?.refreshedAt == nil
             else { return }
             try? await Task.sleep(for: .seconds(1))
-            await loadRemoteContext()
+            await loadRemoteContext(for: tab)
         }
     }
 
@@ -595,6 +638,13 @@ struct SSHTerminalView: View {
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
                         .contextMenu {
+                            Button("Изменить подключение…") {
+                                connectionEditorRequest = TerminalConnectionEditorRequest(
+                                    tabID: tab.id,
+                                    initialConnection: tab.connection
+                                )
+                            }
+                            .disabled(tab.session.isRunning || tab.isPrimary)
                             Button("Переименовать") {
                                 renameValue = tab.title
                                 renameTabID = tab.id
@@ -611,7 +661,10 @@ struct SSHTerminalView: View {
             }
 
             Button {
-                _ = workspace.addTab()
+                connectionEditorRequest = TerminalConnectionEditorRequest(
+                    tabID: nil,
+                    initialConnection: .savedProfile(profile.id)
+                )
             } label: {
                 Image(systemName: "plus")
             }
@@ -666,7 +719,12 @@ struct SSHTerminalView: View {
         VStack(spacing: 0) {
             if workspace.layout != .single {
                 HStack {
-                    Text(tab.title).font(.caption.weight(.semibold))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(tab.title).font(.caption.weight(.semibold))
+                        Text(connectionLabel(for: tab))
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
                     Spacer()
                     Text(tab.session.phase.title)
                         .font(.caption2)
@@ -681,8 +739,10 @@ struct SSHTerminalView: View {
             EmbeddedTerminalWebView(
                 session: tab.session,
                 appearance: appearance.snapshot,
-                historyContext: TerminalHistoryContext(profileID: profile.id),
-                remoteContext: remoteContext,
+                historyContext: TerminalHistoryContext(
+                    profileID: historyContextID(for: tab)
+                ),
+                remoteContext: remoteContexts[tab.id] ?? .empty,
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
@@ -702,22 +762,177 @@ struct SSHTerminalView: View {
     }
 
     private func refreshRemoteContext() {
-        guard !isRefreshingContext else { return }
-        Task { await loadRemoteContext() }
+        let tab = workspace.selectedTab
+        guard !refreshingContextTabIDs.contains(tab.id) else { return }
+        Task { await loadRemoteContext(for: tab) }
     }
 
     @MainActor
-    private func loadRemoteContext() async {
-        guard !isRefreshingContext else { return }
-        isRefreshingContext = true
-        defer { isRefreshingContext = false }
+    private func loadRemoteContext(for tab: TerminalWorkspaceTab) async {
+        guard !refreshingContextTabIDs.contains(tab.id) else { return }
+        refreshingContextTabIDs.insert(tab.id)
+        defer { refreshingContextTabIDs.remove(tab.id) }
         do {
-            remoteContext = try await discoverContext()
+            remoteContexts[tab.id] = try await discoverContext(tab)
         } catch {
-            remoteContext.message = error.localizedDescription
-            remoteContext.suggestions = []
-            remoteContext.refreshedAt = Date()
+            remoteContexts[tab.id] = TerminalRemoteContextSnapshot(
+                hostLabel: connectionLabel(for: tab),
+                systemLabel: "",
+                refreshedAt: Date(),
+                suggestions: [],
+                message: error.localizedDescription
+            )
         }
+    }
+
+    private func connectionLabel(for tab: TerminalWorkspaceTab) -> String {
+        switch tab.connection.kind {
+        case .savedProfile:
+            guard let profileID = tab.connection.profileID,
+                  let target = sshProfiles.first(where: { $0.id == profileID })
+            else { return "Сохранённый профиль недоступен" }
+            let user = target.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            return user.isEmpty ? target.host : "\(user)@\(target.host)"
+        case .custom:
+            let user = tab.connection.normalizedUsername
+            let host = tab.connection.normalizedHost
+            let destination = user.isEmpty ? host : "\(user)@\(host)"
+            return tab.connection.port == 22
+                ? destination
+                : "\(destination):\(tab.connection.port)"
+        }
+    }
+
+    private func historyContextID(for tab: TerminalWorkspaceTab) -> UUID {
+        if tab.connection.kind == .savedProfile,
+           let profileID = tab.connection.profileID {
+            return profileID
+        }
+        return tab.id
+    }
+}
+
+private struct TerminalConnectionEditorRequest: Identifiable {
+    let id = UUID()
+    let tabID: UUID?
+    let initialConnection: TerminalTabConnection
+}
+
+private struct TerminalConnectionEditor: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let profiles: [ConnectionProfile]
+    let onSave: (TerminalTabConnection, String) -> Void
+
+    @State private var kind: TerminalTabConnection.Kind
+    @State private var selectedProfileID: UUID?
+    @State private var host: String
+    @State private var username: String
+    @State private var port: Int
+
+    init(
+        profiles: [ConnectionProfile],
+        initialConnection: TerminalTabConnection,
+        onSave: @escaping (TerminalTabConnection, String) -> Void
+    ) {
+        self.profiles = profiles
+        self.onSave = onSave
+        _kind = State(initialValue: initialConnection.kind)
+        _selectedProfileID = State(
+            initialValue: initialConnection.profileID ?? profiles.first?.id
+        )
+        _host = State(initialValue: initialConnection.host)
+        _username = State(initialValue: initialConnection.username)
+        _port = State(initialValue: initialConnection.port)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Подключение вкладки")
+                    .font(.title2.weight(.semibold))
+                Text("Выберите сохранённый профиль или укажите временный SSH-адрес.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Picker("Источник", selection: $kind) {
+                ForEach(TerminalTabConnection.Kind.allCases) { item in
+                    Text(item.title).tag(item)
+                }
+            }
+            .pickerStyle(.segmented)
+
+            if kind == .savedProfile {
+                Picker("SSH-профиль", selection: $selectedProfileID) {
+                    ForEach(profiles) { profile in
+                        VStack(alignment: .leading) {
+                            Text(profile.friendlyName)
+                            Text(profile.host).foregroundStyle(.secondary)
+                        }
+                        .tag(Optional(profile.id))
+                    }
+                }
+                .pickerStyle(.menu)
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    TextField("Hostname или IP", text: $host)
+                    TextField("Логин — необязательно", text: $username)
+                    TextField("Порт", value: $port, format: .number)
+                }
+                Text(
+                    "Пароль будет запрошен непосредственно в терминале. "
+                        + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Spacer()
+                Button("Отмена", role: .cancel) { dismiss() }
+                Button("Сохранить") { save() }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSave)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+    }
+
+    private var canSave: Bool {
+        switch kind {
+        case .savedProfile:
+            guard let selectedProfileID else { return false }
+            return profiles.contains(where: { $0.id == selectedProfileID })
+        case .custom:
+            return TerminalTabConnection.custom(
+                host: host,
+                username: username,
+                port: port
+            ).isValidCustomConnection
+        }
+    }
+
+    private func save() {
+        switch kind {
+        case .savedProfile:
+            guard let selectedProfileID,
+                  let profile = profiles.first(where: { $0.id == selectedProfileID })
+            else { return }
+            onSave(.savedProfile(profile.id), profile.friendlyName)
+        case .custom:
+            let connection = TerminalTabConnection.custom(
+                host: host,
+                username: username,
+                port: port
+            )
+            guard connection.isValidCustomConnection else { return }
+            let title = connection.normalizedUsername.isEmpty
+                ? connection.normalizedHost
+                : "\(connection.normalizedUsername)@\(connection.normalizedHost)"
+            onSave(connection, title)
+        }
+        dismiss()
     }
 }
 
