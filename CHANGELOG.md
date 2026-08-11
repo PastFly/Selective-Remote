@@ -3,6 +3,10 @@
 
 [← Вернуться на главную страницу](README.md)
 
+## 0.19.9
+
+- Fixed SFTP upload progress totals for directories containing hidden files or hidden subdirectories. The calculated total now matches the tree that OpenSSH SFTP actually transfers recursively.
+
 ## 0.19.8
 
 - Исправлено надёжное выделение строк SFTP/локальной панели с поддержкой Cmd и Shift.

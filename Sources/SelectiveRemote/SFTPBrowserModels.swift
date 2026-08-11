@@ -1457,10 +1457,13 @@ final class SFTPBrowserModel: ObservableObject {
             }
             return nil
         }
+        // SFTP `put -r` transfers dotfiles and hidden subdirectories too.
+        // The progress total must therefore count exactly the same tree; skipping
+        // hidden files made the denominator smaller than the bytes actually sent.
         guard let enumerator = FileManager.default.enumerator(
             at: url,
             includingPropertiesForKeys: Array(keys),
-            options: [.skipsHiddenFiles]
+            options: []
         ) else { return nil }
         var total: Int64 = 0
         for case let child as URL in enumerator {
