@@ -690,8 +690,10 @@ enum SFTPService {
     }
 
     static func connectionArguments(settings: SSHConnectionSettings) -> [String] {
+        // Commands are still written to stdin, but `-b -` must not be used here.
+        // OpenSSH treats batch-file mode as non-interactive authentication and
+        // can reject a password-only server without invoking SSH_ASKPASS.
         var arguments = [
-            "-b", "-",
             "-P", String(settings.port),
             "-o", "BatchMode=no",
             "-o", "NumberOfPasswordPrompts=1",

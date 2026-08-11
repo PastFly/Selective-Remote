@@ -91,6 +91,7 @@ func reusesActiveSSHControlSocketForSFTP() throws {
     #expect(arguments.contains("BatchMode=no"))
     #expect(arguments.contains("NumberOfPasswordPrompts=1"))
     #expect(arguments.contains("PreferredAuthentications=publickey,keyboard-interactive,password"))
+    #expect(!arguments.contains("-b"))
     #expect(controlPath.utf8.count < 100)
 
     var changedProfile = profile
