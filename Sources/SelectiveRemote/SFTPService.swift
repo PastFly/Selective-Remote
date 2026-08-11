@@ -212,8 +212,110 @@ enum SFTPRemoteEntrySorter {
     }
 }
 
+private final class SFTPMasterConnectionManager: @unchecked Sendable {
+    private let lock = NSLock()
+    private var ownedProcesses: [String: Process] = [:]
+
+    func ensureMaster(
+        settings: SSHConnectionSettings,
+        executable: String
+    ) throws {
+        let controlPath = SSHService.controlPath(settings: settings)
+
+        lock.lock()
+        defer { lock.unlock() }
+
+        if controlSocketIsAlive(
+            settings: settings,
+            executable: executable,
+            controlPath: controlPath
+        ) {
+            return
+        }
+
+        if let stale = ownedProcesses.removeValue(forKey: controlPath),
+           stale.isRunning {
+            stale.terminate()
+        }
+        try? FileManager.default.removeItem(atPath: controlPath)
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = SFTPService.persistentMasterArguments(settings: settings)
+        process.environment = SSHKeyService.backgroundAuthenticationEnvironment()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        do {
+            try process.run()
+        } catch {
+            throw SSHServiceError.launchFailed(error.localizedDescription)
+        }
+        ownedProcesses[controlPath] = process
+
+        // Authentication, including SSH_ASKPASS, happens only in this master.
+        // All SFTP child processes attach to the ready socket with BatchMode=yes.
+        while process.isRunning {
+            if controlSocketIsAlive(
+                settings: settings,
+                executable: executable,
+                controlPath: controlPath
+            ) {
+                return
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+
+        ownedProcesses.removeValue(forKey: controlPath)
+        if process.terminationStatus == 255 {
+            throw SFTPServiceError.authenticationRequired
+        }
+        throw SFTPServiceError.commandFailed(
+            "не удалось создать управляющее SSH-соединение "
+                + "(код \(process.terminationStatus))"
+        )
+    }
+
+    private func controlSocketIsAlive(
+        settings: SSHConnectionSettings,
+        executable: String,
+        controlPath: String
+    ) -> Bool {
+        guard FileManager.default.fileExists(atPath: controlPath) else {
+            return false
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        var arguments = [
+            "-S", controlPath,
+            "-O", "check",
+            "-p", String(settings.port)
+        ]
+        if !settings.username.isEmpty {
+            arguments += ["-o", "User=\(settings.username)"]
+        }
+        arguments.append(settings.host)
+        process.arguments = arguments
+        process.environment = SSHKeyService.processEnvironment()
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        do {
+            try process.run()
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        } catch {
+            return false
+        }
+    }
+}
+
 enum SFTPService {
     private static let executable = "/usr/bin/sftp"
+    private static let sshExecutable = "/usr/bin/ssh"
+    private static let masterManager = SFTPMasterConnectionManager()
 
     static func list(
         settings: SSHConnectionSettings,
@@ -690,18 +792,15 @@ enum SFTPService {
     }
 
     static func connectionArguments(settings: SSHConnectionSettings) -> [String] {
-        // Commands are still written to stdin, but `-b -` must not be used here.
-        // OpenSSH treats batch-file mode as non-interactive authentication and
-        // can reject a password-only server without invoking SSH_ASKPASS.
+        // Every file operation is a non-interactive slave of the persistent
+        // master created before the first operation. If that master disappears,
+        // the child fails instead of asking for the password again.
         var arguments = [
             "-P", String(settings.port),
-            "-o", "BatchMode=no",
-            "-o", "NumberOfPasswordPrompts=1",
-            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
+            "-o", "BatchMode=yes",
             "-o", "StrictHostKeyChecking=\(settings.hostKeyPolicy.openSSHValue)",
             "-o", "ControlPath=\(SSHService.controlPath(settings: settings))",
-            "-o", "ControlMaster=auto",
-            "-o", "ControlPersist=600"
+            "-o", "ControlMaster=no"
         ]
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
@@ -722,6 +821,40 @@ enum SFTPService {
             ]
         }
         arguments.append(settings.host)
+        return arguments
+    }
+
+    static func persistentMasterArguments(settings: SSHConnectionSettings) -> [String] {
+        var arguments = [
+            "-p", String(settings.port),
+            "-o", "BatchMode=no",
+            "-o", "NumberOfPasswordPrompts=1",
+            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
+            "-o", "StrictHostKeyChecking=\(settings.hostKeyPolicy.openSSHValue)",
+            "-o", "ControlPath=\(SSHService.controlPath(settings: settings))",
+            "-o", "ControlMaster=yes",
+            "-o", "ControlPersist=600",
+            "-o", "ConnectTimeout=15"
+        ]
+        if !settings.username.isEmpty {
+            arguments += ["-o", "User=\(settings.username)"]
+        }
+        if let identity = settings.identity {
+            arguments += [
+                "-i", identity.privateKeyPath,
+                "-o", "IdentitiesOnly=yes"
+            ]
+        }
+        if settings.compression {
+            arguments.append("-C")
+        }
+        if settings.keepAliveSeconds > 0 {
+            arguments += [
+                "-o", "ServerAliveInterval=\(settings.keepAliveSeconds)",
+                "-o", "ServerAliveCountMax=3"
+            ]
+        }
+        arguments += ["-N", settings.host]
         return arguments
     }
 
@@ -803,9 +936,16 @@ enum SFTPService {
         commands: [String],
         control: SFTPProcessControl? = nil
     ) throws -> String {
-        guard FileManager.default.isExecutableFile(atPath: executable) else {
+        guard FileManager.default.isExecutableFile(atPath: executable),
+              FileManager.default.isExecutableFile(atPath: sshExecutable)
+        else {
             throw SFTPServiceError.executableUnavailable
         }
+
+        try masterManager.ensureMaster(
+            settings: settings,
+            executable: sshExecutable
+        )
 
         let process = Process()
         let input = Pipe()

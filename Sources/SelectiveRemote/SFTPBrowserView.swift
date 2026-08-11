@@ -542,14 +542,11 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            local.selectedEntryID = entry.id
+                    .highPriorityGesture(
+                        TapGesture(count: 2).onEnded {
+                            local.open(entry)
                         }
                     )
-                    .onTapGesture(count: 2) {
-                        local.open(entry)
-                    }
                     .contextMenu {
                         localContextMenu(for: entry)
                     }
@@ -719,19 +716,16 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
-                    .simultaneousGesture(
-                        TapGesture().onEnded {
-                            remote.selectedEntryID = entry.id
+                    .highPriorityGesture(
+                        TapGesture(count: 2).onEnded {
+                            guard let settings else { return }
+                            if entry.isDirectory {
+                                remote.open(entry, settings: settings)
+                            } else {
+                                remote.edit(entry, settings: settings)
+                            }
                         }
                     )
-                    .onTapGesture(count: 2) {
-                        guard let settings else { return }
-                        if entry.isDirectory {
-                            remote.open(entry, settings: settings)
-                        } else {
-                            remote.edit(entry, settings: settings)
-                        }
-                    }
                     .contextMenu {
                         remoteContextMenu(for: entry)
                     }

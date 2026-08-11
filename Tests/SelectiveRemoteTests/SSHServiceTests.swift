@@ -86,13 +86,22 @@ func reusesActiveSSHControlSocketForSFTP() throws {
     let controlPath = SSHService.controlPath(settings: settings)
 
     #expect(arguments.contains("ControlPath=\(controlPath)"))
-    #expect(arguments.contains("ControlMaster=auto"))
-    #expect(arguments.contains("ControlPersist=600"))
-    #expect(arguments.contains("BatchMode=no"))
-    #expect(arguments.contains("NumberOfPasswordPrompts=1"))
-    #expect(arguments.contains("PreferredAuthentications=publickey,keyboard-interactive,password"))
+    #expect(arguments.contains("ControlMaster=no"))
+    #expect(arguments.contains("BatchMode=yes"))
+    #expect(!arguments.contains("ControlMaster=auto"))
+    #expect(!arguments.contains("NumberOfPasswordPrompts=1"))
     #expect(!arguments.contains("-b"))
     #expect(controlPath.utf8.count < 100)
+
+    let masterArguments = SFTPService.persistentMasterArguments(settings: settings)
+    #expect(masterArguments.contains("ControlPath=\(controlPath)"))
+    #expect(masterArguments.contains("ControlMaster=yes"))
+    #expect(masterArguments.contains("ControlPersist=600"))
+    #expect(masterArguments.contains("BatchMode=no"))
+    #expect(masterArguments.contains("NumberOfPasswordPrompts=1"))
+    #expect(masterArguments.contains("PreferredAuthentications=publickey,keyboard-interactive,password"))
+    #expect(masterArguments.contains("ConnectTimeout=15"))
+    #expect(masterArguments.contains("-N"))
 
     var changedProfile = profile
     changedProfile.host = "other.example.com"
