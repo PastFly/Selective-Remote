@@ -505,7 +505,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
             urls = try FileManager.default.contentsOfDirectory(
                 at: directory,
                 includingPropertiesForKeys: Array(keys),
-                options: [.skipsHiddenFiles]
+                options: []
             )
         } catch {
             throw SFTPLocalFileError.unreadableDirectory(directory.path)
@@ -614,6 +614,7 @@ final class SFTPBrowserModel: ObservableObject {
     private var operationID = UUID()
     private var backStack: [String] = []
     private var forwardStack: [String] = []
+    private var isSilentRefreshRunning = false
     private let transfers: SFTPTransferQueue
 
     init(transfers: SFTPTransferQueue) {
@@ -751,6 +752,52 @@ final class SFTPBrowserModel: ObservableObject {
         }
     }
 
+    func refreshSilently(settings: SSHConnectionSettings) {
+        guard !isBusy, !isSilentRefreshRunning else { return }
+        let directory = currentPath
+        isSilentRefreshRunning = true
+        Task {
+            let result = await Task.detached(priority: .utility) {
+                Result { try SFTPService.list(settings: settings, directory: directory) }
+            }.value
+            defer { isSilentRefreshRunning = false }
+            guard currentPath == directory else { return }
+            switch result {
+            case let .success(values):
+                let knownSizes = Dictionary(
+                    uniqueKeysWithValues: rawEntries.compactMap { entry in
+                        guard entry.isDirectory, let size = entry.size else { return nil }
+                        return (entry.name, size)
+                    }
+                )
+                rawEntries = values.map { entry in
+                    guard entry.isDirectory, entry.size == nil, let size = knownSizes[entry.name] else {
+                        return entry
+                    }
+                    return SFTPRemoteEntry(
+                        name: entry.name,
+                        isDirectory: entry.isDirectory,
+                        isSymbolicLink: entry.isSymbolicLink,
+                        size: size,
+                        permissions: entry.permissions,
+                        owner: entry.owner,
+                        group: entry.group,
+                        modifiedText: entry.modifiedText,
+                        modificationDate: entry.modificationDate
+                    )
+                }
+                applySort()
+                selectedEntryIDs.formIntersection(Set(entries.map(\.id)))
+                statusMessage = "Объектов: \(values.count)"
+                errorMessage = nil
+            case .failure:
+                // Background refresh must never turn a healthy visible panel
+                // into an error state because of one transient probe failure.
+                break
+            }
+        }
+    }
+
     func goBack(settings: SSHConnectionSettings) {
         guard let target = backStack.last else { return }
         let previous = currentPath
@@ -884,7 +931,7 @@ final class SFTPBrowserModel: ObservableObject {
                 name: request.localURL.lastPathComponent,
                 source: request.localURL.path,
                 destination: request.remotePath,
-                totalBytes: request.isDirectory ? nil : totalBytes,
+                totalBytes: totalBytes,
                 createdAt: Date(),
                 phase: .queued,
                 transferredBytes: 0,
@@ -910,10 +957,10 @@ final class SFTPBrowserModel: ObservableObject {
                 )
                 },
                 progressProbe: {
-                    guard !request.isDirectory else { return nil }
-                    return SFTPService.transferFileSize(
+                    SFTPService.transferItemSize(
                         settings: settings,
-                        remotePath: request.remotePath
+                        remotePath: request.remotePath,
+                        isDirectory: request.isDirectory
                     )
                 },
                 completion: { [weak self] in

@@ -37,6 +37,8 @@ struct SFTPBrowserView: View {
     @State private var localPathInput = ""
     @State private var remotePathInput = "."
     @State private var showsTransferQueue = false
+    @State private var localSelectionAnchor: String?
+    @State private var remoteSelectionAnchor: String?
 
     let profile: ConnectionProfile
     let requestConnection: (() -> Void)?
@@ -117,6 +119,14 @@ struct SFTPBrowserView: View {
         }
         .onChange(of: transfers.activeCount) { _, count in
             if count > 0 { showsTransferQueue = true }
+        }
+        .task(id: profile.id) {
+            while !Task.isCancelled {
+                let delayMilliseconds: Int64 = transfers.activeCount > 0 ? 1_500 : 5_000
+                try? await Task.sleep(for: .milliseconds(delayMilliseconds))
+                guard !Task.isCancelled, let settings = session.settings else { continue }
+                remote.refreshSilently(settings: settings)
+            }
         }
     }
 
@@ -366,8 +376,10 @@ struct SFTPBrowserView: View {
                 }
                 if let fraction = item.fractionCompleted {
                     ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
                 } else if item.phase == .running {
-                    ProgressView().controlSize(.small)
+                    ProgressView()
+                        .progressViewStyle(.linear)
                 }
                 HStack {
                     Text(item.progressText)
@@ -530,7 +542,7 @@ struct SFTPBrowserView: View {
                 local.selectSort(field)
             }
 
-            List(selection: $local.selectedEntryIDs) {
+            List {
                 ForEach(local.entries) { entry in
                     fileRow(
                         name: entry.name,
@@ -543,6 +555,14 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
+                    .listRowBackground(
+                        local.selectedEntryIDs.contains(entry.id)
+                            ? Color.accentColor.opacity(0.24)
+                            : Color.clear
+                    )
+                    .onTapGesture(count: 1) {
+                        selectLocalRow(entry.id)
+                    }
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded {
                             local.open(entry)
@@ -705,7 +725,7 @@ struct SFTPBrowserView: View {
                 remote.selectSort(field)
             }
 
-            List(selection: $remote.selectedEntryIDs) {
+            List {
                 ForEach(remote.entries) { entry in
                     fileRow(
                         name: entry.name,
@@ -718,6 +738,14 @@ struct SFTPBrowserView: View {
                     )
                     .tag(entry.id)
                     .contentShape(Rectangle())
+                    .listRowBackground(
+                        remote.selectedEntryIDs.contains(entry.id)
+                            ? Color.accentColor.opacity(0.24)
+                            : Color.clear
+                    )
+                    .onTapGesture(count: 1) {
+                        selectRemoteRow(entry.id)
+                    }
                     .simultaneousGesture(
                         TapGesture(count: 2).onEnded {
                             guard let settings else { return }
@@ -1337,6 +1365,57 @@ struct SFTPBrowserView: View {
                 ) != nil
         }
         .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    private func selectLocalRow(_ id: String) {
+        let result = rowSelection(
+            id: id,
+            orderedIDs: local.entries.map(\.id),
+            selection: local.selectedEntryIDs,
+            anchor: localSelectionAnchor
+        )
+        local.selectedEntryIDs = result.selection
+        localSelectionAnchor = result.anchor
+    }
+
+    private func selectRemoteRow(_ id: String) {
+        let result = rowSelection(
+            id: id,
+            orderedIDs: remote.entries.map(\.id),
+            selection: remote.selectedEntryIDs,
+            anchor: remoteSelectionAnchor
+        )
+        remote.selectedEntryIDs = result.selection
+        remoteSelectionAnchor = result.anchor
+    }
+
+    private func rowSelection(
+        id: String,
+        orderedIDs: [String],
+        selection: Set<String>,
+        anchor: String?
+    ) -> (selection: Set<String>, anchor: String?) {
+        let flags = NSApp.currentEvent?.modifierFlags ?? []
+        if flags.contains(.shift),
+           let anchor,
+           let first = orderedIDs.firstIndex(of: anchor),
+           let last = orderedIDs.firstIndex(of: id) {
+            let lower = min(first, last)
+            let upper = max(first, last)
+            return (Set(orderedIDs[lower...upper]), anchor)
+        }
+
+        if flags.contains(.command) {
+            var updated = selection
+            if updated.contains(id) {
+                updated.remove(id)
+            } else {
+                updated.insert(id)
+            }
+            return (updated, id)
+        }
+
+        return ([id], id)
     }
 
     private func localActionEntries(for entry: SFTPLocalEntry) -> [SFTPLocalEntry] {

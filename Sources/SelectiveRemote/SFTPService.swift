@@ -590,6 +590,29 @@ enum SFTPService {
         return try? remoteSize(settings: settings, remotePath: remotePath)
     }
 
+    /// Returns the current transferred byte count for either a file or a
+    /// directory. Directory progress uses one lightweight `du` over the
+    /// existing SSH master connection; restricted SFTP-only accounts simply
+    /// return nil and keep the UI's indeterminate linear progress bar.
+    static func transferItemSize(
+        settings: SSHConnectionSettings,
+        remotePath: String,
+        isDirectory: Bool
+    ) -> Int64? {
+        guard isDirectory else {
+            return transferFileSize(settings: settings, remotePath: remotePath)
+        }
+        guard let expression = try? shellPathExpression(remotePath),
+              let output = try? runRemoteShellCommand(
+                  settings: settings,
+                  command: "du -sk -- \(expression) 2>/dev/null | awk 'NR==1 {print $1}'"
+              ),
+              let first = output.split(whereSeparator: { $0.isWhitespace }).first,
+              let kib = Int64(first)
+        else { return nil }
+        return kib * 1024
+    }
+
     /// Calculates recursive sizes of the listed child directories in one SSH
     /// process. Each output line corresponds to one requested name; failures
     /// stay nil and do not prevent the rest of the list from updating.
