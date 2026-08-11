@@ -11,16 +11,24 @@ struct SSHKeychainAskPass {
 
         let alert = NSAlert()
         alert.alertStyle = .informational
-        alert.messageText = "Passphrase SSH-ключа"
-        alert.informativeText = CommandLine.arguments.dropFirst().first
-            ?? "Введите passphrase. Системный OpenSSH сохранит его в Keychain macOS."
-        alert.addButton(withTitle: "Продолжить")
-        alert.addButton(withTitle: "Отмена")
+        let prompt = CommandLine.arguments.dropFirst().first
+            ?? "Введите пароль или passphrase для SSH-подключения."
+        let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
+        let usesEnglish = Locale.preferredLanguages.first?
+            .lowercased().hasPrefix("en") == true
+        alert.messageText = isPasswordPrompt
+            ? (usesEnglish ? "SSH Server Password" : "Пароль SSH-сервера")
+            : (usesEnglish ? "SSH Key Passphrase" : "Passphrase SSH-ключа")
+        alert.informativeText = prompt
+        alert.addButton(withTitle: usesEnglish ? "Continue" : "Продолжить")
+        alert.addButton(withTitle: usesEnglish ? "Cancel" : "Отмена")
 
         let field = NSSecureTextField(
             frame: NSRect(x: 0, y: 0, width: 360, height: 24)
         )
-        field.placeholderString = "Passphrase"
+        field.placeholderString = isPasswordPrompt
+            ? (usesEnglish ? "Password" : "Пароль")
+            : "Passphrase"
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
 

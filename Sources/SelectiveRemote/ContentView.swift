@@ -162,10 +162,14 @@ struct ContentView: View {
                         .savedProfile($0.id)
                     }
                     ?? .custom(host: "", username: ""),
-                allowsInteractivePassword: false,
+                allowsInteractivePassword: true,
                 actionTitle: "Подключить SFTP",
                 heading: "Подключение SFTP",
-                message: "Выберите сохранённый сервер или укажите временный SFTP-адрес.",
+                message: "Выберите сохранённый сервер или укажите временный SFTP-адрес. "
+                    + "При необходимости пароль будет запрошен отдельным системным окном.",
+                customAuthenticationMessage: "SFTP использует системный ssh-agent и ~/.ssh/config. "
+                    + "Если ключа или активной SSH-сессии нет, пароль будет запрошен "
+                    + "в отдельном защищённом окне и не будет сохранён.",
                 onSave: { connection, _ in
                     globalSFTPConnection = connection
                     connectGlobalSFTP(connection)
@@ -561,10 +565,13 @@ struct ContentView: View {
                     showsGlobalSFTPConnectionEditor = true
                 },
                 activeSSHSession: {
-                    guard let profileID = globalSFTPConnection?.profileID else {
-                        return false
+                    if let profileID = globalSFTPConnection?.profileID {
+                        return model.isSSHTerminalRunning(profileID: profileID)
                     }
-                    return model.isSSHTerminalRunning(profileID: profileID)
+                    guard let connection = globalSFTPConnection else { return false }
+                    return model.globalTerminalWorkspace().tabs.contains {
+                        $0.session.isRunning && $0.connection == connection
+                    }
                 }
             )
             .padding(.horizontal, 28)
@@ -591,10 +598,13 @@ struct ContentView: View {
         return profile
     }
 
-    private func connectGlobalSFTP(_ connection: TerminalTabConnection) {
+    private func connectGlobalSFTP(
+        _ connection: TerminalTabConnection,
+        clientID: UUID = Self.globalSFTPScopeID
+    ) {
         guard let settings = model.prepareSSHConnection(
             connection: connection,
-            clientID: Self.globalSFTPScopeID
+            clientID: clientID
         ) else { return }
         model.globalSFTPSession.prepare(for: Self.globalSFTPScopeID)
         model.globalSFTPSession.connect(settings)
@@ -664,6 +674,15 @@ struct ContentView: View {
             toggleFocusMode: {
                 setTerminalFocusMode(!terminalFocusMode)
             },
+            openSFTP: { tab in
+                guard let settings = model.prepareSSHConnection(
+                    connection: tab.connection,
+                    clientID: tab.id
+                ) else { return }
+                sftpSession.prepare(for: profile.id)
+                sftpSession.connect(settings)
+                selectedTab = .sftp
+            },
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
                     connection: tab.connection,
@@ -700,6 +719,11 @@ struct ContentView: View {
             installKey: {},
             toggleFocusMode: {
                 setTerminalFocusMode(!terminalFocusMode)
+            },
+            openSFTP: { tab in
+                globalSFTPConnection = tab.connection
+                connectGlobalSFTP(tab.connection, clientID: tab.id)
+                mainArea = .sftp
             },
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
@@ -956,7 +980,8 @@ struct ContentView: View {
                     }
                     Text(
                         "Встроенный терминал запрашивает passphrase напрямую. "
-                            + "SFTP и forwarding используют активную SSH-сессию или ssh-agent; "
+                            + "SFTP использует активную SSH-сессию, ssh-agent или защищённый "
+                            + "запрос пароля; forwarding использует SSH-ключ либо ssh-agent; "
                             + "пароль SSH-сервера приложение не сохраняет."
                     )
                     .font(.caption)

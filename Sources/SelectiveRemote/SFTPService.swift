@@ -22,9 +22,8 @@ enum SFTPServiceError: LocalizedError, Sendable {
         case .invalidNumericID:
             "UID и GID должны быть целыми неотрицательными числами"
         case .authenticationRequired:
-            "SFTP не получил SSH-аутентификацию. Откройте встроенный SSH-терминал, "
-                + "войдите на сервер и повторите подключение — активная сессия будет "
-                + "использована без повторного запроса пароля. Также можно выбрать SSH-ключ."
+            "SSH-сервер отклонил аутентификацию SFTP. Проверьте логин, пароль "
+                + "или SSH-ключ и повторите подключение."
         case let .commandFailed(message):
             "Ошибка SFTP: \(message)"
         }
@@ -694,11 +693,13 @@ enum SFTPService {
         var arguments = [
             "-b", "-",
             "-P", String(settings.port),
-            "-o", "BatchMode=yes",
+            "-o", "BatchMode=no",
+            "-o", "NumberOfPasswordPrompts=1",
+            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
             "-o", "StrictHostKeyChecking=\(settings.hostKeyPolicy.openSSHValue)",
             "-o", "ControlPath=\(SSHService.controlPath(settings: settings))",
             "-o", "ControlMaster=auto",
-            "-o", "ControlPersist=60"
+            "-o", "ControlPersist=600"
         ]
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
@@ -809,7 +810,7 @@ enum SFTPService {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = connectionArguments(settings: settings)
-        process.environment = SSHKeyService.processEnvironment()
+        process.environment = SSHKeyService.backgroundAuthenticationEnvironment()
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output

@@ -36,7 +36,7 @@ struct SFTPBrowserView: View {
     @State private var localDropTargeted = false
     @State private var localPathInput = ""
     @State private var remotePathInput = "."
-    @State private var showsTransferQueue = true
+    @State private var showsTransferQueue = false
 
     let profile: ConnectionProfile
     let requestConnection: (() -> Void)?
@@ -77,7 +77,8 @@ struct SFTPBrowserView: View {
                     remotePanel
                         .frame(minWidth: 470)
                 }
-                .frame(minHeight: 540, maxHeight: .infinity)
+                .frame(minHeight: 280, maxHeight: .infinity)
+                .layoutPriority(1)
 
                 transferBar
                 transferQueuePanel
@@ -113,6 +114,9 @@ struct SFTPBrowserView: View {
         }
         .onChange(of: transfers.completedCount) { _, _ in
             local.reload()
+        }
+        .onChange(of: transfers.activeCount) { _, count in
+            if count > 0 { showsTransferQueue = true }
         }
     }
 
@@ -229,7 +233,7 @@ struct SFTPBrowserView: View {
                 .foregroundStyle(.green)
             } else {
                 Text(
-                    "Для входа по паролю сначала откройте SSH-терминал; "
+                    "Пароль или passphrase будут запрошены в отдельном защищённом окне; "
                         + "подключение по ключу работает сразу."
                 )
                 .font(.caption)
@@ -324,7 +328,7 @@ struct SFTPBrowserView: View {
                         systemImage: "arrow.left.arrow.right",
                         description: Text("Копирование продолжится, даже если перейти на другую вкладку.")
                     )
-                    .frame(height: 74)
+                    .frame(height: 54)
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 6) {
@@ -333,7 +337,7 @@ struct SFTPBrowserView: View {
                             }
                         }
                     }
-                    .frame(maxHeight: 190)
+                    .frame(maxHeight: 130)
                 }
             }
             .padding(.top, 8)

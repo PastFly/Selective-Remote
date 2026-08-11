@@ -141,6 +141,15 @@ func closesAndPromotesPrimaryTerminalTab() throws {
     #expect(workspace.tabs[0].isPrimary)
     workspace.closeTab(second.id)
     #expect(workspace.tabs.count == 1)
+    #expect(workspace.isEmptyState)
+    #expect(workspace.displayedTabs.isEmpty)
+
+    let replacement = try #require(workspace.addTab(
+        connection: .custom(host: "third.example.test", username: "root")
+    ))
+    #expect(!workspace.isEmptyState)
+    #expect(workspace.tabs.count == 1)
+    #expect(replacement.id == workspace.tabs[0].id)
 }
 
 @Test("Независимый туннель сохраняет собственную SSH-цель")

@@ -21,7 +21,10 @@ English in the application's appearance settings.
   and folder redirection;
 - an independent SSH workspace with up to eight tabs and one, two, or four-pane
   layouts, where every tab can connect to a different server; panes fill the
-  available workspace and can be reordered with drag and drop;
+  available workspace and can be reordered with drag and drop; all tabs may be
+  closed, while the empty workspace keeps a visible connection action;
+- optional broadcast input for active SSH panes, a `⌘K` command palette, and a
+  quick action that opens the selected terminal server in SFTP;
 - local command history, searchable suggestions, favorites, templates, and
   server-aware service and container commands;
 - standalone dual-pane SFTP with a saved profile or a temporary hostname/IP,
@@ -81,8 +84,9 @@ terminal and are not stored by the application.
 Open **SFTP** in the main sidebar. The local Mac pane is available immediately;
 in the remote pane, select a saved SSH profile or enter a temporary hostname/IP,
 username, and port. Use **Change Server** to switch the remote endpoint without
-opening a connection card. Background SFTP authentication uses an SSH key, an
-authenticated system agent, or suitable `~/.ssh/config` settings.
+opening a connection card. SFTP can reuse an active SSH session, use an SSH key
+or system agent, or request a password/passphrase in a separate secure window.
+Passwords are never stored by the application.
 
 ## Independent forwarding
 

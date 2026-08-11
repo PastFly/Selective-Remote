@@ -1,13 +1,13 @@
-# Сборка Selective Remote 0.18.3
+# Сборка Selective Remote 0.19.0
 
 Архив с исходниками создаёт отдельный каталог
-`SelectiveRemote-0.18.3-source-public`, не затрагивая прежние
+`SelectiveRemote-0.19.0-source-public`, не затрагивая прежние
 распаковки.
 
 ```bash
 cd ~/Downloads
-unzip -q SelectiveRemote-0.18.3-source-public.zip
-cd SelectiveRemote-0.18.3-source-public
+unzip -q SelectiveRemote-0.19.0-source-public.zip
+cd SelectiveRemote-0.19.0-source-public
 ./scripts/build_and_install.sh
 ```
 
@@ -17,8 +17,8 @@ cd SelectiveRemote-0.18.3-source-public
 После успешной сборки будут созданы:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.18.3-arm64.dmg` на Apple Silicon;
-- `dist/SelectiveRemote-0.18.3-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.19.0-arm64.dmg` на Apple Silicon;
+- `dist/SelectiveRemote-0.19.0-arm64.dmg.sha256`.
 
 Откройте DMG и перетащите **Selective Remote** в `Applications`.
 Пакет, интерфейс и системные диалоги используют одно имя — **Selective Remote**.
@@ -86,9 +86,9 @@ Selective Remote не хранит пароль SSH-сервера и не ко�
 
 ## Проверка SFTP
 
-1. Если сервер принимает только пароль, сначала войдите во вкладке
-   **Терминал** и оставьте SSH-сессию открытой. Для ключа этот шаг не нужен.
-2. Откройте вкладку **SFTP** и нажмите **Подключить SFTP**.
+1. Откройте самостоятельный раздел **SFTP** и нажмите **Подключить SFTP**.
+2. Выберите сохранённый профиль либо вручную укажите hostname/IP, логин и порт.
+   Для парольного сервера проверьте отдельный защищённый запрос пароля.
 3. Убедитесь, что слева показан локальный Mac, а справа — удалённый сервер.
 4. Перетащите тестовый файл и папку слева направо, затем обратно.
 5. Перетащите файл из Finder в удалённую панель.
@@ -108,9 +108,9 @@ Selective Remote не хранит пароль SSH-сервера и не ко�
     терминал и вернитесь; очередь и прогресс должны сохраниться. Затем проверьте
     отмену и повтор частично переданного файла.
 
-SFTP использует `BatchMode`, выбранный ключ, системный/резервный `ssh-agent`
-или control socket уже аутентифицированной встроенной SSH-сессии. Пароль
-SSH-сервера приложение не сохраняет.
+SFTP использует выбранный ключ, системный/резервный `ssh-agent`, control socket
+уже аутентифицированной встроенной SSH-сессии либо отдельный защищённый запрос
+пароля/passphrase. Пароль SSH-сервера приложение не сохраняет.
 
 ## Проверка port forwarding
 

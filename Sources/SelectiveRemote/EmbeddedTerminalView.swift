@@ -21,6 +21,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let historyContext: TerminalHistoryContext?
     let remoteContext: TerminalRemoteContextSnapshot
     let onFocus: () -> Void
+    let onInput: (Data) -> Void
     @Binding var historyVisible: Bool
 
     init(
@@ -29,6 +30,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         historyContext: TerminalHistoryContext? = nil,
         remoteContext: TerminalRemoteContextSnapshot = .empty,
         onFocus: @escaping () -> Void = {},
+        onInput: ((Data) -> Void)? = nil,
         historyVisible: Binding<Bool> = .constant(false)
     ) {
         self.session = session
@@ -36,6 +38,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         self.historyContext = historyContext
         self.remoteContext = remoteContext
         self.onFocus = onFocus
+        self.onInput = onInput ?? { _ in }
         _historyVisible = historyVisible
     }
 
@@ -46,6 +49,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             historyContext: historyContext,
             remoteContext: remoteContext,
             onFocus: onFocus,
+            onInput: onInput,
             historyVisible: _historyVisible
         )
     }
@@ -99,6 +103,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         context.coordinator.updateHistoryContext(historyContext)
         context.coordinator.updateRemoteContext(remoteContext)
         context.coordinator.updateFocusHandler(onFocus)
+        context.coordinator.updateInputHandler(onInput)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
         context.coordinator.updateHistoryVisibility(historyVisible)
@@ -136,6 +141,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var historyContext: TerminalHistoryContext?
         private var remoteContext: TerminalRemoteContextSnapshot
         private var onFocus: () -> Void
+        private var onInput: (Data) -> Void
         private var historyVisible: Binding<Bool>
         private var appliedHistoryVisibility: Bool?
         private var pageReady = false
@@ -149,6 +155,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             historyContext: TerminalHistoryContext?,
             remoteContext: TerminalRemoteContextSnapshot,
             onFocus: @escaping () -> Void,
+            onInput: @escaping (Data) -> Void,
             historyVisible: Binding<Bool>
         ) {
             self.session = session
@@ -156,6 +163,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             self.historyContext = historyContext
             self.remoteContext = remoteContext
             self.onFocus = onFocus
+            self.onInput = onInput
             self.historyVisible = historyVisible
         }
 
@@ -197,6 +205,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onFocus = updated
         }
 
+        func updateInputHandler(_ updated: @escaping (Data) -> Void) {
+            onInput = updated
+        }
+
         func updateHistoryVisibility(_ visible: Bool) {
             guard pageReady else {
                 appliedHistoryVisibility = nil
@@ -230,7 +242,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             switch message.name {
             case Self.inputMessageName:
                 guard let value = message.body as? String else { return }
-                session?.sendInput(Data(value.utf8))
+                onInput(Data(value.utf8))
             case Self.resizeMessageName:
                 guard let value = message.body as? [String: Any],
                       let columns = (value["columns"] as? NSNumber)?.intValue,
@@ -433,6 +445,7 @@ struct SSHTerminalView: View {
     let connect: (TerminalWorkspaceTab) -> Void
     let installKey: () -> Void
     let toggleFocusMode: () -> Void
+    let openSFTP: (TerminalWorkspaceTab) -> Void
     let discoverContext: (TerminalWorkspaceTab) async throws -> TerminalRemoteContextSnapshot
 
     @State private var showsAppearance = false
@@ -443,6 +456,9 @@ struct SSHTerminalView: View {
     @State private var renameValue = ""
     @State private var connectionEditorRequest: TerminalConnectionEditorRequest?
     @State private var showsLayoutPicker = false
+    @State private var broadcastsInput = false
+    @State private var showsBroadcastConfirmation = false
+    @State private var showsCommandPalette = false
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
 
@@ -500,6 +516,41 @@ struct SSHTerminalView: View {
                 .help("История, поиск и общие подсказки команд")
                 .accessibilityLabel("История и подсказки команд")
                 .keyboardShortcut("y", modifiers: [.command, .shift])
+
+                Button {
+                    if broadcastsInput {
+                        broadcastsInput = false
+                    } else {
+                        showsBroadcastConfirmation = true
+                    }
+                } label: {
+                    Image(systemName: broadcastsInput ? "antenna.radiowaves.left.and.right.circle.fill" : "antenna.radiowaves.left.and.right")
+                }
+                .disabled(workspace.runningSessionCount < 2)
+                .help(
+                    broadcastsInput
+                        ? "Групповой ввод включён: клавиши отправляются во все активные панели"
+                        : "Отправлять ввод во все активные панели"
+                )
+                .accessibilityLabel("Групповой ввод")
+
+                Button {
+                    openSFTP(workspace.selectedTab)
+                } label: {
+                    Image(systemName: "folder.badge.gearshape")
+                }
+                .disabled(workspace.isEmptyState)
+                .help("Открыть этот сервер в SFTP")
+                .accessibilityLabel("Открыть сервер в SFTP")
+
+                Button {
+                    showsCommandPalette = true
+                } label: {
+                    Image(systemName: "command")
+                }
+                .help("Палитра действий — ⌘K")
+                .accessibilityLabel("Палитра действий")
+                .keyboardShortcut("k", modifiers: .command)
 
                 Button {
                     showsAppearance.toggle()
@@ -561,6 +612,15 @@ struct SSHTerminalView: View {
 
             terminalTabBar
 
+            if broadcastsInput {
+                Label(
+                    "Групповой ввод включён: клавиши отправляются во все активные панели",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            }
+
             terminalWorkspace
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 360)
@@ -598,6 +658,12 @@ struct SSHTerminalView: View {
                 renameTabID = nil
             }
         }
+        .alert("Включить групповой ввод?", isPresented: $showsBroadcastConfirmation) {
+            Button("Отмена", role: .cancel) { }
+            Button("Включить") { broadcastsInput = true }
+        } message: {
+            Text("Каждая введённая клавиша будет отправляться во все активные SSH-панели.")
+        }
         .sheet(item: $connectionEditorRequest) { request in
             TerminalConnectionEditor(
                 profiles: sshProfiles,
@@ -625,6 +691,9 @@ struct SSHTerminalView: View {
                 }
             )
         }
+        .sheet(isPresented: $showsCommandPalette) {
+            terminalCommandPalette
+        }
         .task(id: "\(workspace.selectedTabID.uuidString)-\(session.isRunning)") {
             let tab = workspace.selectedTab
             guard tab.session.isRunning,
@@ -639,7 +708,7 @@ struct SSHTerminalView: View {
         HStack(spacing: 7) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    ForEach(workspace.tabs) { tab in
+                    ForEach(workspace.displayedTabs) { tab in
                         HStack(spacing: 4) {
                             Button {
                                 workspace.selectedTabID = tab.id
@@ -652,8 +721,7 @@ struct SSHTerminalView: View {
                                 }
                             }
                             .buttonStyle(.plain)
-                            if (!tab.isPrimary || !locksPrimaryConnection),
-                               workspace.tabs.count > 1 {
+                            if !tab.isPrimary || !locksPrimaryConnection {
                                 Button {
                                     workspace.closeTab(tab.id)
                                 } label: {
@@ -687,8 +755,7 @@ struct SSHTerminalView: View {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
-                            if (!tab.isPrimary || !locksPrimaryConnection),
-                               workspace.tabs.count > 1 {
+                            if !tab.isPrimary || !locksPrimaryConnection {
                                 Divider()
                                 Button("Закрыть", role: .destructive) {
                                     workspace.closeTab(tab.id)
@@ -713,7 +780,7 @@ struct SSHTerminalView: View {
             } label: {
                 Image(systemName: "plus")
             }
-            .disabled(workspace.tabs.count >= 8)
+            .disabled(workspace.displayedTabs.count >= 8)
             .help("Новая независимая SSH-вкладка")
 
             Button {
@@ -770,9 +837,75 @@ struct SSHTerminalView: View {
         .frame(width: 300)
     }
 
+    private var terminalCommandPalette: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Действия терминала")
+                .font(.title2.weight(.semibold))
+            Button("Новое SSH-подключение", systemImage: "plus") {
+                showsCommandPalette = false
+                connectionEditorRequest = TerminalConnectionEditorRequest(
+                    tabID: nil,
+                    initialConnection: defaultProfileID.map { .savedProfile($0) }
+                        ?? .custom(host: "", username: "")
+                )
+            }
+            Button("Подключить выбранную панель", systemImage: "play.fill") {
+                showsCommandPalette = false
+                requestConnection(for: workspace.selectedTab)
+            }
+            .disabled(workspace.selectedTab.session.isRunning)
+            Button("Открыть сервер в SFTP", systemImage: "folder.badge.gearshape") {
+                showsCommandPalette = false
+                openSFTP(workspace.selectedTab)
+            }
+            .disabled(workspace.isEmptyState)
+            Button(
+                broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
+                systemImage: "antenna.radiowaves.left.and.right"
+            ) {
+                showsCommandPalette = false
+                if broadcastsInput {
+                    broadcastsInput = false
+                } else {
+                    showsBroadcastConfirmation = true
+                }
+            }
+            .disabled(workspace.runningSessionCount < 2)
+            Divider()
+            ForEach(TerminalWorkspaceLayout.allCases) { layout in
+                Button(layout.title, systemImage: layout.systemImage) {
+                    workspace.setLayout(layout)
+                    showsCommandPalette = false
+                }
+                .disabled(workspace.isEmptyState)
+            }
+        }
+        .buttonStyle(.bordered)
+        .padding(22)
+        .frame(width: 430)
+    }
+
     @ViewBuilder
     private var terminalWorkspace: some View {
-        if workspace.layout == .splitHorizontal {
+        if workspace.isEmptyState {
+            VStack(spacing: 14) {
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 38, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("Нет открытых терминалов")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Выберите сохранённый сервер или укажите новый SSH-адрес.")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.68))
+                Button("Подключиться", systemImage: "play.fill") {
+                    requestConnection(for: workspace.selectedTab)
+                }
+                .buttonStyle(.borderedProminent)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(TerminalColorCodecView.color(appearance.palette.background))
+        } else if workspace.layout == .splitHorizontal {
             HStack(spacing: 8) {
                 ForEach(workspace.orderedSplitTabs()) { tab in
                     terminalPane(tab)
@@ -862,6 +995,13 @@ struct SSHTerminalView: View {
                 ),
                 remoteContext: remoteContexts[tab.id] ?? .empty,
                 onFocus: { selectTabIfNeeded(tab.id) },
+                onInput: { data in
+                    workspace.sendInput(
+                        data,
+                        from: tab.id,
+                        broadcast: broadcastsInput
+                    )
+                },
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
@@ -996,6 +1136,7 @@ struct TerminalConnectionEditor: View {
     let actionTitle: String
     let heading: String
     let message: String
+    let customAuthenticationMessage: String?
 
     @State private var kind: TerminalTabConnection.Kind
     @State private var selectedProfileID: UUID?
@@ -1010,6 +1151,7 @@ struct TerminalConnectionEditor: View {
         actionTitle: String = "Подключить",
         heading: String = "Подключение вкладки",
         message: String = "Выберите сохранённый профиль или укажите временный SSH-адрес.",
+        customAuthenticationMessage: String? = nil,
         onSave: @escaping (TerminalTabConnection, String) -> Void
     ) {
         self.profiles = profiles
@@ -1018,6 +1160,7 @@ struct TerminalConnectionEditor: View {
         self.actionTitle = actionTitle
         self.heading = heading
         self.message = message
+        self.customAuthenticationMessage = customAuthenticationMessage
         _kind = State(initialValue: initialConnection.kind)
         _selectedProfileID = State(
             initialValue: initialConnection.profileID ?? profiles.first?.id
@@ -1061,11 +1204,12 @@ struct TerminalConnectionEditor: View {
                     TextField("Порт", value: $port, format: .number)
                 }
                 Text(
-                    allowsInteractivePassword
-                        ? "Пароль будет запрошен непосредственно в терминале. "
-                            + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
-                        : "Фоновое подключение не может запросить пароль в терминале. "
-                            + "Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config."
+                    customAuthenticationMessage
+                        ?? (allowsInteractivePassword
+                            ? "Пароль будет запрошен непосредственно в терминале. "
+                                + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
+                            : "Фоновое подключение не может запросить пароль в терминале. "
+                                + "Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config.")
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

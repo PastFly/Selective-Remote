@@ -112,6 +112,13 @@ struct TerminalWorkspaceTab: Identifiable {
     let session: TerminalSessionModel
     var isPrimary: Bool
     var connection: TerminalTabConnection
+
+    @MainActor var isEmptyPlaceholder: Bool {
+        !session.isRunning
+            && connection.kind == .custom
+            && connection.normalizedHost.isEmpty
+            && connection.normalizedUsername.isEmpty
+    }
 }
 
 private struct StoredTerminalWorkspace: Codable {
@@ -239,8 +246,16 @@ final class TerminalWorkspaceModel: ObservableObject {
 
     var hasRunningSession: Bool { runningSessionCount > 0 }
 
+    var isEmptyState: Bool {
+        tabs.count == 1 && tabs[0].isEmptyPlaceholder
+    }
+
+    var displayedTabs: [TerminalWorkspaceTab] {
+        isEmptyState ? [] : tabs
+    }
+
     func visibleTabs(limit: Int = 4) -> [TerminalWorkspaceTab] {
-        Array(tabs.prefix(max(1, limit)))
+        Array(displayedTabs.prefix(max(1, limit)))
     }
 
     func orderedSplitTabs() -> [TerminalWorkspaceTab] {
@@ -267,6 +282,18 @@ final class TerminalWorkspaceModel: ObservableObject {
         title: String? = nil,
         select: Bool = true
     ) -> TerminalWorkspaceTab? {
+        if isEmptyState {
+            let resolvedConnection = connection ?? .savedProfile(profileID)
+            tabs[0].connection = resolvedConnection
+            tabs[0].title = Self.normalizedTitle(
+                title ?? "Терминал 1",
+                fallback: "Терминал 1"
+            )
+            selectedTabID = tabs[0].id
+            persist()
+            objectWillChange.send()
+            return tabs[0]
+        }
         guard tabs.count < 8 else { return nil }
         let tab = TerminalWorkspaceTab(
             id: UUID(),
@@ -287,9 +314,18 @@ final class TerminalWorkspaceModel: ObservableObject {
     }
 
     func closeTab(_ id: UUID) {
-        guard let index = tabs.firstIndex(where: { $0.id == id }),
-              tabs.count > 1
-        else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        if tabs.count == 1 {
+            tabs[0].session.stop()
+            tabs[0].title = "Новый терминал"
+            tabs[0].connection = .custom(host: "", username: "")
+            tabs[0].isPrimary = true
+            layout = .single
+            secondaryTabID = nil
+            persist()
+            objectWillChange.send()
+            return
+        }
         let wasPrimary = tabs[index].isPrimary
         tabs[index].session.stop()
         sessionObservers[id] = nil
@@ -335,6 +371,10 @@ final class TerminalWorkspaceModel: ObservableObject {
     }
 
     func setLayout(_ newLayout: TerminalWorkspaceLayout) {
+        guard !isEmptyState else {
+            layout = .single
+            return
+        }
         if newLayout != .single, tabs.count == 1 {
             _ = addTab(select: false)
         }
@@ -357,6 +397,19 @@ final class TerminalWorkspaceModel: ObservableObject {
 
     func stopAll() {
         tabs.forEach { $0.session.stop() }
+    }
+
+    func sendInput(
+        _ data: Data,
+        from sourceTabID: UUID,
+        broadcast: Bool
+    ) {
+        guard let source = tabs.first(where: { $0.id == sourceTabID }) else { return }
+        source.session.sendInput(data)
+        guard broadcast else { return }
+        for tab in tabs where tab.id != sourceTabID && tab.session.isRunning {
+            tab.session.sendInput(data)
+        }
     }
 
     private func observeSessions() {

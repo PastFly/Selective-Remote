@@ -128,7 +128,7 @@ struct CredentialVaultView: View {
                     )
                     Text(
                         "Пароль SSH-сервера \(AppBrand.name) не хранит. SFTP может использовать "
-                            + "уже аутентифицированную встроенную SSH-сессию."
+                            + "активную SSH-сессию либо запросить пароль в отдельном защищённом окне."
                     )
                         .font(.caption)
                         .foregroundStyle(.secondary)

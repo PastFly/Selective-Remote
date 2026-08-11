@@ -87,8 +87,10 @@ func reusesActiveSSHControlSocketForSFTP() throws {
 
     #expect(arguments.contains("ControlPath=\(controlPath)"))
     #expect(arguments.contains("ControlMaster=auto"))
-    #expect(arguments.contains("ControlPersist=60"))
-    #expect(arguments.contains("BatchMode=yes"))
+    #expect(arguments.contains("ControlPersist=600"))
+    #expect(arguments.contains("BatchMode=no"))
+    #expect(arguments.contains("NumberOfPasswordPrompts=1"))
+    #expect(arguments.contains("PreferredAuthentications=publickey,keyboard-interactive,password"))
     #expect(controlPath.utf8.count < 100)
 
     var changedProfile = profile

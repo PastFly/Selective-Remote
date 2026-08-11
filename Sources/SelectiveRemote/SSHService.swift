@@ -663,6 +663,15 @@ enum SSHKeyService {
             ?? ProcessInfo.processInfo.environment
     }
 
+    static func backgroundAuthenticationEnvironment() -> [String: String] {
+        var environment = processEnvironment(startAgentIfNeeded: true)
+        guard let helper = askPassHelperURL() else { return environment }
+        environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
+        environment["SSH_ASKPASS"] = helper.path
+        environment["SSH_ASKPASS_REQUIRE"] = "force"
+        return environment
+    }
+
     static func stopManagedAgent() {
         SSHAgentManager.shared.stopManagedAgent()
     }
