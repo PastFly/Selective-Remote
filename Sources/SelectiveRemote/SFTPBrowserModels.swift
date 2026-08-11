@@ -694,6 +694,12 @@ final class SFTPBrowserModel: ObservableObject {
                 isBusy = false
                 statusMessage = "Объектов: \(values.count)"
                 completion?(true)
+                enrichDirectorySizes(
+                    settings: settings,
+                    directory: target,
+                    token: token,
+                    entries: values
+                )
             } catch {
                 guard operationID == token else { return }
                 isBusy = false
@@ -701,6 +707,47 @@ final class SFTPBrowserModel: ObservableObject {
                 errorMessage = error.localizedDescription
                 completion?(false)
             }
+        }
+    }
+
+    private func enrichDirectorySizes(
+        settings: SSHConnectionSettings,
+        directory: String,
+        token: UUID,
+        entries: [SFTPRemoteEntry]
+    ) {
+        var directories = entries.filter { $0.isDirectory && !$0.isSymbolicLink }.map(\.name)
+        // Avoid expensive or endless walks through virtual/mounted filesystems
+        // when browsing the server root. Ordinary folders are still enriched.
+        if directory == "/" {
+            let skipped = Set(["dev", "proc", "sys", "run", "mnt", "media"])
+            directories.removeAll { skipped.contains($0) }
+        }
+        guard !directories.isEmpty, directories.count <= 50 else { return }
+        Task {
+            let sizes = await Task.detached(priority: .utility) {
+                SFTPService.directorySizes(
+                    settings: settings,
+                    directory: directory,
+                    names: directories
+                )
+            }.value
+            guard operationID == token, currentPath == directory, !sizes.isEmpty else { return }
+            rawEntries = rawEntries.map { entry in
+                guard let size = sizes[entry.name], entry.isDirectory else { return entry }
+                return SFTPRemoteEntry(
+                    name: entry.name,
+                    isDirectory: entry.isDirectory,
+                    isSymbolicLink: entry.isSymbolicLink,
+                    size: size,
+                    permissions: entry.permissions,
+                    owner: entry.owner,
+                    group: entry.group,
+                    modifiedText: entry.modifiedText,
+                    modificationDate: entry.modificationDate
+                )
+            }
+            applySort()
         }
     }
 
@@ -798,7 +845,8 @@ final class SFTPBrowserModel: ObservableObject {
     func upload(
         localURLs: [URL],
         to remoteDirectory: String? = nil,
-        settings: SSHConnectionSettings
+        settings: SSHConnectionSettings,
+        sizeHints: [String: Int64] = [:]
     ) {
         let targetDirectory = remoteDirectory ?? currentPath
         var reservedNames = transfers.conflictPolicy == .rename && targetDirectory == currentPath
@@ -827,7 +875,9 @@ final class SFTPBrowserModel: ObservableObject {
 
         for request in requests {
             let id = UUID()
-            let totalBytes = Self.localItemSize(request.localURL)
+            let accessedForSize = request.localURL.startAccessingSecurityScopedResource()
+            let totalBytes = sizeHints[request.localURL.path] ?? Self.localItemSize(request.localURL)
+            if accessedForSize { request.localURL.stopAccessingSecurityScopedResource() }
             let item = SFTPTransferItem(
                 id: id,
                 direction: .upload,
@@ -861,7 +911,7 @@ final class SFTPBrowserModel: ObservableObject {
                 },
                 progressProbe: {
                     guard !request.isDirectory else { return nil }
-                    return try? SFTPService.remoteSize(
+                    return SFTPService.transferFileSize(
                         settings: settings,
                         remotePath: request.remotePath
                     )
@@ -1343,9 +1393,23 @@ final class SFTPBrowserModel: ObservableObject {
 
     nonisolated private static func localItemSize(_ url: URL) -> Int64? {
         guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey]
-        guard let values = try? url.resourceValues(forKeys: keys) else { return nil }
-        if values.isDirectory != true { return Int64(values.fileSize ?? 0) }
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .fileSizeKey, .totalFileAllocatedSizeKey]
+        guard let values = try? url.resourceValues(forKeys: keys) else {
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let number = attributes[.size] as? NSNumber {
+                return number.int64Value
+            }
+            return nil
+        }
+        if values.isDirectory != true {
+            if let fileSize = values.fileSize { return Int64(fileSize) }
+            if let allocated = values.totalFileAllocatedSize { return Int64(allocated) }
+            if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+               let number = attributes[.size] as? NSNumber {
+                return number.int64Value
+            }
+            return nil
+        }
         guard let enumerator = FileManager.default.enumerator(
             at: url,
             includingPropertiesForKeys: Array(keys),

@@ -1330,8 +1330,11 @@ struct SFTPBrowserView: View {
         guard !typed.isEmpty else { return unique.sorted().prefix(15).map { $0 } }
         let last = typed.split(separator: "/", omittingEmptySubsequences: false).last.map(String.init) ?? typed
         return unique.filter { candidate in
-            candidate.localizedCaseInsensitiveHasPrefix(typed)
-                || URL(fileURLWithPath: candidate).lastPathComponent.localizedCaseInsensitiveHasPrefix(last)
+            candidate.range(of: typed, options: [.caseInsensitive, .anchored]) != nil
+                || URL(fileURLWithPath: candidate).lastPathComponent.range(
+                    of: last,
+                    options: [.caseInsensitive, .anchored]
+                ) != nil
         }
         .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
@@ -1370,9 +1373,15 @@ struct SFTPBrowserView: View {
 
     private func uploadSelectedLocalEntry() {
         guard let settings, !local.selectedEntries.isEmpty else { return }
+        let selected = local.selectedEntries
         remote.upload(
-            localURLs: local.selectedEntries.map(\.url),
-            settings: settings
+            localURLs: selected.map(\.url),
+            settings: settings,
+            sizeHints: Dictionary(
+                uniqueKeysWithValues: selected.compactMap { entry in
+                    entry.isDirectory ? nil : entry.size.map { (entry.url.path, $0) }
+                }
+            )
         )
     }
 
@@ -1424,7 +1433,7 @@ struct SFTPBrowserView: View {
     private var deleteConfirmationText: String {
         switch deleteTarget {
         case let .local(entries):
-            entries.count == 1
+            return entries.count == 1
                 ? "«\(entries[0].name)» будет перемещён в Корзину и сможет быть восстановлен."
                 : "Выбранные объекты (\(entries.count)) будут перемещены в Корзину."
         case let .remote(entries):
@@ -1436,7 +1445,7 @@ struct SFTPBrowserView: View {
             }
             return "Выбранные удалённые объекты (\(entries.count)) и содержимое папок будут удалены безвозвратно."
         case nil:
-            "Выбранный объект будет удалён."
+            return "Выбранный объект будет удалён."
         }
     }
 

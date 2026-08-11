@@ -44,7 +44,7 @@ struct SFTPRemoteEntry: Identifiable, Equatable, Sendable {
     var id: String { name }
 
     var sizeText: String {
-        guard !isDirectory, let size else { return "—" }
+        guard let size else { return "—" }
         return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
     }
 
@@ -532,10 +532,11 @@ enum SFTPService {
         return "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
+    @discardableResult
     private static func runRemoteShellCommand(
         settings: SSHConnectionSettings,
         command: String
-    ) throws {
+    ) throws -> String {
         guard FileManager.default.isExecutableFile(atPath: sshExecutable) else {
             throw SFTPServiceError.executableUnavailable
         }
@@ -559,14 +560,75 @@ enum SFTPService {
         try process.run()
         let data = output.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
+        let text = String(data: data, encoding: .utf8) ?? ""
         guard process.terminationStatus == 0 else {
-            let text = String(data: data, encoding: .utf8) ?? ""
             throw SFTPServiceError.commandFailed(
                 text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? "удалённая команда завершилась с кодом \(process.terminationStatus)"
                     : String(text.suffix(4_000))
             )
         }
+        return text
+    }
+
+    /// Returns the current byte size of a remote file. Prefer one lightweight
+    /// shell `wc` over parsing `sftp ls` output; accounts restricted to
+    /// internal-sftp automatically fall back to the portable SFTP probe.
+    static func transferFileSize(
+        settings: SSHConnectionSettings,
+        remotePath: String
+    ) -> Int64? {
+        if let expression = try? shellPathExpression(remotePath),
+           let output = try? runRemoteShellCommand(
+               settings: settings,
+               command: "wc -c < \(expression)"
+           ),
+           let first = output.split(whereSeparator: { $0.isWhitespace }).first,
+           let bytes = Int64(first) {
+            return bytes
+        }
+        return try? remoteSize(settings: settings, remotePath: remotePath)
+    }
+
+    /// Calculates recursive sizes of the listed child directories in one SSH
+    /// process. Each output line corresponds to one requested name; failures
+    /// stay nil and do not prevent the rest of the list from updating.
+    static func directorySizes(
+        settings: SSHConnectionSettings,
+        directory: String,
+        names: [String]
+    ) -> [String: Int64] {
+        let safeNames = names.filter { !$0.contains("\0") && !$0.contains(where: \.isNewline) }
+        guard !safeNames.isEmpty else { return [:] }
+        var expressions: [String] = []
+        for name in safeNames {
+            let path = joinedRemotePath(directory, name)
+            guard let expression = try? shellPathExpression(path) else { continue }
+            expressions.append(expression)
+        }
+        guard expressions.count == safeNames.count else { return [:] }
+        let joined = expressions.joined(separator: " ")
+        let command = "for p in \(joined); do "
+            + "s=$(du -sk -- \"$p\" 2>/dev/null | awk 'NR==1 {print $1}'); "
+            + "printf '%s\\n' \"${s:-}\"; done"
+        guard let output = try? runRemoteShellCommand(settings: settings, command: command) else {
+            return [:]
+        }
+        let lines = output.split(separator: "\n", omittingEmptySubsequences: false)
+        var result: [String: Int64] = [:]
+        for (index, name) in safeNames.enumerated() where index < lines.count {
+            let value = lines[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let kib = Int64(value) { result[name] = kib * 1024 }
+        }
+        return result
+    }
+
+    private static func shellPathExpression(_ path: String) throws -> String {
+        if path == "~" { return "$HOME" }
+        if path.hasPrefix("~/") {
+            return "$HOME/" + (try shellQuoted(String(path.dropFirst(2))))
+        }
+        return try shellQuoted(path)
     }
 
     static func updateAttributes(
@@ -671,7 +733,7 @@ enum SFTPService {
             name: name,
             isDirectory: permissions.hasPrefix("d"),
             isSymbolicLink: permissions.hasPrefix("l"),
-            size: size,
+            size: permissions.hasPrefix("d") ? nil : size,
             permissions: permissions,
             owner: owner,
             group: group,
