@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="0.19.1"
+VERSION="0.19.2"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="81"
+BUILD_NUMBER="82"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
@@ -41,10 +41,15 @@ NOTARY_PROFILE="${SELECTIVEREMOTE_NOTARY_PROFILE:-}"
 
 DMG_MOUNTED=false
 DMG_MOUNT=""
+DMG_DEVICE=""
 DMG_FINDER_DISK_NAME=""
 cleanup_dmg_workspace() {
-    if [[ "$DMG_MOUNTED" == "true" && -n "$DMG_MOUNT" ]]; then
-        hdiutil detach "$DMG_MOUNT" -force >/dev/null 2>&1 || true
+    if [[ "$DMG_MOUNTED" == "true" ]]; then
+        if [[ -n "$DMG_DEVICE" ]]; then
+            hdiutil detach "$DMG_DEVICE" -force >/dev/null 2>&1 || true
+        elif [[ -n "$DMG_MOUNT" ]]; then
+            hdiutil detach "$DMG_MOUNT" -force >/dev/null 2>&1 || true
+        fi
     fi
     rm -f "$DMG_RW" "$DMG_ATTACH_PLIST"
 }
@@ -55,9 +60,11 @@ attach_dmg() {
     local access_mode="$2"
     local index=0
     local candidate=""
+    local candidate_device=""
     local fallback_device=""
 
     DMG_MOUNT=""
+    DMG_DEVICE=""
     DMG_FINDER_DISK_NAME=""
     rm -f "$DMG_ATTACH_PLIST"
     hdiutil attach \
@@ -75,17 +82,19 @@ attach_dmg() {
                 "$DMG_ATTACH_PLIST" 2>/dev/null \
                 || true
         )"
+        candidate_device="$(
+            /usr/libexec/PlistBuddy \
+                -c "Print :system-entities:$index:dev-entry" \
+                "$DMG_ATTACH_PLIST" 2>/dev/null \
+                || true
+        )"
         if [[ -n "$candidate" ]]; then
             DMG_MOUNT="$candidate"
+            DMG_DEVICE="$candidate_device"
             break
         fi
-        if [[ -z "$fallback_device" ]]; then
-            fallback_device="$(
-                /usr/libexec/PlistBuddy \
-                    -c "Print :system-entities:$index:dev-entry" \
-                    "$DMG_ATTACH_PLIST" 2>/dev/null \
-                    || true
-            )"
+        if [[ -z "$fallback_device" && -n "$candidate_device" ]]; then
+            fallback_device="$candidate_device"
         fi
         index=$((index + 1))
     done
@@ -104,15 +113,22 @@ attach_dmg() {
 
 detach_dmg() {
     local attempt
+    local target
 
-    if [[ "$DMG_MOUNTED" != "true" || -z "$DMG_MOUNT" ]]; then
+    if [[ "$DMG_MOUNTED" != "true" ]]; then
         return
+    fi
+    target="${DMG_DEVICE:-$DMG_MOUNT}"
+    if [[ -z "$target" ]]; then
+        echo "Ошибка: отсутствует идентификатор подключённого DMG" >&2
+        return 1
     fi
 
     for attempt in 1 2 3; do
-        if hdiutil detach "$DMG_MOUNT" >/dev/null 2>&1; then
+        if hdiutil detach "$target" >/dev/null 2>&1; then
             DMG_MOUNTED=false
             DMG_MOUNT=""
+            DMG_DEVICE=""
             DMG_FINDER_DISK_NAME=""
             rm -f "$DMG_ATTACH_PLIST"
             return
@@ -120,9 +136,20 @@ detach_dmg() {
         sleep 1
     done
 
-    hdiutil detach "$DMG_MOUNT" -force >/dev/null
+    if ! hdiutil detach "$target" -force >/dev/null 2>&1; then
+        if [[ -n "$DMG_DEVICE" ]] \
+                && hdiutil info | grep -Fq -- "$DMG_DEVICE"; then
+            echo "Ошибка: не удалось отключить $DMG_DEVICE" >&2
+            return 1
+        fi
+        if [[ -z "$DMG_DEVICE" && -d "$DMG_MOUNT" ]]; then
+            echo "Ошибка: не удалось отключить $DMG_MOUNT" >&2
+            return 1
+        fi
+    fi
     DMG_MOUNTED=false
     DMG_MOUNT=""
+    DMG_DEVICE=""
     DMG_FINDER_DISK_NAME=""
     rm -f "$DMG_ATTACH_PLIST"
 }

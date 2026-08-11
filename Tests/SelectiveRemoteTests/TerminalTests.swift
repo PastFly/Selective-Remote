@@ -348,6 +348,22 @@ func sshAskPassSupportsPaste() throws {
     #expect(!readme.contains("Почему камера не работала в 0.7.1"))
 }
 
+@Test("Сборка DMG отключает образ по device node")
+func dmgBuildDetachesStableDeviceNode() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let buildScript = try String(
+        contentsOf: projectRoot.appendingPathComponent("scripts/build_app.sh"),
+        encoding: .utf8
+    )
+
+    #expect(buildScript.contains("DMG_DEVICE=\"\""))
+    #expect(buildScript.contains("target=\"${DMG_DEVICE:-$DMG_MOUNT}\""))
+    #expect(buildScript.contains("hdiutil info | grep -Fq -- \"$DMG_DEVICE\""))
+}
+
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")
 func terminalPaletteAvoidsSwift63ColorBridge() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
