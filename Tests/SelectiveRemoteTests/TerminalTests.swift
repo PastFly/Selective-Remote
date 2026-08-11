@@ -261,6 +261,54 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(workspace.contains("Другой сервер"))
     #expect(workspace.contains("var connection: TerminalTabConnection"))
     #expect(workspace.contains("isValidCustomConnection"))
+    #expect(source.contains("if let tab = workspace.addTab"))
+    #expect(source.contains("connect(tab)"))
+}
+
+@Test("Приложение содержит глобальные Terminal и Forwarding")
+func exposesGlobalSSHWorkspaces() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let content = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/ContentView.swift"
+        ),
+        encoding: .utf8
+    )
+    let forwarding = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/IndependentForwardingView.swift"
+        ),
+        encoding: .utf8
+    )
+    #expect(content.contains("case terminal = \"Терминал\""))
+    #expect(content.contains("case forwarding = \"Forwarding\""))
+    #expect(content.contains("model.globalTerminalWorkspace()"))
+    #expect(forwarding.contains("model.startIndependentPortForward"))
+}
+
+@Test("Публичный проект содержит английский интерфейс и README")
+func includesEnglishLocalizationAndDocumentation() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let localization = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Resources/en.lproj/Localizable.strings"
+        ),
+        encoding: .utf8
+    )
+    let readme = try String(
+        contentsOf: projectRoot.appendingPathComponent("README_EN.md"),
+        encoding: .utf8
+    )
+    #expect(localization.contains("\"Подключения\" = \"Connections\""))
+    #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
+    #expect(readme.contains("## SSH terminal workspace"))
+    #expect(readme.contains("## Independent forwarding"))
 }
 
 @Test("Палитра терминала не использует падающий bridge SwiftUI Color в NSColor")

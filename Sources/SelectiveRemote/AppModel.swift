@@ -283,6 +283,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sshKeyPassphraseStoredIDs: Set<String> = []
     @Published private(set) var sshTunnels: [UUID: SSHTunnelSummary] = [:]
     @Published private(set) var requestedSSHConsoleProfileID: UUID? = nil
+    @Published var independentPortForwards: [IndependentPortForward] {
+        didSet { saveIndependentPortForwards() }
+    }
 
     private let displayManager = DisplayManager()
     private let overlay = DisplayNumberOverlay()
@@ -296,6 +299,13 @@ final class AppModel: NSObject, ObservableObject {
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
     private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
+    private let independentPortForwardsKey = "SelectiveRemote.independentPortForwards.v1"
+    private static let globalTerminalWorkspaceID = UUID(
+        uuidString: "72A7656C-289F-4E2D-9775-8AC0C24EFD55"
+    )!
+    private static let globalForwardingProfileID = UUID(
+        uuidString: "227C7A86-DA01-48C2-8098-0C995E75DB79"
+    )!
     private var managedSessions: [UUID: ManagedRDPSession] = [:]
     private var lastSessionLogURLs: [UUID: URL] = [:]
     private var managedSSHTunnels: [UUID: RunningSSHTunnel] = [:]
@@ -334,6 +344,15 @@ final class AppModel: NSObject, ObservableObject {
             sshKeys = decoded
         } else {
             sshKeys = []
+        }
+        if let data = UserDefaults.standard.data(forKey: independentPortForwardsKey),
+           let decoded = try? JSONDecoder().decode(
+               [IndependentPortForward].self,
+               from: data
+           ) {
+            independentPortForwards = decoded
+        } else {
+            independentPortForwards = []
         }
 
         profiles = savedProfiles
@@ -498,13 +517,17 @@ final class AppModel: NSObject, ObservableObject {
         return session
     }
 
-    func terminalWorkspace(profileID: UUID) -> TerminalWorkspaceModel {
+    func terminalWorkspace(
+        profileID: UUID,
+        primaryConnection: TerminalTabConnection? = nil
+    ) -> TerminalWorkspaceModel {
         if let existing = terminalWorkspaces[profileID] {
             return existing
         }
         let workspace = TerminalWorkspaceModel(
             profileID: profileID,
-            primarySession: terminalSession(profileID: profileID)
+            primarySession: terminalSession(profileID: profileID),
+            primaryConnection: primaryConnection
         )
         terminalWorkspaces[profileID] = workspace
         terminalWorkspaceObservers[profileID] = workspace.objectWillChange.sink {
@@ -514,6 +537,16 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
         return workspace
+    }
+
+    func globalTerminalWorkspace() -> TerminalWorkspaceModel {
+        let initialConnection = profiles.first(where: { $0.connectionType == .ssh })
+            .map { TerminalTabConnection.savedProfile($0.id) }
+            ?? .custom(host: "", username: "")
+        return terminalWorkspace(
+            profileID: Self.globalTerminalWorkspaceID,
+            primaryConnection: initialConnection
+        )
     }
 
     func consumeSSHConsoleNavigationRequest() {
@@ -1170,6 +1203,79 @@ final class AppModel: NSObject, ObservableObject {
     func addPortForward(_ kind: PortForwardKind) {
         mutateSelectedProfile { $0.portForwards.append(PortForwardRule(kind: kind)) }
         statusMessage = "Добавлено правило: \(kind.title)"
+    }
+
+    func addIndependentPortForward(_ kind: PortForwardKind) {
+        let connection = profiles.first(where: { $0.connectionType == .ssh })
+            .map { TerminalTabConnection.savedProfile($0.id) }
+            ?? .custom(host: "", username: "")
+        independentPortForwards.append(
+            IndependentPortForward(connection: connection, kind: kind)
+        )
+        statusMessage = "Добавлен независимый SSH-туннель"
+    }
+
+    func updateIndependentPortForward(_ updated: IndependentPortForward) {
+        guard let index = independentPortForwards.firstIndex(where: {
+            $0.id == updated.id
+        }), !isSSHTunnelRunning(ruleID: updated.id) else { return }
+        var normalized = updated
+        normalized.rule.id = updated.id
+        independentPortForwards[index] = normalized
+    }
+
+    func removeIndependentPortForward(_ id: UUID) {
+        guard !isSSHTunnelRunning(ruleID: id) else {
+            errorMessage = "Сначала остановите этот SSH-туннель"
+            return
+        }
+        independentPortForwards.removeAll { $0.id == id }
+        lastSSHTunnelLogURLs.removeValue(forKey: id)
+    }
+
+    func startIndependentPortForward(_ id: UUID) {
+        guard !isSSHTunnelRunning(ruleID: id),
+              let item = independentPortForwards.first(where: { $0.id == id }),
+              let settings = sshConnectionSettings(
+                  connection: item.connection,
+                  tabID: Self.globalForwardingProfileID
+              )
+        else { return }
+
+        do {
+            if let identity = settings.identity,
+               SSHKeyService.shouldLoadIdentityIntoAgent(
+                   hasIdentity: true,
+                   hasActiveControlSession: false
+               ) {
+                try SSHKeyService.addToAgent(
+                    identity,
+                    useStoredPassphrase: hasSavedSSHKeyPassphrase(keyID: identity.id)
+                )
+                setSSHKeyPassphraseStored(true, keyID: identity.id)
+            }
+            let running = try SSHService.launchTunnel(
+                settings: settings,
+                rule: item.rule
+            )
+            managedSSHTunnels[id] = running
+            sshTunnels[id] = SSHTunnelSummary(
+                id: id,
+                profileID: Self.globalForwardingProfileID,
+                profileName: settings.profileName,
+                ruleName: item.rule.name,
+                startedAt: Date(),
+                logURL: running.logURL
+            )
+            lastSSHTunnelLogURLs[id] = running.logURL
+            stoppingSSHTunnelIDs.remove(id)
+            startSSHTunnelMonitorIfNeeded()
+            statusMessage = "Независимый SSH-туннель «\(item.rule.name)» запущен"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            statusMessage = "SSH-туннель не запущен"
+        }
     }
 
     func removePortForward(_ ruleID: UUID) {
@@ -1884,7 +1990,8 @@ final class AppModel: NSObject, ObservableObject {
         let message = details.isEmpty
             ? "процесс завершился: \(termination)"
             : String(details.suffix(3_000))
-        if summary?.profileID == selectedProfileID {
+        if summary?.profileID == selectedProfileID
+            || summary?.profileID == Self.globalForwardingProfileID {
             errorMessage = "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен:\n\(message)"
         }
         statusMessage = "SSH-туннель неожиданно завершён"
@@ -2315,6 +2422,13 @@ final class AppModel: NSObject, ObservableObject {
     private func saveProfiles() {
         guard let data = try? JSONEncoder().encode(profiles) else { return }
         UserDefaults.standard.set(data, forKey: profilesKey)
+    }
+
+    private func saveIndependentPortForwards() {
+        guard let data = try? JSONEncoder().encode(independentPortForwards) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: independentPortForwardsKey)
     }
 
     private func saveSSHKeys() {

@@ -402,7 +402,9 @@ struct SSHTerminalView: View {
     @ObservedObject var workspace: TerminalWorkspaceModel
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
-    let profile: ConnectionProfile
+    let workspaceTitle: String
+    let defaultProfileID: UUID?
+    let locksPrimaryConnection: Bool
     let sshProfiles: [ConnectionProfile]
     let hasInstallableKey: Bool
     let isFocusMode: Bool
@@ -444,7 +446,10 @@ struct SSHTerminalView: View {
                 } label: {
                     Image(systemName: "slider.horizontal.3")
                 }
-                .disabled(session.isRunning || workspace.selectedTab.isPrimary)
+                .disabled(
+                    session.isRunning
+                        || (workspace.selectedTab.isPrimary && locksPrimaryConnection)
+                )
                 .help("Выбрать другой сервер для этой вкладки")
                 .accessibilityLabel("Изменить подключение вкладки")
 
@@ -556,7 +561,7 @@ struct SSHTerminalView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("SSH-терминал \(profile.friendlyName)")
+        .accessibilityLabel("SSH-терминал \(workspaceTitle)")
         .alert("Переименовать вкладку", isPresented: Binding(
             get: { renameTabID != nil },
             set: { if !$0 { renameTabID = nil } }
@@ -576,17 +581,23 @@ struct SSHTerminalView: View {
                 initialConnection: request.initialConnection,
                 onSave: { connection, suggestedTitle in
                     if let tabID = request.tabID {
-                        _ = workspace.updateConnection(
+                        let updated = workspace.updateConnection(
                             tabID: tabID,
                             connection: connection,
                             suggestedTitle: suggestedTitle
                         )
                         remoteContexts[tabID] = nil
+                        if updated,
+                           let tab = workspace.tabs.first(where: { $0.id == tabID }) {
+                            connect(tab)
+                        }
                     } else {
-                        _ = workspace.addTab(
+                        if let tab = workspace.addTab(
                             connection: connection,
                             title: suggestedTitle
-                        )
+                        ) {
+                            connect(tab)
+                        }
                     }
                 }
             )
@@ -644,7 +655,10 @@ struct SSHTerminalView: View {
                                     initialConnection: tab.connection
                                 )
                             }
-                            .disabled(tab.session.isRunning || tab.isPrimary)
+                            .disabled(
+                                tab.session.isRunning
+                                    || (tab.isPrimary && locksPrimaryConnection)
+                            )
                             Button("Переименовать") {
                                 renameValue = tab.title
                                 renameTabID = tab.id
@@ -663,7 +677,9 @@ struct SSHTerminalView: View {
             Button {
                 connectionEditorRequest = TerminalConnectionEditorRequest(
                     tabID: nil,
-                    initialConnection: .savedProfile(profile.id)
+                    initialConnection: defaultProfileID.map {
+                        .savedProfile($0)
+                    } ?? .custom(host: "", username: "")
                 )
             } label: {
                 Image(systemName: "plus")
@@ -677,9 +693,13 @@ struct SSHTerminalView: View {
                         workspace.setLayout(layout)
                     } label: {
                         if workspace.layout == layout {
-                            Label(layout.title, systemImage: "checkmark")
+                            Label {
+                                Text(LocalizedStringKey(layout.title))
+                            } icon: {
+                                Image(systemName: "checkmark")
+                            }
                         } else {
-                            Text(layout.title)
+                            Text(LocalizedStringKey(layout.title))
                         }
                     }
                 }
@@ -709,6 +729,19 @@ struct SSHTerminalView: View {
             VStack(spacing: 8) {
                 terminalPane(workspace.selectedTab)
                 terminalPane(secondary)
+            }
+        } else if workspace.layout == .grid {
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(), spacing: 8),
+                    GridItem(.flexible(), spacing: 8)
+                ],
+                spacing: 8
+            ) {
+                ForEach(workspace.visibleTabs()) { tab in
+                    terminalPane(tab)
+                        .frame(minHeight: 260)
+                }
             }
         } else {
             terminalPane(workspace.selectedTab)
@@ -786,21 +819,7 @@ struct SSHTerminalView: View {
     }
 
     private func connectionLabel(for tab: TerminalWorkspaceTab) -> String {
-        switch tab.connection.kind {
-        case .savedProfile:
-            guard let profileID = tab.connection.profileID,
-                  let target = sshProfiles.first(where: { $0.id == profileID })
-            else { return "Сохранённый профиль недоступен" }
-            let user = target.username.trimmingCharacters(in: .whitespacesAndNewlines)
-            return user.isEmpty ? target.host : "\(user)@\(target.host)"
-        case .custom:
-            let user = tab.connection.normalizedUsername
-            let host = tab.connection.normalizedHost
-            let destination = user.isEmpty ? host : "\(user)@\(host)"
-            return tab.connection.port == 22
-                ? destination
-                : "\(destination):\(tab.connection.port)"
-        }
+        tab.connection.displayLabel(profiles: sshProfiles)
     }
 
     private func historyContextID(for tab: TerminalWorkspaceTab) -> UUID {
@@ -818,11 +837,13 @@ private struct TerminalConnectionEditorRequest: Identifiable {
     let initialConnection: TerminalTabConnection
 }
 
-private struct TerminalConnectionEditor: View {
+struct TerminalConnectionEditor: View {
     @Environment(\.dismiss) private var dismiss
 
     let profiles: [ConnectionProfile]
     let onSave: (TerminalTabConnection, String) -> Void
+    let allowsInteractivePassword: Bool
+    let actionTitle: String
 
     @State private var kind: TerminalTabConnection.Kind
     @State private var selectedProfileID: UUID?
@@ -833,10 +854,14 @@ private struct TerminalConnectionEditor: View {
     init(
         profiles: [ConnectionProfile],
         initialConnection: TerminalTabConnection,
+        allowsInteractivePassword: Bool = true,
+        actionTitle: String = "Подключить",
         onSave: @escaping (TerminalTabConnection, String) -> Void
     ) {
         self.profiles = profiles
         self.onSave = onSave
+        self.allowsInteractivePassword = allowsInteractivePassword
+        self.actionTitle = actionTitle
         _kind = State(initialValue: initialConnection.kind)
         _selectedProfileID = State(
             initialValue: initialConnection.profileID ?? profiles.first?.id
@@ -857,7 +882,7 @@ private struct TerminalConnectionEditor: View {
 
             Picker("Источник", selection: $kind) {
                 ForEach(TerminalTabConnection.Kind.allCases) { item in
-                    Text(item.title).tag(item)
+                    Text(LocalizedStringKey(item.title)).tag(item)
                 }
             }
             .pickerStyle(.segmented)
@@ -880,8 +905,11 @@ private struct TerminalConnectionEditor: View {
                     TextField("Порт", value: $port, format: .number)
                 }
                 Text(
-                    "Пароль будет запрошен непосредственно в терминале. "
-                        + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
+                    allowsInteractivePassword
+                        ? "Пароль будет запрошен непосредственно в терминале. "
+                            + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
+                        : "Фоновый туннель не может запросить пароль в терминале. "
+                            + "Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -890,7 +918,7 @@ private struct TerminalConnectionEditor: View {
             HStack {
                 Spacer()
                 Button("Отмена", role: .cancel) { dismiss() }
-                Button("Сохранить") { save() }
+                Button(actionTitle) { save() }
                     .buttonStyle(.borderedProminent)
                     .disabled(!canSave)
             }

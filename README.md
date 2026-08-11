@@ -1,11 +1,17 @@
 # Selective Remote
 
+[English](README_EN.md) · **Русский**
+
 [![CI](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml/badge.svg)](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml)
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](https://support.apple.com/macos)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Нативный клиент удалённого доступа для macOS: RDP с несколькими мониторами,
 SSH-терминал, двухпанельный SFTP и SSH-туннели в одном приложении.
+
+Интерфейс доступен на русском и английском языках. По умолчанию приложение
+использует язык macOS; отдельный язык можно назначить в **Системные настройки →
+Основные → Язык и регион → Приложения**.
 
 ## Навигация
 
@@ -96,10 +102,10 @@ swift run SelectiveRemote
 
 ## Последние изменения
 
-Текущая публичная версия — **0.17.8**. В ней каждая панель разделённого
-SSH-терминала может использовать отдельный сохранённый профиль или временный
-адрес `login@host:port`. Избранные команды, шаблоны и контекстные подсказки
-учитывают фактический сервер вкладки. Пароли и passphrase не сохраняются.
+Текущая публичная версия — **0.18.0**. В ней терминал и forwarding вынесены в
+самостоятельные разделы: вкладки и панели могут подключаться к разным серверам,
+а каждый туннель хранит собственную SSH-цель. Добавлена английская локализация,
+которая автоматически выбирается по языку macOS.
 
 Полный список исправлений и новых возможностей вынесен в отдельный
 [CHANGELOG.md](CHANGELOG.md).
@@ -246,7 +252,7 @@ XQuartz не нужен: используется SDL-клиент `sdl-freerdp`
 На вашем Mac выполните:
 
 ```bash
-cd ~/Downloads/SelectiveRemote-0.17.8-source
+cd ~/Downloads/SelectiveRemote-0.18.0-source
 chmod +x scripts/build_app.sh
 ./scripts/build_app.sh
 ```
@@ -254,8 +260,8 @@ chmod +x scripts/build_app.sh
 Успешная сборка создаёт:
 
 - `dist/Selective Remote.app`;
-- `dist/SelectiveRemote-0.17.8-arm64.dmg`;
-- `dist/SelectiveRemote-0.17.8-arm64.dmg.sha256`.
+- `dist/SelectiveRemote-0.18.0-arm64.dmg`;
+- `dist/SelectiveRemote-0.18.0-arm64.dmg.sha256`.
 
 Именно два последних файла можно распространять. Получателю не передаются исходники и не требуется запускать `build_app.sh`.
 
@@ -267,7 +273,7 @@ chmod +x scripts/build_app.sh
 
 ```bash
 cd ~/Downloads
-shasum -a 256 SelectiveRemote-0.17.8-arm64.dmg
+shasum -a 256 SelectiveRemote-0.18.0-arm64.dmg
 ```
 
 Результат должен полностью совпасть с опубликованным. SHA-256 подтверждает совпадение файла с выложенной вами копией, но не заменяет удостоверение издателя Apple.

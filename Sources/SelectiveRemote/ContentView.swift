@@ -26,11 +26,28 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
     }
 }
 
+private enum MainArea: String, CaseIterable, Identifiable {
+    case connections = "Подключения"
+    case terminal = "Терминал"
+    case forwarding = "Forwarding"
+
+    var id: String { rawValue }
+
+    var systemImage: String {
+        switch self {
+        case .connections: "rectangle.stack"
+        case .terminal: "terminal"
+        case .forwarding: "arrow.left.arrow.right"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
     @State private var selectedTab = ProfileTab.general
+    @State private var mainArea = MainArea.connections
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
@@ -146,6 +163,7 @@ struct ContentView: View {
         }
         .onChange(of: model.requestedSSHConsoleProfileID) { _, profileID in
             guard profileID == profile.id else { return }
+            mainArea = .connections
             selectedTab = .terminal
             model.consumeSSHConsoleNavigationRequest()
         }
@@ -244,9 +262,53 @@ struct ContentView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 10)
 
+            VStack(spacing: 5) {
+                ForEach(MainArea.allCases) { area in
+                    Button {
+                        setMainArea(area)
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: area.systemImage)
+                                .frame(width: 22)
+                            Text(LocalizedStringKey(area.rawValue))
+                            Spacer()
+                            if area == .terminal,
+                               model.runningSSHTerminalCount > 0 {
+                                Text("\(model.runningSSHTerminalCount)")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.green)
+                            }
+                            if area == .forwarding,
+                               model.runningSSHTunnelCount > 0 {
+                                Text("\(model.runningSSHTunnelCount)")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .padding(.horizontal, 11)
+                        .frame(height: 34)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .background(
+                        mainArea == area
+                            ? Color.accentColor.opacity(0.18)
+                            : Color.clear,
+                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    )
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+
             List(selection: Binding(
                 get: { model.selectedProfileID },
-                set: { if let id = $0 { model.selectProfile(id) } }
+                set: {
+                    if let id = $0 {
+                        model.selectProfile(id)
+                        setMainArea(.connections)
+                    }
+                }
             )) {
                 ForEach(model.profileGroups) { group in
                     Section(group.name) {
@@ -359,7 +421,19 @@ struct ContentView: View {
             )
             .ignoresSafeArea()
 
-            VStack(spacing: 0) {
+            switch mainArea {
+            case .connections:
+                profileDetail
+            case .terminal:
+                globalTerminalDetail
+            case .forwarding:
+                IndependentForwardingView()
+            }
+        }
+    }
+
+    private var profileDetail: some View {
+        VStack(spacing: 0) {
                 if selectedTab == .terminal {
                     if !terminalFocusMode {
                         VStack(alignment: .leading, spacing: 20) {
@@ -403,14 +477,43 @@ struct ContentView: View {
             }
             .groupBoxStyle(ModernGroupBoxStyle())
             .controlSize(.large)
+    }
+
+    private var globalTerminalDetail: some View {
+        VStack(spacing: 0) {
+            if !terminalFocusMode {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Терминал")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("Независимые SSH-сессии, вкладки и разделённые панели")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 16)
+            }
+
+            globalTerminalPanel
+                .padding(.horizontal, terminalFocusMode ? 10 : 28)
+                .padding(.bottom, terminalFocusMode ? 10 : 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
     }
 
     private var profileTabPicker: some View {
         Picker("Раздел", selection: $selectedTab) {
             ForEach(availableTabs) { tab in
-                Label(tab.rawValue, systemImage: tab.systemImage)
-                    .tag(tab)
+                Label {
+                    Text(LocalizedStringKey(tab.rawValue))
+                } icon: {
+                    Image(systemName: tab.systemImage)
+                }
+                .tag(tab)
             }
         }
         .pickerStyle(.segmented)
@@ -444,7 +547,9 @@ struct ContentView: View {
             workspace: model.terminalWorkspace(profileID: profile.id),
             appearance: terminalAppearance,
             appAppearance: appAppearance,
-            profile: profile,
+            workspaceTitle: profile.friendlyName,
+            defaultProfileID: profile.id,
+            locksPrimaryConnection: true,
             sshProfiles: model.profiles
                 .filter { $0.connectionType == .ssh }
                 .sorted {
@@ -471,6 +576,50 @@ struct ContentView: View {
                 )
             }
         )
+    }
+
+    private var globalTerminalPanel: some View {
+        let profiles = model.profiles
+            .filter { $0.connectionType == .ssh }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+        return SSHTerminalView(
+            workspace: model.globalTerminalWorkspace(),
+            appearance: terminalAppearance,
+            appAppearance: appAppearance,
+            workspaceTitle: "Терминал",
+            defaultProfileID: profiles.first?.id,
+            locksPrimaryConnection: false,
+            sshProfiles: profiles,
+            hasInstallableKey: false,
+            isFocusMode: terminalFocusMode,
+            connect: { tab in
+                model.connectSSHTerminal(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session
+                )
+            },
+            installKey: {},
+            toggleFocusMode: {
+                setTerminalFocusMode(!terminalFocusMode)
+            },
+            discoverContext: { tab in
+                try await model.discoverTerminalContext(
+                    connection: tab.connection,
+                    tabID: tab.id
+                )
+            }
+        )
+    }
+
+    private func setMainArea(_ area: MainArea) {
+        if area != .terminal {
+            setTerminalFocusMode(false)
+        }
+        mainArea = area
     }
 
     private func setTerminalFocusMode(_ enabled: Bool) {

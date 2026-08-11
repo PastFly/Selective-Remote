@@ -1,0 +1,2 @@
+"NSMicrophoneUsageDescription" = "Selective Remote sends microphone audio to the remote computer only for profiles where microphone redirection is enabled.";
+"NSCameraUsageDescription" = "Selective Remote lists available cameras for profile selection. Capture starts only after connecting with camera redirection enabled.";

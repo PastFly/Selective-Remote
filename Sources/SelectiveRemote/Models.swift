@@ -516,6 +516,23 @@ struct PortForwardRule: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+struct IndependentPortForward: Codable, Equatable, Identifiable {
+    var id: UUID
+    var connection: TerminalTabConnection
+    var rule: PortForwardRule
+
+    init(
+        id: UUID = UUID(),
+        connection: TerminalTabConnection,
+        kind: PortForwardKind = .local
+    ) {
+        self.id = id
+        self.connection = connection
+        rule = PortForwardRule(kind: kind)
+        rule.id = id
+    }
+}
+
 struct SSHKeyRecord: Codable, Equatable, Identifiable, Sendable {
     var id = UUID()
     var name: String

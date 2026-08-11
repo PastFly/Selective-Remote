@@ -5,6 +5,7 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     case single
     case splitHorizontal
     case splitVertical
+    case grid
 
     var id: String { rawValue }
 
@@ -13,6 +14,7 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
         case .single: "Одна панель"
         case .splitHorizontal: "Разделить слева направо"
         case .splitVertical: "Разделить сверху вниз"
+        case .grid: "Сетка до четырёх панелей"
         }
     }
 }
@@ -76,6 +78,23 @@ struct TerminalTabConnection: Codable, Equatable {
             && (1...65_535).contains(port)
             && !normalizedUsername.contains(where: { $0.isWhitespace || $0.isNewline })
     }
+
+    func displayLabel(profiles: [ConnectionProfile]) -> String {
+        switch kind {
+        case .savedProfile:
+            guard let profileID,
+                  let profile = profiles.first(where: { $0.id == profileID })
+            else { return "Сохранённый профиль недоступен" }
+            let user = profile.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            let destination = user.isEmpty ? profile.host : "\(user)@\(profile.host)"
+            return profile.sshPort == 22 ? destination : "\(destination):\(profile.sshPort)"
+        case .custom:
+            let destination = normalizedUsername.isEmpty
+                ? normalizedHost
+                : "\(normalizedUsername)@\(normalizedHost)"
+            return port == 22 ? destination : "\(destination):\(port)"
+        }
+    }
 }
 
 struct TerminalWorkspaceTab: Identifiable {
@@ -125,6 +144,7 @@ final class TerminalWorkspaceModel: ObservableObject {
     init(
         profileID: UUID,
         primarySession: TerminalSessionModel,
+        primaryConnection: TerminalTabConnection? = nil,
         defaults: UserDefaults = .standard
     ) {
         self.profileID = profileID
@@ -146,7 +166,9 @@ final class TerminalWorkspaceModel: ObservableObject {
                 title: Self.normalizedTitle(primaryMetadata.title, fallback: "Терминал 1"),
                 session: primarySession,
                 isPrimary: true,
-                connection: .savedProfile(profileID)
+                connection: primaryMetadata.connection
+                    ?? primaryConnection
+                    ?? .savedProfile(profileID)
             )
         ]
         let additionalMetadata = Array(
@@ -196,6 +218,12 @@ final class TerminalWorkspaceModel: ObservableObject {
     }
 
     var hasRunningSession: Bool { runningSessionCount > 0 }
+
+    func visibleTabs(limit: Int = 4) -> [TerminalWorkspaceTab] {
+        var result = [selectedTab]
+        result.append(contentsOf: tabs.filter { $0.id != selectedTabID })
+        return Array(result.prefix(max(1, limit)))
+    }
 
     @discardableResult
     func addTab(

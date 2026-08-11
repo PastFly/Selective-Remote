@@ -59,6 +59,53 @@ func validatesCustomTerminalConnection() {
     ).isValidCustomConnection)
 }
 
+@Test("Сетка терминала показывает до четырёх независимых вкладок")
+@MainActor
+func exposesFourPaneTerminalGrid() throws {
+    let suiteName = "TerminalGridTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let workspace = TerminalWorkspaceModel(
+        profileID: UUID(),
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .custom(host: "first.example.test", username: "root"),
+        defaults: defaults
+    )
+    for index in 2...5 {
+        _ = workspace.addTab(
+            connection: .custom(
+                host: "server-\(index).example.test",
+                username: "operator"
+            ),
+            select: false
+        )
+    }
+    workspace.setLayout(.grid)
+
+    #expect(workspace.layout == .grid)
+    #expect(workspace.visibleTabs().count == 4)
+    #expect(Set(workspace.visibleTabs().map(\.connection.normalizedHost)).count == 4)
+}
+
+@Test("Независимый туннель сохраняет собственную SSH-цель")
+func persistsIndependentForwardingTarget() throws {
+    let original = IndependentPortForward(
+        connection: .custom(
+            host: "gateway.example.test",
+            username: "admin",
+            port: 2222
+        ),
+        kind: .dynamic
+    )
+    let data = try JSONEncoder().encode(original)
+    let restored = try JSONDecoder().decode(IndependentPortForward.self, from: data)
+
+    #expect(restored.id == original.id)
+    #expect(restored.rule.kind == .dynamic)
+    #expect(restored.connection.normalizedHost == "gateway.example.test")
+    #expect(restored.connection.port == 2222)
+}
+
 @Test("Избранное и шаблоны команд изолированы по SSH-профилям")
 @MainActor
 func scopesFavoritesAndTemplatesToProfile() throws {
