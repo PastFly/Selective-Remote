@@ -94,7 +94,7 @@ struct SSHDiagnosticsView: View {
         }
     }
 
-    private static func runProcess(_ path: String, _ arguments: [String]) -> (status: Int32, output: String) {
+    private nonisolated static func runProcess(_ path: String, _ arguments: [String]) -> (status: Int32, output: String) {
         let process = Process(); let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: path); process.arguments = arguments
         process.standardOutput = pipe; process.standardError = pipe; process.standardInput = FileHandle.nullDevice
