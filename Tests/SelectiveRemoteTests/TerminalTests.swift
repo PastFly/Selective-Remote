@@ -265,7 +265,8 @@ func terminalServerContextUsesActiveTabAuthentication() throws {
     #expect(appModel.contains("jumpHostPasswordCredential: settings.jumpHostProfileID.map"))
     #expect(embedded.contains("remoteContextRequestIDs"))
     #expect(embedded.contains("currentTab.connection == expectedConnection"))
-    #expect(embedded.contains("case \"retryRemoteContext\""))
+    #expect(embedded.contains("if action == \"retryRemoteContext\""))
+    #expect(embedded.contains("onRemoteContextRetry()"))
 }
 
 @Test("Перезагрузка WebView повторно выводит активную SSH-сессию")
