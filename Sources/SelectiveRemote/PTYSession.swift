@@ -300,6 +300,7 @@ final class TerminalSessionModel: ObservableObject {
     private var columns: UInt16 = 100
     private var rows: UInt16 = 30
     private let maximumReplayBytes = 2 * 1_024 * 1_024
+    private var displayRefreshTask: Task<Void, Never>?
 
     var isRunning: Bool { phase.isRunning }
 
@@ -377,12 +378,24 @@ final class TerminalSessionModel: ObservableObject {
         updateTerminalSize(columns: columns, rows: rows, force: false)
     }
 
-    /// Re-sends the current PTY geometry even when it did not change. Full-screen
-    /// programs such as nano, vim and tmux redraw themselves on SIGWINCH. This is
-    /// used after SwiftUI recreates the WebView when the user switches profiles.
+    /// Forces a real SIGWINCH round-trip for full-screen terminal applications.
+    /// Merely writing the same TIOCSWINSZ geometry does not reliably emit SIGWINCH
+    /// on Unix, so nano/vim/tmux may keep a screen that belonged to the old WebView.
+    /// Pulse the row count by one and immediately restore the real geometry.
     func refreshDisplay() {
-        guard isRunning else { return }
-        process?.resize(columns: columns, rows: rows)
+        guard isRunning, let process else { return }
+
+        displayRefreshTask?.cancel()
+        let realColumns = columns
+        let realRows = rows
+        let pulseRows: UInt16 = realRows > 5 ? realRows - 1 : realRows + 1
+
+        process.resize(columns: realColumns, rows: pulseRows)
+        displayRefreshTask = Task { @MainActor [weak self, weak process] in
+            try? await Task.sleep(for: .milliseconds(80))
+            guard !Task.isCancelled, let self, self.isRunning, let process else { return }
+            process.resize(columns: realColumns, rows: realRows)
+        }
     }
 
     private func updateTerminalSize(columns: Int, rows: Int, force: Bool) {
@@ -405,6 +418,8 @@ final class TerminalSessionModel: ObservableObject {
 
     func stop() {
         guard isRunning else { return }
+        displayRefreshTask?.cancel()
+        displayRefreshTask = nil
         phase = .stopping
         process?.terminate()
     }

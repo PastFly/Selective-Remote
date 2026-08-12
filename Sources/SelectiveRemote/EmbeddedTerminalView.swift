@@ -82,6 +82,11 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         webView.layoutHandler = { [weak coordinator = context.coordinator] in
             coordinator?.requestFit()
         }
+        webView.visibilityHandler = { [weak coordinator = context.coordinator] visible in
+            if visible {
+                coordinator?.terminalBecameVisible()
+            }
+        }
 
         if let directory = TerminalResourceLocator.directoryURL {
             let page = directory.appendingPathComponent("terminal.html")
@@ -111,6 +116,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         (webView as? TerminalWKWebView)?.layoutHandler = nil
+        (webView as? TerminalWKWebView)?.visibilityHandler = nil
         coordinator.detach()
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.inputMessageName
@@ -235,6 +241,20 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             webView?.evaluateJavaScript("window.selectiveTerminalFit?.()")
         }
 
+        func terminalBecameVisible() {
+            guard pageReady else { return }
+            requestFit()
+            Task { @MainActor [weak self, weak session] in
+                try? await Task.sleep(for: .milliseconds(140))
+                guard let self, self.pageReady else { return }
+                self.requestFit()
+                session?.refreshDisplay()
+                try? await Task.sleep(for: .milliseconds(180))
+                guard self.pageReady else { return }
+                self.requestFit()
+            }
+        }
+
         func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
@@ -271,10 +291,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             // Replaying ANSI output is not enough to reconstruct an alternate
             // screen perfectly (nano/vim/tmux). Re-send the PTY size so the remote
             // TUI receives SIGWINCH and paints a clean full frame.
-            Task { @MainActor [weak session] in
+            Task { @MainActor [weak self, weak session] in
                 try? await Task.sleep(for: .milliseconds(180))
-                session?.refreshDisplay()
-                try? await Task.sleep(for: .milliseconds(160))
+                guard let self, self.pageReady else { return }
+                self.requestFit()
                 session?.refreshDisplay()
             }
         }
@@ -436,10 +456,16 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
 
 private final class TerminalWKWebView: WKWebView {
     var layoutHandler: (() -> Void)?
+    var visibilityHandler: ((Bool) -> Void)?
 
     override func layout() {
         super.layout()
         layoutHandler?()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        visibilityHandler?(window != nil)
     }
 }
 
