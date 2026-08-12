@@ -20,6 +20,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
         case .folders: "folder"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
+        case .keychain: "key.viewfinder"
         case .forwarding: "arrow.left.arrow.right"
         case .security: "lock.shield"
         }
@@ -30,6 +31,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     case connections = "Подключения"
     case terminal = "Терминал"
     case sftp = "SFTP"
+    case keychain = "Keychain"
     case forwarding = "Forwarding"
 
     var id: String { rawValue }
@@ -39,6 +41,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connections: "rectangle.stack"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
+        case .keychain: "key.viewfinder"
         case .forwarding: "arrow.left.arrow.right"
         }
     }
@@ -58,7 +61,6 @@ struct ContentView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
-    @State private var showsCredentialVault = false
     @State private var showsSSHKeyGenerator = false
     @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
@@ -146,10 +148,6 @@ struct ContentView: View {
                 redirectsCamera: profile.redirectCamera,
                 redirectsMicrophone: profile.redirectMicrophone
             )
-        }
-        .sheet(isPresented: $showsCredentialVault) {
-            CredentialVaultView()
-                .environmentObject(model)
         }
         .sheet(isPresented: $showsSSHDiagnostics) {
             SSHDiagnosticsView(profile: profile, identity: model.selectedSSHKey)
@@ -481,6 +479,8 @@ struct ContentView: View {
                 globalTerminalDetail
             case .sftp:
                 globalSFTPDetail
+            case .keychain:
+                credentialVaultDetail
             case .forwarding:
                 IndependentForwardingView()
             }
@@ -508,6 +508,20 @@ struct ContentView: View {
                         .padding(.top, terminalFocusMode ? 10 : 0)
                         .padding(.bottom, terminalFocusMode ? 10 : 20)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if selectedTab == .sftp {
+                    VStack(alignment: .leading, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 20) {
+                            header
+                            profileTabPicker
+                        }
+                        .frame(maxWidth: 1120, alignment: .leading)
+
+                        SFTPBrowserView(profile: profile, session: sftpSession)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(1)
+                    }
+                    .padding(28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
@@ -518,10 +532,7 @@ struct ContentView: View {
                             .frame(maxWidth: 1120, alignment: .leading)
 
                             selectedSettingsContent
-                                .frame(
-                                    maxWidth: selectedTab == .sftp ? .infinity : 1120,
-                                    alignment: .leading
-                                )
+                                .frame(maxWidth: 1120, alignment: .leading)
                         }
                         .padding(28)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -598,6 +609,16 @@ struct ContentView: View {
         }
         .groupBoxStyle(ModernGroupBoxStyle())
         .controlSize(.large)
+    }
+
+    private var credentialVaultDetail: some View {
+        CredentialVaultView(presentation: .embedded) { profileID in
+            model.selectProfile(profileID)
+            setMainArea(.connections)
+            selectedTab = .general
+        }
+        .environmentObject(model)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var sortedSSHProfiles: [ConnectionProfile] {
@@ -1021,8 +1042,8 @@ struct ContentView: View {
                     Button("Диагностика", systemImage: "stethoscope") {
                         showsSSHDiagnostics = true
                     }
-                    Button("SSH ID и секреты", systemImage: "lock.shield") {
-                        showsCredentialVault = true
+                    Button("Keychain", systemImage: "lock.shield") {
+                        setMainArea(.keychain)
                     }
                 }
 
@@ -1838,7 +1859,7 @@ struct ContentView: View {
                             Button("Экспортировать .rdp…") { model.exportSelectedRDP() }
                         }
                         Button("Keychain и ключи…", systemImage: "key.viewfinder") {
-                            showsCredentialVault = true
+                            setMainArea(.keychain)
                         }
                     }
                 }

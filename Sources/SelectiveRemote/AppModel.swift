@@ -499,10 +499,16 @@ final class AppModel: NSObject, ObservableObject {
         gatewayPasswordStoredProfileIDs.contains(selectedProfile.id.uuidString)
     }
     var selectedProfileHasSavedSSHPassword: Bool {
-        sshPasswordStoredProfileIDs.contains(selectedProfile.id.uuidString)
+        hasSavedSSHPassword(profileID: selectedProfile.id)
     }
     var selectedSSHPasswordRequiresUserPresence: Bool {
-        sshPasswordUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
+        sshPasswordRequiresUserPresence(profileID: selectedProfile.id)
+    }
+    func hasSavedSSHPassword(profileID: UUID) -> Bool {
+        sshPasswordStoredProfileIDs.contains(profileID.uuidString)
+    }
+    func sshPasswordRequiresUserPresence(profileID: UUID) -> Bool {
+        sshPasswordUserPresenceProfileIDs.contains(profileID.uuidString)
     }
     var selectedProfileHasSavedProxyPassword: Bool {
         KeychainService.passwordExists(
@@ -510,7 +516,10 @@ final class AppModel: NSObject, ObservableObject {
         )
     }
     var selectedSSHKeyRequiresUserPresence: Bool {
-        sshKeyUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
+        sshKeyRequiresUserPresence(profileID: selectedProfile.id)
+    }
+    func sshKeyRequiresUserPresence(profileID: UUID) -> Bool {
+        sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)
     }
     var touchIDAvailable: Bool {
         KeychainService.touchIDAvailable
@@ -960,8 +969,12 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func setSelectedSSHKeyUserPresence(_ enabled: Bool) {
+        setSSHKeyUserPresenceForProfile(enabled, profileID: selectedProfile.id)
+    }
+
+    func setSSHKeyUserPresenceForProfile(_ enabled: Bool, profileID: UUID) {
         do {
-            try setSSHKeyUserPresence(enabled, profileID: selectedProfile.id)
+            try setSSHKeyUserPresence(enabled, profileID: profileID)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -998,7 +1011,10 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func repairSelectedSSHCredentialAccess() {
-        let profileID = selectedProfile.id
+        repairSSHCredentialAccess(profileID: selectedProfile.id)
+    }
+
+    func repairSSHCredentialAccess(profileID: UUID) {
         do {
             try KeychainService.repairPasswordAccess(profileID: profileID, kind: .ssh)
             setPasswordStored(false, profileID: profileID, kind: .ssh)
@@ -1007,8 +1023,10 @@ final class AppModel: NSObject, ObservableObject {
                 sshPasswordUserPresenceProfileIDs.sorted(),
                 forKey: sshPasswordUserPresenceProfilesKey
             )
-            sshPassword = ""
-            statusMessage = "Проблемная запись SSH-пароля удалена. Введите пароль заново; при необходимости сначала включите Touch ID, затем нажмите «Сохранить»."
+            if profileID == selectedProfile.id {
+                sshPassword = ""
+            }
+            statusMessage = "Проблемная запись SSH-пароля удалена. Откройте профиль и сохраните пароль заново."
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1065,6 +1083,14 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func importSSHKey() {
+        importSSHKey(
+            assignToProfileID: selectedProfile.connectionType == .ssh
+                ? selectedProfile.id
+                : nil
+        )
+    }
+
+    func importSSHKey(assignToProfileID profileID: UUID?) {
         let panel = NSOpenPanel()
         panel.title = "Выберите приватный SSH-ключ"
         panel.canChooseDirectories = false
@@ -1076,10 +1102,12 @@ final class AppModel: NSObject, ObservableObject {
         do {
             let result = try registerSSHKey(
                 at: url,
-                forProfileID: selectedProfile.id
+                forProfileID: profileID
             )
             if result.wasExisting {
-                statusMessage = "SSH-ключ уже зарегистрирован и выбран"
+                statusMessage = profileID == nil
+                    ? "SSH-ключ уже зарегистрирован"
+                    : "SSH-ключ уже зарегистрирован и выбран"
             } else {
                 statusMessage = "SSH-ключ «\(result.key.name)» добавлен"
             }
@@ -1098,7 +1126,26 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = "Создайте или выберите SSH-профиль перед генерацией ключа"
             return false
         }
-        let profileID = selectedProfile.id
+        return generateSSHKey(
+            request,
+            session: session,
+            profileID: selectedProfile.id
+        )
+    }
+
+    @discardableResult
+    func generateSSHKeyGlobally(
+        _ request: SSHKeyGenerationRequest,
+        session: TerminalSessionModel
+    ) -> Bool {
+        generateSSHKey(request, session: session, profileID: nil)
+    }
+
+    private func generateSSHKey(
+        _ request: SSHKeyGenerationRequest,
+        session: TerminalSessionModel,
+        profileID: UUID?
+    ) -> Bool {
         guard !session.isRunning else {
             errorMessage = "Дождитесь завершения текущей генерации SSH-ключа"
             return false
@@ -1118,7 +1165,7 @@ final class AppModel: NSObject, ObservableObject {
                             at: command.privateKeyURL,
                             forProfileID: profileID
                         )
-                        if request.protectUseWithUserPresence {
+                        if request.protectUseWithUserPresence, let profileID {
                             try setSSHKeyUserPresence(
                                 true,
                                 profileID: profileID,
@@ -1126,12 +1173,19 @@ final class AppModel: NSObject, ObservableObject {
                             )
                         }
                         if request.algorithm == .ecdsaP256TouchID,
+                           let profileID,
                            let index = profiles.firstIndex(where: { $0.id == profileID }) {
                             profiles[index].sshAuthenticationMode = .touchIDKey
                         }
-                        statusMessage = result.wasExisting
-                            ? "Созданный SSH-ключ выбран"
-                            : "SSH-ключ «\(result.key.name)» создан и выбран"
+                        if profileID == nil {
+                            statusMessage = result.wasExisting
+                                ? "Созданный SSH-ключ уже зарегистрирован"
+                                : "SSH-ключ «\(result.key.name)» создан. Назначьте его SSH-профилю для использования Touch ID."
+                        } else {
+                            statusMessage = result.wasExisting
+                                ? "Созданный SSH-ключ выбран"
+                                : "SSH-ключ «\(result.key.name)» создан и выбран"
+                        }
                         errorMessage = nil
                     } catch {
                         errorMessage = error.localizedDescription
@@ -1151,7 +1205,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private func registerSSHKey(
         at url: URL,
-        forProfileID profileID: UUID
+        forProfileID profileID: UUID?
     ) throws -> (key: SSHKeyRecord, wasExisting: Bool) {
         let inspected = try SSHKeyService.inspectPrivateKey(at: url)
         let existing = sshKeys.first {
@@ -1168,7 +1222,8 @@ final class AppModel: NSObject, ObservableObject {
             sshKeys.append(inspected)
             record = inspected
         }
-        if let index = profiles.firstIndex(where: { $0.id == profileID }) {
+        if let profileID,
+           let index = profiles.firstIndex(where: { $0.id == profileID }) {
             profiles[index].sshIdentityID = record.id
         }
         return (record, existing != nil)
@@ -1352,17 +1407,33 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func installSelectedSSHPublicKey() {
-        guard let settings = selectedSSHConnectionSettings(),
-              let key = settings.identity
-        else {
+        guard let keyID = selectedProfile.sshIdentityID else {
             errorMessage = "Выберите SSH-ключ, который нужно установить на сервер"
+            return
+        }
+        installSSHPublicKey(keyID: keyID, profileID: selectedProfile.id)
+    }
+
+    func installSSHPublicKey(keyID: UUID, profileID: UUID) {
+        guard var profile = profiles.first(where: {
+            $0.id == profileID && $0.connectionType == .ssh
+        }), let key = sshKeys.first(where: { $0.id == keyID }) else {
+            errorMessage = "Выберите SSH-профиль и ключ, который нужно установить на сервер"
             return
         }
         guard let publicKeyPath = key.publicKeyPath else {
             errorMessage = SSHKeyServiceError.publicKeyUnavailable.localizedDescription
             return
         }
-        let session = terminalSession(profileID: settings.profileID)
+        profile.sshIdentityID = keyID
+        let settings: SSHConnectionSettings
+        do {
+            settings = try SSHConnectionSettings(profile: profile, identity: key)
+        } catch {
+            errorMessage = error.localizedDescription
+            return
+        }
+        let session = terminalSession(profileID: profileID)
         guard !session.isRunning else {
             errorMessage = "Сначала завершите текущую SSH-сессию"
             return
@@ -1401,7 +1472,7 @@ final class AppModel: NSObject, ObservableObject {
                     : "Установка SSH-ключа завершилась с кодом \(exitCode)"
             }
             requestedSSHConsoleProfileID = settings.profileID
-            statusMessage = selectedProfileHasSavedSSHPassword
+            statusMessage = hasSavedSSHPassword(profileID: profileID)
                 ? "Ключ безопасно добавляется в authorized_keys с сохранённым SSH-паролем"
                 : "Ключ будет добавлен в authorized_keys без удаления существующих ключей; при необходимости введите пароль сервера"
             errorMessage = nil
