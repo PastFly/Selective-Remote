@@ -20,7 +20,6 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
         case .folders: "folder"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
-        case .keychain: "key.viewfinder"
         case .forwarding: "arrow.left.arrow.right"
         case .security: "lock.shield"
         }
