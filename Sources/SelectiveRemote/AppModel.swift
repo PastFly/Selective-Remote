@@ -269,6 +269,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published var sshPassword = ""
     @Published var proxyPassword = ""
     @Published var searchText = ""
+    @Published var quickConnectPresented = false
     @Published var profileSortMode: ProfileSortMode {
         didSet { UserDefaults.standard.set(profileSortMode.rawValue, forKey: sortModeKey) }
     }
@@ -656,6 +657,19 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    var profileGroupNames: [String] {
+        Array(Set(profiles.map { $0.group.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }))
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    func setProfileGroup(profileID: UUID, group: String) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        profiles[index].group = group.trimmingCharacters(in: .whitespacesAndNewlines)
+        statusMessage = profiles[index].group.isEmpty
+            ? "Профиль перемещён в «Без группы»"
+            : "Профиль перемещён в группу «\(profiles[index].group)»"
+    }
+
     var profileGroups: [ProfileGroupSection] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered: [ConnectionProfile]
@@ -720,6 +734,42 @@ final class AppModel: NSObject, ObservableObject {
         profiles.append(profile)
         selectedProfileID = profile.id
         statusMessage = "Создан новый \(connectionType.title)-профиль"
+    }
+
+    @discardableResult
+    func importSSHConfigHost(_ host: SSHConfigHost) -> UUID? {
+        let alias = host.alias.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !alias.isEmpty else { return nil }
+        if let existing = profiles.first(where: {
+            $0.connectionType == .ssh
+                && $0.host.caseInsensitiveCompare(alias) == .orderedSame
+        }) {
+            selectedProfileID = existing.id
+            statusMessage = "SSH Host «\(alias)» уже есть в подключениях"
+            return existing.id
+        }
+
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.friendlyName = alias
+        // Сохраняем alias, а не HostName: системный OpenSSH продолжает применять
+        // Include, IdentityFile, Match, ProxyJump и другие параметры ~/.ssh/config.
+        profile.host = alias
+        profile.username = host.user
+        profile.sshPort = host.port
+        profile.sshAuthenticationMode = .agent
+        profiles.append(profile)
+        selectedProfileID = profile.id
+        statusMessage = "Импортирован SSH Host «\(alias)» из ~/.ssh/config"
+        errorMessage = nil
+        return profile.id
+    }
+
+    func toggleFavorite(profileID: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        profiles[index].isFavorite.toggle()
+        statusMessage = profiles[index].isFavorite
+            ? "«\(profiles[index].friendlyName)» добавлен в избранное"
+            : "«\(profiles[index].friendlyName)» удалён из избранного"
     }
 
     @discardableResult
@@ -1386,6 +1436,11 @@ final class AppModel: NSObject, ObservableObject {
         statusMessage = "Секретами Selective Remote нужно управлять из карточки подключения; приложение «Пароли» не показывает generic-password записи и SSH-файлы."
     }
 
+    private func sshJumpHostProfile(for profile: ConnectionProfile) -> ConnectionProfile? {
+        guard let jumpID = profile.sshJumpHostProfileID, jumpID != profile.id else { return nil }
+        return profiles.first(where: { $0.id == jumpID && $0.connectionType == .ssh })
+    }
+
     func selectedSSHConnectionSettings() -> SSHConnectionSettings? {
         sshConnectionSettings(profileID: selectedProfile.id)
     }
@@ -1408,9 +1463,15 @@ final class AppModel: NSObject, ObservableObject {
             return nil
         }
         do {
+            let jumpHost = sshJumpHostProfile(for: profile)
+            if jumpHost?.sshAuthenticationMode == .password {
+                errorMessage = "Jump Host с парольной аутентификацией пока не поддерживается. Используйте SSH ID, Touch ID Key, ssh-agent или ~/.ssh/config для bastion-профиля."
+                return nil
+            }
             let settings = try SSHConnectionSettings(
                 profile: profile,
-                identity: identity
+                identity: identity,
+                jumpHost: jumpHost
             )
             errorMessage = nil
             return settings
@@ -1440,6 +1501,29 @@ final class AppModel: NSObject, ObservableObject {
             tabID: clientID
         ) else { return nil }
         do {
+            if let sourceProfileID = connection.profileID,
+               let sourceProfile = profiles.first(where: { $0.id == sourceProfileID }),
+               let jumpProfile = sshJumpHostProfile(for: sourceProfile) {
+                if jumpProfile.sshAuthenticationMode == .password {
+                    throw SSHServiceError.launchFailed("Jump Host с паролем не поддерживается; настройте ключ или ssh-agent")
+                }
+                if let jumpKeyID = jumpProfile.sshIdentityID,
+                   let jumpKey = sshKeys.first(where: { $0.id == jumpKeyID }) {
+                    if jumpProfile.sshAuthenticationMode == .touchIDKey
+                        || sshKeyUserPresenceProfileIDs.contains(jumpProfile.id.uuidString) {
+                        try KeychainService.authorizeSSHKeyUse(
+                            profileID: jumpProfile.id,
+                            reason: "Подтвердите Touch ID для Jump Host «\(jumpProfile.friendlyName)»"
+                        )
+                    }
+                    if jumpProfile.sshAuthenticationMode != .agent {
+                        try SSHKeyService.addToAgent(
+                            jumpKey,
+                            useStoredPassphrase: hasSavedSSHKeyPassphrase(keyID: jumpKey.id)
+                        )
+                    }
+                }
+            }
             let matchingTerminalIsRunning = connection.profileID.map {
                 isSSHTerminalRunning(profileID: $0)
             } ?? false
@@ -1497,7 +1581,11 @@ final class AppModel: NSObject, ObservableObject {
         profile.sshIdentityID = keyID
         let settings: SSHConnectionSettings
         do {
-            settings = try SSHConnectionSettings(profile: profile, identity: key)
+            settings = try SSHConnectionSettings(
+                profile: profile,
+                identity: key,
+                jumpHost: sshJumpHostProfile(for: profile)
+            )
         } catch {
             errorMessage = error.localizedDescription
             return
@@ -1908,7 +1996,11 @@ final class AppModel: NSObject, ObservableObject {
             profile.username = connection.normalizedUsername
             profile.sshPort = connection.port
             do {
-                let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+                let settings = try SSHConnectionSettings(
+                    profile: profile,
+                    identity: nil,
+                    jumpHost: sshJumpHostProfile(for: profile)
+                )
                 errorMessage = nil
                 return settings
             } catch {

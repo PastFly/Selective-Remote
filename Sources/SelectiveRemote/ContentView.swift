@@ -137,6 +137,23 @@ struct ContentView: View {
         } message: {
             Text(model.updateMessage ?? "")
         }
+        .sheet(isPresented: $model.quickConnectPresented) {
+            QuickConnectView { profileID, action in
+                model.selectProfile(profileID)
+                switch action {
+                case .terminal:
+                    setMainArea(.connections)
+                    selectedTab = .terminal
+                case .sftp:
+                    setMainArea(.connections)
+                    selectedTab = .sftp
+                case .connect:
+                    setMainArea(.connections)
+                    model.connect()
+                }
+            }
+            .environmentObject(model)
+        }
         .sheet(isPresented: $showsCaptureDiagnostics) {
             CaptureDiagnosticsView(
                 cameraSelectionMode: profile.cameraSelectionMode,
@@ -149,7 +166,13 @@ struct ContentView: View {
             )
         }
         .sheet(isPresented: $showsSSHDiagnostics) {
-            SSHDiagnosticsView(profile: profile, identity: model.selectedSSHKey)
+            SSHDiagnosticsView(
+                profile: profile,
+                identity: model.selectedSSHKey,
+                jumpHost: profile.sshJumpHostProfileID.flatMap { jumpID in
+                    model.profiles.first(where: { $0.id == jumpID })
+                }
+            )
         }
         .sheet(isPresented: $showsSSHKeyGenerator) {
             SSHKeyGenerationView(
@@ -411,6 +434,23 @@ struct ContentView: View {
                                     }
 
                                     Divider()
+                                    Button(
+                                        item.isFavorite ? "Убрать из избранного" : "В избранное",
+                                        systemImage: item.isFavorite ? "star.slash" : "star"
+                                    ) {
+                                        model.toggleFavorite(profileID: item.id)
+                                    }
+                                    Menu("Переместить в группу", systemImage: "folder") {
+                                        Button("Без группы") {
+                                            model.setProfileGroup(profileID: item.id, group: "")
+                                        }
+                                        if !model.profileGroupNames.isEmpty { Divider() }
+                                        ForEach(model.profileGroupNames, id: \.self) { groupName in
+                                            Button(groupName) {
+                                                model.setProfileGroup(profileID: item.id, group: groupName)
+                                            }
+                                        }
+                                    }
                                     Button("Создать копию", systemImage: "doc.on.doc") {
                                         model.selectProfile(item.id)
                                         model.duplicateSelectedProfile()
@@ -1292,6 +1332,67 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
+                    Label("Маршрут SSH", systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(.headline)
+                    Spacer()
+                    Text(profileBinding.wrappedValue.sshJumpHostProfileID == nil ? "Прямое подключение" : "Jump Host")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Picker("Jump Host", selection: profileBinding.sshJumpHostProfileID) {
+                    Text("Прямое подключение").tag(UUID?.none)
+                    ForEach(sortedSSHProfiles.filter {
+                        $0.id != profile.id && $0.sshAuthenticationMode != .password
+                    }) { jump in
+                        Text(jump.friendlyName.isEmpty ? jump.host : jump.friendlyName)
+                            .tag(Optional(jump.id))
+                    }
+                }
+                .pickerStyle(.menu)
+
+                if let jumpID = profileBinding.wrappedValue.sshJumpHostProfileID,
+                   let jump = model.profiles.first(where: { $0.id == jumpID }) {
+                    HStack(spacing: 12) {
+                        routeNode(title: "Mac", subtitle: "Этот Mac", systemImage: "laptopcomputer")
+                        Image(systemName: "arrow.right").foregroundStyle(Color.accentColor)
+                        routeNode(
+                            title: jump.friendlyName.isEmpty ? "Jump Host" : jump.friendlyName,
+                            subtitle: jump.username.isEmpty ? "\(jump.host):\(jump.sshPort)" : "\(jump.username)@\(jump.host):\(jump.sshPort)",
+                            systemImage: "server.rack"
+                        )
+                        Image(systemName: "arrow.right").foregroundStyle(Color.accentColor)
+                        routeNode(
+                            title: profile.friendlyName.isEmpty ? "Target" : profile.friendlyName,
+                            subtitle: profile.username.isEmpty ? "\(profile.host):\(profile.sshPort)" : "\(profile.username)@\(profile.host):\(profile.sshPort)",
+                            systemImage: "terminal"
+                        )
+                    }
+                    .padding(12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                    Label(
+                        "Подключение выполняется системным OpenSSH через -J. Настройки HTTP/SOCKS proxy целевого профиля при этом не применяются.",
+                        systemImage: "info.circle"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                } else {
+                    Text("Для bastion-сценария выберите другой сохранённый SSH-профиль. Его адрес и пользователь используются как ProxyJump.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08))
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
                     Label("Proxy", systemImage: "arrow.triangle.branch")
                         .font(.headline)
                     Spacer()
@@ -1303,8 +1404,10 @@ struct ContentView: View {
                     ForEach(SSHProxyMode.allCases) { mode in Text(mode.title).tag(mode) }
                 }
                 .pickerStyle(.segmented)
+                .disabled(profileBinding.wrappedValue.sshJumpHostProfileID != nil)
 
-                if profileBinding.wrappedValue.sshProxyMode != .none {
+                if profileBinding.wrappedValue.sshProxyMode != .none
+                    && profileBinding.wrappedValue.sshJumpHostProfileID == nil {
                     HStack(spacing: 10) {
                         TextField("proxy.example.com", text: profileBinding.sshProxyHost)
                             .textFieldStyle(.roundedBorder)
@@ -2119,6 +2222,22 @@ private struct ProfileRow: View {
         .padding(.vertical, 5)
         .contentShape(Rectangle())
     }
+}
+
+private func routeNode(title: String, subtitle: String, systemImage: String) -> some View {
+    VStack(spacing: 6) {
+        Image(systemName: systemImage)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+        Text(subtitle)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+    .frame(maxWidth: .infinity)
 }
 
 private struct ModernGroupBoxStyle: GroupBoxStyle {

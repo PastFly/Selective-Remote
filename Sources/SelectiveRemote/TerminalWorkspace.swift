@@ -112,6 +112,8 @@ struct TerminalWorkspaceTab: Identifiable {
     let session: TerminalSessionModel
     var isPrimary: Bool
     var connection: TerminalTabConnection
+    var isPinned: Bool
+    var colorIndex: Int
 
     @MainActor var isEmptyPlaceholder: Bool {
         !session.isRunning
@@ -127,6 +129,8 @@ private struct StoredTerminalWorkspace: Codable {
         var title: String
         let isPrimary: Bool
         var connection: TerminalTabConnection?
+        var isPinned: Bool?
+        var colorIndex: Int?
     }
 
     var tabs: [Tab]
@@ -175,7 +179,9 @@ final class TerminalWorkspaceModel: ObservableObject {
                 id: UUID(),
                 title: "Терминал 1",
                 isPrimary: true,
-                connection: nil
+                connection: nil,
+                isPinned: false,
+                colorIndex: 0
             )
         var restoredTabs = [
             TerminalWorkspaceTab(
@@ -185,7 +191,9 @@ final class TerminalWorkspaceModel: ObservableObject {
                 isPrimary: true,
                 connection: primaryMetadata.connection
                     ?? primaryConnection
-                    ?? .savedProfile(profileID)
+                    ?? .savedProfile(profileID),
+                isPinned: primaryMetadata.isPinned ?? false,
+                colorIndex: primaryMetadata.colorIndex ?? 0
             )
         ]
         let additionalMetadata = Array(
@@ -201,7 +209,9 @@ final class TerminalWorkspaceModel: ObservableObject {
                     ),
                     session: TerminalSessionModel(),
                     isPrimary: false,
-                    connection: metadata.connection ?? .savedProfile(profileID)
+                    connection: metadata.connection ?? .savedProfile(profileID),
+                    isPinned: metadata.isPinned ?? false,
+                    colorIndex: metadata.colorIndex ?? restoredTabs.count % 6
                 )
             )
         }
@@ -303,7 +313,9 @@ final class TerminalWorkspaceModel: ObservableObject {
             ),
             session: TerminalSessionModel(),
             isPrimary: false,
-            connection: connection ?? .savedProfile(profileID)
+            connection: connection ?? .savedProfile(profileID),
+            isPinned: false,
+            colorIndex: tabs.count % 6
         )
         tabs.append(tab)
         observe(tab)
@@ -317,14 +329,35 @@ final class TerminalWorkspaceModel: ObservableObject {
     func duplicateTab(_ id: UUID) -> TerminalWorkspaceTab? {
         guard let source = tabs.first(where: { $0.id == id }), tabs.count < 8 else { return nil }
         let baseTitle = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
-        return addTab(
+        guard let created = addTab(
             connection: source.connection,
             title: baseTitle.isEmpty ? "Копия терминала" : "\(baseTitle) · копия"
-        )
+        ) else { return nil }
+        if let index = tabs.firstIndex(where: { $0.id == created.id }) {
+            tabs[index].colorIndex = source.colorIndex
+            tabs[index].isPinned = false
+            persist()
+            objectWillChange.send()
+        }
+        return tabs.first(where: { $0.id == created.id })
+    }
+
+    func togglePinned(_ id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].isPinned.toggle()
+        persist()
+        objectWillChange.send()
+    }
+
+    func cycleColor(_ id: UUID) {
+        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        tabs[index].colorIndex = (tabs[index].colorIndex + 1) % 6
+        persist()
+        objectWillChange.send()
     }
 
     func closeTab(_ id: UUID) {
-        guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
+        guard let index = tabs.firstIndex(where: { $0.id == id }), !tabs[index].isPinned else { return }
         if tabs.count == 1 {
             tabs[0].session.stop()
             tabs[0].title = "Новый терминал"
@@ -464,7 +497,9 @@ final class TerminalWorkspaceModel: ObservableObject {
                     id: $0.id,
                     title: $0.title,
                     isPrimary: $0.isPrimary,
-                    connection: $0.connection
+                    connection: $0.connection,
+                    isPinned: $0.isPinned,
+                    colorIndex: $0.colorIndex
                 )
             },
             selectedTabID: selectedTabID,

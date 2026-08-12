@@ -501,151 +501,7 @@ struct SSHTerminalView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                VStack(alignment: .leading, spacing: 3) {
-                    Label("Встроенный SSH-терминал", systemImage: "terminal.fill")
-                        .font(.headline)
-                    Text(
-                        "\(connectionLabel(for: workspace.selectedTab)) · "
-                            + "\(session.phase.title) · "
-                            + "\(session.terminalColumns)×\(session.terminalRows)"
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    connectionEditorRequest = TerminalConnectionEditorRequest(
-                        tabID: workspace.selectedTab.id,
-                        initialConnection: workspace.selectedTab.connection
-                    )
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .disabled(
-                    session.isRunning
-                        || (workspace.selectedTab.isPrimary && locksPrimaryConnection)
-                )
-                .help("Выбрать другой сервер для этой вкладки")
-                .accessibilityLabel("Изменить подключение вкладки")
-
-                Button {
-                    refreshRemoteContext()
-                } label: {
-                    if refreshingContextTabIDs.contains(workspace.selectedTabID) {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Image(systemName: "server.rack")
-                    }
-                }
-                .disabled(
-                    refreshingContextTabIDs.contains(workspace.selectedTabID)
-                        || !session.isRunning
-                )
-                .help("Обновить безопасные подсказки по службам и контейнерам сервера")
-                .accessibilityLabel("Обновить команды сервера")
-
-                Button {
-                    showsHistory.toggle()
-                } label: {
-                    Image(systemName: "clock.arrow.circlepath")
-                }
-                .help("История, поиск и общие подсказки команд")
-                .accessibilityLabel("История и подсказки команд")
-                .keyboardShortcut("y", modifiers: [.command, .shift])
-
-                Button {
-                    if broadcastsInput {
-                        broadcastsInput = false
-                    } else {
-                        showsBroadcastConfirmation = true
-                    }
-                } label: {
-                    Image(systemName: broadcastsInput ? "antenna.radiowaves.left.and.right.circle.fill" : "antenna.radiowaves.left.and.right")
-                }
-                .disabled(workspace.runningSessionCount < 2)
-                .help(
-                    broadcastsInput
-                        ? "Групповой ввод включён: клавиши отправляются во все активные панели"
-                        : "Отправлять ввод во все активные панели"
-                )
-                .accessibilityLabel("Групповой ввод")
-
-                Button {
-                    openSFTP(workspace.selectedTab)
-                } label: {
-                    Image(systemName: "folder.badge.gearshape")
-                }
-                .disabled(workspace.isEmptyState)
-                .help("Открыть этот сервер в SFTP")
-                .accessibilityLabel("Открыть сервер в SFTP")
-
-                Button {
-                    showsCommandPalette = true
-                } label: {
-                    Image(systemName: "command")
-                }
-                .help("Палитра действий — ⌘K")
-                .accessibilityLabel("Палитра действий")
-                .keyboardShortcut("k", modifiers: .command)
-
-                Button {
-                    showsAppearance.toggle()
-                } label: {
-                    Image(systemName: "paintpalette")
-                }
-                .help("Оформление терминала")
-                .accessibilityLabel("Оформление терминала")
-                .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
-                    TerminalAppearanceView(
-                        store: appearance,
-                        appAppearance: appAppearance
-                    )
-                }
-
-                Button {
-                    toggleFocusMode()
-                } label: {
-                    Image(
-                        systemName: isFocusMode
-                            ? "arrow.down.right.and.arrow.up.left"
-                            : "arrow.up.left.and.arrow.down.right"
-                    )
-                }
-                .help(Text(isFocusMode ? "Вернуть интерфейс" : "Развернуть терминал"))
-                .accessibilityLabel(
-                    Text(isFocusMode ? "Вернуть интерфейс" : "Развернуть терминал")
-                )
-                .keyboardShortcut(.return, modifiers: [.command, .shift])
-
-                Button {
-                    installKey()
-                } label: {
-                    Image(systemName: "key.horizontal")
-                }
-                .disabled(!hasInstallableKey || session.isRunning || !workspace.selectedTab.isPrimary)
-                .help("Добавить выбранный публичный ключ в ~/.ssh/authorized_keys сервера")
-                .accessibilityLabel("Установить SSH-ключ на сервер")
-
-                Button {
-                    session.clear()
-                } label: {
-                    Image(systemName: "eraser")
-                }
-                .help("Очистить терминал")
-                .accessibilityLabel("Очистить терминал")
-                if session.isRunning {
-                    Button("Отключить", systemImage: "stop.fill", role: .destructive) {
-                        session.stop()
-                    }
-                    .buttonStyle(.borderedProminent)
-                } else {
-                    Button("Подключиться", systemImage: "play.fill") {
-                        requestConnection(for: workspace.selectedTab)
-                    }
-                    .buttonStyle(.borderedProminent)
-                }
-            }
+            terminalHeader
 
             terminalTabBar
 
@@ -741,6 +597,126 @@ struct SSHTerminalView: View {
         }
     }
 
+    private var terminalHeader: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(paneColor(for: workspace.selectedTab).opacity(0.16))
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(paneColor(for: workspace.selectedTab))
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 7) {
+                    Text(workspace.selectedTab.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    if workspace.selectedTab.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    Text(session.phase.title)
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(
+                            session.isRunning ? Color.green.opacity(0.14) : Color.secondary.opacity(0.12),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(session.isRunning ? Color.green : Color.secondary)
+                }
+                Text("\(connectionLabel(for: workspace.selectedTab)) · \(session.terminalColumns)×\(session.terminalRows)")
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            if broadcastsInput {
+                Label("SYNC", systemImage: "antenna.radiowaves.left.and.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.14), in: Capsule())
+            }
+
+            Button {
+                if session.isRunning {
+                    session.stop()
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(350))
+                        requestConnection(for: workspace.selectedTab)
+                    }
+                } else {
+                    requestConnection(for: workspace.selectedTab)
+                }
+            } label: {
+                Image(systemName: session.isRunning ? "arrow.clockwise" : "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .help(session.isRunning ? "Переподключить" : "Подключиться")
+
+            Menu {
+                Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
+                    connectionEditorRequest = TerminalConnectionEditorRequest(
+                        tabID: workspace.selectedTab.id,
+                        initialConnection: workspace.selectedTab.connection
+                    )
+                }
+                .disabled(session.isRunning || (workspace.selectedTab.isPrimary && locksPrimaryConnection))
+                Button("Обновить контекст сервера", systemImage: "server.rack") { refreshRemoteContext() }
+                    .disabled(!session.isRunning || refreshingContextTabIDs.contains(workspace.selectedTabID))
+                Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(workspace.selectedTab) }
+                    .disabled(workspace.isEmptyState)
+                Divider()
+                Button("История и подсказки", systemImage: "clock.arrow.circlepath") { showsHistory.toggle() }
+                Button(
+                    broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
+                    systemImage: "antenna.radiowaves.left.and.right"
+                ) {
+                    if broadcastsInput { broadcastsInput = false } else { showsBroadcastConfirmation = true }
+                }
+                .disabled(workspace.runningSessionCount < 2)
+                Button("Очистить терминал", systemImage: "eraser") { session.clear() }
+                Divider()
+                Button("Палитра действий", systemImage: "command") { showsCommandPalette = true }
+                Button("Оформление", systemImage: "paintpalette") { showsAppearance.toggle() }
+                Button(isFocusMode ? "Вернуть интерфейс" : "Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    toggleFocusMode()
+                }
+                if hasInstallableKey && workspace.selectedTab.isPrimary && !session.isRunning {
+                    Divider()
+                    Button("Установить SSH-ключ", systemImage: "key.horizontal") { installKey() }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .font(.title3)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
+            }
+
+            if session.isRunning {
+                Button("Отключить", systemImage: "stop.fill", role: .destructive) { session.stop() }
+                    .buttonStyle(.bordered)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08))
+        }
+    }
+
     private var terminalTabBar: some View {
         HStack(spacing: 7) {
             ScrollView(.horizontal, showsIndicators: false) {
@@ -754,11 +730,16 @@ struct SSHTerminalView: View {
                                     Circle()
                                         .fill(tab.session.isRunning ? Color.green : Color.secondary.opacity(0.45))
                                         .frame(width: 7, height: 7)
+                                    if tab.isPinned {
+                                        Image(systemName: "pin.fill")
+                                            .font(.caption2)
+                                            .foregroundStyle(paneColor(for: tab))
+                                    }
                                     Text(tab.title).lineLimit(1)
                                 }
                             }
                             .buttonStyle(.plain)
-                            if !tab.isPrimary || !locksPrimaryConnection {
+                            if (!tab.isPrimary || !locksPrimaryConnection) && !tab.isPinned {
                                 Button {
                                     workspace.closeTab(tab.id)
                                 } label: {
@@ -786,6 +767,23 @@ struct SSHTerminalView: View {
                                 Button("Подключить", systemImage: "play.fill") {
                                     selectTabIfNeeded(tab.id)
                                     requestConnection(for: tab)
+                                }
+                            }
+                            Button(tab.isPinned ? "Открепить вкладку" : "Закрепить вкладку", systemImage: tab.isPinned ? "pin.slash" : "pin") {
+                                workspace.togglePinned(tab.id)
+                            }
+                            Button("Сменить цвет", systemImage: "paintpalette.fill") {
+                                workspace.cycleColor(tab.id)
+                            }
+                            if tab.session.isRunning {
+                                Button("Переподключить", systemImage: "arrow.clockwise") {
+                                    tab.session.stop()
+                                    Task { @MainActor in
+                                        try? await Task.sleep(for: .milliseconds(350))
+                                        if let current = workspace.tabs.first(where: { $0.id == tab.id }) {
+                                            connect(current, nil)
+                                        }
+                                    }
                                 }
                             }
                             Button("Очистить терминал", systemImage: "eraser") {
@@ -819,7 +817,7 @@ struct SSHTerminalView: View {
                                     )
                                 }
                             }
-                            if !tab.isPrimary || !locksPrimaryConnection {
+                            if (!tab.isPrimary || !locksPrimaryConnection) && !tab.isPinned {
                                 Divider()
                                 Button("Закрыть", systemImage: "xmark", role: .destructive) {
                                     workspace.closeTab(tab.id)
@@ -1118,10 +1116,8 @@ struct SSHTerminalView: View {
 
     private func paneColor(for tab: TerminalWorkspaceTab) -> Color {
         let colors: [Color] = [.blue, .teal, .orange, .purple, .pink, .green]
-        let index = tab.id.uuidString.utf8.reduce(0) {
-            ($0 + Int($1)) % colors.count
-        }
-        return colors[index % colors.count]
+        let index = max(0, tab.colorIndex) % colors.count
+        return colors[index]
     }
 
     private func requestConnection(for tab: TerminalWorkspaceTab) {

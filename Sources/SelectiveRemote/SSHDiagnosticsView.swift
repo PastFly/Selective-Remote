@@ -21,6 +21,7 @@ struct SSHDiagnosticsView: View {
 
     let profile: ConnectionProfile
     let identity: SSHKeyRecord?
+    let jumpHost: ConnectionProfile?
     @State private var items: [SSHDiagnosticItem] = []
     @State private var running = false
 
@@ -106,6 +107,7 @@ struct SSHDiagnosticsView: View {
         items = []
         let profile = profile
         let identity = identity
+        let jumpHost = jumpHost
         DispatchQueue.global(qos: .userInitiated).async {
             var result: [SSHDiagnosticItem] = []
             let targetHost = profile.sshProxyMode == .none ? profile.host : profile.sshProxyHost
@@ -122,7 +124,11 @@ struct SSHDiagnosticsView: View {
                 ok: tcp.status == 0
             ))
             do {
-                let settings = try SSHConnectionSettings(profile: profile, identity: identity)
+                let settings = try SSHConnectionSettings(
+                    profile: profile,
+                    identity: identity,
+                    jumpHost: jumpHost
+                )
                 let args = SSHService.interactiveSSHArguments(settings: settings)
                 result.append(.init(
                     title: "Конфигурация OpenSSH",

@@ -694,6 +694,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var sshProxyHost: String
     var sshProxyPort: Int
     var sshProxyUsername: String
+    var sshJumpHostProfileID: UUID?
     var sshHostKeyPolicy: SSHHostKeyPolicy
     var sshInitialDirectory: String
     var sshCompression: Bool
@@ -748,6 +749,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         sshProxyHost = ""
         sshProxyPort = 1080
         sshProxyUsername = ""
+        sshJumpHostProfileID = nil
         sshHostKeyPolicy = .acceptNew
         sshInitialDirectory = "."
         sshCompression = false
@@ -791,7 +793,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, connectionType, friendlyName, group, host, username
-        case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshHostKeyPolicy, sshInitialDirectory
+        case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, portForwards
         case gatewayHost, gatewayUsername
         case isFavorite, selectedDisplayIDs, primaryDisplayID
@@ -825,6 +827,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         sshProxyHost = try container.decodeIfPresent(String.self, forKey: .sshProxyHost) ?? defaults.sshProxyHost
         sshProxyPort = try container.decodeIfPresent(Int.self, forKey: .sshProxyPort) ?? defaults.sshProxyPort
         sshProxyUsername = try container.decodeIfPresent(String.self, forKey: .sshProxyUsername) ?? defaults.sshProxyUsername
+        sshJumpHostProfileID = try container.decodeIfPresent(UUID.self, forKey: .sshJumpHostProfileID)
         sshHostKeyPolicy = try container.decodeIfPresent(
             SSHHostKeyPolicy.self,
             forKey: .sshHostKeyPolicy
@@ -944,6 +947,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(sshProxyHost, forKey: .sshProxyHost)
         try container.encode(sshProxyPort, forKey: .sshProxyPort)
         try container.encode(sshProxyUsername, forKey: .sshProxyUsername)
+        try container.encodeIfPresent(sshJumpHostProfileID, forKey: .sshJumpHostProfileID)
         try container.encode(sshHostKeyPolicy, forKey: .sshHostKeyPolicy)
         try container.encode(sshInitialDirectory, forKey: .sshInitialDirectory)
         try container.encode(sshCompression, forKey: .sshCompression)

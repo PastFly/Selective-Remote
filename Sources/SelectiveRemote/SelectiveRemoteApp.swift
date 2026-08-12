@@ -3,8 +3,29 @@ import SwiftUI
 
 @MainActor
 final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate {
+    private var helpWindow: NSWindow?
+
     func applicationWillTerminate(_ notification: Notification) {
         SSHKeyService.stopManagedAgent()
+    }
+
+    func showHelpWindow() {
+        if let helpWindow {
+            helpWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let controller = NSHostingController(rootView: AppHelpView())
+        let window = NSWindow(contentViewController: controller)
+        window.title = "Справка Selective Remote"
+        window.setContentSize(NSSize(width: 860, height: 700))
+        window.minSize = NSSize(width: 720, height: 560)
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        helpWindow = window
     }
 }
 
@@ -26,7 +47,18 @@ struct SelectiveRemoteApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .help) {
+                Button("Справка Selective Remote") {
+                    appDelegate.showHelpWindow()
+                }
+                    .keyboardShortcut("?", modifiers: [.command])
+            }
             CommandMenu("Сессия") {
+                Button("Quick Connect…", systemImage: "bolt.fill") {
+                    model.quickConnectPresented = true
+                }
+                .keyboardShortcut("k", modifiers: [.command])
+                Divider()
                 Button("Показать \(AppBrand.name)") { model.showMainWindow() }
                 Divider()
                 if model.runningSessions.isEmpty {

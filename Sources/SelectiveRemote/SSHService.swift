@@ -57,12 +57,17 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let proxyHost: String
     let proxyPort: Int
     let proxyUsername: String
+    let jumpHostDestination: String?
     let hostKeyPolicy: SSHHostKeyPolicy
     let initialDirectory: String
     let compression: Bool
     let keepAliveSeconds: Int
 
-    init(profile: ConnectionProfile, identity: SSHKeyRecord?) throws {
+    init(
+        profile: ConnectionProfile,
+        identity: SSHKeyRecord?,
+        jumpHost: ConnectionProfile? = nil
+    ) throws {
         let normalizedHost = SSHService.normalizedHost(profile.host)
         let normalizedUser = profile.username.trimmingCharacters(in: .whitespacesAndNewlines)
         let initialDirectory = profile.sshInitialDirectory
@@ -92,6 +97,21 @@ struct SSHConnectionSettings: Equatable, Sendable {
         proxyHost = profile.sshProxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
         proxyPort = profile.sshProxyPort
         proxyUsername = profile.sshProxyUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let jumpHost {
+            let jumpHostName = SSHService.normalizedHost(jumpHost.host)
+            try SSHService.validateHost(jumpHostName)
+            let jumpUser = jumpHost.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            try SSHService.validateUsername(jumpUser)
+            guard (1...65_535).contains(jumpHost.sshPort) else {
+                throw SSHServiceError.invalidPort
+            }
+            let userPrefix = jumpUser.isEmpty ? "" : "\(jumpUser)@"
+            jumpHostDestination = jumpHost.sshPort == 22
+                ? "\(userPrefix)\(jumpHostName)"
+                : "\(userPrefix)\(jumpHostName):\(jumpHost.sshPort)"
+        } else {
+            jumpHostDestination = nil
+        }
         if proxyMode != .none {
             try SSHService.validateHost(proxyHost)
             guard (1...65_535).contains(proxyPort) else {
@@ -404,7 +424,7 @@ enum SSHService {
     }
 
     static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
-        guard settings.proxyMode != .none else { return [] }
+        guard settings.proxyMode != .none, settings.jumpHostDestination == nil else { return [] }
         let helper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers", isDirectory: true)
             .appendingPathComponent("SelectiveRemoteSSHProxy")
@@ -457,6 +477,9 @@ enum SSHService {
         }
         arguments += authenticationArguments(settings: settings)
         arguments += proxyArguments(settings: settings)
+        if let jumpHostDestination = settings.jumpHostDestination {
+            arguments += ["-J", jumpHostDestination]
+        }
         if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
             arguments += ["-i", identity.privateKeyPath]
             if let certificateURL = SSHKeyService.certificateURL(for: identity) {
@@ -515,6 +538,9 @@ enum SSHService {
             arguments += ["-o", "User=\(settings.username)"]
         }
         arguments += proxyArguments(settings: settings)
+        if let jumpHostDestination = settings.jumpHostDestination {
+            arguments += ["-J", jumpHostDestination]
+        }
         arguments += [settings.host, remoteCommand]
         return arguments
     }
@@ -539,6 +565,9 @@ enum SSHService {
             arguments += ["-o", "User=\(settings.username)"]
         }
         arguments += proxyArguments(settings: settings)
+        if let jumpHostDestination = settings.jumpHostDestination {
+            arguments += ["-J", jumpHostDestination]
+        }
         return arguments + [settings.host]
     }
 

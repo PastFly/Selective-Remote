@@ -6,12 +6,20 @@ enum CredentialVaultPresentation {
     case embedded
 }
 
+
+private struct SSHCertificateSigningRequest: Identifiable {
+    let id = UUID()
+    let key: SSHKeyRecord
+    let authority: SSHCertificateAuthorityRecord
+}
+
 private enum VaultFilter: String, CaseIterable, Identifiable {
     case all
     case keys
     case certificates
     case touchID
     case passwords
+    case authorities
     case knownHosts
 
     var id: String { rawValue }
@@ -23,6 +31,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
         case .certificates: "Certificates"
         case .touchID: "Touch ID"
         case .passwords: "Passwords"
+        case .authorities: "SSH CA"
         case .knownHosts: "Known Hosts"
         }
     }
@@ -34,6 +43,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
         case .certificates: "checkmark.seal"
         case .touchID: "touchid"
         case .passwords: "ellipsis.rectangle"
+        case .authorities: "seal"
         case .knownHosts: "server.rack"
         }
     }
@@ -42,6 +52,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
 private enum VaultSelection: Hashable {
     case key(UUID)
     case credential(UUID)
+    case authority(UUID)
     case knownHost(String)
 }
 
@@ -63,6 +74,8 @@ struct CredentialVaultView: View {
     @State private var certificateInfo: SSHCertificateInfo?
     @State private var certificateError: String?
     @State private var knownHosts: [SSHKnownHostEntry] = []
+    @State private var authorities: [SSHCertificateAuthorityRecord] = []
+    @State private var signingRequest: SSHCertificateSigningRequest?
     @State private var knownHostsError: String?
     @State private var verifyingKnownHostID: String?
     @State private var knownHostVerification: [String: SSHKnownHostVerification] = [:]
@@ -104,7 +117,7 @@ struct CredentialVaultView: View {
             model.sshKeys.filter { SSHKeyService.certificateURL(for: $0) != nil }
         case .touchID:
             model.sshKeys.filter(SSHKeyService.isTouchIDCompatible)
-        case .passwords, .knownHosts:
+        case .passwords, .authorities, .knownHosts:
             []
         }
     }
@@ -113,7 +126,7 @@ struct CredentialVaultView: View {
         switch filter {
         case .all, .passwords:
             savedCredentialProfiles
-        case .keys, .certificates, .touchID, .knownHosts:
+        case .keys, .certificates, .touchID, .authorities, .knownHosts:
             []
         }
     }
@@ -122,9 +135,23 @@ struct CredentialVaultView: View {
         switch filter {
         case .all, .knownHosts:
             knownHosts
-        case .keys, .certificates, .touchID, .passwords:
+        case .keys, .certificates, .touchID, .passwords, .authorities:
             []
         }
+    }
+
+    private var visibleAuthorities: [SSHCertificateAuthorityRecord] {
+        switch filter {
+        case .all, .authorities:
+            authorities
+        case .keys, .certificates, .touchID, .passwords, .knownHosts:
+            []
+        }
+    }
+
+    private var selectedAuthority: SSHCertificateAuthorityRecord? {
+        guard case let .authority(id) = selection else { return nil }
+        return authorities.first(where: { $0.id == id })
     }
 
     private var selectedKey: SSHKeyRecord? {
@@ -175,6 +202,7 @@ struct CredentialVaultView: View {
             refreshAgentState()
             refreshCertificateInfo()
             refreshKnownHosts()
+            refreshAuthorities()
         }
         .onChange(of: selection) { _, _ in
             refreshCertificateInfo()
@@ -204,6 +232,11 @@ struct CredentialVaultView: View {
         .sheet(isPresented: $showsKeyGenerator) {
             SSHKeyGenerationView(touchIDPreset: touchIDGenerator) { request, session in
                 model.generateSSHKeyGlobally(request, session: session)
+            }
+        }
+        .sheet(item: $signingRequest) { request in
+            SSHCertificateSigningView(key: request.key, authority: request.authority) {
+                refreshCertificateInfo()
             }
         }
     }
@@ -255,8 +288,15 @@ struct CredentialVaultView: View {
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Импортировать", systemImage: "square.and.arrow.down") {
-                    model.importSSHKey(assignToProfileID: nil)
+                Menu {
+                    Button("SSH ID…", systemImage: "key.horizontal") {
+                        model.importSSHKey(assignToProfileID: nil)
+                    }
+                    Button("SSH CA public key…", systemImage: "seal") {
+                        importAuthority()
+                    }
+                } label: {
+                    Label("Импортировать", systemImage: "square.and.arrow.down")
                 }
                 Spacer()
             }
@@ -271,22 +311,29 @@ struct CredentialVaultView: View {
             .help("Можно перетащить сюда приватный SSH-ключ")
             Divider()
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(VaultFilter.allCases) { item in
-                        Button {
-                            filter = item
-                            normalizeSelectionForFilter()
-                        } label: {
-                            Label(item.title, systemImage: item.systemImage)
-                                .font(.caption.weight(.semibold))
-                        }
-                        .buttonStyle(.bordered)
-                        .tint(filter == item ? Color.accentColor : nil)
+            LazyVGrid(
+                columns: [
+                    GridItem(.flexible(minimum: 92), spacing: 8),
+                    GridItem(.flexible(minimum: 92), spacing: 8),
+                    GridItem(.flexible(minimum: 92), spacing: 8)
+                ],
+                alignment: .leading,
+                spacing: 8
+            ) {
+                ForEach(VaultFilter.allCases) { item in
+                    Button {
+                        filter = item
+                        normalizeSelectionForFilter()
+                    } label: {
+                        Label(item.title, systemImage: item.systemImage)
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .buttonStyle(.bordered)
+                    .tint(filter == item ? Color.accentColor : nil)
                 }
-                .padding(12)
             }
+            .padding(12)
             Divider()
 
             List(selection: $selection) {
@@ -308,6 +355,15 @@ struct CredentialVaultView: View {
                     }
                 }
 
+                if !visibleAuthorities.isEmpty {
+                    Section("Certificate Authorities") {
+                        ForEach(visibleAuthorities) { authority in
+                            authorityRow(authority)
+                                .tag(VaultSelection.authority(authority.id))
+                        }
+                    }
+                }
+
                 if !visibleKnownHosts.isEmpty {
                     Section("Known Hosts") {
                         ForEach(visibleKnownHosts) { entry in
@@ -317,7 +373,7 @@ struct CredentialVaultView: View {
                     }
                 }
 
-                if visibleKeys.isEmpty && visibleCredentials.isEmpty && visibleKnownHosts.isEmpty {
+                if visibleKeys.isEmpty && visibleCredentials.isEmpty && visibleAuthorities.isEmpty && visibleKnownHosts.isEmpty {
                     ContentUnavailableView(
                         "Ничего не найдено",
                         systemImage: filter.systemImage,
@@ -514,6 +570,132 @@ struct CredentialVaultView: View {
         }
     }
 
+    private func authorityRow(_ authority: SSHCertificateAuthorityRecord) -> some View {
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                Image(systemName: "seal.fill")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 38, height: 38)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(authority.name).font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("\(authority.algorithm) · \(authority.fingerprint)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Image(systemName: authority.hasPrivateKey ? "checkmark.shield.fill" : "lock.open")
+                .foregroundStyle(authority.hasPrivateKey ? Color.green : Color.secondary)
+        }
+        .padding(.vertical, 5)
+        .contextMenu {
+            Button("Копировать fingerprint", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(authority.fingerprint, forType: .string)
+            }
+            Button("Показать в Finder", systemImage: "folder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: authority.publicKeyPath)])
+            }
+            Divider()
+            Button("Удалить регистрацию", systemImage: "trash", role: .destructive) {
+                SSHCertificateAuthorityService.remove(authority.id)
+                refreshAuthorities()
+            }
+        }
+    }
+
+    private func authorityInspector(_ authority: SSHCertificateAuthorityRecord) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.13))
+                        Image(systemName: "seal.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 52, height: 52)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(authority.name).font(.title2.bold())
+                        Text("SSH Certificate Authority · \(authority.algorithm)").foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+
+                GroupBox("Параметры CA") {
+                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 10) {
+                        GridRow { metadataLabel("Fingerprint"); Text(authority.fingerprint).font(.caption.monospaced()).textSelection(.enabled) }
+                        GridRow { metadataLabel("Public key"); Text(authority.publicKeyPath).font(.caption.monospaced()).textSelection(.enabled) }
+                        GridRow { metadataLabel("Private key"); Text(authority.privateKeyPath).font(.caption.monospaced()).textSelection(.enabled) }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Label(
+                    authority.hasPrivateKey
+                        ? "Private CA key найден рядом с public key. Он остаётся файлом и не копируется в Keychain."
+                        : "Зарегистрирован только public CA key. Для выпуска сертификатов private CA key должен находиться рядом без расширения .pub.",
+                    systemImage: authority.hasPrivateKey ? "checkmark.shield.fill" : "exclamationmark.triangle.fill"
+                )
+                .font(.callout)
+                .foregroundStyle(authority.hasPrivateKey ? Color.green : Color.orange)
+
+                GroupBox("Выпустить SSH certificate") {
+                    if authority.hasPrivateKey {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Выберите SSH ID. Selective Remote вызовет системный ssh-keygen и создаст стандартный *-cert.pub рядом с public key.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(model.sshKeys) { key in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(key.name).font(.subheadline.weight(.semibold))
+                                        Text(key.fingerprint).font(.caption2.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Button("Подписать…") {
+                                        signingRequest = SSHCertificateSigningRequest(key: key, authority: authority)
+                                    }
+                                    .disabled(key.publicKeyPath == nil)
+                                }
+                            }
+                        }
+                    } else {
+                        Text("Подписание недоступно без private CA key.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 820)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    private func importAuthority() {
+        do {
+            if let value = try SSHCertificateAuthorityService.chooseAndRegister() {
+                refreshAuthorities()
+                filter = .authorities
+                selection = .authority(value.id)
+            }
+        } catch {
+            knownHostsError = error.localizedDescription
+        }
+    }
+
+    private func refreshAuthorities() {
+        authorities = SSHCertificateAuthorityService.registered()
+        if case let .authority(id) = selection, !authorities.contains(where: { $0.id == id }) {
+            selection = authorities.first.map { .authority($0.id) }
+        }
+    }
+
     private var agentStrip: some View {
         HStack(spacing: 8) {
             Image(systemName: agentCheckError == nil ? "memorychip" : "exclamationmark.triangle")
@@ -543,6 +725,8 @@ struct CredentialVaultView: View {
             keyInspector(key)
         } else if let profile = selectedCredential {
             credentialInspector(profile)
+        } else if let authority = selectedAuthority {
+            authorityInspector(authority)
         } else if let entry = selectedKnownHost {
             knownHostInspector(entry)
         } else {
@@ -1003,9 +1187,11 @@ struct CredentialVaultView: View {
     private func normalizeSelectionForFilter() {
         if let selectedKey, visibleKeys.contains(where: { $0.id == selectedKey.id }) { return }
         if let selectedCredential, visibleCredentials.contains(where: { $0.id == selectedCredential.id }) { return }
+        if let selectedAuthority, visibleAuthorities.contains(where: { $0.id == selectedAuthority.id }) { return }
         if let selectedKnownHost, visibleKnownHosts.contains(where: { $0.id == selectedKnownHost.id }) { return }
         selection = visibleKeys.first.map { .key($0.id) }
             ?? visibleCredentials.first.map { .credential($0.id) }
+            ?? visibleAuthorities.first.map { .authority($0.id) }
             ?? visibleKnownHosts.first.map { .knownHost($0.id) }
     }
 
