@@ -11,6 +11,7 @@ struct IndependentForwardingView: View {
     @State private var connectionRequest: ForwardConnectionRequest?
     @State private var passwordInputs: [UUID: String] = [:]
     @State private var selectedTunnelID: UUID?
+    @State private var diagramPulse = false
 
     private var sshProfiles: [ConnectionProfile] {
         model.profiles
@@ -56,6 +57,9 @@ struct IndependentForwardingView: View {
             if selectedTunnelID == nil {
                 selectedTunnelID = model.independentPortForwards.first?.id
             }
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                diagramPulse = true
+            }
         }
         .onChange(of: model.independentPortForwards) { _, tunnels in
             if let selectedTunnelID,
@@ -70,9 +74,10 @@ struct IndependentForwardingView: View {
                 profiles: sshProfiles,
                 initialConnection: request.connection,
                 allowsInteractivePassword: false,
+                allowsTemporaryPassword: false,
                 actionTitle: "Сохранить",
                 customAuthenticationMessage: "Для ручного SSH-сервера пароль можно сохранить в Keychain прямо в инспекторе туннеля.",
-                onSave: { connection, _ in
+                onSave: { connection, _, _ in
                     guard var item = model.independentPortForwards.first(where: {
                         $0.id == request.tunnelID
                     }) else { return }
@@ -102,7 +107,6 @@ struct IndependentForwardingView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            addTunnelMenu
         }
         .padding(.horizontal, 22)
         .padding(.vertical, 16)
@@ -130,15 +134,14 @@ struct IndependentForwardingView: View {
 
     private var tunnelList: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Port Forwarding")
-                    .font(.headline)
+            HStack(spacing: 10) {
+                addTunnelMenu
                 Spacer()
                 Text("\(model.independentPortForwards.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
-            .padding(16)
+            .padding(12)
             Divider()
 
             List(selection: $selectedTunnelID) {
@@ -149,6 +152,16 @@ struct IndependentForwardingView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .contextMenu {
+                Menu("Новый туннель", systemImage: "plus") {
+                    ForEach(PortForwardKind.allCases) { kind in
+                        Button(kind.title) {
+                            model.addIndependentPortForward(kind)
+                            selectedTunnelID = model.independentPortForwards.last?.id
+                        }
+                    }
+                }
+            }
 
             Divider()
             HStack {
@@ -190,6 +203,47 @@ struct IndependentForwardingView: View {
             }
         }
         .padding(.vertical, 5)
+        .contentShape(Rectangle())
+        .onTapGesture(count: 2) {
+            selectedTunnelID = item.id
+            if !running {
+                model.startIndependentPortForward(item.id)
+            }
+        }
+        .contextMenu {
+            if running {
+                Button("Остановить", systemImage: "stop.fill", role: .destructive) {
+                    model.stopSSHTunnel(item.id)
+                }
+                Button("Перезапустить", systemImage: "arrow.clockwise") {
+                    model.restartIndependentPortForward(item.id)
+                }
+            } else {
+                Button("Запустить", systemImage: "play.fill") {
+                    model.startIndependentPortForward(item.id)
+                }
+            }
+            Button("Показать журнал", systemImage: "doc.text.magnifyingglass") {
+                model.revealSSHTunnelLog(item.id)
+            }
+            Divider()
+            Button("Создать копию", systemImage: "doc.on.doc") {
+                selectedTunnelID = model.duplicateIndependentPortForward(item.id)
+            }
+            Menu("Новый туннель", systemImage: "plus") {
+                ForEach(PortForwardKind.allCases) { kind in
+                    Button(kind.title) {
+                        model.addIndependentPortForward(kind)
+                        selectedTunnelID = model.independentPortForwards.last?.id
+                    }
+                }
+            }
+            Divider()
+            Button("Удалить", systemImage: "trash", role: .destructive) {
+                model.removeIndependentPortForward(item.id)
+            }
+            .disabled(running)
+        }
     }
 
     private func tunnelInspector(_ item: IndependentPortForward) -> some View {
@@ -242,7 +296,7 @@ struct IndependentForwardingView: View {
                     }
                 }
 
-                forwardingDiagram(item)
+                forwardingDiagram(item, running: running)
 
                 inspectorCard("Режим", systemImage: "arrow.triangle.branch") {
                     Picker("Режим", selection: binding.rule.kind) {
@@ -322,14 +376,15 @@ struct IndependentForwardingView: View {
         }
     }
 
-    private func forwardingDiagram(_ item: IndependentPortForward) -> some View {
+    private func forwardingDiagram(_ item: IndependentPortForward, running: Bool) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Label("Схема туннеля", systemImage: "network")
                     .font(.headline)
                 Spacer()
-                Text(item.rule.kind.title)
+                Label(running ? "Работает" : item.rule.kind.title, systemImage: running ? "checkmark.circle.fill" : item.rule.kind.systemImage)
                     .font(.caption.weight(.semibold))
+                    .foregroundStyle(running ? Color.green : Color.secondary)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 4)
                     .background(Color.accentColor.opacity(0.12), in: Capsule())
@@ -338,23 +393,23 @@ struct IndependentForwardingView: View {
             HStack(spacing: 10) {
                 switch item.rule.kind {
                 case .local:
-                    diagramNode("Ваш Mac", detail: "\(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "laptopcomputer")
-                    diagramConnector(label: "SSH")
-                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack")
-                    diagramConnector(label: "TCP")
-                    diagramNode("Destination", detail: endpoint(item.rule.destinationHost, item.rule.destinationPort), icon: "network")
+                    diagramNode("Ваш Mac", detail: "\(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "laptopcomputer", running: running)
+                    diagramConnector(label: "SSH", running: running)
+                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack", running: running)
+                    diagramConnector(label: "TCP", running: running)
+                    diagramNode("Destination", detail: endpoint(item.rule.destinationHost, item.rule.destinationPort), icon: "network", running: running)
                 case .remote:
-                    diagramNode("Destination", detail: endpoint(item.rule.destinationHost, item.rule.destinationPort), icon: "network")
-                    diagramConnector(label: "TCP")
-                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack")
-                    diagramConnector(label: "listen")
-                    diagramNode("Remote port", detail: "\(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "dot.radiowaves.left.and.right")
+                    diagramNode("Destination", detail: endpoint(item.rule.destinationHost, item.rule.destinationPort), icon: "network", running: running)
+                    diagramConnector(label: "TCP", running: running)
+                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack", running: running)
+                    diagramConnector(label: "listen", running: running)
+                    diagramNode("Remote port", detail: "\(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "dot.radiowaves.left.and.right", running: running)
                 case .dynamic:
-                    diagramNode("Ваш Mac", detail: "SOCKS5 · \(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "laptopcomputer")
-                    diagramConnector(label: "SSH")
-                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack")
-                    diagramConnector(label: "SOCKS")
-                    diagramNode("Сеть", detail: "динамический маршрут", icon: "globe")
+                    diagramNode("Ваш Mac", detail: "SOCKS5 · \(item.rule.bindAddress):\(item.rule.sourcePort)", icon: "laptopcomputer", running: running)
+                    diagramConnector(label: "SSH", running: running)
+                    diagramNode("SSH Server", detail: item.connection.displayLabel(profiles: sshProfiles), icon: "server.rack", running: running)
+                    diagramConnector(label: "SOCKS", running: running)
+                    diagramNode("Сеть", detail: "динамический маршрут", icon: "globe", running: running)
                 }
             }
         }
@@ -366,14 +421,14 @@ struct IndependentForwardingView: View {
         }
     }
 
-    private func diagramNode(_ title: String, detail: String, icon: String) -> some View {
+    private func diagramNode(_ title: String, detail: String, icon: String, running: Bool) -> some View {
         VStack(spacing: 8) {
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.13))
+                    .fill((running ? Color.green : Color.accentColor).opacity(running ? (diagramPulse ? 0.22 : 0.10) : 0.13))
                 Image(systemName: icon)
                     .font(.system(size: 23, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(running ? Color.green : Color.accentColor)
             }
             .frame(width: 54, height: 54)
             Text(title).font(.caption.weight(.semibold)).lineLimit(1)
@@ -386,15 +441,17 @@ struct IndependentForwardingView: View {
         .frame(maxWidth: .infinity)
     }
 
-    private func diagramConnector(label: String) -> some View {
+    private func diagramConnector(label: String, running: Bool) -> some View {
         VStack(spacing: 5) {
             HStack(spacing: 3) {
                 Rectangle().frame(height: 2)
                 Image(systemName: "chevron.right")
                     .font(.caption.bold())
             }
-            .foregroundStyle(Color.accentColor)
-            Text(label).font(.caption2).foregroundStyle(.secondary)
+            .foregroundStyle(running ? Color.green.opacity(diagramPulse ? 1.0 : 0.55) : Color.accentColor)
+            Text(label)
+                .font(.caption2)
+                .foregroundStyle(running ? Color.green : Color.secondary)
         }
         .frame(width: 70)
     }

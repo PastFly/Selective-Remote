@@ -174,9 +174,9 @@ struct ContentView: View {
                 customAuthenticationMessage: "SFTP использует системный ssh-agent и ~/.ssh/config. "
                     + "Если ключа или активной SSH-сессии нет, пароль будет запрошен "
                     + "в отдельном защищённом окне и не будет сохранён.",
-                onSave: { connection, _ in
+                onSave: { connection, _, temporaryPassword in
                     globalSFTPConnection = connection
-                    connectGlobalSFTP(connection)
+                    connectGlobalSFTP(connection, temporaryPassword: temporaryPassword)
                 }
             )
         }
@@ -375,17 +375,48 @@ struct ContentView: View {
                                 .contextMenu {
                                     if model.isSessionRunning(profileID: item.id)
                                         || model.isSSHTerminalRunning(profileID: item.id) {
-                                        Button("Отключить", role: .destructive) {
+                                        Button("Отключить", systemImage: "stop.fill", role: .destructive) {
                                             model.disconnect(profileID: item.id)
                                         }
-                                        Divider()
+                                    } else {
+                                        Button(
+                                            item.connectionType == .ssh ? "Подключить SSH" : "Подключить RDP",
+                                            systemImage: item.connectionType == .ssh ? "terminal" : "play.fill"
+                                        ) {
+                                            model.selectProfile(item.id)
+                                            setMainArea(.connections)
+                                            if item.connectionType == .ssh {
+                                                selectedTab = .terminal
+                                            }
+                                            model.connect()
+                                        }
                                     }
-                                    Button("Создать копию") {
+
+                                    if item.connectionType == .ssh {
+                                        Button("Открыть терминал", systemImage: "terminal") {
+                                            model.selectProfile(item.id)
+                                            setMainArea(.connections)
+                                            selectedTab = .terminal
+                                        }
+                                        Button("Открыть SFTP", systemImage: "folder.badge.gearshape") {
+                                            model.selectProfile(item.id)
+                                            setMainArea(.connections)
+                                            selectedTab = .sftp
+                                        }
+                                        Button("Открыть туннели", systemImage: "arrow.left.arrow.right") {
+                                            model.selectProfile(item.id)
+                                            setMainArea(.connections)
+                                            selectedTab = .forwarding
+                                        }
+                                    }
+
+                                    Divider()
+                                    Button("Создать копию", systemImage: "doc.on.doc") {
                                         model.selectProfile(item.id)
                                         model.duplicateSelectedProfile()
                                     }
                                     Divider()
-                                    Button("Удалить", role: .destructive) {
+                                    Button("Удалить", systemImage: "trash", role: .destructive) {
                                         model.selectProfile(item.id)
                                         model.deleteSelectedProfile()
                                     }
@@ -638,14 +669,35 @@ struct ContentView: View {
 
     private func connectGlobalSFTP(
         _ connection: TerminalTabConnection,
-        clientID: UUID = Self.globalSFTPScopeID
+        clientID: UUID = Self.globalSFTPScopeID,
+        temporaryPassword: String? = nil
     ) {
         guard let settings = model.prepareSSHConnection(
             connection: connection,
             clientID: clientID
         ) else { return }
+
+        let hasTemporaryPassword = connection.kind == .custom
+            && temporaryPassword?.isEmpty == false
+        if hasTemporaryPassword, let temporaryPassword {
+            do {
+                try KeychainService.savePassword(
+                    temporaryPassword,
+                    profileID: clientID,
+                    kind: .ssh
+                )
+            } catch {
+                model.errorMessage = error.localizedDescription
+                return
+            }
+        }
+
         model.globalSFTPSession.prepare(for: Self.globalSFTPScopeID)
-        model.globalSFTPSession.connect(settings)
+        model.globalSFTPSession.connect(settings) { _ in
+            if hasTemporaryPassword {
+                try? KeychainService.deletePassword(profileID: clientID, kind: .ssh)
+            }
+        }
     }
 
     private var profileTabPicker: some View {
@@ -701,11 +753,12 @@ struct ContentView: View {
                 },
             hasInstallableKey: model.selectedSSHKey?.publicKeyPath != nil,
             isFocusMode: terminalFocusMode,
-            connect: { tab in
+            connect: { tab, temporaryPassword in
                 model.connectSSHTerminal(
                     connection: tab.connection,
                     tabID: tab.id,
-                    session: tab.session
+                    session: tab.session,
+                    temporaryPassword: temporaryPassword
                 )
             },
             installKey: model.installSelectedSSHPublicKey,
@@ -747,11 +800,12 @@ struct ContentView: View {
             sshProfiles: profiles,
             hasInstallableKey: false,
             isFocusMode: terminalFocusMode,
-            connect: { tab in
+            connect: { tab, temporaryPassword in
                 model.connectSSHTerminal(
                     connection: tab.connection,
                     tabID: tab.id,
-                    session: tab.session
+                    session: tab.session,
+                    temporaryPassword: temporaryPassword
                 )
             },
             installKey: {},

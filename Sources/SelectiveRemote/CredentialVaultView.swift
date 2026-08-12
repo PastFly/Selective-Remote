@@ -192,24 +192,6 @@ struct CredentialVaultView: View {
 
             Spacer()
 
-            Menu {
-                Button("Обычный SSH ID", systemImage: "key.horizontal") {
-                    touchIDGenerator = false
-                    showsKeyGenerator = true
-                }
-                Button("Touch ID Key · ECDSA", systemImage: "touchid") {
-                    touchIDGenerator = true
-                    showsKeyGenerator = true
-                }
-            } label: {
-                Label("Создать", systemImage: "plus")
-            }
-            .buttonStyle(.borderedProminent)
-
-            Button("Импортировать", systemImage: "square.and.arrow.down") {
-                model.importSSHKey(assignToProfileID: nil)
-            }
-
             if presentation == .sheet {
                 Button("Готово") { dismiss() }
                     .keyboardShortcut(.defaultAction)
@@ -221,6 +203,29 @@ struct CredentialVaultView: View {
 
     private var vaultList: some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Menu {
+                    Button("Обычный SSH ID", systemImage: "key.horizontal") {
+                        touchIDGenerator = false
+                        showsKeyGenerator = true
+                    }
+                    Button("Touch ID Key · ECDSA", systemImage: "touchid") {
+                        touchIDGenerator = true
+                        showsKeyGenerator = true
+                    }
+                } label: {
+                    Label("Создать", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+
+                Button("Импортировать", systemImage: "square.and.arrow.down") {
+                    model.importSSHKey(assignToProfileID: nil)
+                }
+                Spacer()
+            }
+            .padding(12)
+            Divider()
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(VaultFilter.allCases) { item in
@@ -269,6 +274,21 @@ struct CredentialVaultView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .contextMenu {
+                Menu("Создать", systemImage: "plus") {
+                    Button("Обычный SSH ID", systemImage: "key.horizontal") {
+                        touchIDGenerator = false
+                        showsKeyGenerator = true
+                    }
+                    Button("Touch ID Key · ECDSA", systemImage: "touchid") {
+                        touchIDGenerator = true
+                        showsKeyGenerator = true
+                    }
+                }
+                Button("Импортировать…", systemImage: "square.and.arrow.down") {
+                    model.importSSHKey(assignToProfileID: nil)
+                }
+            }
 
             Divider()
             agentStrip
@@ -313,6 +333,40 @@ struct CredentialVaultView: View {
             }
         }
         .padding(.vertical, 5)
+        .contextMenu {
+            Button("Копировать public key", systemImage: "doc.on.doc") {
+                model.copySSHPublicKey(key.id)
+            }
+            .disabled(key.publicKeyPath == nil)
+            Button("Показать в Finder", systemImage: "folder") {
+                model.revealSSHKey(key.id)
+            }
+            Menu("Установить на сервер", systemImage: "arrow.up.to.line") {
+                ForEach(sshProfiles) { profile in
+                    Button(profile.friendlyName) {
+                        installTargetProfileID = profile.id
+                        model.installSSHPublicKey(keyID: key.id, profileID: profile.id)
+                    }
+                }
+            }
+            .disabled(key.publicKeyPath == nil || sshProfiles.isEmpty)
+            Divider()
+            if agentLoadedKeyIDs.contains(key.id) {
+                Button("Убрать из ssh-agent", systemImage: "minus.circle") {
+                    model.removeSSHKeyFromAgentAndKeychain(key.id)
+                    refreshAgentState()
+                }
+            } else {
+                Button("Добавить в ssh-agent", systemImage: "plus.circle") {
+                    model.addSSHKeyToAgent(key.id)
+                    refreshAgentState()
+                }
+            }
+            Divider()
+            Button("Удалить из Selective Remote", systemImage: "trash", role: .destructive) {
+                model.removeSSHKey(key.id)
+            }
+        }
     }
 
     private func credentialRow(_ profile: ConnectionProfile) -> some View {
@@ -336,6 +390,20 @@ struct CredentialVaultView: View {
             }
         }
         .padding(.vertical, 5)
+        .contextMenu {
+            if let onOpenProfile {
+                Button("Открыть SSH-профиль", systemImage: "arrow.right.circle") {
+                    onOpenProfile(profile.id)
+                }
+            }
+            Button("Исправить запись Keychain…", systemImage: "wrench.and.screwdriver") {
+                model.repairSSHCredentialAccess(profileID: profile.id)
+            }
+            Divider()
+            Button("Удалить пароль", systemImage: "trash", role: .destructive) {
+                model.deleteSavedSSHPassword(profileID: profile.id)
+            }
+        }
     }
 
     private var agentStrip: some View {

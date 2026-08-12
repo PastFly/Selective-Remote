@@ -722,6 +722,47 @@ final class AppModel: NSObject, ObservableObject {
         statusMessage = "Создан новый \(connectionType.title)-профиль"
     }
 
+    @discardableResult
+    func saveManualSSHProfile(
+        host: String,
+        username: String,
+        port: Int,
+        name: String,
+        password: String = ""
+    ) -> UUID? {
+        let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedHost.isEmpty, (1...65535).contains(port) else {
+            errorMessage = "Укажите корректный SSH-адрес и порт"
+            return nil
+        }
+        let normalizedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveUser = normalizedUser.isEmpty ? "root" : normalizedUser
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.friendlyName = normalizedName.isEmpty ? normalizedHost : normalizedName
+        profile.host = normalizedHost
+        profile.username = effectiveUser
+        profile.sshPort = port
+        profile.sshAuthenticationMode = password.isEmpty ? .automatic : .password
+        profiles.append(profile)
+
+        if !password.isEmpty {
+            do {
+                try KeychainService.savePassword(password, profileID: profile.id, kind: .ssh)
+                setPasswordStored(true, profileID: profile.id, kind: .ssh)
+            } catch {
+                profiles.removeAll { $0.id == profile.id }
+                errorMessage = error.localizedDescription
+                return nil
+            }
+        }
+
+        statusMessage = "SSH-подключение «\(profile.friendlyName)» сохранено"
+        errorMessage = nil
+        return profile.id
+    }
+
     func duplicateSelectedProfile() {
         var copy = selectedProfile
         copy.id = UUID()
@@ -1008,6 +1049,25 @@ final class AppModel: NSObject, ObservableObject {
 
     func deleteSavedSSHPassword() {
         deleteCredential(kind: .ssh)
+    }
+
+    func deleteSavedSSHPassword(profileID: UUID) {
+        do {
+            try KeychainService.deletePassword(profileID: profileID, kind: .ssh)
+            setPasswordStored(false, profileID: profileID, kind: .ssh)
+            sshPasswordUserPresenceProfileIDs.remove(profileID.uuidString)
+            UserDefaults.standard.set(
+                sshPasswordUserPresenceProfileIDs.sorted(),
+                forKey: sshPasswordUserPresenceProfilesKey
+            )
+            if profileID == selectedProfile.id {
+                sshPassword = ""
+            }
+            statusMessage = "SSH-пароль удалён из Keychain"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func repairSelectedSSHCredentialAccess() {
@@ -1502,6 +1562,19 @@ final class AppModel: NSObject, ObservableObject {
         statusMessage = "Добавлен независимый SSH-туннель"
     }
 
+    @discardableResult
+    func duplicateIndependentPortForward(_ id: UUID) -> UUID? {
+        guard let source = independentPortForwards.first(where: { $0.id == id }) else { return nil }
+        var copy = source
+        let newID = UUID()
+        copy.id = newID
+        copy.rule.id = newID
+        copy.rule.name += " — копия"
+        independentPortForwards.append(copy)
+        statusMessage = "Туннель скопирован"
+        return newID
+    }
+
     func updateIndependentPortForward(_ updated: IndependentPortForward) {
         guard let index = independentPortForwards.firstIndex(where: {
             $0.id == updated.id
@@ -1520,6 +1593,25 @@ final class AppModel: NSObject, ObservableObject {
         try? KeychainService.deletePassword(profileID: id, kind: .forwarding)
         setForwardingPasswordStored(false, tunnelID: id)
         lastSSHTunnelLogURLs.removeValue(forKey: id)
+    }
+
+    func restartIndependentPortForward(_ id: UUID) {
+        if !isSSHTunnelRunning(ruleID: id) {
+            startIndependentPortForward(id)
+            return
+        }
+        stopSSHTunnel(id)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            for _ in 0..<30 {
+                if !self.isSSHTunnelRunning(ruleID: id) {
+                    self.startIndependentPortForward(id)
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            self.errorMessage = "Не удалось перезапустить туннель: предыдущий процесс ещё завершается"
+        }
     }
 
     func startIndependentPortForward(_ id: UUID) {
@@ -1826,7 +1918,8 @@ final class AppModel: NSObject, ObservableObject {
     func connectSSHTerminal(
         connection: TerminalTabConnection,
         tabID: UUID,
-        session: TerminalSessionModel
+        session: TerminalSessionModel,
+        temporaryPassword: String? = nil
     ) {
         guard let settings = sshConnectionSettings(
             connection: connection,
@@ -1837,6 +1930,15 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         do {
+            if connection.kind == .custom,
+               let temporaryPassword,
+               !temporaryPassword.isEmpty {
+                try KeychainService.savePassword(
+                    temporaryPassword,
+                    profileID: tabID,
+                    kind: .ssh
+                )
+            }
             if let profileID = connection.profileID,
                (settings.authenticationMode == .touchIDKey
                     || (settings.authenticationMode == .key
@@ -1847,11 +1949,21 @@ final class AppModel: NSObject, ObservableObject {
                     reason: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»"
                 )
             }
-            let credential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
-                ? connection.profileID.map {
-                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            let credential: KeychainCredentialReference?
+            if settings.authenticationMode == .automatic || settings.authenticationMode == .password {
+                switch connection.kind {
+                case .savedProfile:
+                    credential = connection.profileID.map {
+                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                    }
+                case .custom:
+                    credential = temporaryPassword?.isEmpty == false
+                        ? KeychainService.credentialReference(profileID: tabID, kind: .ssh)
+                        : nil
                 }
-                : nil
+            } else {
+                credential = nil
+            }
             try session.start(
                 executable: "/usr/bin/ssh",
                 arguments: SSHService.interactiveSSHArguments(settings: settings),
@@ -1865,6 +1977,9 @@ final class AppModel: NSObject, ObservableObject {
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }
+                if connection.kind == .custom, temporaryPassword?.isEmpty == false {
+                    try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
+                }
                 statusMessage = exitCode == 0
                     ? "SSH-сессия завершена"
                     : "SSH-сессия завершилась с кодом \(exitCode)"
@@ -1934,6 +2049,9 @@ final class AppModel: NSObject, ObservableObject {
             statusMessage = "Команда «\(command.title)» отправлена в «\(runtime.profileName)»"
             errorMessage = nil
         } catch {
+            if connection.kind == .custom, temporaryPassword?.isEmpty == false {
+                try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
+            }
             errorMessage = error.localizedDescription
         }
     }

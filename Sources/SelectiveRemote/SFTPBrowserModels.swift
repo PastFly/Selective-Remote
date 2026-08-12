@@ -1568,8 +1568,15 @@ final class SFTPBrowserSession: ObservableObject {
         remote.reset()
     }
 
-    func connect(_ settings: SSHConnectionSettings) {
+    func connect(
+        _ settings: SSHConnectionSettings,
+        completion: (@MainActor (Bool) -> Void)? = nil
+    ) {
         self.settings = settings
-        remote.load(settings: settings, directory: settings.initialDirectory)
+        remote.load(
+            settings: settings,
+            directory: settings.initialDirectory,
+            completion: completion
+        )
     }
 }

@@ -479,7 +479,7 @@ struct SSHTerminalView: View {
     let sshProfiles: [ConnectionProfile]
     let hasInstallableKey: Bool
     let isFocusMode: Bool
-    let connect: (TerminalWorkspaceTab) -> Void
+    let connect: (TerminalWorkspaceTab, String?) -> Void
     let installKey: () -> Void
     let toggleFocusMode: () -> Void
     let openSFTP: (TerminalWorkspaceTab) -> Void
@@ -705,7 +705,7 @@ struct SSHTerminalView: View {
             TerminalConnectionEditor(
                 profiles: sshProfiles,
                 initialConnection: request.initialConnection,
-                onSave: { connection, suggestedTitle in
+                onSave: { connection, suggestedTitle, temporaryPassword in
                     if let tabID = request.tabID {
                         let updated = workspace.updateConnection(
                             tabID: tabID,
@@ -715,14 +715,14 @@ struct SSHTerminalView: View {
                         remoteContexts[tabID] = nil
                         if updated,
                            let tab = workspace.tabs.first(where: { $0.id == tabID }) {
-                            connect(tab)
+                            connect(tab, temporaryPassword)
                         }
                     } else {
                         if let tab = workspace.addTab(
                             connection: connection,
                             title: suggestedTitle
                         ) {
-                            connect(tab)
+                            connect(tab, temporaryPassword)
                         }
                     }
                 }
@@ -778,7 +778,21 @@ struct SSHTerminalView: View {
                             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                         )
                         .contextMenu {
-                            Button("Изменить подключение…") {
+                            if tab.session.isRunning {
+                                Button("Отключить", systemImage: "stop.fill", role: .destructive) {
+                                    tab.session.stop()
+                                }
+                            } else {
+                                Button("Подключить", systemImage: "play.fill") {
+                                    selectTabIfNeeded(tab.id)
+                                    requestConnection(for: tab)
+                                }
+                            }
+                            Button("Очистить терминал", systemImage: "eraser") {
+                                tab.session.clear()
+                            }
+                            Divider()
+                            Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
                                 connectionEditorRequest = TerminalConnectionEditorRequest(
                                     tabID: tab.id,
                                     initialConnection: tab.connection
@@ -788,13 +802,22 @@ struct SSHTerminalView: View {
                                 tab.session.isRunning
                                     || (tab.isPrimary && locksPrimaryConnection)
                             )
-                            Button("Переименовать") {
+                            Button("Переименовать", systemImage: "pencil") {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
+                            if workspace.displayedTabs.count < 8 {
+                                Button("Новая вкладка", systemImage: "plus") {
+                                    connectionEditorRequest = TerminalConnectionEditorRequest(
+                                        tabID: nil,
+                                        initialConnection: defaultProfileID.map { .savedProfile($0) }
+                                            ?? .custom(host: "", username: "root")
+                                    )
+                                }
+                            }
                             if !tab.isPrimary || !locksPrimaryConnection {
                                 Divider()
-                                Button("Закрыть", role: .destructive) {
+                                Button("Закрыть", systemImage: "xmark", role: .destructive) {
                                     workspace.closeTab(tab.id)
                                 }
                             }
@@ -1099,7 +1122,7 @@ struct SSHTerminalView: View {
 
     private func requestConnection(for tab: TerminalWorkspaceTab) {
         if tab.isPrimary, locksPrimaryConnection {
-            connect(tab)
+            connect(tab, nil)
             return
         }
         connectionEditorRequest = TerminalConnectionEditorRequest(
@@ -1167,10 +1190,12 @@ private struct TerminalConnectionEditorRequest: Identifiable {
 
 struct TerminalConnectionEditor: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject private var model: AppModel
 
     let profiles: [ConnectionProfile]
-    let onSave: (TerminalTabConnection, String) -> Void
+    let onSave: (TerminalTabConnection, String, String?) -> Void
     let allowsInteractivePassword: Bool
+    let allowsTemporaryPassword: Bool
     let actionTitle: String
     let heading: String
     let message: String
@@ -1181,20 +1206,25 @@ struct TerminalConnectionEditor: View {
     @State private var host: String
     @State private var username: String
     @State private var port: Int
+    @State private var password: String
+    @State private var saveAsProfile: Bool
+    @State private var profileName: String
 
     init(
         profiles: [ConnectionProfile],
         initialConnection: TerminalTabConnection,
         allowsInteractivePassword: Bool = true,
+        allowsTemporaryPassword: Bool = true,
         actionTitle: String = "Подключить",
         heading: String = "Подключение вкладки",
         message: String = "Выберите сохранённый профиль или укажите временный SSH-адрес.",
         customAuthenticationMessage: String? = nil,
-        onSave: @escaping (TerminalTabConnection, String) -> Void
+        onSave: @escaping (TerminalTabConnection, String, String?) -> Void
     ) {
         self.profiles = profiles
         self.onSave = onSave
         self.allowsInteractivePassword = allowsInteractivePassword
+        self.allowsTemporaryPassword = allowsTemporaryPassword
         self.actionTitle = actionTitle
         self.heading = heading
         self.message = message
@@ -1206,6 +1236,9 @@ struct TerminalConnectionEditor: View {
         _host = State(initialValue: initialConnection.host)
         _username = State(initialValue: initialConnection.username)
         _port = State(initialValue: initialConnection.port)
+        _password = State(initialValue: "")
+        _saveAsProfile = State(initialValue: false)
+        _profileName = State(initialValue: initialConnection.host)
     }
 
     var body: some View {
@@ -1236,18 +1269,62 @@ struct TerminalConnectionEditor: View {
                 }
                 .pickerStyle(.menu)
             } else {
-                VStack(alignment: .leading, spacing: 12) {
-                    TextField("Hostname или IP", text: $host)
-                    TextField("Логин — необязательно", text: $username)
-                    TextField("Порт", value: $port, format: .number)
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("Hostname или IP", text: $host)
+                        HStack(spacing: 10) {
+                            TextField("Логин", text: $username, prompt: Text("root"))
+                            TextField("Порт", value: $port, format: .number)
+                                .frame(width: 105)
+                        }
+                        Text("Если логин не указан, используется root.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Label("Сервер", systemImage: "server.rack")
                 }
+
+                if allowsTemporaryPassword || saveAsProfile {
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            SecureField("Пароль — необязательно", text: $password)
+                            Text(
+                                saveAsProfile
+                                    ? "Пароль будет сохранён только в macOS Keychain."
+                                    : "Пароль используется только для текущего подключения и удаляется из временной Keychain-записи после завершения сессии."
+                            )
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        }
+                        .padding(.top, 4)
+                    } label: {
+                        Label("Аутентификация", systemImage: "key.fill")
+                    }
+                }
+
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Toggle("Сохранить как SSH-профиль", isOn: $saveAsProfile)
+                            .toggleStyle(.switch)
+                        if saveAsProfile {
+                            TextField("Название подключения", text: $profileName)
+                            Text("Адрес, логин и порт появятся в списке подключений; введённый пароль хранится только в macOS Keychain.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Label("Сохранение", systemImage: "bookmark")
+                }
+
                 Text(
                     customAuthenticationMessage
                         ?? (allowsInteractivePassword
-                            ? "Пароль будет запрошен непосредственно в терминале. "
-                                + "Временное подключение использует системный ssh-agent и ~/.ssh/config."
-                            : "Фоновое подключение не может запросить пароль в терминале. "
-                                + "Используйте SSH-ключ, системный ssh-agent или ~/.ssh/config.")
+                            ? "Для временного подключения используется системный ssh-agent и ~/.ssh/config; при необходимости OpenSSH запросит пароль отдельно."
+                            : "Для временного фонового подключения используйте SSH-ключ, системный ssh-agent или ~/.ssh/config. Для пароля сохраните подключение как SSH-профиль.")
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -1262,7 +1339,12 @@ struct TerminalConnectionEditor: View {
             }
         }
         .padding(22)
-        .frame(width: 520)
+        .frame(width: 560)
+        .onChange(of: host) { _, value in
+            if saveAsProfile, profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                profileName = value
+            }
+        }
     }
 
     private var canSave: Bool {
@@ -1285,18 +1367,34 @@ struct TerminalConnectionEditor: View {
             guard let selectedProfileID,
                   let profile = profiles.first(where: { $0.id == selectedProfileID })
             else { return }
-            onSave(.savedProfile(profile.id), profile.friendlyName)
+            onSave(.savedProfile(profile.id), profile.friendlyName, nil)
         case .custom:
+            let effectiveUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "root"
+                : username
             let connection = TerminalTabConnection.custom(
                 host: host,
-                username: username,
+                username: effectiveUsername,
                 port: port
             )
             guard connection.isValidCustomConnection else { return }
-            let title = connection.normalizedUsername.isEmpty
-                ? connection.normalizedHost
-                : "\(connection.normalizedUsername)@\(connection.normalizedHost)"
-            onSave(connection, title)
+
+            if saveAsProfile {
+                let suggestedName = profileName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    ? connection.normalizedHost
+                    : profileName
+                guard let profileID = model.saveManualSSHProfile(
+                    host: connection.normalizedHost,
+                    username: effectiveUsername,
+                    port: connection.port,
+                    name: suggestedName,
+                    password: password
+                ) else { return }
+                onSave(.savedProfile(profileID), suggestedName, nil)
+            } else {
+                let title = "\(effectiveUsername)@\(connection.normalizedHost)"
+                onSave(connection, title, password.isEmpty ? nil : password)
+            }
         }
         dismiss()
     }
