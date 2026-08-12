@@ -64,10 +64,13 @@ func readUntilHeaders(_ fd: Int32) -> Data {
 }
 
 func socksAddress(_ host: String) -> Data {
-    if var v4 = in_addr(), inet_pton(AF_INET, host, &v4) == 1 {
+    var v4 = in_addr()
+    if inet_pton(AF_INET, host, &v4) == 1 {
         return Data([0x01]) + Data(bytes: &v4, count: MemoryLayout<in_addr>.size)
     }
-    if var v6 = in6_addr(), inet_pton(AF_INET6, host, &v6) == 1 {
+
+    var v6 = in6_addr()
+    if inet_pton(AF_INET6, host, &v6) == 1 {
         return Data([0x04]) + Data(bytes: &v6, count: MemoryLayout<in6_addr>.size)
     }
     let bytes = Array(host.utf8)
