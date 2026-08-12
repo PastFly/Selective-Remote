@@ -22,7 +22,7 @@ The project targets Apple Silicon and macOS 14 or later. The interface is availa
 - `.rdp` import, launch logs, and built-in diagnostics;
 - multiple parallel RDP sessions.
 
-### SSH terminal
+## SSH terminal workspace
 
 - embedded terminal powered by the system `/usr/bin/ssh`;
 - up to eight tabs, each able to connect to a different server;
@@ -69,7 +69,7 @@ The standalone dual-pane file manager includes:
 - path suggestions and navigation history;
 - built-in editing for remote UTF-8 text files.
 
-### SSH forwarding
+## Independent forwarding
 
 Forwarding is an independent workspace rather than a side effect of the selected connection card. It supports:
 
