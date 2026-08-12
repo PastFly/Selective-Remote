@@ -725,14 +725,23 @@ final class SFTPBrowserModel: ObservableObject {
             directories.removeAll { skipped.contains($0) }
         }
         guard !directories.isEmpty, directories.count <= 50 else { return }
+
+        // Snapshot the filtered names before crossing the MainActor boundary.
+        // `directories` is mutable actor-isolated state within this method;
+        // capturing it directly in Task.detached is rejected by newer Swift 6
+        // concurrency checking even though [String] itself is Sendable.
+        let directoryNames = directories
         Task {
-            let sizes = await Task.detached(priority: .utility) {
-                SFTPService.directorySizes(
-                    settings: settings,
-                    directory: directory,
-                    names: directories
-                )
-            }.value
+            let sizes = await Task.detached(
+                priority: .utility,
+                operation: { [settings, directory, directoryNames] in
+                    SFTPService.directorySizes(
+                        settings: settings,
+                        directory: directory,
+                        names: directoryNames
+                    )
+                }
+            ).value
             guard operationID == token, currentPath == directory, !sizes.isEmpty else { return }
             rawEntries = rawEntries.map { entry in
                 guard let size = sizes[entry.name], entry.isDirectory else { return entry }
