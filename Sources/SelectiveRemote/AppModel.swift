@@ -1992,6 +1992,9 @@ final class AppModel: NSObject, ObservableObject {
             statusMessage = "SSH подключается к \(settings.host)"
             errorMessage = nil
         } catch {
+            if connection.kind == .custom, temporaryPassword?.isEmpty == false {
+                try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
+            }
             errorMessage = error.localizedDescription
             statusMessage = "SSH не запущен"
         }
@@ -2049,9 +2052,6 @@ final class AppModel: NSObject, ObservableObject {
             statusMessage = "Команда «\(command.title)» отправлена в «\(runtime.profileName)»"
             errorMessage = nil
         } catch {
-            if connection.kind == .custom, temporaryPassword?.isEmpty == false {
-                try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
-            }
             errorMessage = error.localizedDescription
         }
     }
