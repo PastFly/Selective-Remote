@@ -6,7 +6,7 @@ on:
       tag:
         description: Existing version tag to publish
         required: true
-        default: v0.20.1
+        default: v0.20.2
         type: string
 
 permissions:

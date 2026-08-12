@@ -482,7 +482,7 @@ enum SSHService {
             ]
             + forwarding
             + [settings.host]
-        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
+        process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
             passwordCredential: passwordCredential
         )
         process.standardInput = FileHandle.nullDevice
@@ -671,20 +671,58 @@ enum SSHKeyService {
 
     static func backgroundAuthenticationEnvironment(
         passwordCredential: KeychainCredentialReference? = nil
-    ) -> [String: String] {
+    ) throws -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
         environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
         environment["SSH_ASKPASS"] = helper.path
         environment["SSH_ASKPASS_REQUIRE"] = "force"
-        if let passwordCredential {
-            environment["SELECTIVEREMOTE_KEYCHAIN_SERVICE"] = passwordCredential.service
-            environment["SELECTIVEREMOTE_KEYCHAIN_ACCOUNT"] = passwordCredential.account
-        } else {
-            environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_SERVICE")
-            environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_SERVICE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
+
+        if let passwordCredential,
+           let password = try KeychainService.readPassword(
+               reference: passwordCredential,
+               authenticationPrompt: "Подтвердите Touch ID для использования SSH-пароля"
+           ),
+           !password.isEmpty {
+            let secretURL = try makeAskPassSecretFile(password)
+            environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
         }
         return environment
+    }
+
+    private static func makeAskPassSecretFile(_ password: String) throws -> URL {
+        let directory = URL(
+            fileURLWithPath: "/tmp/selectiveremote-askpass-\(Darwin.getuid())",
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directory.path
+        )
+        let url = directory.appendingPathComponent(UUID().uuidString)
+        guard FileManager.default.createFile(
+            atPath: url.path,
+            contents: Data(password.utf8),
+            attributes: [.posixPermissions: 0o600]
+        ) else {
+            throw SSHServiceError.launchFailed("не удалось подготовить защищённый канал SSH AskPass")
+        }
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: url.path
+        )
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 180) {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
     }
 
     static func stopManagedAgent() {

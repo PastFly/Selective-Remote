@@ -20,12 +20,11 @@ struct CredentialVaultView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Keychain и SSH-ключи")
                         .font(.title2.bold())
-                    Text("Секреты хранятся в системном Keychain и не экспортируются")
+                    Text("SSH-пароли и passphrase хранятся через Keychain; приватные SSH-ключи остаются файлами в ~/.ssh")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("Открыть системное хранилище") { model.openKeychainAccess() }
                 Button("Готово") { dismiss() }
                     .keyboardShortcut(.defaultAction)
             }
@@ -126,12 +125,22 @@ struct CredentialVaultView: View {
                             ?? "Используются ~/.ssh/config и ключи ssh-agent",
                         systemImage: "terminal"
                     )
-                    Text(
-                        "Пароль SSH-сервера \(AppBrand.name) не хранит. SFTP может использовать "
-                            + "активную SSH-сессию либо запросить пароль в отдельном защищённом окне."
+                    credentialStatus(
+                        "Пароль SSH",
+                        stored: model.selectedProfileHasSavedSSHPassword
                     )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Text(
+                        model.selectedSSHPasswordRequiresUserPresence
+                            ? "Доступ к сохранённому SSH-паролю подтверждается только Touch ID."
+                            : "Сохранённый SSH-пароль доступен Terminal, SFTP и Forwarding через Keychain."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    if model.selectedProfileHasSavedSSHPassword {
+                        Button("Исправить доступ к SSH-паролю", systemImage: "wrench.and.screwdriver") {
+                            model.repairSelectedSSHCredentialAccess()
+                        }
+                    }
                 }
             }
             .padding(8)
@@ -179,7 +188,7 @@ struct CredentialVaultView: View {
             .padding(8)
         }
 
-        GroupBox("Passphrase и ssh-agent") {
+        GroupBox("SSH-ключ, passphrase и ssh-agent") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Button("Добавить в ssh-agent и Keychain", systemImage: "plus.circle") {
@@ -225,9 +234,9 @@ struct CredentialVaultView: View {
                 )
 
                 Text(
-                    "При первом добавлении системный ssh-add безопасно запросит passphrase "
-                        + "и сохранит его в Keychain macOS. Приватный ключ не копируется "
-                        + "и не изменяется."
+                    "Приватный ключ остаётся в файле ~/.ssh и не попадает в Keychain. "
+                        + "В Keychain Apple OpenSSH может хранить только passphrase. "
+                        + "Если в карточке профиля включён Touch ID, Selective Remote отдельно подтверждает использование ключа через биометрию."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

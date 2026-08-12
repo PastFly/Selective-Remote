@@ -3,6 +3,14 @@
 
 [← Вернуться на главную страницу](README.md)
 
+## 0.20.2
+
+- Keychain recovery: stale or incorrectly approved SSH password records can be reset from the profile or forwarding card without touching other credentials.
+- Touch ID: saved SSH passwords now use `biometryCurrentSet`, so protected access requires the enrolled Touch ID set instead of falling back to the Mac login password.
+- AskPass: the helper no longer reads Selective Remote Keychain records directly. The main app unlocks the SSH password (including Touch ID) and passes it through a short-lived `0600` handoff file, eliminating the extra legacy “Always Allow” Keychain dialog caused by the separately signed helper.
+- Credentials window: removed the misleading “Open system storage” button and clarified that SSH passwords/passphrases live in Keychain while private SSH keys remain files in `~/.ssh`.
+- Forwarding: manual SSH-password records get the same Touch ID-only protection and per-tunnel Keychain repair action.
+
 ## 0.20.1
 
 - SSH credentials: optional Touch ID / macOS user-presence protection for saved SSH passwords in Keychain.

@@ -505,6 +505,9 @@ final class AppModel: NSObject, ObservableObject {
     var selectedSSHKeyRequiresUserPresence: Bool {
         sshKeyUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
     }
+    var touchIDAvailable: Bool {
+        KeychainService.touchIDAvailable
+    }
 
     func hasSavedForwardingPassword(_ tunnelID: UUID) -> Bool {
         forwardingPasswordStoredIDs.contains(tunnelID.uuidString)
@@ -941,6 +944,11 @@ final class AppModel: NSObject, ObservableObject {
         profileID: UUID,
         announce: Bool = true
     ) throws {
+        if enabled && !KeychainService.touchIDAvailable {
+            throw KeychainError.touchIDUnavailable(
+                "Touch ID недоступен на этом Mac или для текущего пользователя."
+            )
+        }
         try KeychainService.setSSHKeyUseProtection(profileID: profileID, enabled: enabled)
         let key = profileID.uuidString
         if enabled { sshKeyUserPresenceProfileIDs.insert(key) }
@@ -951,7 +959,7 @@ final class AppModel: NSObject, ObservableObject {
         )
         if announce {
             statusMessage = enabled
-                ? "Touch ID включён перед использованием SSH-ключа"
+                ? "Для использования SSH-ключа требуется Touch ID"
                 : "Touch ID перед использованием SSH-ключа отключён"
         }
         errorMessage = nil
@@ -959,6 +967,40 @@ final class AppModel: NSObject, ObservableObject {
 
     func deleteSavedSSHPassword() {
         deleteCredential(kind: .ssh)
+    }
+
+    func repairSelectedSSHCredentialAccess() {
+        let profileID = selectedProfile.id
+        do {
+            try KeychainService.repairPasswordAccess(profileID: profileID, kind: .ssh)
+            setPasswordStored(false, profileID: profileID, kind: .ssh)
+            sshPasswordUserPresenceProfileIDs.remove(profileID.uuidString)
+            UserDefaults.standard.set(
+                sshPasswordUserPresenceProfileIDs.sorted(),
+                forKey: sshPasswordUserPresenceProfilesKey
+            )
+            sshPassword = ""
+            statusMessage = "Проблемная запись SSH-пароля удалена. Введите пароль заново; при необходимости сначала включите Touch ID, затем нажмите «Сохранить»."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func repairForwardingCredentialAccess(_ tunnelID: UUID) {
+        do {
+            try KeychainService.repairPasswordAccess(profileID: tunnelID, kind: .forwarding)
+            setForwardingPasswordStored(false, tunnelID: tunnelID)
+            forwardingPasswordUserPresenceIDs.remove(tunnelID.uuidString)
+            UserDefaults.standard.set(
+                forwardingPasswordUserPresenceIDs.sorted(),
+                forKey: forwardingPasswordUserPresenceIDsKey
+            )
+            statusMessage = "Проблемная запись пароля туннеля удалена. Сохраните SSH-пароль заново."
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func saveForwardingPassword(_ password: String, tunnelID: UUID) {
@@ -1190,44 +1232,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func openKeychainAccess() {
-        let workspace = NSWorkspace.shared
-        let applications = [
-            ("Связка ключей", "com.apple.keychainaccess"),
-            ("Пароли", "com.apple.Passwords")
-        ]
-        var candidates: [(name: String, url: URL)] = applications.compactMap { application in
-            let (name, bundleID) = application
-            return workspace.urlForApplication(withBundleIdentifier: bundleID).map {
-                (name: name, url: $0)
-            }
-        }
-        let fallbackPaths = [
-            ("Связка ключей", "/System/Library/CoreServices/Applications/Keychain Access.app"),
-            ("Связка ключей", "/System/Applications/Utilities/Keychain Access.app"),
-            ("Связка ключей", "/Applications/Utilities/Keychain Access.app"),
-            ("Пароли", "/System/Applications/Passwords.app"),
-            ("Пароли", "/Applications/Passwords.app")
-        ]
-        for (name, path) in fallbackPaths
-            where FileManager.default.fileExists(atPath: path) {
-            let url = URL(fileURLWithPath: path)
-            if !candidates.contains(where: { $0.url.standardizedFileURL == url.standardizedFileURL }) {
-                candidates.append((name: name, url: url))
-            }
-        }
-
-        for candidate in candidates where workspace.open(candidate.url) {
-            errorMessage = nil
-            statusMessage = "Открыто системное приложение «\(candidate.name)»"
-            return
-        }
-
-        // SelectiveRemote can still manage its registered SSH keys and remove its
-        // own saved credentials in the current window. Avoid claiming that
-        // Keychain itself is broken when Apple merely stopped exposing a
-        // separate GUI application on a particular macOS installation.
         errorMessage = nil
-        statusMessage = "Системное приложение Keychain/«Пароли» недоступно; используйте это окно"
+        statusMessage = "Секретами Selective Remote нужно управлять из карточки подключения; приложение «Пароли» не показывает generic-password записи и SSH-файлы."
     }
 
     func selectedSSHConnectionSettings() -> SSHConnectionSettings? {
@@ -1713,7 +1719,7 @@ final class AppModel: NSObject, ObservableObject {
                 executable: "/usr/bin/ssh",
                 arguments: SSHService.interactiveSSHArguments(settings: settings),
                 title: "SSH · \(settings.profileName)",
-                environment: SSHKeyService.backgroundAuthenticationEnvironment(
+                environment: try SSHKeyService.backgroundAuthenticationEnvironment(
                     passwordCredential: credential
                 )
             ) { [weak self] exitCode in
@@ -2445,6 +2451,10 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func setSSHPasswordUserPresence(_ enabled: Bool, profileID: UUID) {
+        if enabled && !KeychainService.touchIDAvailable {
+            errorMessage = "Touch ID недоступен на этом Mac или для текущего пользователя."
+            return
+        }
         let key = profileID.uuidString
         if selectedProfileHasSavedSSHPassword {
             do {
@@ -2461,6 +2471,9 @@ final class AppModel: NSObject, ObservableObject {
                         requiresUserPresence: enabled
                     )
                 }
+            } catch let error as KeychainError where error.needsCredentialRepair {
+                errorMessage = error.localizedDescription
+                return
             } catch {
                 errorMessage = error.localizedDescription
                 return
@@ -2473,12 +2486,16 @@ final class AppModel: NSObject, ObservableObject {
             forKey: sshPasswordUserPresenceProfilesKey
         )
         statusMessage = enabled
-            ? "SSH-пароль защищён Touch ID / паролем Mac"
+            ? "SSH-пароль будет выдаваться только после Touch ID"
             : "Touch ID-защита SSH-пароля отключена"
         errorMessage = nil
     }
 
     private func setForwardingPasswordUserPresencePreference(_ enabled: Bool, tunnelID: UUID) {
+        if enabled && !KeychainService.touchIDAvailable {
+            errorMessage = "Touch ID недоступен на этом Mac или для текущего пользователя."
+            return
+        }
         let key = tunnelID.uuidString
         if hasSavedForwardingPassword(tunnelID) {
             do {
@@ -2506,6 +2523,9 @@ final class AppModel: NSObject, ObservableObject {
             forwardingPasswordUserPresenceIDs.sorted(),
             forKey: forwardingPasswordUserPresenceIDsKey
         )
+        statusMessage = enabled
+            ? "Пароль туннеля будет выдаваться только после Touch ID"
+            : "Touch ID-защита пароля туннеля отключена"
         errorMessage = nil
     }
 

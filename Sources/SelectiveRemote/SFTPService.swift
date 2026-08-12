@@ -242,7 +242,7 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = SFTPService.persistentMasterArguments(settings: settings)
-        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
+        process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
             passwordCredential: KeychainService.credentialReference(
                 profileID: settings.profileID,
                 kind: .ssh
@@ -1170,12 +1170,10 @@ enum SFTPService {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = connectionArguments(settings: settings)
-        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
-            passwordCredential: KeychainService.credentialReference(
-                profileID: settings.profileID,
-                kind: .ssh
-            )
-        )
+        // The persistent master has already authenticated above. Do not unlock
+        // Keychain again for every short SFTP batch; the control socket carries
+        // the authenticated SSH session.
+        process.environment = try SSHKeyService.backgroundAuthenticationEnvironment()
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output

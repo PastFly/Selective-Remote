@@ -1002,16 +1002,37 @@ struct ContentView: View {
                         }
                         .disabled(!model.selectedProfileHasSavedSSHPassword)
                     }
+                    if model.selectedProfileHasSavedSSHPassword {
+                        HStack(spacing: 6) {
+                            Image(systemName: "wrench.and.screwdriver")
+                                .foregroundStyle(.secondary)
+                            Text("Проблемы с доступом к старой записи Keychain?")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Восстановить доступ…") {
+                                model.repairSelectedSSHCredentialAccess()
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
+                    HStack(spacing: 6) {
+                        Image(systemName: model.touchIDAvailable ? "touchid" : "exclamationmark.triangle")
+                            .foregroundStyle(model.touchIDAvailable ? Color.green : Color.orange)
+                        Text(model.touchIDAvailable ? "Touch ID доступен" : "Touch ID недоступен на этом Mac")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle(
                         isOn: Binding(
                             get: { model.selectedSSHPasswordRequiresUserPresence },
                             set: { model.setSelectedSSHPasswordUserPresence($0) }
                         )
                     ) {
-                        Label("Подтверждать доступ к паролю через Touch ID", systemImage: "touchid")
+                        Label("Требовать Touch ID при использовании SSH-пароля", systemImage: "touchid")
                     }
                     .toggleStyle(.switch)
-                    Text("Защита применяется самой macOS Keychain. При чтении секрета система запросит Touch ID или пароль пользователя Mac.")
+                    Text("Пароль хранится в macOS Keychain. При включённой защите доступ разрешается только текущим Touch ID; пароль пользователя Mac не используется как fallback.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1062,7 +1083,7 @@ struct ContentView: View {
                             set: { model.setSelectedSSHKeyUserPresence($0) }
                         )
                     ) {
-                        Label("Touch ID перед использованием выбранного SSH-ключа", systemImage: "touchid")
+                        Label("Требовать Touch ID перед использованием SSH-ключа", systemImage: "touchid")
                     }
                     .toggleStyle(.switch)
                     .disabled(model.selectedSSHKey == nil)

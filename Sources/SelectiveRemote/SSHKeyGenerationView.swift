@@ -112,7 +112,7 @@ struct SSHKeyGenerationView: View {
                             .font(.headline)
                     }
                     .toggleStyle(.switch)
-                    Text("Selective Remote создаст защищённый маркер в macOS Keychain. Перед загрузкой выбранного приватного ключа в ssh-agent приложение запросит Touch ID или пароль пользователя Mac.")
+                    Text("Selective Remote создаст защищённый маркер в macOS Keychain. Перед использованием выбранного приватного ключа приложение запросит именно Touch ID; пароль пользователя Mac не используется как fallback.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

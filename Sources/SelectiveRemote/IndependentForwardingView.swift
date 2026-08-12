@@ -180,17 +180,33 @@ struct IndependentForwardingView: View {
                         .disabled(running)
                     }
                 }
+                if model.hasSavedForwardingPassword(item.id) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "wrench.and.screwdriver")
+                            .foregroundStyle(.secondary)
+                        Text("Если старая запись Keychain больше не открывается")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Восстановить доступ…") {
+                            model.repairForwardingCredentialAccess(item.id)
+                            passwordInputs[item.id] = ""
+                        }
+                        .buttonStyle(.link)
+                        .disabled(running)
+                    }
+                }
                 Toggle(
                     isOn: Binding(
                         get: { model.forwardingPasswordRequiresUserPresence(item.id) },
                         set: { model.setForwardingPasswordUserPresence($0, tunnelID: item.id) }
                     )
                 ) {
-                    Label("Подтверждать доступ к паролю через Touch ID", systemImage: "touchid")
+                    Label("Требовать Touch ID при использовании SSH-пароля", systemImage: "touchid")
                 }
                 .toggleStyle(.switch)
                 .disabled(running)
-                Text("Пароль хранится только в macOS Keychain и не записывается в настройки туннеля. При включённой защите macOS запросит Touch ID или пароль пользователя Mac.")
+                Text("Пароль хранится только в macOS Keychain. При включённой защите туннель получает пароль только после Touch ID; пароль пользователя Mac не используется как fallback.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

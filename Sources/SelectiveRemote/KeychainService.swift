@@ -1,19 +1,36 @@
 import Foundation
+import LocalAuthentication
 import Security
 
 enum KeychainError: LocalizedError {
     case unexpectedStatus(OSStatus)
     case invalidData
+    case touchIDUnavailable(String)
+    case recoveryFailed(String)
 
     var errorDescription: String? {
         switch self {
         case let .unexpectedStatus(status):
             let message = SecCopyErrorMessageString(status, nil).map { $0 as String }
                 ?? "неизвестная ошибка"
+            if status == errSecMissingEntitlement {
+                return "Keychain не разрешил доступ к старой записи (-34018). Нажмите «Исправить доступ» рядом с SSH-паролем и сохраните пароль заново."
+            }
             return "Ошибка Keychain: \(message) (\(status))"
         case .invalidData:
             return "Keychain вернул некорректные данные"
+        case let .touchIDUnavailable(message):
+            return message
+        case let .recoveryFailed(message):
+            return message
         }
+    }
+
+    var needsCredentialRepair: Bool {
+        if case let .unexpectedStatus(status) = self {
+            return status == errSecMissingEntitlement || status == errSecAuthFailed
+        }
+        return false
     }
 }
 
@@ -27,8 +44,6 @@ enum KeychainCredentialKind: String {
     func account(profileID: UUID) -> String {
         switch self {
         case .rdp:
-            // Keep the legacy account name so existing saved RDP passwords
-            // continue to work after upgrading from SelectiveRemote 0.4.x.
             profileID.uuidString
         case .gateway:
             "\(profileID.uuidString).gateway"
@@ -45,6 +60,13 @@ enum KeychainCredentialKind: String {
 enum KeychainService {
     static let service = "local.selectiveremote.credentials"
 
+    static var touchIDAvailable: Bool {
+        let context = LAContext()
+        var error: NSError?
+        return context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+            && context.biometryType == .touchID
+    }
+
     static func credentialReference(
         profileID: UUID,
         kind: KeychainCredentialKind
@@ -56,21 +78,19 @@ enum KeychainService {
     }
 
     static func readPassword(
-        profileID: UUID,
-        kind: KeychainCredentialKind = .rdp,
+        reference: KeychainCredentialReference,
         authenticationPrompt: String? = nil
     ) throws -> String? {
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: kind.account(profileID: profileID),
+            kSecAttrService as String: reference.service,
+            kSecAttrAccount as String: reference.account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
         if let authenticationPrompt, !authenticationPrompt.isEmpty {
             query[kSecUseOperationPrompt as String] = authenticationPrompt
         }
-
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
@@ -79,6 +99,17 @@ enum KeychainService {
             throw KeychainError.invalidData
         }
         return value
+    }
+
+    static func readPassword(
+        profileID: UUID,
+        kind: KeychainCredentialKind = .rdp,
+        authenticationPrompt: String? = nil
+    ) throws -> String? {
+        try readPassword(
+            reference: credentialReference(profileID: profileID, kind: kind),
+            authenticationPrompt: authenticationPrompt
+        )
     }
 
     static func savePassword(
@@ -96,27 +127,38 @@ enum KeychainService {
         var item = key
         item[kSecValueData as String] = Data(password.utf8)
         if requiresUserPresence {
+            guard touchIDAvailable else {
+                throw KeychainError.touchIDUnavailable(
+                    "Touch ID недоступен. Добавьте отпечаток в настройках macOS или отключите защиту Touch ID для этого секрета."
+                )
+            }
             var accessError: Unmanaged<CFError>?
             guard let access = SecAccessControlCreateWithFlags(
                 nil,
                 kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-                .userPresence,
+                .biometryCurrentSet,
                 &accessError
             ) else {
-                _ = accessError?.takeRetainedValue()
-                throw KeychainError.unexpectedStatus(errSecParam)
+                let message = accessError.map {
+                    CFErrorCopyDescription($0.takeRetainedValue()) as String
+                } ?? "не удалось создать биометрическую политику Keychain"
+                throw KeychainError.touchIDUnavailable(message)
             }
             item[kSecAttrAccessControl as String] = access
         } else {
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         }
 
-        // Access-control attributes cannot be reliably changed in-place. Build
-        // the new policy first, then recreate the item so a failed policy build
-        // never destroys the existing secret.
+        // kSecAttrAccessControl cannot be changed safely in-place. Recreate the
+        // item so switching Touch ID on/off has deterministic semantics.
         let deleteStatus = SecItemDelete(key as CFDictionary)
-        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(deleteStatus)
+        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
+            let deleteError = KeychainError.unexpectedStatus(deleteStatus)
+            if deleteError.needsCredentialRepair {
+                try deleteWithSecurityTool(profileID: profileID, kind: kind)
+            } else {
+                throw deleteError
+            }
         }
         let addStatus = SecItemAdd(item as CFDictionary, nil)
         guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
@@ -158,6 +200,58 @@ enum KeychainService {
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
         }
+    }
+
+    /// Recovery for a legacy login-keychain ACL that the current build can no
+    /// longer access (for example after an ad-hoc signature changed and the
+    /// user accidentally chose an incorrect permanent authorization).
+    ///
+    /// First use SecItemDelete. If macOS reports a stale authorization problem,
+    /// ask the system `security` utility to remove only this app-owned generic
+    /// password record. The caller must then ask the user to save the SSH
+    /// password again; no secret is exported or copied during recovery.
+    static func repairPasswordAccess(
+        profileID: UUID,
+        kind: KeychainCredentialKind
+    ) throws {
+        do {
+            try deletePassword(profileID: profileID, kind: kind)
+            return
+        } catch let error as KeychainError where error.needsCredentialRepair {
+            try deleteWithSecurityTool(profileID: profileID, kind: kind)
+        }
+    }
+
+    private static func deleteWithSecurityTool(
+        profileID: UUID,
+        kind: KeychainCredentialKind
+    ) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = [
+            "delete-generic-password",
+            "-s", service,
+            "-a", kind.account(profileID: profileID)
+        ]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = pipe
+        do {
+            try process.run()
+            process.waitUntilExit()
+        } catch {
+            throw KeychainError.recoveryFailed(
+                "Не удалось запустить системное восстановление Keychain: \(error.localizedDescription)"
+            )
+        }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: data, encoding: .utf8) ?? ""
+        if process.terminationStatus == 0 || output.localizedCaseInsensitiveContains("could not be found") {
+            return
+        }
+        throw KeychainError.recoveryFailed(
+            "macOS не смогла удалить повреждённую запись Keychain. Откройте «Пароли и связка ключей» в Системных настройках и удалите запись сервиса \(service), затем сохраните пароль заново.\n\(output.trimmingCharacters(in: .whitespacesAndNewlines))"
+        )
     }
 
     static func deleteAllPasswords(profileID: UUID) throws {
