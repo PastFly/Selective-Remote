@@ -1,3 +1,15 @@
+## 0.20.13
+
+- Добавлен раздел Known Hosts в глобальный Keychain.
+- Добавлен просмотр SSH host key, fingerprint, типа ключа и связанных профилей.
+- Добавлена проверка текущего host key сервера через системный OpenSSH.
+- Selective Remote предупреждает, если сохранённый SSH host key изменился.
+- Добавлено безопасное удаление known_hosts-записей с резервной копией файла.
+- Добавлен drag-and-drop импорт SSH ID в Keychain.
+- Улучшено отображение срока действия OpenSSH certificates.
+- В Terminal Workspace добавлено создание копии вкладки из контекстного меню.
+- Расширены тесты для Known Hosts и Terminal Workspace.
+
 ## 0.20.12
 
 - Добавлены контекстные действия для SSH Forwarding, Keychain, Terminal и хостов в sidebar.
