@@ -97,6 +97,23 @@ func windowTransparencyAvoidsNSAppearanceOverride() throws {
     #expect(!source.contains("private var appearance = AppWindowAppearanceSnapshot"))
 }
 
+@Test("xterm учитывает внутренний отступ и не обрезает последнюю строку")
+func terminalHostInsetDoesNotInflateFitAddonGeometry() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let cssURL = projectRoot
+        .appendingPathComponent("Sources/SelectiveRemote/TerminalResources/terminal-host.css")
+    let css = try String(contentsOf: cssURL, encoding: .utf8)
+
+    #expect(css.contains("width: calc(100% - (2 * var(--terminal-padding)))"))
+    #expect(css.contains("height: calc(100% - (2 * var(--terminal-padding)))"))
+    #expect(css.contains("margin: var(--terminal-padding)"))
+    #expect(css.contains("padding: 0"))
+    #expect(!css.contains("padding: var(--terminal-padding)"))
+}
+
 @Test("CSP разрешает геометрию xterm, но не сторонние скрипты")
 func terminalContentSecurityPolicySupportsXtermLayout() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
