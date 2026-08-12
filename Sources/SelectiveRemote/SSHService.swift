@@ -642,6 +642,7 @@ struct SSHKeyGenerationRequest: Sendable {
     var algorithm: SSHKeyAlgorithm
     var path: String
     var comment: String
+    var protectUseWithUserPresence: Bool = true
 }
 
 struct SSHKeyGenerationCommand: Sendable {

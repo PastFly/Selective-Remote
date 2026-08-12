@@ -10,15 +10,18 @@ struct SSHKeychainAskPass {
             ?? "Введите пароль или passphrase для SSH-подключения."
         let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
 
-        if isPasswordPrompt,
-           let password = storedPasswordFromEnvironment() {
-            FileHandle.standardOutput.write(Data((password + "\n").utf8))
-            return
-        }
-
+        // Initialize an accessory application before asking Keychain for a
+        // user-presence protected secret. This gives macOS a foreground owner
+        // for the Touch ID / authentication sheet.
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         application.activate(ignoringOtherApps: true)
+
+        if isPasswordPrompt,
+           let password = storedPasswordFromEnvironment(prompt: prompt) {
+            FileHandle.standardOutput.write(Data((password + "\n").utf8))
+            return
+        }
 
         let usesEnglish = Locale.preferredLanguages.first?
             .lowercased().hasPrefix("en") == true
@@ -77,7 +80,7 @@ struct SSHKeychainAskPass {
         FileHandle.standardOutput.write(Data((field.stringValue + "\n").utf8))
     }
 
-    private static func storedPasswordFromEnvironment() -> String? {
+    private static func storedPasswordFromEnvironment(prompt: String) -> String? {
         let environment = ProcessInfo.processInfo.environment
         guard let service = environment["SELECTIVEREMOTE_KEYCHAIN_SERVICE"],
               let account = environment["SELECTIVEREMOTE_KEYCHAIN_ACCOUNT"],
@@ -90,7 +93,8 @@ struct SSHKeychainAskPass {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecUseOperationPrompt as String: prompt
         ]
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,

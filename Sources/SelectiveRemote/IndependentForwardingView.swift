@@ -68,11 +68,11 @@ struct IndependentForwardingView: View {
                     }
                 }
 
-                GroupBox("Подсказка") {
+                GroupBox("Безопасность") {
                     Text(
-                        "Сохранённый профиль использует свой SSH-ключ и настройки безопасности. "
-                            + "Для ручного адреса фоновой процесс использует системный ssh-agent "
-                            + "и ~/.ssh/config; интерактивный пароль для туннелей не поддерживается."
+                        "Сохранённый профиль наследует пароль, SSH ID и Touch ID-защиту из своей карточки. "
+                            + "Для ручного SSH-сервера пароль можно сохранить в macOS Keychain и отдельно "
+                            + "включить подтверждение Touch ID перед его использованием."
                     )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .foregroundStyle(.secondary)
@@ -180,7 +180,17 @@ struct IndependentForwardingView: View {
                         .disabled(running)
                     }
                 }
-                Text("Пароль хранится только в macOS Keychain и не записывается в настройки туннеля.")
+                Toggle(
+                    isOn: Binding(
+                        get: { model.forwardingPasswordRequiresUserPresence(item.id) },
+                        set: { model.setForwardingPasswordUserPresence($0, tunnelID: item.id) }
+                    )
+                ) {
+                    Label("Подтверждать доступ к паролю через Touch ID", systemImage: "touchid")
+                }
+                .toggleStyle(.switch)
+                .disabled(running)
+                Text("Пароль хранится только в macOS Keychain и не записывается в настройки туннеля. При включённой защите macOS запросит Touch ID или пароль пользователя Mac.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {

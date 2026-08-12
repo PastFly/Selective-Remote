@@ -10,6 +10,7 @@ struct SSHKeyGenerationView: View {
     @State private var algorithm = SSHKeyAlgorithm.ed25519
     @State private var path = SSHKeyService.defaultPrivateKeyPath(for: .ed25519)
     @State private var comment = "\(NSUserName())@SelectiveRemote"
+    @State private var protectUseWithUserPresence = true
     @State private var generationStarted = false
 
     var body: some View {
@@ -67,13 +68,28 @@ struct SSHKeyGenerationView: View {
                     .foregroundStyle(.secondary)
                 }
             } else {
-                Form {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "key.horizontal.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(Color.accentColor)
+                            .frame(width: 42, height: 42)
+                            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("SSH ID")
+                                .font(.headline)
+                            Text("Ed25519 рекомендуется для новых подключений")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
                     Picker("Алгоритм", selection: $algorithm) {
                         ForEach(SSHKeyAlgorithm.allCases) { item in
                             Text(item.title).tag(item)
                         }
                     }
-                    .pickerStyle(.radioGroup)
+                    .pickerStyle(.segmented)
 
                     LabeledContent("Файл") {
                         HStack {
@@ -82,18 +98,29 @@ struct SSHKeyGenerationView: View {
                             Button("Выбрать…") { chooseDestination() }
                         }
                     }
-
                     LabeledContent("Комментарий") {
                         TextField("user@host", text: $comment)
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-                .formStyle(.grouped)
+                .padding(16)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle(isOn: $protectUseWithUserPresence) {
+                        Label("Touch ID перед использованием ключа", systemImage: "touchid")
+                            .font(.headline)
+                    }
+                    .toggleStyle(.switch)
+                    Text("Selective Remote создаст защищённый маркер в macOS Keychain. Перед загрузкой выбранного приватного ключа в ssh-agent приложение запросит Touch ID или пароль пользователя Mac.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(14)
+                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
 
                 Label(
-                    "После запуска в отдельном терминале дважды появится безопасный запрос "
-                        + "passphrase. Можно нажать Enter два раза, чтобы создать ключ без "
-                        + "passphrase.",
+                    "Passphrase ключа остаётся отдельной защитой OpenSSH. В служебном терминале можно задать её или нажать Enter два раза, чтобы оставить ключ без passphrase.",
                     systemImage: "lock.shield"
                 )
                 .font(.caption)
@@ -106,7 +133,8 @@ struct SSHKeyGenerationView: View {
                         let request = SSHKeyGenerationRequest(
                             algorithm: algorithm,
                             path: path,
-                            comment: comment
+                            comment: comment,
+                            protectUseWithUserPresence: protectUseWithUserPresence
                         )
                         if generate(request, terminal) {
                             generationStarted = true

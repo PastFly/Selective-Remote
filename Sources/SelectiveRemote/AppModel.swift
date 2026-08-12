@@ -280,7 +280,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
     @Published private(set) var sshPasswordStoredProfileIDs: Set<String> = []
+    @Published private(set) var sshPasswordUserPresenceProfileIDs: Set<String> = []
+    @Published private(set) var sshKeyUserPresenceProfileIDs: Set<String> = []
     @Published private(set) var forwardingPasswordStoredIDs: Set<String> = []
+    @Published private(set) var forwardingPasswordUserPresenceIDs: Set<String> = []
     @Published private(set) var reconnectCandidateProfileIDs: Set<UUID> = []
     @Published var sshKeys: [SSHKeyRecord] {
         didSet { saveSSHKeys() }
@@ -301,7 +304,10 @@ final class AppModel: NSObject, ObservableObject {
     private let storedPasswordProfilesKey = "SelectiveRemote.storedPasswordProfiles.v1"
     private let storedGatewayPasswordProfilesKey = "SelectiveRemote.storedGatewayPasswordProfiles.v1"
     private let storedSSHPasswordProfilesKey = "SelectiveRemote.storedSSHPasswordProfiles.v1"
+    private let sshPasswordUserPresenceProfilesKey = "SelectiveRemote.sshPasswordUserPresenceProfiles.v1"
+    private let sshKeyUserPresenceProfilesKey = "SelectiveRemote.sshKeyUserPresenceProfiles.v1"
     private let storedForwardingPasswordIDsKey = "SelectiveRemote.storedForwardingPasswordIDs.v1"
+    private let forwardingPasswordUserPresenceIDsKey = "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1"
     private let sshKeysKey = "SelectiveRemote.sshKeys.v1"
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
@@ -383,8 +389,17 @@ final class AppModel: NSObject, ObservableObject {
         sshPasswordStoredProfileIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHPasswordProfilesKey) ?? []
         )
+        sshPasswordUserPresenceProfileIDs = Set(
+            UserDefaults.standard.stringArray(forKey: sshPasswordUserPresenceProfilesKey) ?? []
+        )
+        sshKeyUserPresenceProfileIDs = Set(
+            UserDefaults.standard.stringArray(forKey: sshKeyUserPresenceProfilesKey) ?? []
+        )
         forwardingPasswordStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedForwardingPasswordIDsKey) ?? []
+        )
+        forwardingPasswordUserPresenceIDs = Set(
+            UserDefaults.standard.stringArray(forKey: forwardingPasswordUserPresenceIDsKey) ?? []
         )
         sshKeyPassphraseStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHKeyPassphrasesKey) ?? []
@@ -484,9 +499,18 @@ final class AppModel: NSObject, ObservableObject {
     var selectedProfileHasSavedSSHPassword: Bool {
         sshPasswordStoredProfileIDs.contains(selectedProfile.id.uuidString)
     }
+    var selectedSSHPasswordRequiresUserPresence: Bool {
+        sshPasswordUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
+    }
+    var selectedSSHKeyRequiresUserPresence: Bool {
+        sshKeyUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
+    }
 
     func hasSavedForwardingPassword(_ tunnelID: UUID) -> Bool {
         forwardingPasswordStoredIDs.contains(tunnelID.uuidString)
+    }
+    func forwardingPasswordRequiresUserPresence(_ tunnelID: UUID) -> Bool {
+        forwardingPasswordUserPresenceIDs.contains(tunnelID.uuidString)
     }
     var sessionLogURL: URL? {
         guard selectedProfile.connectionType == .rdp else { return nil }
@@ -893,7 +917,44 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func saveSSHPassword() {
-        saveCredential(sshPassword, kind: .ssh)
+        saveCredential(
+            sshPassword,
+            kind: .ssh,
+            requiresUserPresence: selectedSSHPasswordRequiresUserPresence
+        )
+    }
+
+    func setSelectedSSHPasswordUserPresence(_ enabled: Bool) {
+        setSSHPasswordUserPresence(enabled, profileID: selectedProfile.id)
+    }
+
+    func setSelectedSSHKeyUserPresence(_ enabled: Bool) {
+        do {
+            try setSSHKeyUserPresence(enabled, profileID: selectedProfile.id)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func setSSHKeyUserPresence(
+        _ enabled: Bool,
+        profileID: UUID,
+        announce: Bool = true
+    ) throws {
+        try KeychainService.setSSHKeyUseProtection(profileID: profileID, enabled: enabled)
+        let key = profileID.uuidString
+        if enabled { sshKeyUserPresenceProfileIDs.insert(key) }
+        else { sshKeyUserPresenceProfileIDs.remove(key) }
+        UserDefaults.standard.set(
+            sshKeyUserPresenceProfileIDs.sorted(),
+            forKey: sshKeyUserPresenceProfilesKey
+        )
+        if announce {
+            statusMessage = enabled
+                ? "Touch ID включён перед использованием SSH-ключа"
+                : "Touch ID перед использованием SSH-ключа отключён"
+        }
+        errorMessage = nil
     }
 
     func deleteSavedSSHPassword() {
@@ -903,7 +964,12 @@ final class AppModel: NSObject, ObservableObject {
     func saveForwardingPassword(_ password: String, tunnelID: UUID) {
         guard !password.isEmpty else { return }
         do {
-            try KeychainService.savePassword(password, profileID: tunnelID, kind: .forwarding)
+            try KeychainService.savePassword(
+                password,
+                profileID: tunnelID,
+                kind: .forwarding,
+                requiresUserPresence: forwardingPasswordRequiresUserPresence(tunnelID)
+            )
             setForwardingPasswordStored(true, tunnelID: tunnelID)
             statusMessage = "SSH-пароль туннеля сохранён в Keychain"
             errorMessage = nil
@@ -912,10 +978,15 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    func setForwardingPasswordUserPresence(_ enabled: Bool, tunnelID: UUID) {
+        setForwardingPasswordUserPresencePreference(enabled, tunnelID: tunnelID)
+    }
+
     func deleteSavedForwardingPassword(_ tunnelID: UUID) {
         do {
             try KeychainService.deletePassword(profileID: tunnelID, kind: .forwarding)
             setForwardingPasswordStored(false, tunnelID: tunnelID)
+            setForwardingPasswordUserPresencePreference(false, tunnelID: tunnelID)
             statusMessage = "Сохранённый SSH-пароль туннеля удалён"
             errorMessage = nil
         } catch {
@@ -977,6 +1048,13 @@ final class AppModel: NSObject, ObservableObject {
                             at: command.privateKeyURL,
                             forProfileID: profileID
                         )
+                        if request.protectUseWithUserPresence {
+                            try setSSHKeyUserPresence(
+                                true,
+                                profileID: profileID,
+                                announce: false
+                            )
+                        }
                         statusMessage = result.wasExisting
                             ? "Созданный SSH-ключ выбран"
                             : "SSH-ключ «\(result.key.name)» создан и выбран"
@@ -1206,6 +1284,14 @@ final class AppModel: NSObject, ObservableObject {
             let hasActiveControlSession = !requiresIndependentAuthentication
                 && matchingTerminalIsRunning
             if let key = settings.identity,
+               let profileID = connection.profileID,
+               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString) {
+                try KeychainService.authorizeSSHKeyUse(
+                    profileID: profileID,
+                    reason: "Подтвердите Touch ID для использования SSH-ключа «\(key.name)»"
+                )
+            }
+            if let key = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,
                    hasActiveControlSession: hasActiveControlSession
@@ -1315,6 +1401,14 @@ final class AppModel: NSObject, ObservableObject {
         else { return }
 
         do {
+            if let identity = settings.identity,
+               let profileID = item.connection.profileID,
+               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString) {
+                try KeychainService.authorizeSSHKeyUse(
+                    profileID: profileID,
+                    reason: "Подтвердите Touch ID для SSH-туннеля и ключа «\(identity.name)»"
+                )
+            }
             if let identity = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,
@@ -1604,6 +1698,14 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         do {
+            if let profileID = connection.profileID,
+               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString),
+               let identity = settings.identity {
+                try KeychainService.authorizeSSHKeyUse(
+                    profileID: profileID,
+                    reason: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»"
+                )
+            }
             let credential = connection.profileID.map {
                 KeychainService.credentialReference(profileID: $0, kind: .ssh)
             }
@@ -2240,18 +2342,27 @@ final class AppModel: NSObject, ObservableObject {
         return "FreeRDP завершился с кодом \(status). Откройте журнал для диагностики."
     }
 
-    private func saveCredential(_ value: String, kind: KeychainCredentialKind) {
+    private func saveCredential(
+        _ value: String,
+        kind: KeychainCredentialKind,
+        requiresUserPresence: Bool = false
+    ) {
         guard !value.isEmpty else {
             switch kind {
             case .rdp: statusMessage = "Введите новый RDP-пароль перед сохранением"
             case .gateway: statusMessage = "Введите новый пароль RD Gateway перед сохранением"
             case .ssh: statusMessage = "Введите SSH-пароль перед сохранением"
-            case .forwarding: return
+            case .forwarding, .sshKeyAuthorization: return
             }
             return
         }
         do {
-            try KeychainService.savePassword(value, profileID: selectedProfile.id, kind: kind)
+            try KeychainService.savePassword(
+                value,
+                profileID: selectedProfile.id,
+                kind: kind,
+                requiresUserPresence: requiresUserPresence
+            )
             setPasswordStored(true, profileID: selectedProfile.id, kind: kind)
             switch kind {
             case .rdp:
@@ -2263,7 +2374,7 @@ final class AppModel: NSObject, ObservableObject {
             case .ssh:
                 sshPassword = ""
                 statusMessage = "SSH-пароль сохранён в Keychain"
-            case .forwarding:
+            case .forwarding, .sshKeyAuthorization:
                 break
             }
             errorMessage = nil
@@ -2285,8 +2396,13 @@ final class AppModel: NSObject, ObservableObject {
                 statusMessage = "Сохранённый пароль RD Gateway удалён"
             case .ssh:
                 sshPassword = ""
+                sshPasswordUserPresenceProfileIDs.remove(selectedProfile.id.uuidString)
+                UserDefaults.standard.set(
+                    sshPasswordUserPresenceProfileIDs.sorted(),
+                    forKey: sshPasswordUserPresenceProfilesKey
+                )
                 statusMessage = "Сохранённый SSH-пароль удалён"
-            case .forwarding:
+            case .forwarding, .sshKeyAuthorization:
                 break
             }
             errorMessage = nil
@@ -2323,9 +2439,74 @@ final class AppModel: NSObject, ObservableObject {
                 sshPasswordStoredProfileIDs.sorted(),
                 forKey: storedSSHPasswordProfilesKey
             )
-        case .forwarding:
+        case .forwarding, .sshKeyAuthorization:
             break
         }
+    }
+
+    private func setSSHPasswordUserPresence(_ enabled: Bool, profileID: UUID) {
+        let key = profileID.uuidString
+        if selectedProfileHasSavedSSHPassword {
+            do {
+                let existing = try KeychainService.readPassword(
+                    profileID: profileID,
+                    kind: .ssh,
+                    authenticationPrompt: "Подтвердите изменение защиты SSH-пароля"
+                )
+                if let existing {
+                    try KeychainService.savePassword(
+                        existing,
+                        profileID: profileID,
+                        kind: .ssh,
+                        requiresUserPresence: enabled
+                    )
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        if enabled { sshPasswordUserPresenceProfileIDs.insert(key) }
+        else { sshPasswordUserPresenceProfileIDs.remove(key) }
+        UserDefaults.standard.set(
+            sshPasswordUserPresenceProfileIDs.sorted(),
+            forKey: sshPasswordUserPresenceProfilesKey
+        )
+        statusMessage = enabled
+            ? "SSH-пароль защищён Touch ID / паролем Mac"
+            : "Touch ID-защита SSH-пароля отключена"
+        errorMessage = nil
+    }
+
+    private func setForwardingPasswordUserPresencePreference(_ enabled: Bool, tunnelID: UUID) {
+        let key = tunnelID.uuidString
+        if hasSavedForwardingPassword(tunnelID) {
+            do {
+                let existing = try KeychainService.readPassword(
+                    profileID: tunnelID,
+                    kind: .forwarding,
+                    authenticationPrompt: "Подтвердите изменение защиты пароля туннеля"
+                )
+                if let existing {
+                    try KeychainService.savePassword(
+                        existing,
+                        profileID: tunnelID,
+                        kind: .forwarding,
+                        requiresUserPresence: enabled
+                    )
+                }
+            } catch {
+                errorMessage = error.localizedDescription
+                return
+            }
+        }
+        if enabled { forwardingPasswordUserPresenceIDs.insert(key) }
+        else { forwardingPasswordUserPresenceIDs.remove(key) }
+        UserDefaults.standard.set(
+            forwardingPasswordUserPresenceIDs.sorted(),
+            forKey: forwardingPasswordUserPresenceIDsKey
+        )
+        errorMessage = nil
     }
 
     private func setForwardingPasswordStored(_ stored: Bool, tunnelID: UUID) {

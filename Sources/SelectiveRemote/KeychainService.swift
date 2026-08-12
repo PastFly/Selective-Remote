@@ -22,6 +22,7 @@ enum KeychainCredentialKind: String {
     case gateway
     case ssh
     case forwarding
+    case sshKeyAuthorization
 
     func account(profileID: UUID) -> String {
         switch self {
@@ -35,6 +36,8 @@ enum KeychainCredentialKind: String {
             "\(profileID.uuidString).ssh"
         case .forwarding:
             "\(profileID.uuidString).forwarding"
+        case .sshKeyAuthorization:
+            "\(profileID.uuidString).ssh-key-authorization"
         }
     }
 }
@@ -54,15 +57,19 @@ enum KeychainService {
 
     static func readPassword(
         profileID: UUID,
-        kind: KeychainCredentialKind = .rdp
+        kind: KeychainCredentialKind = .rdp,
+        authenticationPrompt: String? = nil
     ) throws -> String? {
-        let query: [String: Any] = [
+        var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: kind.account(profileID: profileID),
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        if let authenticationPrompt, !authenticationPrompt.isEmpty {
+            query[kSecUseOperationPrompt as String] = authenticationPrompt
+        }
 
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
@@ -77,28 +84,65 @@ enum KeychainService {
     static func savePassword(
         _ password: String,
         profileID: UUID,
-        kind: KeychainCredentialKind = .rdp
+        kind: KeychainCredentialKind = .rdp,
+        requiresUserPresence: Bool = false
     ) throws {
         let key: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: kind.account(profileID: profileID)
         ]
-        let attributes: [String: Any] = [
-            kSecValueData as String: Data(password.utf8)
-        ]
-
-        let updateStatus = SecItemUpdate(key as CFDictionary, attributes as CFDictionary)
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(updateStatus)
-        }
 
         var item = key
         item[kSecValueData as String] = Data(password.utf8)
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        if requiresUserPresence {
+            var accessError: Unmanaged<CFError>?
+            guard let access = SecAccessControlCreateWithFlags(
+                nil,
+                kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+                .userPresence,
+                &accessError
+            ) else {
+                _ = accessError?.takeRetainedValue()
+                throw KeychainError.unexpectedStatus(errSecParam)
+            }
+            item[kSecAttrAccessControl as String] = access
+        } else {
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        }
+
+        // Access-control attributes cannot be reliably changed in-place. Build
+        // the new policy first, then recreate the item so a failed policy build
+        // never destroys the existing secret.
+        let deleteStatus = SecItemDelete(key as CFDictionary)
+        guard deleteStatus == errSecSuccess || deleteStatus == errSecItemNotFound else {
+            throw KeychainError.unexpectedStatus(deleteStatus)
+        }
         let addStatus = SecItemAdd(item as CFDictionary, nil)
         guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
+    }
+
+    static func authorizeSSHKeyUse(profileID: UUID, reason: String) throws {
+        guard try readPassword(
+            profileID: profileID,
+            kind: .sshKeyAuthorization,
+            authenticationPrompt: reason
+        ) != nil else {
+            throw KeychainError.invalidData
+        }
+    }
+
+    static func setSSHKeyUseProtection(profileID: UUID, enabled: Bool) throws {
+        if enabled {
+            try savePassword(
+                UUID().uuidString,
+                profileID: profileID,
+                kind: .sshKeyAuthorization,
+                requiresUserPresence: true
+            )
+        } else {
+            try deletePassword(profileID: profileID, kind: .sshKeyAuthorization)
+        }
     }
 
     static func deletePassword(
@@ -120,6 +164,7 @@ enum KeychainService {
         try deletePassword(profileID: profileID, kind: .rdp)
         try deletePassword(profileID: profileID, kind: .gateway)
         try deletePassword(profileID: profileID, kind: .ssh)
+        try deletePassword(profileID: profileID, kind: .sshKeyAuthorization)
     }
 }
 

@@ -3,6 +3,13 @@
 
 [← Вернуться на главную страницу](README.md)
 
+## 0.20.1
+
+- SSH credentials: optional Touch ID / macOS user-presence protection for saved SSH passwords in Keychain.
+- SSH ID: redesigned credentials UI, Ed25519 key generation flow and one-click public-key installation on the selected server.
+- SSH keys: optional Touch ID gate before Selective Remote uses the selected private key.
+- Forwarding: manual SSH passwords can be protected with Touch ID; saved profiles inherit their SSH credential security settings.
+
 ## 0.20.0
 
 - SSH-профили получили отдельный пароль сервера, который хранится только в macOS Keychain и не попадает в экспорт профилей;
