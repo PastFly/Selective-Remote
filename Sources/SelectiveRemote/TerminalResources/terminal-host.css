@@ -425,6 +425,21 @@ input {
     font-size: 14px;
 }
 
+#remote-context-retry {
+    margin-top: 6px;
+    padding: 7px 12px;
+    color: #dce6f5;
+    background: rgba(54, 211, 153, 0.16);
+    border: 1px solid rgba(54, 211, 153, 0.28);
+    border-radius: 8px;
+    font: 12px -apple-system, BlinkMacSystemFont, sans-serif;
+    cursor: pointer;
+}
+
+#remote-context-retry:hover {
+    background: rgba(54, 211, 153, 0.24);
+}
+
 #terminal-history footer {
     padding: 11px 18px 14px;
     border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -473,6 +488,16 @@ input {
 .terminal-theme-light .history-search input,
 .terminal-theme-light #history-empty strong {
     color: #1f2a3a;
+}
+
+.terminal-theme-light #remote-context-retry {
+    color: #1f2a3a;
+    background: rgba(19, 133, 91, 0.10);
+    border-color: rgba(19, 133, 91, 0.22);
+}
+
+.terminal-theme-light #remote-context-retry:hover {
+    background: rgba(19, 133, 91, 0.16);
 }
 
 .terminal-theme-light .history-search input::placeholder,

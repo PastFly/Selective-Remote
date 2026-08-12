@@ -14,14 +14,27 @@ struct TerminalRemoteContextSnapshot: Codable, Equatable, Sendable {
     var refreshedAt: Date?
     var suggestions: [TerminalRemoteSuggestion]
     var message: String
+    var canRetry: Bool
 
     static let empty = TerminalRemoteContextSnapshot(
         hostLabel: "",
         systemLabel: "",
         refreshedAt: nil,
         suggestions: [],
-        message: "Подключите SSH и обновите сведения о сервере"
+        message: "Подключите SSH и обновите сведения о сервере",
+        canRetry: false
     )
+
+    static func loading(hostLabel: String) -> TerminalRemoteContextSnapshot {
+        TerminalRemoteContextSnapshot(
+            hostLabel: hostLabel,
+            systemLabel: hostLabel,
+            refreshedAt: nil,
+            suggestions: [],
+            message: "Получаем сведения о сервере…",
+            canRetry: false
+        )
+    }
 }
 
 enum TerminalRemoteContextError: LocalizedError {
@@ -103,6 +116,26 @@ fi
         }
     }
 
+    static func probeArguments(settings: SSHConnectionSettings) -> [String] {
+        // The terminal itself deliberately does not expose a reusable ControlMaster.
+        // Run the probe as a separate OpenSSH command, but keep the exact same
+        // destination/authentication/proxy/jump/certificate settings and allow
+        // SSH_ASKPASS to supply Keychain-backed credentials.
+        SSHService.commonSSHArguments(
+            settings: settings,
+            batchMode: false,
+            multiplexing: false
+        ) + [
+            "-T",
+            "-o", "ConnectTimeout=8",
+            "-o", "ConnectionAttempts=1",
+            "-o", "LogLevel=ERROR",
+            "-o", "NumberOfPasswordPrompts=1",
+            settings.host,
+            probeCommand
+        ]
+    }
+
     private static func runProbe(
         settings: SSHConnectionSettings,
         environment: [String: String]
@@ -115,16 +148,7 @@ fi
         let process = Process()
         let outputPipe = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = SSHService.commonSSHArguments(
-            settings: settings,
-            batchMode: true
-        ) + [
-            "-o", "ConnectTimeout=8",
-            "-o", "ConnectionAttempts=1",
-            "-o", "LogLevel=ERROR",
-            settings.host,
-            probeCommand
-        ]
+        process.arguments = probeArguments(settings: settings)
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = outputPipe
@@ -231,7 +255,8 @@ fi
             suggestions: suggestions,
             message: suggestions.isEmpty
                 ? "Подходящие службы и контейнеры не обнаружены"
-                : "Найдено команд: \(suggestions.count)"
+                : "Найдено команд: \(suggestions.count)",
+            canRetry: false
         )
     }
 }

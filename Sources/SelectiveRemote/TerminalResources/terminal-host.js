@@ -25,6 +25,7 @@
     const commandPanelSubtitle = document.getElementById("command-panel-subtitle");
     const commandEmptyTitle = document.getElementById("command-empty-title");
     const commandEmptyMessage = document.getElementById("command-empty-message");
+    const remoteContextRetryButton = document.getElementById("remote-context-retry");
     const commandTabs = Array.from(document.querySelectorAll("#command-tabs button"));
 
     const terminal = new Terminal({
@@ -81,6 +82,7 @@
     let remoteCommandEntries = [];
     let remoteContextMessage = "Подключите SSH и обновите сведения о сервере";
     let remoteSystemLabel = "";
+    let remoteContextCanRetry = false;
     let currentLine = [];
     let inputCursor = 0;
     let lineTrackingReliable = true;
@@ -636,6 +638,9 @@
         commandEmptyMessage.textContent = section.emptyMessage;
         historyList.hidden = empty;
         historyEmpty.hidden = !empty;
+        remoteContextRetryButton.hidden = !(
+            activePanelSection === "remote" && empty && remoteContextCanRetry
+        );
         historyClearButton.disabled = historyEntries.length === 0;
         historyEnabledInput.checked = historyEnabled;
     };
@@ -975,6 +980,7 @@
         remoteSystemLabel = typeof remote.systemLabel === "string"
             ? remote.systemLabel
             : "";
+        remoteContextCanRetry = remote.canRetry === true;
         renderHistoryPanel();
         renderSuggestions();
     };
@@ -995,6 +1001,9 @@
     };
 
     historyQuery.addEventListener("input", renderHistoryPanel);
+    remoteContextRetryButton.addEventListener("click", () => {
+        postHistory({ action: "retryRemoteContext" });
+    });
     commandTabs.forEach((button) => {
         button.addEventListener("click", () => {
             activePanelSection = button.dataset.section || "history";

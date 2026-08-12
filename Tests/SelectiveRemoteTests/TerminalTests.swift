@@ -216,8 +216,10 @@ func terminalIncludesHistoryInterface() throws {
     #expect(html.contains("data-section=\"favorites\""))
     #expect(html.contains("data-section=\"templates\""))
     #expect(html.contains("id=\"template-dialog\""))
+    #expect(html.contains("id=\"remote-context-retry\""))
     #expect(html.contains("terminal-command-catalog.js"))
     #expect(script.contains("selectiveTerminalSetHistory"))
+    #expect(script.contains("retryRemoteContext"))
     #expect(script.contains("isAlternateScreen"))
     #expect(script.contains("outputContainsEchoedCommand"))
     #expect(script.contains("outputEndsInShellPrompt"))
@@ -235,6 +237,35 @@ func terminalIncludesHistoryInterface() throws {
     #expect(catalog.contains("kubectl rollout restart deployment/"))
     #expect(catalog.contains("docker compose logs --tail 100 -f"))
     #expect(catalog.components(separatedBy: "],").count >= 200)
+}
+
+@Test("Контекст сервера привязан к активной вкладке и использует SSH credentials")
+func terminalServerContextUsesActiveTabAuthentication() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let appModel = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+        encoding: .utf8
+    )
+    let embedded = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift"),
+        encoding: .utf8
+    )
+    let contentView = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(contentView.contains("connection: tab.connection"))
+    #expect(contentView.contains("tabID: tab.id"))
+    #expect(appModel.contains("requiresIndependentAuthentication: true"))
+    #expect(appModel.contains("SSHKeyService.backgroundAuthenticationEnvironment"))
+    #expect(appModel.contains("jumpHostPasswordCredential: settings.jumpHostProfileID.map"))
+    #expect(embedded.contains("remoteContextRequestIDs"))
+    #expect(embedded.contains("currentTab.connection == expectedConnection"))
+    #expect(embedded.contains("case \"retryRemoteContext\""))
 }
 
 @Test("Перезагрузка WebView повторно выводит активную SSH-сессию")

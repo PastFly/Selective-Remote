@@ -223,10 +223,80 @@ func buildsRemoteServiceAndContainerSuggestions() throws {
     )
 
     #expect(snapshot.systemLabel == "Debian GNU/Linux 13")
+    #expect(!snapshot.canRetry)
     #expect(snapshot.suggestions.contains {
         $0.command == "sudo systemctl restart sshd.service"
     })
     #expect(snapshot.suggestions.contains {
         $0.command == "docker logs --tail 100 -f web-api"
     })
+}
+
+@Test("Контекст сервера использует отдельный SSH probe с полной аутентификацией")
+func remoteContextProbePreservesSSHAuthenticationAndJumpHost() throws {
+    var jump = ConnectionProfile(connectionType: .ssh)
+    jump.friendlyName = "Jump"
+    jump.host = "jump.example.test"
+    jump.username = "jump"
+    jump.sshPort = 2222
+
+    var target = ConnectionProfile(connectionType: .ssh)
+    target.friendlyName = "Target"
+    target.host = "target.example.test"
+    target.username = "root"
+    target.sshPort = 2200
+    target.sshAuthenticationMode = .password
+
+    let settings = try SSHConnectionSettings(
+        profile: target,
+        identity: nil,
+        jumpHost: jump
+    )
+    let arguments = TerminalRemoteContextService.probeArguments(settings: settings)
+
+    #expect(arguments.contains("-S"))
+    #expect(arguments.contains("none"))
+    #expect(arguments.contains("ControlMaster=no"))
+    #expect(!arguments.contains("BatchMode=yes"))
+    #expect(arguments.contains("NumberOfPasswordPrompts=1"))
+    #expect(arguments.contains("User=root"))
+    #expect(arguments.contains("PreferredAuthentications=keyboard-interactive,password"))
+    #expect(arguments.contains("PubkeyAuthentication=no"))
+    #expect(arguments.contains("2200"))
+    #expect(arguments.contains("-J"))
+    #expect(arguments.contains("jump@jump.example.test:2222"))
+    #expect(arguments.contains("target.example.test"))
+    #expect(arguments.contains("-T"))
+}
+
+@Test("Смена подключения вкладки полностью заменяет profileID")
+@MainActor
+func terminalTabConnectionDoesNotKeepStaleProfileID() throws {
+    let suiteName = "TerminalProfileSwitchTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let firstProfileID = UUID()
+    let secondProfileID = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: firstProfileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .savedProfile(firstProfileID),
+        defaults: defaults
+    )
+    let tabID = workspace.selectedTabID
+
+    #expect(workspace.updateConnection(
+        tabID: tabID,
+        connection: .savedProfile(secondProfileID),
+        suggestedTitle: "Второй сервер"
+    ))
+    #expect(workspace.selectedTab.connection.profileID == secondProfileID)
+
+    #expect(workspace.updateConnection(
+        tabID: tabID,
+        connection: .custom(host: "custom.example.test", username: "operator"),
+        suggestedTitle: "Custom"
+    ))
+    #expect(workspace.selectedTab.connection.profileID == nil)
+    #expect(workspace.selectedTab.connection.host == "custom.example.test")
 }

@@ -2113,17 +2113,49 @@ final class AppModel: NSObject, ObservableObject {
         connection: TerminalTabConnection,
         tabID: UUID
     ) async throws -> TerminalRemoteContextSnapshot {
-        guard let settings = sshConnectionSettings(
+        guard let settings = prepareSSHConnection(
             connection: connection,
-            tabID: tabID
+            clientID: tabID,
+            requiresIndependentAuthentication: true
         ) else {
             throw TerminalRemoteContextError.commandFailed(
-                "подключение SSH больше недоступно"
+                errorMessage ?? "подключение SSH больше недоступно"
             )
         }
+
+        let passwordCredential: KeychainCredentialReference?
+        if settings.authenticationMode == .automatic || settings.authenticationMode == .password {
+            switch connection.kind {
+            case .savedProfile:
+                passwordCredential = connection.profileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                }
+            case .custom:
+                // A temporary custom-tab password, when supplied during connect,
+                // is stored under the tab ID for the lifetime of that SSH session.
+                passwordCredential = KeychainService.credentialReference(
+                    profileID: tabID,
+                    kind: .ssh
+                )
+            }
+        } else {
+            passwordCredential = nil
+        }
+
+        let environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+            passwordCredential: passwordCredential,
+            proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                profileID: settings.profileID,
+                kind: .proxy
+            ),
+            jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            },
+            jumpHostPromptTokens: settings.jumpHostPromptTokens
+        )
         return try await TerminalRemoteContextService.discover(
             settings: settings,
-            environment: SSHKeyService.processEnvironment()
+            environment: environment
         )
     }
 

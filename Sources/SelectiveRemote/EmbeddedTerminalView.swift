@@ -20,6 +20,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let appearance: TerminalAppearanceSnapshot
     let historyContext: TerminalHistoryContext?
     let remoteContext: TerminalRemoteContextSnapshot
+    let onRemoteContextRetry: () -> Void
     let onFocus: () -> Void
     let onInput: (Data) -> Void
     @Binding var historyVisible: Bool
@@ -29,6 +30,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         appearance: TerminalAppearanceSnapshot,
         historyContext: TerminalHistoryContext? = nil,
         remoteContext: TerminalRemoteContextSnapshot = .empty,
+        onRemoteContextRetry: @escaping () -> Void = {},
         onFocus: @escaping () -> Void = {},
         onInput: ((Data) -> Void)? = nil,
         historyVisible: Binding<Bool> = .constant(false)
@@ -37,6 +39,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         self.appearance = appearance
         self.historyContext = historyContext
         self.remoteContext = remoteContext
+        self.onRemoteContextRetry = onRemoteContextRetry
         self.onFocus = onFocus
         self.onInput = onInput ?? { _ in }
         _historyVisible = historyVisible
@@ -48,6 +51,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             appearance: appearance,
             historyContext: historyContext,
             remoteContext: remoteContext,
+            onRemoteContextRetry: onRemoteContextRetry,
             onFocus: onFocus,
             onInput: onInput,
             historyVisible: _historyVisible
@@ -107,6 +111,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.updateHistoryContext(historyContext)
         context.coordinator.updateRemoteContext(remoteContext)
+        context.coordinator.updateRemoteContextRetryHandler(onRemoteContextRetry)
         context.coordinator.updateFocusHandler(onFocus)
         context.coordinator.updateInputHandler(onInput)
         context.coordinator.updateSession(session)
@@ -146,6 +151,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var appearance: TerminalAppearanceSnapshot
         private var historyContext: TerminalHistoryContext?
         private var remoteContext: TerminalRemoteContextSnapshot
+        private var onRemoteContextRetry: () -> Void
         private var onFocus: () -> Void
         private var onInput: (Data) -> Void
         private var historyVisible: Binding<Bool>
@@ -160,6 +166,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             appearance: TerminalAppearanceSnapshot,
             historyContext: TerminalHistoryContext?,
             remoteContext: TerminalRemoteContextSnapshot,
+            onRemoteContextRetry: @escaping () -> Void,
             onFocus: @escaping () -> Void,
             onInput: @escaping (Data) -> Void,
             historyVisible: Binding<Bool>
@@ -168,6 +175,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             self.appearance = appearance
             self.historyContext = historyContext
             self.remoteContext = remoteContext
+            self.onRemoteContextRetry = onRemoteContextRetry
             self.onFocus = onFocus
             self.onInput = onInput
             self.historyVisible = historyVisible
@@ -205,6 +213,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             guard remoteContext != updated else { return }
             remoteContext = updated
             refreshHistory()
+        }
+
+        func updateRemoteContextRetryHandler(_ updated: @escaping () -> Void) {
+            onRemoteContextRetry = updated
         }
 
         func updateFocusHandler(_ updated: @escaping () -> Void) {
@@ -380,10 +392,15 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         }
 
         private func handleHistoryMessage(_ body: Any) {
-            guard let context = historyContext,
-                  let payload = body as? [String: Any],
+            guard let payload = body as? [String: Any],
                   let action = payload["action"] as? String
             else { return }
+
+            if action == "retryRemoteContext" {
+                onRemoteContextRetry()
+                return
+            }
+            guard let context = historyContext else { return }
 
             let store = TerminalCommandHistoryStore.shared
             switch action {
@@ -489,6 +506,7 @@ struct SSHTerminalView: View {
     @State private var showsHistory = false
     @State private var remoteContexts: [UUID: TerminalRemoteContextSnapshot] = [:]
     @State private var refreshingContextTabIDs: Set<UUID> = []
+    @State private var remoteContextRequestIDs: [UUID: UUID] = [:]
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
     @State private var connectionEditorRequest: TerminalConnectionEditorRequest?
@@ -498,6 +516,10 @@ struct SSHTerminalView: View {
     @State private var showsCommandPalette = false
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
+
+    private var remoteContextTaskID: String {
+        "\(workspace.selectedTabID.uuidString)-\(session.phase.title)"
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -568,7 +590,7 @@ struct SSHTerminalView: View {
                             connection: connection,
                             suggestedTitle: suggestedTitle
                         )
-                        remoteContexts[tabID] = nil
+                        invalidateRemoteContext(for: tabID)
                         if updated,
                            let tab = workspace.tabs.first(where: { $0.id == tabID }) {
                             connect(tab, temporaryPassword)
@@ -587,13 +609,20 @@ struct SSHTerminalView: View {
         .sheet(isPresented: $showsCommandPalette) {
             terminalCommandPalette
         }
-        .task(id: "\(workspace.selectedTabID.uuidString)-\(session.isRunning)") {
+        .task(id: remoteContextTaskID) {
             let tab = workspace.selectedTab
-            guard tab.session.isRunning,
-                  remoteContexts[tab.id]?.refreshedAt == nil
-            else { return }
-            try? await Task.sleep(for: .seconds(1))
-            await loadRemoteContext(for: tab)
+            guard case .running = tab.session.phase else {
+                invalidateRemoteContext(for: tab.id)
+                return
+            }
+            guard remoteContexts[tab.id]?.refreshedAt == nil else { return }
+            do {
+                try await Task.sleep(for: .seconds(1))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            await loadRemoteContext(forTabID: tab.id)
         }
     }
 
@@ -1056,6 +1085,10 @@ struct SSHTerminalView: View {
                     profileID: historyContextID(for: tab)
                 ),
                 remoteContext: remoteContexts[tab.id] ?? .empty,
+                onRemoteContextRetry: {
+                    selectTabIfNeeded(tab.id)
+                    refreshRemoteContext(for: tab.id)
+                },
                 onFocus: { selectTabIfNeeded(tab.id) },
                 onInput: { data in
                     workspace.sendInput(
@@ -1145,26 +1178,60 @@ struct SSHTerminalView: View {
         workspace.selectedTabID = id
     }
 
-    private func refreshRemoteContext() {
-        let tab = workspace.selectedTab
-        guard !refreshingContextTabIDs.contains(tab.id) else { return }
-        Task { await loadRemoteContext(for: tab) }
+    private func refreshRemoteContext(for tabID: UUID? = nil) {
+        let resolvedTabID = tabID ?? workspace.selectedTabID
+        invalidateRemoteContext(for: resolvedTabID)
+        Task { await loadRemoteContext(forTabID: resolvedTabID) }
     }
 
     @MainActor
-    private func loadRemoteContext(for tab: TerminalWorkspaceTab) async {
-        guard !refreshingContextTabIDs.contains(tab.id) else { return }
-        refreshingContextTabIDs.insert(tab.id)
-        defer { refreshingContextTabIDs.remove(tab.id) }
+    private func invalidateRemoteContext(for tabID: UUID) {
+        remoteContexts[tabID] = nil
+        remoteContextRequestIDs[tabID] = nil
+        refreshingContextTabIDs.remove(tabID)
+    }
+
+    @MainActor
+    private func loadRemoteContext(forTabID tabID: UUID) async {
+        guard !refreshingContextTabIDs.contains(tabID),
+              let tab = workspace.tabs.first(where: { $0.id == tabID }),
+              case .running = tab.session.phase
+        else { return }
+
+        let expectedConnection = tab.connection
+        let expectedHostLabel = connectionLabel(for: tab)
+        let requestID = UUID()
+        remoteContextRequestIDs[tabID] = requestID
+        refreshingContextTabIDs.insert(tabID)
+        remoteContexts[tabID] = .loading(hostLabel: expectedHostLabel)
+        defer {
+            if remoteContextRequestIDs[tabID] == requestID {
+                remoteContextRequestIDs[tabID] = nil
+                refreshingContextTabIDs.remove(tabID)
+            }
+        }
+
         do {
-            remoteContexts[tab.id] = try await discoverContext(tab)
+            let snapshot = try await discoverContext(tab)
+            guard remoteContextRequestIDs[tabID] == requestID,
+                  let currentTab = workspace.tabs.first(where: { $0.id == tabID }),
+                  currentTab.connection == expectedConnection,
+                  case .running = currentTab.session.phase
+            else { return }
+            remoteContexts[tabID] = snapshot
         } catch {
-            remoteContexts[tab.id] = TerminalRemoteContextSnapshot(
-                hostLabel: connectionLabel(for: tab),
-                systemLabel: "",
+            guard remoteContextRequestIDs[tabID] == requestID,
+                  let currentTab = workspace.tabs.first(where: { $0.id == tabID }),
+                  currentTab.connection == expectedConnection,
+                  case .running = currentTab.session.phase
+            else { return }
+            remoteContexts[tabID] = TerminalRemoteContextSnapshot(
+                hostLabel: expectedHostLabel,
+                systemLabel: expectedHostLabel,
                 refreshedAt: Date(),
                 suggestions: [],
-                message: error.localizedDescription
+                message: error.localizedDescription,
+                canRetry: true
             )
         }
     }
