@@ -3,6 +3,13 @@
 
 [← Вернуться на главную страницу](README.md)
 
+## 0.20.3
+
+- Исправлено восстановление SSH-пароля после недоступной legacy-записи Keychain: SSH/Forwarding используют новый namespace, поэтому старая ACL больше не блокирует повторное сохранение.
+- Touch ID теперь проверяется через LocalAuthentication непосредственно перед чтением SSH-пароля и использованием защищённого SSH-ключа.
+- Для Touch ID больше не создаются biometric ACL-записи Keychain, которые в ad-hoc GitHub-сборках могли завершаться `errSecMissingEntitlement (-34018)`.
+- Отмена Touch ID не передаёт SSH-пароль и останавливает запуск подключения.
+
 ## 0.20.2
 
 - Keychain recovery: stale or incorrectly approved SSH password records can be reset from the profile or forwarding card without touching other credentials.

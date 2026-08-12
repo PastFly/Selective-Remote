@@ -681,14 +681,20 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
 
-        if let passwordCredential,
-           let password = try KeychainService.readPassword(
-               reference: passwordCredential,
-               authenticationPrompt: "Подтвердите Touch ID для использования SSH-пароля"
-           ),
-           !password.isEmpty {
-            let secretURL = try makeAskPassSecretFile(password)
-            environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
+        if let passwordCredential {
+            let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
+            let hasCurrentSecret = KeychainService.passwordExists(reference: passwordCredential)
+            if requiresTouchID && hasCurrentSecret {
+                try KeychainService.authenticateTouchID(
+                    reason: "Подтвердите Touch ID для использования SSH-пароля"
+                )
+            }
+            if let password = try KeychainService.readPassword(
+                reference: passwordCredential
+            ), !password.isEmpty {
+                let secretURL = try makeAskPassSecretFile(password)
+                environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
+            }
         }
         return environment
     }
