@@ -1,3 +1,16 @@
+## 0.20.11
+
+- Переработан глобальный Keychain: добавлен трёхзонный интерфейс со списком credentials и отдельным Inspector выбранного элемента.
+- Добавлены подробности SSH-ключей: алгоритм, fingerprint, путь, public key, связанные профили и состояние ssh-agent.
+- Touch ID Key теперь является отдельным типом credential и использует только обычные ECDSA-ключи.
+- Добавлена проверка несовместимых ключей для Touch ID на уровне SSH-аутентификации.
+- Добавлено автоматическое обнаружение и отображение OpenSSH certificates (*-cert.pub).
+- OpenSSH certificates теперь передаются в SSH через CertificateFile.
+- Улучшено создание SSH ID и Touch ID Key.
+- Переработан глобальный Forwarding: список туннелей и отдельный Inspector.
+- Добавлены визуальные схемы для Local, Remote и Dynamic SSH forwarding.
+- Сохранены существующие функции запуска, остановки, Keychain, Touch ID и диагностики туннелей.
+
 ## 0.20.10
 
 - Добавлен отдельный глобальный раздел Keychain для управления SSH ID, сохранёнными SSH credentials, Touch ID и ssh-agent.
