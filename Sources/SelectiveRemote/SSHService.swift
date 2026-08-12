@@ -319,6 +319,7 @@ struct SSHTunnelSummary: Identifiable, Equatable {
 }
 
 enum SSHService {
+    static let sshPath = "/usr/bin/ssh"
     private static let allowedHostCharacters = CharacterSet.alphanumerics.union(
         CharacterSet(charactersIn: "._:-")
     )
@@ -466,6 +467,43 @@ enum SSHService {
             + ["-tt", settings.host]
     }
 
+    /// Installs a public key without ever replacing authorized_keys. The remote
+    /// command creates the file if necessary and appends only when the exact key
+    /// is not already present. Existing keys and comments are preserved.
+    static func appendPublicKeyArguments(
+        settings: SSHConnectionSettings,
+        publicKeyText: String
+    ) -> [String] {
+        let normalizedKey = publicKeyText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let quotedKey = shellQuotedArgument(normalizedKey)
+        let remoteCommand = "umask 077; mkdir -p \"$HOME/.ssh\"; "
+            + "touch \"$HOME/.ssh/authorized_keys\"; "
+            + "chmod 700 \"$HOME/.ssh\"; "
+            + "chmod 600 \"$HOME/.ssh/authorized_keys\"; "
+            + "grep -qxF -- \(quotedKey) \"$HOME/.ssh/authorized_keys\" "
+            + "|| printf '%s\\n' \(quotedKey) >> \"$HOME/.ssh/authorized_keys\""
+
+        var arguments = [
+            "-p", String(settings.port),
+            "-o", "StrictHostKeyChecking=\(settings.hostKeyPolicy.openSSHValue)",
+            "-S", "none",
+            "-o", "ControlMaster=no",
+            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
+            "-o", "ServerAliveInterval=\(max(settings.keepAliveSeconds, 30))",
+            "-o", "ServerAliveCountMax=3"
+        ]
+        if !settings.username.isEmpty {
+            arguments += ["-o", "User=\(settings.username)"]
+        }
+        arguments += proxyArguments(settings: settings)
+        arguments += [settings.host, remoteCommand]
+        return arguments
+    }
+
+    private static func shellQuotedArgument(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+
     static func copyPublicKeyArguments(
         settings: SSHConnectionSettings,
         publicKeyPath: String
@@ -514,7 +552,7 @@ enum SSHService {
         fileManager: FileManager = .default
     ) throws -> RunningSSHTunnel {
         let forwarding = try forwardingArguments(rule)
-        let executable = "/usr/bin/ssh"
+        let executable = sshPath
         guard fileManager.isExecutableFile(atPath: executable) else {
             throw SSHServiceError.executableUnavailable(executable)
         }

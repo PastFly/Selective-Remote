@@ -218,19 +218,38 @@
             .map((candidate) => candidate.entry);
     };
 
+    const normalizedSearchTokens = (value) => value
+        .trim()
+        .toLocaleLowerCase()
+        // Treat common shell path spelling as equivalent for command discovery:
+        // `nano .ssh`, `nano ~/.ssh` and `authorized_key` should find the same row.
+        .replaceAll("~/", "")
+        .replace(/[\/._~=-]+/g, " ")
+        .split(/\s+/)
+        .filter(Boolean);
+
     const matchingCatalog = (query, limit = Number.POSITIVE_INFINITY) => {
         const normalized = query.trim().toLocaleLowerCase();
         if (!normalized) {
             return builtInCommandCatalog.slice(0, limit);
         }
+        const queryTokens = normalizedSearchTokens(normalized);
         return builtInCommandCatalog
             .map((entry, order) => {
                 const command = entry.command.toLocaleLowerCase();
                 const details = `${entry.description} ${entry.category} ${entry.keywords}`
                     .toLocaleLowerCase();
+                const combined = `${command} ${details}`;
                 const commandIndex = command.indexOf(normalized);
                 const detailsIndex = details.indexOf(normalized);
-                let rank = 4;
+                const searchableTokens = normalizedSearchTokens(combined);
+                const fuzzyTokenMatch = queryTokens.length > 0
+                    && queryTokens.every((token) => searchableTokens.some(
+                        (candidate) => candidate === token
+                            || candidate.startsWith(token)
+                            || token.startsWith(candidate)
+                    ));
+                let rank = 5;
                 if (commandIndex === 0) {
                     rank = 0;
                 } else if (commandIndex > 0) {
@@ -239,10 +258,12 @@
                     rank = 2;
                 } else if (detailsIndex > 0) {
                     rank = 3;
+                } else if (fuzzyTokenMatch) {
+                    rank = 4;
                 }
                 return { entry, order, rank };
             })
-            .filter((candidate) => candidate.rank < 4)
+            .filter((candidate) => candidate.rank < 5)
             .sort((left, right) => left.rank - right.rank || left.order - right.order)
             .slice(0, limit)
             .map((candidate) => candidate.entry);

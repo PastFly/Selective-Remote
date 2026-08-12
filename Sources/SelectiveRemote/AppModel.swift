@@ -1339,19 +1339,21 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = "Сначала завершите текущую SSH-сессию"
             return
         }
-        guard FileManager.default.isExecutableFile(atPath: SSHKeyService.sshCopyIDPath) else {
+        guard FileManager.default.isExecutableFile(atPath: SSHService.sshPath) else {
             errorMessage = SSHServiceError.executableUnavailable(
-                SSHKeyService.sshCopyIDPath
+                SSHService.sshPath
             ).localizedDescription
             return
         }
 
         do {
+            let publicKeyText = try String(contentsOfFile: publicKeyPath, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             try session.start(
-                executable: SSHKeyService.sshCopyIDPath,
-                arguments: SSHService.copyPublicKeyArguments(
+                executable: SSHService.sshPath,
+                arguments: SSHService.appendPublicKeyArguments(
                     settings: settings,
-                    publicKeyPath: publicKeyPath
+                    publicKeyText: publicKeyText
                 ),
                 title: "Установка ключа «\(key.name)»",
                 environment: try SSHKeyService.backgroundAuthenticationEnvironment(
@@ -1367,7 +1369,9 @@ final class AppModel: NSObject, ObservableObject {
                     : "Установка SSH-ключа завершилась с кодом \(exitCode)"
             }
             requestedSSHConsoleProfileID = settings.profileID
-            statusMessage = selectedProfileHasSavedSSHPassword ? "Публичный ключ устанавливается с сохранённым SSH-паролем" : "Подтвердите host key и введите пароль сервера в терминале"
+            statusMessage = selectedProfileHasSavedSSHPassword
+                ? "Ключ безопасно добавляется в authorized_keys с сохранённым SSH-паролем"
+                : "Ключ будет добавлен в authorized_keys без удаления существующих ключей; при необходимости введите пароль сервера"
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription

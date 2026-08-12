@@ -53,6 +53,7 @@ struct ContentView: View {
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
     @State private var selectedTab = ProfileTab.general
+    @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connections
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
@@ -178,10 +179,15 @@ struct ContentView: View {
                 }
             )
         }
-        .onChange(of: profile.id) { _, _ in
+        .onAppear {
+            selectedTab = restoredProfileTab(for: profile.id)
+            profileTabs[profile.id] = selectedTab
+        }
+        .onChange(of: profile.id) { oldProfileID, newProfileID in
             setTerminalFocusMode(false)
-            sftpSession.prepare(for: profile.id)
-            selectedTab = .general
+            profileTabs[oldProfileID] = selectedTab
+            sftpSession.prepare(for: newProfileID)
+            selectedTab = restoredProfileTab(for: newProfileID)
         }
         .onChange(of: profile.connectionType) { _, _ in
             if !availableTabs.contains(selectedTab) {
@@ -189,6 +195,11 @@ struct ContentView: View {
             }
         }
         .onChange(of: selectedTab) { _, tab in
+            profileTabs[profile.id] = tab
+            UserDefaults.standard.set(
+                tab.rawValue,
+                forKey: profileTabStorageKey(profileID: profile.id)
+            )
             if tab != .terminal {
                 setTerminalFocusMode(false)
             }
@@ -735,6 +746,23 @@ struct ContentView: View {
                 )
             }
         )
+    }
+
+
+    private func profileTabStorageKey(profileID: UUID) -> String {
+        "SelectiveRemote.profile.lastTab.v1.\(profileID.uuidString)"
+    }
+
+    private func restoredProfileTab(for profileID: UUID) -> ProfileTab {
+        if let cached = profileTabs[profileID] {
+            return cached
+        }
+        guard let rawValue = UserDefaults.standard.string(
+            forKey: profileTabStorageKey(profileID: profileID)
+        ), let stored = ProfileTab(rawValue: rawValue) else {
+            return .general
+        }
+        return stored
     }
 
     private func setMainArea(_ area: MainArea) {

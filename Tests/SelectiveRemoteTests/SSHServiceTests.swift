@@ -73,6 +73,28 @@ func buildsPublicKeyInstallationArguments() throws {
     )
 }
 
+@Test("Установка SSH-ключа только дописывает authorized_keys и сохраняет старые ключи")
+func appendsPublicKeyWithoutReplacingAuthorizedKeys() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.username = "alice"
+    profile.sshPort = 2200
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let publicKey = "ssh-ed25519 AAAATEST selective-remote"
+    let arguments = SSHService.appendPublicKeyArguments(
+        settings: settings,
+        publicKeyText: publicKey
+    )
+    let remoteCommand = arguments.last ?? ""
+
+    #expect(arguments.contains("server.example.com"))
+    #expect(arguments.contains("ControlMaster=no"))
+    #expect(remoteCommand.contains("grep -qxF"))
+    #expect(remoteCommand.contains(">> \"$HOME/.ssh/authorized_keys\""))
+    #expect(!remoteCommand.contains("> \"$HOME/.ssh/authorized_keys\""))
+    #expect(remoteCommand.contains("chmod 600"))
+}
+
 @Test("SFTP использует ControlPath активной SSH-сессии")
 func reusesActiveSSHControlSocketForSFTP() throws {
     var profile = ConnectionProfile(connectionType: .ssh)

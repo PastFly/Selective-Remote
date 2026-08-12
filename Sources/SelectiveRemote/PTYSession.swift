@@ -374,6 +374,18 @@ final class TerminalSessionModel: ObservableObject {
     }
 
     func resize(columns: Int, rows: Int) {
+        updateTerminalSize(columns: columns, rows: rows, force: false)
+    }
+
+    /// Re-sends the current PTY geometry even when it did not change. Full-screen
+    /// programs such as nano, vim and tmux redraw themselves on SIGWINCH. This is
+    /// used after SwiftUI recreates the WebView when the user switches profiles.
+    func refreshDisplay() {
+        guard isRunning else { return }
+        process?.resize(columns: columns, rows: rows)
+    }
+
+    private func updateTerminalSize(columns: Int, rows: Int, force: Bool) {
         // SwiftUI can briefly lay a tab out at a near-zero size while changing
         // sections or hiding the sidebar. Do not forward that transient 2×1
         // geometry to interactive programs: nano/vim would redraw against it
@@ -383,7 +395,7 @@ final class TerminalSessionModel: ObservableObject {
         let normalizedRows = min(rows, 1_000)
         let safeColumns = UInt16(clamping: normalizedColumns)
         let safeRows = UInt16(clamping: normalizedRows)
-        guard safeColumns != self.columns || safeRows != self.rows else { return }
+        guard force || safeColumns != self.columns || safeRows != self.rows else { return }
         self.columns = safeColumns
         self.rows = safeRows
         terminalColumns = Int(safeColumns)

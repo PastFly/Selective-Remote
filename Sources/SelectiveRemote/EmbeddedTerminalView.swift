@@ -266,6 +266,17 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             refreshHistory()
             updateHistoryVisibility(historyVisible.wrappedValue)
             webView.evaluateJavaScript("window.selectiveTerminalFocus?.()")
+
+            // A host switch can recreate the WebView while the PTY keeps running.
+            // Replaying ANSI output is not enough to reconstruct an alternate
+            // screen perfectly (nano/vim/tmux). Re-send the PTY size so the remote
+            // TUI receives SIGWINCH and paints a clean full frame.
+            Task { @MainActor [weak session] in
+                try? await Task.sleep(for: .milliseconds(180))
+                session?.refreshDisplay()
+                try? await Task.sleep(for: .milliseconds(160))
+                session?.refreshDisplay()
+            }
         }
 
         func webView(
