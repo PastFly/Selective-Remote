@@ -806,6 +806,10 @@ struct SSHTerminalView: View {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
+                            Button("Создать копию вкладки", systemImage: "plus.square.on.square") {
+                                _ = workspace.duplicateTab(tab.id)
+                            }
+                            .disabled(workspace.displayedTabs.count >= 8)
                             if workspace.displayedTabs.count < 8 {
                                 Button("Новая вкладка", systemImage: "plus") {
                                     connectionEditorRequest = TerminalConnectionEditorRequest(

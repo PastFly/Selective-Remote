@@ -313,6 +313,16 @@ final class TerminalWorkspaceModel: ObservableObject {
         return tab
     }
 
+    @discardableResult
+    func duplicateTab(_ id: UUID) -> TerminalWorkspaceTab? {
+        guard let source = tabs.first(where: { $0.id == id }), tabs.count < 8 else { return nil }
+        let baseTitle = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return addTab(
+            connection: source.connection,
+            title: baseTitle.isEmpty ? "Копия терминала" : "\(baseTitle) · копия"
+        )
+    }
+
     func closeTab(_ id: UUID) {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         if tabs.count == 1 {

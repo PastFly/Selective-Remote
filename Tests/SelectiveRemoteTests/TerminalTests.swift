@@ -293,6 +293,8 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
     #expect(source.contains("GeometryReader"))
     #expect(source.contains("showsLayoutPicker"))
     #expect(workspace.contains("func moveTab"))
+    #expect(workspace.contains("func duplicateTab"))
+    #expect(source.contains("Создать копию вкладки"))
     #expect(workspace.contains("var displayedTabs"))
     #expect(workspace.contains("Array(displayedTabs.prefix"))
 }

@@ -12,6 +12,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
     case certificates
     case touchID
     case passwords
+    case knownHosts
 
     var id: String { rawValue }
 
@@ -22,6 +23,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
         case .certificates: "Certificates"
         case .touchID: "Touch ID"
         case .passwords: "Passwords"
+        case .knownHosts: "Known Hosts"
         }
     }
 
@@ -32,6 +34,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
         case .certificates: "checkmark.seal"
         case .touchID: "touchid"
         case .passwords: "ellipsis.rectangle"
+        case .knownHosts: "server.rack"
         }
     }
 }
@@ -39,6 +42,7 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
 private enum VaultSelection: Hashable {
     case key(UUID)
     case credential(UUID)
+    case knownHost(String)
 }
 
 struct CredentialVaultView: View {
@@ -58,6 +62,11 @@ struct CredentialVaultView: View {
     @State private var checkingAgent = false
     @State private var certificateInfo: SSHCertificateInfo?
     @State private var certificateError: String?
+    @State private var knownHosts: [SSHKnownHostEntry] = []
+    @State private var knownHostsError: String?
+    @State private var verifyingKnownHostID: String?
+    @State private var knownHostVerification: [String: SSHKnownHostVerification] = [:]
+    @State private var knownHostPendingDeletion: SSHKnownHostEntry?
 
     init(
         presentation: CredentialVaultPresentation = .sheet,
@@ -95,7 +104,7 @@ struct CredentialVaultView: View {
             model.sshKeys.filter { SSHKeyService.certificateURL(for: $0) != nil }
         case .touchID:
             model.sshKeys.filter(SSHKeyService.isTouchIDCompatible)
-        case .passwords:
+        case .passwords, .knownHosts:
             []
         }
     }
@@ -104,7 +113,16 @@ struct CredentialVaultView: View {
         switch filter {
         case .all, .passwords:
             savedCredentialProfiles
-        case .keys, .certificates, .touchID:
+        case .keys, .certificates, .touchID, .knownHosts:
+            []
+        }
+    }
+
+    private var visibleKnownHosts: [SSHKnownHostEntry] {
+        switch filter {
+        case .all, .knownHosts:
+            knownHosts
+        case .keys, .certificates, .touchID, .passwords:
             []
         }
     }
@@ -117,6 +135,11 @@ struct CredentialVaultView: View {
     private var selectedCredential: ConnectionProfile? {
         guard case let .credential(id) = selection else { return nil }
         return sshProfiles.first(where: { $0.id == id })
+    }
+
+    private var selectedKnownHost: SSHKnownHostEntry? {
+        guard case let .knownHost(id) = selection else { return nil }
+        return knownHosts.first(where: { $0.id == id })
     }
 
     var body: some View {
@@ -151,6 +174,7 @@ struct CredentialVaultView: View {
             }
             refreshAgentState()
             refreshCertificateInfo()
+            refreshKnownHosts()
         }
         .onChange(of: selection) { _, _ in
             refreshCertificateInfo()
@@ -163,6 +187,19 @@ struct CredentialVaultView: View {
             }
             refreshAgentState()
             refreshCertificateInfo()
+        }
+        .alert(
+            "Удалить Known Host?",
+            isPresented: Binding(
+                get: { knownHostPendingDeletion != nil },
+                set: { if !$0 { knownHostPendingDeletion = nil } }
+            ),
+            presenting: knownHostPendingDeletion
+        ) { entry in
+            Button("Удалить", role: .destructive) { deleteKnownHost(entry) }
+            Button("Отмена", role: .cancel) {}
+        } message: { entry in
+            Text("Запись «\(entry.displayHost)» будет удалена из ~/.ssh/known_hosts. Перед изменением создаётся резервная копия known_hosts.selectiveremote.bak.")
         }
         .sheet(isPresented: $showsKeyGenerator) {
             SSHKeyGenerationView(touchIDPreset: touchIDGenerator) { request, session in
@@ -224,6 +261,14 @@ struct CredentialVaultView: View {
                 Spacer()
             }
             .padding(12)
+            .dropDestination(for: URL.self) { urls, _ in
+                guard !urls.isEmpty else { return false }
+                for url in urls {
+                    model.importSSHKey(at: url, assignToProfileID: nil)
+                }
+                return true
+            }
+            .help("Можно перетащить сюда приватный SSH-ключ")
             Divider()
 
             ScrollView(.horizontal, showsIndicators: false) {
@@ -263,7 +308,16 @@ struct CredentialVaultView: View {
                     }
                 }
 
-                if visibleKeys.isEmpty && visibleCredentials.isEmpty {
+                if !visibleKnownHosts.isEmpty {
+                    Section("Known Hosts") {
+                        ForEach(visibleKnownHosts) { entry in
+                            knownHostRow(entry)
+                                .tag(VaultSelection.knownHost(entry.id))
+                        }
+                    }
+                }
+
+                if visibleKeys.isEmpty && visibleCredentials.isEmpty && visibleKnownHosts.isEmpty {
                     ContentUnavailableView(
                         "Ничего не найдено",
                         systemImage: filter.systemImage,
@@ -287,6 +341,10 @@ struct CredentialVaultView: View {
                 }
                 Button("Импортировать…", systemImage: "square.and.arrow.down") {
                     model.importSSHKey(assignToProfileID: nil)
+                }
+                Divider()
+                Button("Обновить Known Hosts", systemImage: "arrow.clockwise") {
+                    refreshKnownHosts()
                 }
             }
 
@@ -406,6 +464,56 @@ struct CredentialVaultView: View {
         }
     }
 
+    private func knownHostRow(_ entry: SSHKnownHostEntry) -> some View {
+        HStack(spacing: 11) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                Image(systemName: entry.isHashed ? "lock.fill" : "server.rack")
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.displayHost)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                Text("\(entry.algorithm) · \(entry.fingerprint)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if case .some(.matches) = knownHostVerification[entry.id] {
+                Image(systemName: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+            } else if case .some(.changed) = knownHostVerification[entry.id] {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.vertical, 5)
+        .contextMenu {
+            Button("Копировать fingerprint", systemImage: "doc.on.doc") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(entry.fingerprint, forType: .string)
+            }
+            if !entry.isHashed {
+                Button("Копировать host", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(entry.displayHost, forType: .string)
+                }
+                Button("Проверить ключ сервера", systemImage: "checkmark.shield") {
+                    verifyKnownHost(entry)
+                }
+            }
+            Divider()
+            Button("Удалить из known_hosts", systemImage: "trash", role: .destructive) {
+                knownHostPendingDeletion = entry
+            }
+        }
+    }
+
     private var agentStrip: some View {
         HStack(spacing: 8) {
             Image(systemName: agentCheckError == nil ? "memorychip" : "exclamationmark.triangle")
@@ -435,6 +543,8 @@ struct CredentialVaultView: View {
             keyInspector(key)
         } else if let profile = selectedCredential {
             credentialInspector(profile)
+        } else if let entry = selectedKnownHost {
+            knownHostInspector(entry)
         } else {
             ContentUnavailableView(
                 "Выберите credential",
@@ -552,6 +662,11 @@ struct CredentialVaultView: View {
         if SSHKeyService.certificateURL(for: key) != nil {
             inspectorCard("OpenSSH Certificate", systemImage: "checkmark.seal.fill") {
                 if let certificateInfo {
+                    if let status = certificateValidityStatus(certificateInfo) {
+                        Label(status.text, systemImage: status.systemImage)
+                            .foregroundStyle(status.color)
+                            .font(.subheadline.weight(.semibold))
+                    }
                     Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
                         if let value = certificateInfo.type { GridRow { metadataLabel("Type"); Text(value) } }
                         if let value = certificateInfo.keyID { GridRow { metadataLabel("Key ID"); Text(value) } }
@@ -718,6 +833,131 @@ struct CredentialVaultView: View {
         }
     }
 
+    private func knownHostInspector(_ entry: SSHKnownHostEntry) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(spacing: 14) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.13))
+                        Image(systemName: entry.isHashed ? "lock.shield.fill" : "server.rack")
+                            .font(.system(size: 23, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 52, height: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(entry.displayHost).font(.title2.bold())
+                        Text("Known Host · \(entry.algorithm)").foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button { refreshKnownHosts() } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .help("Перечитать ~/.ssh/known_hosts")
+                }
+
+                inspectorCard("Host key", systemImage: "key.horizontal") {
+                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                        GridRow { metadataLabel("Host"); Text(entry.hosts).font(.caption.monospaced()).textSelection(.enabled) }
+                        GridRow { metadataLabel("Тип"); Text(entry.algorithm) }
+                        GridRow { metadataLabel("Fingerprint"); Text(entry.fingerprint).font(.caption.monospaced()).textSelection(.enabled) }
+                        GridRow { metadataLabel("Строка"); Text(String(entry.lineNumber)) }
+                        if let marker = entry.marker { GridRow { metadataLabel("Marker"); Text(marker) } }
+                    }
+                    HStack {
+                        Button("Копировать fingerprint", systemImage: "doc.on.doc") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(entry.fingerprint, forType: .string)
+                        }
+                        Spacer()
+                        Button("Удалить запись", systemImage: "trash", role: .destructive) {
+                            knownHostPendingDeletion = entry
+                        }
+                    }
+                }
+
+                inspectorCard("Проверка сервера", systemImage: "checkmark.shield") {
+                    if entry.isHashed {
+                        Label("Имя хоста скрыто хешированием OpenSSH", systemImage: "lock.fill")
+                            .foregroundStyle(.secondary)
+                        Text("Selective Remote не пытается раскрывать хешированную запись. Проверка выполняется штатным OpenSSH при подключении.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if verifyingKnownHostID == entry.id {
+                        ProgressView("Получаем текущий host key…")
+                    } else {
+                        verificationView(for: entry)
+                        Button("Проверить сейчас", systemImage: "arrow.triangle.2.circlepath") {
+                            verifyKnownHost(entry)
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+
+                let profiles = profilesUsingKnownHost(entry)
+                inspectorCard("Используется", systemImage: "rectangle.stack") {
+                    if profiles.isEmpty {
+                        Text(entry.isHashed ? "Связь с профилями для хешированной записи определить напрямую нельзя." : "Сохранённые SSH-профили с этим host не найдены.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(profiles) { profile in
+                            HStack {
+                                Image(systemName: "terminal")
+                                Text(profile.friendlyName)
+                                Spacer()
+                                Text(profile.host).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                inspectorCard("Файл", systemImage: "doc.text") {
+                    Text(entry.sourcePath)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    Text("При удалении Selective Remote создаёт рядом резервную копию known_hosts.selectiveremote.bak.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(22)
+            .frame(maxWidth: 820)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+    }
+
+    @ViewBuilder
+    private func verificationView(for entry: SSHKnownHostEntry) -> some View {
+        switch knownHostVerification[entry.id] {
+        case .some(.matches):
+            Label("Текущий ключ сервера совпадает с known_hosts", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case let .some(.changed(currentFingerprint: currentFingerprint)):
+            VStack(alignment: .leading, spacing: 8) {
+                Label("Host key изменился", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(.orange)
+                Text("Сохранённый: \(entry.fingerprint)")
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                Text("Текущий: \(currentFingerprint)")
+                    .font(.caption.monospaced())
+                    .textSelection(.enabled)
+                Text("Не заменяйте ключ автоматически, пока изменение не подтверждено администратором сервера.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case let .some(.unavailable(message)):
+            Label(message, systemImage: "exclamationmark.circle")
+                .foregroundStyle(.secondary)
+        case .none:
+            Text("Можно сравнить сохранённый ключ с ключом, который сервер отдаёт сейчас через ssh-keyscan.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     private func inspectorCard<Content: View>(
         _ title: String,
         systemImage: String,
@@ -763,8 +1003,71 @@ struct CredentialVaultView: View {
     private func normalizeSelectionForFilter() {
         if let selectedKey, visibleKeys.contains(where: { $0.id == selectedKey.id }) { return }
         if let selectedCredential, visibleCredentials.contains(where: { $0.id == selectedCredential.id }) { return }
+        if let selectedKnownHost, visibleKnownHosts.contains(where: { $0.id == selectedKnownHost.id }) { return }
         selection = visibleKeys.first.map { .key($0.id) }
             ?? visibleCredentials.first.map { .credential($0.id) }
+            ?? visibleKnownHosts.first.map { .knownHost($0.id) }
+    }
+
+    private func certificateValidityStatus(_ info: SSHCertificateInfo) -> (text: String, systemImage: String, color: Color)? {
+        guard let raw = info.validTo else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withDashSeparatorInDate, .withColonSeparatorInTime]
+        let normalized = raw.contains("Z") || raw.contains("+") ? raw : raw + "Z"
+        guard let date = formatter.date(from: normalized) else { return nil }
+        let remaining = date.timeIntervalSinceNow
+        if remaining <= 0 {
+            return ("Сертификат истёк", "xmark.octagon.fill", .red)
+        }
+        let days = Int(remaining / 86_400)
+        if days <= 7 {
+            return ("Истекает через \(max(days, 0)) дн.", "exclamationmark.triangle.fill", .orange)
+        }
+        return ("Сертификат действителен", "checkmark.seal.fill", .green)
+    }
+
+    private func refreshKnownHosts() {
+        do {
+            knownHosts = try SSHKnownHostsService.load()
+            knownHostsError = nil
+            if case let .knownHost(id) = selection, !knownHosts.contains(where: { $0.id == id }) {
+                selection = knownHosts.first.map { .knownHost($0.id) }
+            }
+        } catch {
+            knownHosts = []
+            knownHostsError = error.localizedDescription
+        }
+    }
+
+    private func profilesUsingKnownHost(_ entry: SSHKnownHostEntry) -> [ConnectionProfile] {
+        guard !entry.isHashed else { return [] }
+        let candidates = Set(entry.directHosts.map { raw -> String in
+            if raw.hasPrefix("[") , let close = raw.firstIndex(of: "]") {
+                return String(raw[raw.index(after: raw.startIndex)..<close]).lowercased()
+            }
+            return raw.lowercased()
+        })
+        return sshProfiles.filter { candidates.contains($0.host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()) }
+    }
+
+    private func verifyKnownHost(_ entry: SSHKnownHostEntry) {
+        verifyingKnownHostID = entry.id
+        Task {
+            let result = await SSHKnownHostsService.verify(entry)
+            knownHostVerification[entry.id] = result
+            if verifyingKnownHostID == entry.id { verifyingKnownHostID = nil }
+        }
+    }
+
+    private func deleteKnownHost(_ entry: SSHKnownHostEntry) {
+        knownHostPendingDeletion = nil
+        do {
+            try SSHKnownHostsService.delete(entry)
+            knownHostVerification[entry.id] = nil
+            refreshKnownHosts()
+        } catch {
+            knownHostsError = error.localizedDescription
+        }
     }
 
     private func refreshCertificateInfo() {

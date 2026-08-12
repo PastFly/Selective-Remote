@@ -1158,7 +1158,10 @@ final class AppModel: NSObject, ObservableObject {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.data]
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        importSSHKey(at: url, assignToProfileID: profileID)
+    }
 
+    func importSSHKey(at url: URL, assignToProfileID profileID: UUID?) {
         do {
             let result = try registerSSHKey(
                 at: url,
