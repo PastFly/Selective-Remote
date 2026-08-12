@@ -1338,6 +1338,12 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = "Выбранный SSH-ключ больше недоступен. Выберите другой ключ."
             return nil
         }
+        if profile.sshAuthenticationMode == .touchIDKey,
+           let identity,
+           !SSHKeyService.isTouchIDCompatible(identity) {
+            errorMessage = "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый."
+            return nil
+        }
         do {
             let settings = try SSHConnectionSettings(
                 profile: profile,

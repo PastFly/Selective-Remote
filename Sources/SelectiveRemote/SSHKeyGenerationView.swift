@@ -4,6 +4,7 @@ import SwiftUI
 struct SSHKeyGenerationView: View {
     @Environment(\.dismiss) private var dismiss
     let generate: (SSHKeyGenerationRequest, TerminalSessionModel) -> Bool
+    private let touchIDOnly: Bool
 
     @StateObject private var terminal = TerminalSessionModel()
     @StateObject private var appearance = TerminalAppearanceStore()
@@ -18,6 +19,7 @@ struct SSHKeyGenerationView: View {
         generate: @escaping (SSHKeyGenerationRequest, TerminalSessionModel) -> Bool
     ) {
         self.generate = generate
+        touchIDOnly = touchIDPreset
         let initial: SSHKeyAlgorithm = touchIDPreset ? .ecdsaP256TouchID : .ed25519
         _algorithm = State(initialValue: initial)
         _path = State(initialValue: SSHKeyService.defaultPrivateKeyPath(for: initial))
@@ -31,7 +33,7 @@ struct SSHKeyGenerationView: View {
                     .font(.system(size: 28))
                     .foregroundStyle(Color.blue)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Новый SSH-ключ")
+                    Text(touchIDOnly ? "Новый Touch ID Key" : "Новый SSH-ключ")
                         .font(.title2.bold())
                     Text("Приватный ключ остаётся только на этом Mac")
                         .font(.caption)
@@ -87,20 +89,27 @@ struct SSHKeyGenerationView: View {
                             .frame(width: 42, height: 42)
                             .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("SSH ID")
+                            Text(touchIDOnly ? "Touch ID Key" : "SSH ID")
                                 .font(.headline)
-                            Text("Ed25519 рекомендуется для новых подключений")
+                            Text(touchIDOnly ? "Отдельный ECDSA P-256 ключ с обязательным Touch ID" : "Ed25519 рекомендуется для новых подключений")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                     }
 
-                    Picker("Алгоритм", selection: $algorithm) {
-                        ForEach(SSHKeyAlgorithm.allCases) { item in
-                            Text(item.title).tag(item)
+                    if touchIDOnly {
+                        LabeledContent("Алгоритм") {
+                            Label("ECDSA P-256", systemImage: "touchid")
+                                .font(.headline)
                         }
+                    } else {
+                        Picker("Алгоритм", selection: $algorithm) {
+                            ForEach(SSHKeyAlgorithm.allCases.filter { $0 != .ecdsaP256TouchID }) { item in
+                                Text(item.title).tag(item)
+                            }
+                        }
+                        .pickerStyle(.segmented)
                     }
-                    .pickerStyle(.segmented)
 
                     LabeledContent("Файл") {
                         HStack {
@@ -119,10 +128,11 @@ struct SSHKeyGenerationView: View {
 
                 VStack(alignment: .leading, spacing: 8) {
                     Toggle(isOn: $protectUseWithUserPresence) {
-                        Label("Touch ID перед использованием ключа", systemImage: "touchid")
+                        Label(touchIDOnly ? "Touch ID обязателен" : "Touch ID перед использованием ключа", systemImage: "touchid")
                             .font(.headline)
                     }
                     .toggleStyle(.switch)
+                    .disabled(touchIDOnly)
                     Text(algorithm == .ecdsaP256TouchID
                         ? "Touch ID Key создаётся как ECDSA P-256 SSH-ключ без passphrase. Selective Remote не загружает его в ssh-agent и перед каждым использованием требует Touch ID."
                         : "Перед использованием выбранного приватного ключа Selective Remote запросит Touch ID; пароль пользователя Mac не используется как fallback.")

@@ -10,6 +10,7 @@ enum SSHServiceError: LocalizedError, Sendable {
     case invalidForwardPort(String)
     case missingForwardDestination
     case missingIdentityFile(String)
+    case incompatibleTouchIDKey
     case executableUnavailable(String)
     case launchFailed(String)
     case commandFailed(String)
@@ -32,6 +33,8 @@ enum SSHServiceError: LocalizedError, Sendable {
             "Для локального или удалённого туннеля укажите конечный host и порт"
         case let .missingIdentityFile(path):
             "Файл SSH-ключа недоступен: \(path)"
+        case .incompatibleTouchIDKey:
+            "Touch ID Key поддерживает только обычные ECDSA-ключи. Выберите ECDSA ключ или создайте новый Touch ID Key."
         case let .executableUnavailable(path):
             "Системная команда недоступна: \(path)"
         case let .launchFailed(message):
@@ -97,6 +100,11 @@ struct SSHConnectionSettings: Equatable, Sendable {
         }
         if authenticationMode == .key || authenticationMode == .touchIDKey, identity == nil {
             throw SSHServiceError.missingIdentityFile("Выберите SSH-ключ для выбранного способа входа")
+        }
+        if authenticationMode == .touchIDKey,
+           let identity,
+           !SSHKeyService.isTouchIDCompatible(identity) {
+            throw SSHServiceError.incompatibleTouchIDKey
         }
         hostKeyPolicy = profile.sshHostKeyPolicy
         self.initialDirectory = initialDirectory.isEmpty ? "." : initialDirectory
@@ -451,6 +459,9 @@ enum SSHService {
         arguments += proxyArguments(settings: settings)
         if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
             arguments += ["-i", identity.privateKeyPath]
+            if let certificateURL = SSHKeyService.certificateURL(for: identity) {
+                arguments += ["-o", "CertificateFile=\(certificateURL.path)"]
+            }
             if settings.authenticationMode == .automatic {
                 arguments += ["-o", "IdentitiesOnly=yes"]
             }
@@ -767,6 +778,18 @@ struct SSHKeyGenerationCommand: Sendable {
     let arguments: [String]
 }
 
+struct SSHCertificateInfo: Equatable, Sendable {
+    let path: String
+    let keyID: String?
+    let serial: String?
+    let type: String?
+    let signingCA: String?
+    let validFrom: String?
+    let validTo: String?
+    let principals: [String]
+    let rawText: String
+}
+
 enum SSHKeyService {
     static let sshKeygenPath = "/usr/bin/ssh-keygen"
     static let sshCopyIDPath = "/usr/bin/ssh-copy-id"
@@ -850,6 +873,72 @@ enum SSHKeyService {
             .appendingPathComponent(".ssh", isDirectory: true)
             .appendingPathComponent(algorithm.defaultFilename)
             .path
+    }
+
+    static func isTouchIDCompatible(_ key: SSHKeyRecord) -> Bool {
+        let normalized = key.algorithm
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .uppercased()
+        return normalized.contains("ECDSA") && !normalized.contains("-SK")
+    }
+
+    static func certificateURL(for key: SSHKeyRecord, fileManager: FileManager = .default) -> URL? {
+        let path = key.privateKeyPath + "-cert.pub"
+        guard fileManager.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
+    static func inspectCertificate(for key: SSHKeyRecord) throws -> SSHCertificateInfo? {
+        guard let url = certificateURL(for: key) else { return nil }
+        let result = try run(
+            executable: sshKeygenPath,
+            arguments: ["-L", "-f", url.path]
+        )
+        guard result.status == 0 else {
+            throw SSHKeyServiceError.inspectionFailed(cleanOutput(result.output))
+        }
+
+        let lines = result.output.components(separatedBy: .newlines)
+        func value(after prefix: String) -> String? {
+            lines.first { $0.trimmingCharacters(in: .whitespaces).hasPrefix(prefix) }
+                .map { line in
+                    let trimmed = line.trimmingCharacters(in: .whitespaces)
+                    return String(trimmed.dropFirst(prefix.count))
+                        .trimmingCharacters(in: .whitespaces)
+                }
+        }
+
+        let validity = value(after: "Valid:")
+        var validFrom: String?
+        var validTo: String?
+        if let validity, let range = validity.range(of: " to ") {
+            validFrom = String(validity[..<range.lowerBound])
+                .replacingOccurrences(of: "from ", with: "")
+            validTo = String(validity[range.upperBound...])
+        }
+
+        var principals: [String] = []
+        if let principalIndex = lines.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces) == "Principals:"
+        }) {
+            for line in lines.dropFirst(principalIndex + 1) {
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.isEmpty || trimmed.contains(":") { break }
+                principals.append(trimmed)
+            }
+        }
+
+        return SSHCertificateInfo(
+            path: url.path,
+            keyID: value(after: "Key ID:")?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")),
+            serial: value(after: "Serial:"),
+            type: value(after: "Type:"),
+            signingCA: value(after: "Signing CA:"),
+            validFrom: validFrom,
+            validTo: validTo,
+            principals: principals,
+            rawText: cleanOutput(result.output)
+        )
     }
 
     static func prepareGeneration(

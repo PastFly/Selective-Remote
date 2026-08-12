@@ -505,3 +505,115 @@ func exportsProfileArchiveSchemaTwo() throws {
     #expect(object?["schemaVersion"] as? Int == 2)
     #expect(decoded.first?.sshIdentityID == nil)
 }
+
+@Test("Touch ID Key принимает только обычный ECDSA-ключ")
+func touchIDKeyCompatibilityIsECDSAOnly() {
+    let ecdsa = SSHKeyRecord(
+        name: "touchid",
+        privateKeyPath: "/tmp/id_ecdsa",
+        publicKeyPath: "/tmp/id_ecdsa.pub",
+        fingerprint: "SHA256:test",
+        algorithm: "ECDSA"
+    )
+    let ed25519 = SSHKeyRecord(
+        name: "regular",
+        privateKeyPath: "/tmp/id_ed25519",
+        publicKeyPath: "/tmp/id_ed25519.pub",
+        fingerprint: "SHA256:test2",
+        algorithm: "ED25519"
+    )
+    let securityKey = SSHKeyRecord(
+        name: "fido",
+        privateKeyPath: "/tmp/id_ecdsa_sk",
+        publicKeyPath: "/tmp/id_ecdsa_sk.pub",
+        fingerprint: "SHA256:test3",
+        algorithm: "ECDSA-SK"
+    )
+
+    #expect(SSHKeyService.isTouchIDCompatible(ecdsa))
+    #expect(!SSHKeyService.isTouchIDCompatible(ed25519))
+    #expect(!SSHKeyService.isTouchIDCompatible(securityKey))
+}
+
+@Test("OpenSSH certificate ищется рядом с приватным ключом")
+func findsOpenSSHCertificateNextToPrivateKey() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let privateURL = directory.appendingPathComponent("id_ed25519")
+    let certificateURL = URL(fileURLWithPath: privateURL.path + "-cert.pub")
+    FileManager.default.createFile(atPath: certificateURL.path, contents: Data())
+
+    let key = SSHKeyRecord(
+        name: "cert-test",
+        privateKeyPath: privateURL.path,
+        publicKeyPath: privateURL.path + ".pub",
+        fingerprint: "SHA256:test",
+        algorithm: "ED25519"
+    )
+
+    #expect(SSHKeyService.certificateURL(for: key)?.path == certificateURL.path)
+}
+
+@Test("OpenSSH certificate подключается через CertificateFile")
+func addsCertificateFileToSSHArguments() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let privateURL = directory.appendingPathComponent("id_ed25519")
+    FileManager.default.createFile(atPath: privateURL.path, contents: Data("-----BEGIN OPENSSH PRIVATE KEY-----\n".utf8))
+    let certificateURL = URL(fileURLWithPath: privateURL.path + "-cert.pub")
+    FileManager.default.createFile(atPath: certificateURL.path, contents: Data())
+
+    let key = SSHKeyRecord(
+        name: "cert-test",
+        privateKeyPath: privateURL.path,
+        publicKeyPath: privateURL.path + ".pub",
+        fingerprint: "SHA256:test",
+        algorithm: "ED25519"
+    )
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshAuthenticationMode = .key
+    let settings = try SSHConnectionSettings(profile: profile, identity: key)
+    let arguments = SSHService.commonSSHArguments(settings: settings, batchMode: false)
+
+    #expect(arguments.contains("CertificateFile=\(certificateURL.path)"))
+}
+
+@Test("Touch ID режим отклоняет Ed25519 identity на уровне SSH settings")
+func touchIDModeRejectsEd25519Identity() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+
+    let privateURL = directory.appendingPathComponent("id_ed25519")
+    FileManager.default.createFile(atPath: privateURL.path, contents: Data("-----BEGIN OPENSSH PRIVATE KEY-----\n".utf8))
+
+    let key = SSHKeyRecord(
+        name: "wrong-touchid-key",
+        privateKeyPath: privateURL.path,
+        publicKeyPath: nil,
+        fingerprint: "SHA256:test",
+        algorithm: "ED25519"
+    )
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshAuthenticationMode = .touchIDKey
+
+    do {
+        _ = try SSHConnectionSettings(profile: profile, identity: key)
+        Issue.record("Touch ID mode accepted a non-ECDSA key")
+    } catch let error as SSHServiceError {
+        if case .incompatibleTouchIDKey = error {
+            // Expected.
+        } else {
+            Issue.record("Unexpected SSH error: \(error.localizedDescription)")
+        }
+    }
+}

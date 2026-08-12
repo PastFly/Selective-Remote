@@ -1003,6 +1003,23 @@ struct ContentView: View {
         }
     }
 
+    private var availableSSHIdentityKeys: [SSHKeyRecord] {
+        if profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey {
+            return model.sshKeys.filter(SSHKeyService.isTouchIDCompatible)
+        }
+        return model.sshKeys
+    }
+
+    private func normalizeTouchIDIdentitySelection() {
+        guard profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey else { return }
+        let selectedID = profileBinding.wrappedValue.sshIdentityID
+        let selectedIsCompatible = selectedID.flatMap { id in
+            model.sshKeys.first(where: { $0.id == id })
+        }.map(SSHKeyService.isTouchIDCompatible) ?? false
+        guard !selectedIsCompatible else { return }
+        profileBinding.wrappedValue.sshIdentityID = availableSSHIdentityKeys.first?.id
+    }
+
     private var authModeHint: String {
         switch profileBinding.wrappedValue.sshAuthenticationMode {
         case .automatic:
@@ -1012,7 +1029,7 @@ struct ContentView: View {
         case .key:
             "Используется только выбранный SSH-ключ. Пароль не будет fallback-вариантом."
         case .touchIDKey:
-            "Как в Termius: выбранный ключ используется только после Touch ID. На сервер устанавливается его обычный публичный ключ."
+            "Touch ID Key — отдельный тип входа: используется только ECDSA-ключ и перед каждым использованием требуется Touch ID. На сервер устанавливается обычный публичный ECDSA-ключ."
         case .agent:
             "Используются только системный ssh-agent и ~/.ssh/config."
         }
@@ -1131,11 +1148,29 @@ struct ContentView: View {
 
                         Picker("Ключ", selection: profileBinding.sshIdentityID) {
                             Text("Выберите ключ…").tag(nil as UUID?)
-                            ForEach(model.sshKeys) { key in
+                            ForEach(availableSSHIdentityKeys) { key in
                                 Text("\(key.name) · \(key.algorithm)").tag(Optional(key.id))
                             }
                         }
                         .labelsHidden()
+                        .onChange(of: profileBinding.wrappedValue.sshAuthenticationMode) { _, _ in
+                            normalizeTouchIDIdentitySelection()
+                        }
+
+                        if profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey {
+                            if availableSSHIdentityKeys.isEmpty {
+                                Label(
+                                    "Нет ECDSA Touch ID Key. Создайте новый ключ — обычные Ed25519/RSA здесь намеренно не предлагаются.",
+                                    systemImage: "exclamationmark.triangle.fill"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                            } else {
+                                Text("Для Touch ID Key доступны только ECDSA-ключи. Ed25519, RSA и FIDO2/SK остаются отдельными SSH ID.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
 
                         HStack(spacing: 8) {
                             Button(
