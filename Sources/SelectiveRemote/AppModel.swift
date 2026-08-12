@@ -1097,6 +1097,10 @@ final class AppModel: NSObject, ObservableObject {
                                 announce: false
                             )
                         }
+                        if request.algorithm == .ecdsaP256TouchID,
+                           let index = profiles.firstIndex(where: { $0.id == profileID }) {
+                            profiles[index].sshAuthenticationMode = .touchIDKey
+                        }
                         statusMessage = result.wasExisting
                             ? "Созданный SSH-ключ выбран"
                             : "SSH-ключ «\(result.key.name)» создан и выбран"
@@ -1291,13 +1295,15 @@ final class AppModel: NSObject, ObservableObject {
                 && matchingTerminalIsRunning
             if let key = settings.identity,
                let profileID = connection.profileID,
-               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString) {
+               (settings.authenticationMode == .touchIDKey
+                    || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)) {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
                     reason: "Подтвердите Touch ID для использования SSH-ключа «\(key.name)»"
                 )
             }
-            if let key = settings.identity,
+            if settings.authenticationMode != .touchIDKey,
+               let key = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,
                    hasActiveControlSession: hasActiveControlSession
@@ -1409,13 +1415,15 @@ final class AppModel: NSObject, ObservableObject {
         do {
             if let identity = settings.identity,
                let profileID = item.connection.profileID,
-               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString) {
+               (settings.authenticationMode == .touchIDKey
+                    || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)) {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
                     reason: "Подтвердите Touch ID для SSH-туннеля и ключа «\(identity.name)»"
                 )
             }
-            if let identity = settings.identity,
+            if settings.authenticationMode != .touchIDKey,
+               let identity = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,
                    hasActiveControlSession: false
@@ -1438,10 +1446,13 @@ final class AppModel: NSObject, ObservableObject {
                     kind: .forwarding
                 )
             }
+            let effectiveCredential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
+                ? credential
+                : nil
             let running = try SSHService.launchTunnel(
                 settings: settings,
                 rule: item.rule,
-                passwordCredential: credential
+                passwordCredential: effectiveCredential
             )
             managedSSHTunnels[id] = running
             sshTunnels[id] = SSHTunnelSummary(
@@ -1482,10 +1493,13 @@ final class AppModel: NSObject, ObservableObject {
         else { return }
 
         do {
-            let credential = KeychainService.credentialReference(
-                profileID: selectedProfile.id,
-                kind: .ssh
-            )
+            let credential: KeychainCredentialReference? =
+                (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
+                ? KeychainService.credentialReference(
+                    profileID: selectedProfile.id,
+                    kind: .ssh
+                )
+                : nil
             let running = try SSHService.launchTunnel(
                 settings: settings,
                 rule: rule,
@@ -1705,16 +1719,19 @@ final class AppModel: NSObject, ObservableObject {
         }
         do {
             if let profileID = connection.profileID,
-               sshKeyUserPresenceProfileIDs.contains(profileID.uuidString),
+               (settings.authenticationMode == .touchIDKey
+                    || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)),
                let identity = settings.identity {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
                     reason: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»"
                 )
             }
-            let credential = connection.profileID.map {
-                KeychainService.credentialReference(profileID: $0, kind: .ssh)
-            }
+            let credential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
+                ? connection.profileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                }
+                : nil
             try session.start(
                 executable: "/usr/bin/ssh",
                 arguments: SSHService.interactiveSSHArguments(settings: settings),

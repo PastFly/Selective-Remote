@@ -150,7 +150,9 @@ struct ContentView: View {
                 .environmentObject(model)
         }
         .sheet(isPresented: $showsSSHKeyGenerator) {
-            SSHKeyGenerationView { request, session in
+            SSHKeyGenerationView(
+                touchIDPreset: profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey
+            ) { request, session in
                 model.generateSSHKey(request, session: session)
             }
         }
@@ -948,167 +950,231 @@ struct ContentView: View {
         }
     }
 
+    private var authModeHint: String {
+        switch profileBinding.wrappedValue.sshAuthenticationMode {
+        case .automatic:
+            "OpenSSH попробует выбранный ключ, ssh-agent и затем пароль. Удобно для совместимости."
+        case .password:
+            "Используется только SSH-пароль. Public key authentication отключена."
+        case .key:
+            "Используется только выбранный SSH-ключ. Пароль не будет fallback-вариантом."
+        case .touchIDKey:
+            "Как в Termius: выбранный ключ используется только после Touch ID. На сервер устанавливается его обычный публичный ключ."
+        case .agent:
+            "Используются только системный ssh-agent и ~/.ssh/config."
+        }
+    }
+
     private var sshGeneralSettings: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 12) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(Color.accentColor.opacity(0.12))
-                        Image(systemName: "lock.shield.fill")
-                            .font(.system(size: 20, weight: .semibold))
+                        Image(systemName: "key.viewfinder")
+                            .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(Color.accentColor)
                     }
-                    .frame(width: 42, height: 42)
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("SSH credentials")
-                            .font(.headline)
-                        Text("Единые реквизиты для Terminal, SFTP и Forwarding")
+                    .frame(width: 48, height: 48)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("SSH-аутентификация")
+                            .font(.title3.bold())
+                        Text("Один способ входа используется Terminal, SFTP и Forwarding")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Keychain", systemImage: "key.viewfinder") {
+                    Button("Keychain", systemImage: "lock.shield") {
                         showsCredentialVault = true
                     }
                 }
 
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("Пароль", systemImage: "ellipsis.rectangle.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        if model.selectedProfileHasSavedSSHPassword {
-                            Label("Сохранён", systemImage: "checkmark.circle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.green)
+                    Text("Способ входа")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                    Picker("Способ входа", selection: profileBinding.sshAuthenticationMode) {
+                        ForEach(SSHAuthenticationMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
                         }
                     }
-                    HStack(spacing: 8) {
-                        SecureField(
-                            model.selectedProfileHasSavedSSHPassword
-                                ? "Сохранён в Keychain — введите новый для замены"
-                                : "Пароль SSH-сервера",
-                            text: $model.sshPassword
-                        )
-                        .textFieldStyle(.roundedBorder)
-                        Button("Сохранить") { model.saveSSHPassword() }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(model.sshPassword.isEmpty)
-                        Button(role: .destructive) {
-                            model.deleteSavedSSHPassword()
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .disabled(!model.selectedProfileHasSavedSSHPassword)
-                    }
-                    if model.selectedProfileHasSavedSSHPassword {
-                        HStack(spacing: 6) {
-                            Image(systemName: "wrench.and.screwdriver")
-                                .foregroundStyle(.secondary)
-                            Text("Проблемы с доступом к старой записи Keychain?")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Button("Восстановить доступ…") {
-                                model.repairSelectedSSHCredentialAccess()
-                            }
-                            .buttonStyle(.link)
-                        }
-                    }
-                    HStack(spacing: 6) {
-                        Image(systemName: model.touchIDAvailable ? "touchid" : "exclamationmark.triangle")
-                            .foregroundStyle(model.touchIDAvailable ? Color.green : Color.orange)
-                        Text(model.touchIDAvailable ? "Touch ID доступен" : "Touch ID недоступен на этом Mac")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Toggle(
-                        isOn: Binding(
-                            get: { model.selectedSSHPasswordRequiresUserPresence },
-                            set: { model.setSelectedSSHPasswordUserPresence($0) }
-                        )
-                    ) {
-                        Label("Требовать Touch ID при использовании SSH-пароля", systemImage: "touchid")
-                    }
-                    .toggleStyle(.switch)
-                    Text("Пароль хранится в macOS Keychain. При включённой защите доступ разрешается только текущим Touch ID; пароль пользователя Mac не используется как fallback.")
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    Text(authModeHint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .padding(14)
                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("SSH ID", systemImage: "key.horizontal.fill")
-                            .font(.subheadline.weight(.semibold))
-                        Spacer()
-                        if let key = model.selectedSSHKey {
-                            Text(key.algorithm)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    Picker("Ключ", selection: profileBinding.sshIdentityID) {
-                        Text("Автоматически · ~/.ssh/config / ssh-agent")
-                            .tag(nil as UUID?)
-                        ForEach(model.sshKeys) { key in
-                            Text("\(key.name) · \(key.algorithm)")
-                                .tag(Optional(key.id))
-                        }
-                    }
-                    .labelsHidden()
-
-                    HStack(spacing: 8) {
-                        Button("Создать SSH ID", systemImage: "plus.circle.fill") {
-                            showsSSHKeyGenerator = true
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button("Импортировать", systemImage: "square.and.arrow.down") {
-                            model.importSSHKey()
-                        }
-                        Button("Установить на сервер", systemImage: "arrow.up.to.line") {
-                            model.installSelectedSSHPublicKey()
-                        }
-                        .disabled(
-                            model.selectedSSHKey?.publicKeyPath == nil
-                                || model.isSelectedSSHTerminalRunning
-                        )
-                    }
-
-                    Toggle(
-                        isOn: Binding(
-                            get: { model.selectedSSHKeyRequiresUserPresence },
-                            set: { model.setSelectedSSHKeyUserPresence($0) }
-                        )
-                    ) {
-                        Label("Требовать Touch ID перед использованием SSH-ключа", systemImage: "touchid")
-                    }
-                    .toggleStyle(.switch)
-                    .disabled(model.selectedSSHKey == nil)
-
-                    if let key = model.selectedSSHKey {
-                        HStack(spacing: 8) {
-                            Image(systemName: "checkmark.shield.fill")
-                                .foregroundStyle(.green)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(key.name)
-                                    .font(.caption.weight(.semibold))
-                                Text(key.fingerprint)
-                                    .font(.caption2.monospaced())
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                if profileBinding.wrappedValue.sshAuthenticationMode == .automatic
+                    || profileBinding.wrappedValue.sshAuthenticationMode == .password {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label("Пароль", systemImage: "ellipsis.rectangle.fill")
+                                .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            if model.selectedProfileHasSavedSSHPassword {
+                                Label("Сохранён в Keychain", systemImage: "checkmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
                             }
                         }
-                    } else {
-                        Text("Создайте Ed25519-ключ или импортируйте существующий. Публичный ключ можно одним нажатием добавить в ~/.ssh/authorized_keys на сервере.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            SecureField(
+                                model.selectedProfileHasSavedSSHPassword
+                                    ? "Сохранён — введите новый для замены"
+                                    : "Пароль SSH-сервера",
+                                text: $model.sshPassword
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            Button("Сохранить") { model.saveSSHPassword() }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(model.sshPassword.isEmpty)
+                            Button(role: .destructive) { model.deleteSavedSSHPassword() } label: {
+                                Image(systemName: "trash")
+                            }
+                            .disabled(!model.selectedProfileHasSavedSSHPassword)
+                        }
+                        if model.selectedProfileHasSavedSSHPassword {
+                            Toggle(
+                                isOn: Binding(
+                                    get: { model.selectedSSHPasswordRequiresUserPresence },
+                                    set: { model.setSelectedSSHPasswordUserPresence($0) }
+                                )
+                            ) {
+                                Label("Touch ID перед использованием пароля", systemImage: "touchid")
+                            }
+                            .toggleStyle(.switch)
+                        }
                     }
+                    .padding(14)
+                    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                 }
-                .padding(14)
-                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+                if profileBinding.wrappedValue.sshAuthenticationMode == .automatic
+                    || profileBinding.wrappedValue.sshAuthenticationMode == .key
+                    || profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label(
+                                profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey ? "Touch ID Key" : "SSH ID",
+                                systemImage: profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey ? "touchid" : "key.horizontal.fill"
+                            )
+                            .font(.subheadline.weight(.semibold))
+                            Spacer()
+                            if profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey {
+                                Label("Touch ID обязателен", systemImage: "checkmark.shield.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(.green)
+                            }
+                        }
+
+                        Picker("Ключ", selection: profileBinding.sshIdentityID) {
+                            Text("Выберите ключ…").tag(nil as UUID?)
+                            ForEach(model.sshKeys) { key in
+                                Text("\(key.name) · \(key.algorithm)").tag(Optional(key.id))
+                            }
+                        }
+                        .labelsHidden()
+
+                        HStack(spacing: 8) {
+                            Button(
+                                profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey
+                                    ? "Создать Touch ID Key"
+                                    : "Создать SSH ID",
+                                systemImage: profileBinding.wrappedValue.sshAuthenticationMode == .touchIDKey ? "touchid" : "plus.circle.fill"
+                            ) { showsSSHKeyGenerator = true }
+                            .buttonStyle(.borderedProminent)
+                            Button("Импортировать", systemImage: "square.and.arrow.down") { model.importSSHKey() }
+                            Button("Установить на сервер", systemImage: "arrow.up.to.line") {
+                                model.installSelectedSSHPublicKey()
+                            }
+                            .disabled(model.selectedSSHKey?.publicKeyPath == nil || model.isSelectedSSHTerminalRunning)
+                        }
+
+                        if profileBinding.wrappedValue.sshAuthenticationMode == .key {
+                            Toggle(
+                                isOn: Binding(
+                                    get: { model.selectedSSHKeyRequiresUserPresence },
+                                    set: { model.setSelectedSSHKeyUserPresence($0) }
+                                )
+                            ) {
+                                Label("Дополнительно подтверждать использование ключа через Touch ID", systemImage: "touchid")
+                            }
+                            .toggleStyle(.switch)
+                            .disabled(model.selectedSSHKey == nil)
+                        }
+
+                        if let key = model.selectedSSHKey {
+                            HStack(spacing: 8) {
+                                Image(systemName: "checkmark.shield.fill").foregroundStyle(.green)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(key.name).font(.caption.weight(.semibold))
+                                    Text(key.fingerprint)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                }
+                            }
+                        }
+                    }
+                    .padding(14)
+                    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+
+                if profileBinding.wrappedValue.sshAuthenticationMode == .agent {
+                    Label(
+                        "Selective Remote использует системный ssh-agent и ~/.ssh/config. Пароль и выбранный SSH ID профиля не передаются OpenSSH.",
+                        systemImage: "terminal.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+            }
+            .padding(16)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08))
+            }
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Label("Proxy", systemImage: "arrow.triangle.branch")
+                        .font(.headline)
+                    Spacer()
+                    Text(profileBinding.wrappedValue.sshProxyMode.title)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Picker("Proxy", selection: profileBinding.sshProxyMode) {
+                    ForEach(SSHProxyMode.allCases) { mode in Text(mode.title).tag(mode) }
+                }
+                .pickerStyle(.segmented)
+
+                if profileBinding.wrappedValue.sshProxyMode != .none {
+                    HStack(spacing: 10) {
+                        TextField("proxy.example.com", text: profileBinding.sshProxyHost)
+                            .textFieldStyle(.roundedBorder)
+                        TextField(
+                            "Порт",
+                            value: profileBinding.sshProxyPort,
+                            format: .number.grouping(.never)
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 110)
+                    }
+                    Text("Прокси применяется к Terminal, SFTP и Forwarding этого профиля через системный OpenSSH. Поддерживаются HTTP CONNECT и SOCKS5 без отдельной proxy-аутентификации.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(16)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))

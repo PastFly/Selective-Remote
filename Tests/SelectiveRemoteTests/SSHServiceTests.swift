@@ -39,6 +39,7 @@ func buildsEmbeddedSSHArguments() throws {
             "-o", "ControlPath=\(controlPath)",
             "-o", "ControlMaster=auto",
             "-o", "User=alice",
+            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
             "-o", "ControlPersist=60",
@@ -107,6 +108,29 @@ func reusesActiveSSHControlSocketForSFTP() throws {
     changedProfile.host = "other.example.com"
     let changedSettings = try SSHConnectionSettings(profile: changedProfile, identity: nil)
     #expect(SSHService.controlPath(settings: changedSettings) != controlPath)
+}
+
+@Test("SSH режим пароля отключает public key fallback")
+func passwordOnlyAuthenticationArguments() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshAuthenticationMode = .password
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let arguments = SSHService.commonSSHArguments(settings: settings, batchMode: false)
+    #expect(arguments.contains("PreferredAuthentications=keyboard-interactive,password"))
+    #expect(arguments.contains("PubkeyAuthentication=no"))
+}
+
+@Test("SSH proxy добавляет ProxyCommand для SOCKS5")
+func socksProxyArguments() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshProxyMode = .socks5
+    profile.sshProxyHost = "127.0.0.1"
+    profile.sshProxyPort = 1080
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let arguments = SSHService.commonSSHArguments(settings: settings, batchMode: false)
+    #expect(arguments.contains("ProxyCommand=/usr/bin/nc -X 5 -x 127.0.0.1:1080 %h %p"))
 }
 
 @Test("Активная SSH-сессия не требует повторной загрузки ключа в ssh-agent")

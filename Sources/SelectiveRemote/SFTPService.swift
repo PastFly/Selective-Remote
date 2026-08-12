@@ -242,11 +242,12 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = SFTPService.persistentMasterArguments(settings: settings)
+        let passwordCredential: KeychainCredentialReference? =
+            (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
+            ? KeychainService.credentialReference(profileID: settings.profileID, kind: .ssh)
+            : nil
         process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
-            passwordCredential: KeychainService.credentialReference(
-                profileID: settings.profileID,
-                kind: .ssh
-            )
+            passwordCredential: passwordCredential
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
@@ -1023,11 +1024,13 @@ enum SFTPService {
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
         }
-        if let identity = settings.identity {
-            arguments += [
-                "-i", identity.privateKeyPath,
-                "-o", "IdentitiesOnly=yes"
-            ]
+        arguments += SSHService.authenticationArguments(settings: settings)
+        arguments += SSHService.proxyArguments(settings: settings)
+        if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
+            arguments += ["-i", identity.privateKeyPath]
+            if settings.authenticationMode == .automatic {
+                arguments += ["-o", "IdentitiesOnly=yes"]
+            }
         }
         if settings.compression {
             arguments.append("-C")
@@ -1047,7 +1050,6 @@ enum SFTPService {
             "-p", String(settings.port),
             "-o", "BatchMode=no",
             "-o", "NumberOfPasswordPrompts=1",
-            "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
             "-o", "StrictHostKeyChecking=\(settings.hostKeyPolicy.openSSHValue)",
             "-o", "ControlPath=\(SSHService.controlPath(settings: settings))",
             "-o", "ControlMaster=yes",
@@ -1057,11 +1059,13 @@ enum SFTPService {
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
         }
-        if let identity = settings.identity {
-            arguments += [
-                "-i", identity.privateKeyPath,
-                "-o", "IdentitiesOnly=yes"
-            ]
+        arguments += SSHService.authenticationArguments(settings: settings)
+        arguments += SSHService.proxyArguments(settings: settings)
+        if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
+            arguments += ["-i", identity.privateKeyPath]
+            if settings.authenticationMode == .automatic {
+                arguments += ["-o", "IdentitiesOnly=yes"]
+            }
         }
         if settings.compression {
             arguments.append("-C")

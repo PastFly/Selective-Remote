@@ -437,6 +437,53 @@ enum ConnectionType: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+
+enum SSHAuthenticationMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case automatic
+    case password
+    case key
+    case touchIDKey
+    case agent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic: "Автоматически"
+        case .password: "Пароль"
+        case .key: "SSH-ключ"
+        case .touchIDKey: "Touch ID Key"
+        case .agent: "ssh-agent / ~/.ssh/config"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .automatic: "wand.and.stars"
+        case .password: "ellipsis.rectangle.fill"
+        case .key: "key.horizontal.fill"
+        case .touchIDKey: "touchid"
+        case .agent: "terminal.fill"
+        }
+    }
+}
+
+enum SSHProxyMode: String, Codable, CaseIterable, Identifiable, Sendable {
+    case none
+    case http
+    case socks5
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .none: "Без прокси"
+        case .http: "HTTP CONNECT"
+        case .socks5: "SOCKS5"
+        }
+    }
+}
+
 enum SSHHostKeyPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
     case acceptNew
     case strict
@@ -641,7 +688,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var host: String
     var username: String
     var sshPort: Int
+    var sshAuthenticationMode: SSHAuthenticationMode
     var sshIdentityID: UUID?
+    var sshProxyMode: SSHProxyMode
+    var sshProxyHost: String
+    var sshProxyPort: Int
     var sshHostKeyPolicy: SSHHostKeyPolicy
     var sshInitialDirectory: String
     var sshCompression: Bool
@@ -690,7 +741,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         host = ""
         username = ""
         sshPort = 22
+        sshAuthenticationMode = .automatic
         sshIdentityID = nil
+        sshProxyMode = .none
+        sshProxyHost = ""
+        sshProxyPort = 1080
         sshHostKeyPolicy = .acceptNew
         sshInitialDirectory = "."
         sshCompression = false
@@ -734,7 +789,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
 
     private enum CodingKeys: String, CodingKey {
         case id, connectionType, friendlyName, group, host, username
-        case sshPort, sshIdentityID, sshHostKeyPolicy, sshInitialDirectory
+        case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, portForwards
         case gatewayHost, gatewayUsername
         case isFavorite, selectedDisplayIDs, primaryDisplayID
@@ -762,7 +817,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
+        sshAuthenticationMode = try container.decodeIfPresent(SSHAuthenticationMode.self, forKey: .sshAuthenticationMode) ?? defaults.sshAuthenticationMode
         sshIdentityID = try container.decodeIfPresent(UUID.self, forKey: .sshIdentityID)
+        sshProxyMode = try container.decodeIfPresent(SSHProxyMode.self, forKey: .sshProxyMode) ?? defaults.sshProxyMode
+        sshProxyHost = try container.decodeIfPresent(String.self, forKey: .sshProxyHost) ?? defaults.sshProxyHost
+        sshProxyPort = try container.decodeIfPresent(Int.self, forKey: .sshProxyPort) ?? defaults.sshProxyPort
         sshHostKeyPolicy = try container.decodeIfPresent(
             SSHHostKeyPolicy.self,
             forKey: .sshHostKeyPolicy
@@ -876,7 +935,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
+        try container.encode(sshAuthenticationMode, forKey: .sshAuthenticationMode)
         try container.encodeIfPresent(sshIdentityID, forKey: .sshIdentityID)
+        try container.encode(sshProxyMode, forKey: .sshProxyMode)
+        try container.encode(sshProxyHost, forKey: .sshProxyHost)
+        try container.encode(sshProxyPort, forKey: .sshProxyPort)
         try container.encode(sshHostKeyPolicy, forKey: .sshHostKeyPolicy)
         try container.encode(sshInitialDirectory, forKey: .sshInitialDirectory)
         try container.encode(sshCompression, forKey: .sshCompression)

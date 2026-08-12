@@ -7,11 +7,22 @@ struct SSHKeyGenerationView: View {
 
     @StateObject private var terminal = TerminalSessionModel()
     @StateObject private var appearance = TerminalAppearanceStore()
-    @State private var algorithm = SSHKeyAlgorithm.ed25519
-    @State private var path = SSHKeyService.defaultPrivateKeyPath(for: .ed25519)
+    @State private var algorithm: SSHKeyAlgorithm
+    @State private var path: String
     @State private var comment = "\(NSUserName())@SelectiveRemote"
     @State private var protectUseWithUserPresence = true
     @State private var generationStarted = false
+
+    init(
+        touchIDPreset: Bool = false,
+        generate: @escaping (SSHKeyGenerationRequest, TerminalSessionModel) -> Bool
+    ) {
+        self.generate = generate
+        let initial: SSHKeyAlgorithm = touchIDPreset ? .ecdsaP256TouchID : .ed25519
+        _algorithm = State(initialValue: initial)
+        _path = State(initialValue: SSHKeyService.defaultPrivateKeyPath(for: initial))
+        _protectUseWithUserPresence = State(initialValue: touchIDPreset)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -112,7 +123,9 @@ struct SSHKeyGenerationView: View {
                             .font(.headline)
                     }
                     .toggleStyle(.switch)
-                    Text("Selective Remote создаст защищённый маркер в macOS Keychain. Перед использованием выбранного приватного ключа приложение запросит именно Touch ID; пароль пользователя Mac не используется как fallback.")
+                    Text(algorithm == .ecdsaP256TouchID
+                        ? "Touch ID Key создаётся как ECDSA P-256 SSH-ключ без passphrase. Selective Remote не загружает его в ssh-agent и перед каждым использованием требует Touch ID."
+                        : "Перед использованием выбранного приватного ключа Selective Remote запросит Touch ID; пароль пользователя Mac не используется как fallback.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -120,7 +133,9 @@ struct SSHKeyGenerationView: View {
                 .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
 
                 Label(
-                    "Passphrase ключа остаётся отдельной защитой OpenSSH. В служебном терминале можно задать её или нажать Enter два раза, чтобы оставить ключ без passphrase.",
+                    algorithm == .ecdsaP256TouchID
+                        ? "Для Touch ID Key passphrase не запрашивается: подтверждение выполняет Touch ID перед запуском OpenSSH."
+                        : "Passphrase ключа остаётся отдельной защитой OpenSSH. В служебном терминале можно задать её или нажать Enter два раза, чтобы оставить ключ без passphrase.",
                     systemImage: "lock.shield"
                 )
                 .font(.caption)
@@ -153,6 +168,9 @@ struct SSHKeyGenerationView: View {
             let oldDefault = SSHKeyService.defaultPrivateKeyPath(for: oldValue)
             if path == oldDefault {
                 path = SSHKeyService.defaultPrivateKeyPath(for: newValue)
+            }
+            if newValue == .ecdsaP256TouchID {
+                protectUseWithUserPresence = true
             }
         }
     }

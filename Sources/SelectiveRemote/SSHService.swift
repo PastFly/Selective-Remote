@@ -48,7 +48,11 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let host: String
     let username: String
     let port: Int
+    let authenticationMode: SSHAuthenticationMode
     let identity: SSHKeyRecord?
+    let proxyMode: SSHProxyMode
+    let proxyHost: String
+    let proxyPort: Int
     let hostKeyPolicy: SSHHostKeyPolicy
     let initialDirectory: String
     let compression: Bool
@@ -78,7 +82,20 @@ struct SSHConnectionSettings: Equatable, Sendable {
         host = normalizedHost
         username = normalizedUser
         port = profile.sshPort
+        authenticationMode = profile.sshAuthenticationMode
         self.identity = identity
+        proxyMode = profile.sshProxyMode
+        proxyHost = profile.sshProxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        proxyPort = profile.sshProxyPort
+        if proxyMode != .none {
+            try SSHService.validateHost(proxyHost)
+            guard (1...65_535).contains(proxyPort) else {
+                throw SSHServiceError.invalidPort
+            }
+        }
+        if authenticationMode == .key || authenticationMode == .touchIDKey, identity == nil {
+            throw SSHServiceError.missingIdentityFile("Выберите SSH-ключ для выбранного способа входа")
+        }
         hostKeyPolicy = profile.sshHostKeyPolicy
         self.initialDirectory = initialDirectory.isEmpty ? "." : initialDirectory
         compression = profile.sshCompression
@@ -350,6 +367,38 @@ enum SSHService {
         }
     }
 
+    static func authenticationArguments(settings: SSHConnectionSettings) -> [String] {
+        switch settings.authenticationMode {
+        case .automatic:
+            return ["-o", "PreferredAuthentications=publickey,keyboard-interactive,password"]
+        case .password:
+            return [
+                "-o", "PreferredAuthentications=keyboard-interactive,password",
+                "-o", "PubkeyAuthentication=no"
+            ]
+        case .key, .touchIDKey:
+            return [
+                "-o", "PreferredAuthentications=publickey",
+                "-o", "PasswordAuthentication=no",
+                "-o", "KbdInteractiveAuthentication=no",
+                "-o", "IdentitiesOnly=yes"
+            ]
+        case .agent:
+            return [
+                "-o", "PreferredAuthentications=publickey",
+                "-o", "PasswordAuthentication=no",
+                "-o", "KbdInteractiveAuthentication=no"
+            ]
+        }
+    }
+
+    static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
+        guard settings.proxyMode != .none else { return [] }
+        let mode = settings.proxyMode == .http ? "connect" : "5"
+        let command = "/usr/bin/nc -X \(mode) -x \(settings.proxyHost):\(settings.proxyPort) %h %p"
+        return ["-o", "ProxyCommand=\(command)"]
+    }
+
     static func commonSSHArguments(
         settings: SSHConnectionSettings,
         batchMode: Bool,
@@ -379,11 +428,13 @@ enum SSHService {
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
         }
-        if let identity = settings.identity {
-            arguments += [
-                "-i", identity.privateKeyPath,
-                "-o", "IdentitiesOnly=yes"
-            ]
+        arguments += authenticationArguments(settings: settings)
+        arguments += proxyArguments(settings: settings)
+        if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
+            arguments += ["-i", identity.privateKeyPath]
+            if settings.authenticationMode == .automatic {
+                arguments += ["-o", "IdentitiesOnly=yes"]
+            }
         }
         if settings.compression {
             arguments.append("-C")
@@ -421,6 +472,7 @@ enum SSHService {
         if !settings.username.isEmpty {
             arguments += ["-o", "User=\(settings.username)"]
         }
+        arguments += proxyArguments(settings: settings)
         return arguments + [settings.host]
     }
 
@@ -477,8 +529,7 @@ enum SSHService {
                 "-T",
                 "-o", "ExitOnForwardFailure=yes",
                 "-o", "LogLevel=ERROR",
-                "-o", "NumberOfPasswordPrompts=1",
-                "-o", "PreferredAuthentications=publickey,keyboard-interactive,password"
+                "-o", "NumberOfPasswordPrompts=1"
             ]
             + forwarding
             + [settings.host]
@@ -606,6 +657,7 @@ enum SSHKeyServiceError: LocalizedError, Sendable {
 
 enum SSHKeyAlgorithm: String, CaseIterable, Identifiable, Hashable, Sendable {
     case ed25519
+    case ecdsaP256TouchID
     case rsa4096
 
     var id: String { rawValue }
@@ -614,6 +666,8 @@ enum SSHKeyAlgorithm: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .ed25519:
             "Ed25519 — рекомендуется"
+        case .ecdsaP256TouchID:
+            "Touch ID Key · ECDSA P-256"
         case .rsa4096:
             "RSA 4096 — для старых серверов"
         }
@@ -623,6 +677,8 @@ enum SSHKeyAlgorithm: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .ed25519:
             "id_ed25519_selectiveremote"
+        case .ecdsaP256TouchID:
+            "id_ecdsa_selectiveremote_touchid"
         case .rsa4096:
             "id_rsa_selectiveremote"
         }
@@ -632,6 +688,8 @@ enum SSHKeyAlgorithm: String, CaseIterable, Identifiable, Hashable, Sendable {
         switch self {
         case .ed25519:
             ["-t", "ed25519", "-a", "64"]
+        case .ecdsaP256TouchID:
+            ["-t", "ecdsa", "-b", "256", "-a", "64"]
         case .rsa4096:
             ["-t", "rsa", "-b", "4096", "-a", "64"]
         }
@@ -782,6 +840,12 @@ enum SSHKeyService {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var arguments = request.algorithm.keygenArguments
             + ["-f", privateURL.path]
+        if request.algorithm == .ecdsaP256TouchID {
+            // Touch ID is the app-level approval gate for this key. Keeping the
+            // generated key passphrase-free avoids loading it into ssh-agent, so
+            // each Selective Remote connection can require fresh biometrics.
+            arguments += ["-N", ""]
+        }
         if !normalizedComment.isEmpty, !normalizedComment.contains(where: \.isNewline) {
             arguments += ["-C", normalizedComment]
         }
