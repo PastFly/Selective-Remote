@@ -91,7 +91,7 @@ func appendsPublicKeyWithoutReplacingAuthorizedKeys() throws {
     #expect(arguments.contains("ControlMaster=no"))
     #expect(remoteCommand.contains("grep -qxF"))
     #expect(remoteCommand.contains(">> \"$HOME/.ssh/authorized_keys\""))
-    #expect(!remoteCommand.contains("> \"$HOME/.ssh/authorized_keys\""))
+    #expect(!remoteCommand.contains("; > \"$HOME/.ssh/authorized_keys\""))
     #expect(remoteCommand.contains("chmod 600"))
 }
 
