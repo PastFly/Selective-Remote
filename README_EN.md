@@ -89,7 +89,7 @@ SSH profiles can use:
 - **HTTP CONNECT proxy**;
 - **SOCKS5 proxy**.
 
-The proxy configuration is shared by Terminal, SFTP, and Forwarding. HTTP CONNECT supports a proxy username. A proxy password is intentionally not passed on a process command line; secure proxy-password storage will require a dedicated credential helper.
+The proxy configuration is shared by Terminal, SFTP, and Forwarding. HTTP CONNECT and SOCKS5 support username/password authentication. Proxy passwords are stored in macOS Keychain and handed to a dedicated helper through a short-lived `0600` secret file, so credentials never appear in OpenSSH command-line arguments. SSH profiles also include built-in diagnostics for TCP reachability, proxy configuration, and the selected authentication mode.
 
 ## Install
 

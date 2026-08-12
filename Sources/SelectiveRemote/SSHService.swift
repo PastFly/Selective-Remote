@@ -397,12 +397,20 @@ enum SSHService {
 
     static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
         guard settings.proxyMode != .none else { return [] }
-        let mode = settings.proxyMode == .http ? "connect" : "5"
-        var parts = ["/usr/bin/nc", "-X", mode, "-x", "\(settings.proxyHost):\(settings.proxyPort)"]
-        if settings.proxyMode == .http, !settings.proxyUsername.isEmpty {
-            parts += ["-P", shellEscaped(settings.proxyUsername)]
-        }
-        parts += ["%h", "%p"]
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers", isDirectory: true)
+            .appendingPathComponent("SelectiveRemoteSSHProxy")
+        let mode = settings.proxyMode == .http ? "http" : "socks5"
+        let secret = "${SELECTIVEREMOTE_PROXY_SECRET_FILE:-}"
+        let parts = [
+            shellEscaped(helper.path),
+            mode,
+            shellEscaped(settings.proxyHost),
+            String(settings.proxyPort),
+            "%h", "%p",
+            shellEscaped(settings.proxyUsername),
+            "\"\(secret)\""
+        ]
         return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
     }
 
@@ -581,7 +589,11 @@ enum SSHService {
             + forwarding
             + [settings.host]
         process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
-            passwordCredential: passwordCredential
+            passwordCredential: passwordCredential,
+            proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                profileID: settings.profileID,
+                kind: .proxy
+            )
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = logHandle
@@ -775,7 +787,8 @@ enum SSHKeyService {
     }
 
     static func backgroundAuthenticationEnvironment(
-        passwordCredential: KeychainCredentialReference? = nil
+        passwordCredential: KeychainCredentialReference? = nil,
+        proxyPasswordCredential: KeychainCredentialReference? = nil
     ) throws -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
@@ -785,6 +798,7 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_SERVICE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_PROXY_SECRET_FILE")
 
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
@@ -801,39 +815,30 @@ enum SSHKeyService {
                 environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
             }
         }
+        if let proxyPasswordCredential,
+           let proxyPassword = try KeychainService.readPassword(reference: proxyPasswordCredential),
+           !proxyPassword.isEmpty {
+            let secretURL = try makeSecretFile(proxyPassword, prefix: "proxy")
+            environment["SELECTIVEREMOTE_PROXY_SECRET_FILE"] = secretURL.path
+        }
         return environment
     }
 
-    private static func makeAskPassSecretFile(_ password: String) throws -> URL {
-        let directory = URL(
-            fileURLWithPath: "/tmp/selectiveremote-askpass-\(Darwin.getuid())",
-            isDirectory: true
-        )
-        try FileManager.default.createDirectory(
-            at: directory,
-            withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o700],
-            ofItemAtPath: directory.path
-        )
-        let url = directory.appendingPathComponent(UUID().uuidString)
-        guard FileManager.default.createFile(
-            atPath: url.path,
-            contents: Data(password.utf8),
-            attributes: [.posixPermissions: 0o600]
-        ) else {
-            throw SSHServiceError.launchFailed("не удалось подготовить защищённый канал SSH AskPass")
+    private static func makeSecretFile(_ secret: String, prefix: String) throws -> URL {
+        let directory = URL(fileURLWithPath: "/tmp/selectiveremote-secrets-\(Darwin.getuid())", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        let url = directory.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
+        guard FileManager.default.createFile(atPath: url.path, contents: Data(secret.utf8), attributes: [.posixPermissions: 0o600]) else {
+            throw SSHServiceError.launchFailed("не удалось подготовить защищённый канал секрета")
         }
-        try FileManager.default.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: url.path
-        )
-        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 180) {
-            try? FileManager.default.removeItem(at: url)
-        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 180) { try? FileManager.default.removeItem(at: url) }
         return url
+    }
+
+    private static func makeAskPassSecretFile(_ password: String) throws -> URL {
+        try makeSecretFile(password, prefix: "askpass")
     }
 
     static func stopManagedAgent() {

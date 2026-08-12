@@ -149,7 +149,12 @@ func socksProxyArguments() throws {
     profile.sshProxyPort = 1080
     let settings = try SSHConnectionSettings(profile: profile, identity: nil)
     let arguments = SSHService.commonSSHArguments(settings: settings, batchMode: false)
-    #expect(arguments.contains("ProxyCommand=/usr/bin/nc -X 5 -x 127.0.0.1:1080 %h %p"))
+    let proxy = arguments.first(where: { $0.hasPrefix("ProxyCommand=") }) ?? ""
+    #expect(proxy.contains("SelectiveRemoteSSHProxy"))
+    #expect(proxy.contains("socks5"))
+    #expect(proxy.contains("127.0.0.1"))
+    #expect(proxy.contains("1080"))
+    #expect(!proxy.contains("password"))
 }
 
 @Test("Активная SSH-сессия не требует повторной загрузки ключа в ssh-agent")

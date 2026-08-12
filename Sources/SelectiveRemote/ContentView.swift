@@ -60,6 +60,7 @@ struct ContentView: View {
     @State private var showsCaptureDiagnostics = false
     @State private var showsCredentialVault = false
     @State private var showsSSHKeyGenerator = false
+    @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
     @State private var showsGlobalSFTPConnectionEditor = false
     @State private var globalSFTPConnection: TerminalTabConnection?
@@ -149,6 +150,9 @@ struct ContentView: View {
         .sheet(isPresented: $showsCredentialVault) {
             CredentialVaultView()
                 .environmentObject(model)
+        }
+        .sheet(isPresented: $showsSSHDiagnostics) {
+            SSHDiagnosticsView(profile: profile, identity: model.selectedSSHKey)
         }
         .sheet(isPresented: $showsSSHKeyGenerator) {
             SSHKeyGenerationView(
@@ -1014,7 +1018,10 @@ struct ContentView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Keychain", systemImage: "lock.shield") {
+                    Button("Диагностика", systemImage: "stethoscope") {
+                        showsSSHDiagnostics = true
+                    }
+                    Button("SSH ID и секреты", systemImage: "lock.shield") {
                         showsCredentialVault = true
                     }
                 }
@@ -1200,17 +1207,33 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
                     }
-                    if profileBinding.wrappedValue.sshProxyMode == .http {
-                        TextField("Имя пользователя прокси (необязательно)", text: profileBinding.sshProxyUsername)
-                            .textFieldStyle(.roundedBorder)
-                        Text("HTTP CONNECT поддерживает proxy-аутентификацию через системный nc. Если прокси требует пароль, macOS запросит его при установке соединения. Для фоновых туннелей рекомендуется прокси без интерактивного запроса пароля.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("SOCKS5 применяется к Terminal, SFTP и Forwarding через системный OpenSSH. Встроенный системный nc не поддерживает отдельную username/password-аутентификацию SOCKS5.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    TextField("Имя пользователя прокси (необязательно)", text: profileBinding.sshProxyUsername)
+                        .textFieldStyle(.roundedBorder)
+                    HStack(spacing: 10) {
+                        SecureField(
+                            model.selectedProfileHasSavedProxyPassword
+                                ? "Сохранён в Keychain — введите новый для замены"
+                                : "Пароль прокси (необязательно)",
+                            text: $model.proxyPassword
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        Button("Сохранить") { model.saveProxyPassword() }
+                            .disabled(model.proxyPassword.isEmpty)
+                        if model.selectedProfileHasSavedProxyPassword {
+                            Button(role: .destructive) { model.deleteSavedProxyPassword() } label: {
+                                Image(systemName: "trash")
+                            }
+                            .help("Удалить пароль прокси из Keychain")
+                        }
                     }
+                    Label(
+                        profileBinding.wrappedValue.sshProxyMode == .http
+                            ? "HTTP CONNECT: Basic-аутентификация выполняется защищённым helper-процессом; пароль не попадает в аргументы OpenSSH."
+                            : "SOCKS5: поддерживаются анонимный режим и username/password; пароль хранится в Keychain и передаётся helper-процессу через временный файл 0600.",
+                        systemImage: "lock.shield"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
             .padding(16)

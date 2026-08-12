@@ -120,15 +120,14 @@ struct CredentialVaultView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Label(
-                        model.selectedSSHKey.map { "Выбран ключ «\($0.name)»" }
-                            ?? "Используются ~/.ssh/config и ключи ssh-agent",
-                        systemImage: "terminal"
-                    )
-                    credentialStatus(
-                        "Пароль SSH",
-                        stored: model.selectedProfileHasSavedSSHPassword
-                    )
+                    Label("Способ входа: \(model.selectedProfile.sshAuthenticationMode.title)", systemImage: model.selectedProfile.sshAuthenticationMode.systemImage)
+                    if let key = model.selectedSSHKey {
+                        Label("SSH ID: «\(key.name)»", systemImage: "key.horizontal")
+                    }
+                    credentialStatus("Пароль SSH", stored: model.selectedProfileHasSavedSSHPassword)
+                    if model.selectedProfile.sshProxyMode != .none {
+                        credentialStatus("Пароль Proxy", stored: model.selectedProfileHasSavedProxyPassword)
+                    }
                     Text(
                         model.selectedSSHPasswordRequiresUserPresence
                             ? "Доступ к сохранённому SSH-паролю подтверждается только Touch ID."
@@ -235,10 +234,13 @@ struct CredentialVaultView: View {
                     model.hasSavedSSHKeyPassphrase(keyID: key.id) ? Color.green : Color.secondary
                 )
 
-                VStack(alignment: .leading, spacing: 5) {
-                    Label("ssh-agent временно держит разблокированный ключ в памяти, чтобы OpenSSH не спрашивал passphrase при каждом подключении.", systemImage: "info.circle")
-                    Label("Keychain хранит только passphrase ключа и SSH-пароли. Сам приватный ключ остаётся файлом в ~/.ssh.", systemImage: "lock.shield")
-                    Label("Touch ID Key не добавляется в ssh-agent: перед каждым использованием Selective Remote запрашивает Touch ID.", systemImage: "touchid")
+                DisclosureGroup("Что означают эти действия?") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        Label("ssh-agent держит разблокированный обычный ключ только в памяти текущего сеанса.", systemImage: "memorychip")
+                        Label("Keychain хранит SSH-пароли, proxy-пароли и passphrase; приватный SSH-ключ остаётся файлом в ~/.ssh.", systemImage: "lock.shield")
+                        Label("Touch ID Key не загружается в ssh-agent: Selective Remote подтверждает его использование Touch ID перед подключением.", systemImage: "touchid")
+                    }
+                    .padding(.top, 6)
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)

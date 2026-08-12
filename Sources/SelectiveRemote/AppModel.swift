@@ -260,12 +260,14 @@ final class AppModel: NSObject, ObservableObject {
             password = ""
             gatewayPassword = ""
             sshPassword = ""
+            proxyPassword = ""
             errorMessage = nil
         }
     }
     @Published var password = ""
     @Published var gatewayPassword = ""
     @Published var sshPassword = ""
+    @Published var proxyPassword = ""
     @Published var searchText = ""
     @Published var profileSortMode: ProfileSortMode {
         didSet { UserDefaults.standard.set(profileSortMode.rawValue, forKey: sortModeKey) }
@@ -501,6 +503,11 @@ final class AppModel: NSObject, ObservableObject {
     }
     var selectedSSHPasswordRequiresUserPresence: Bool {
         sshPasswordUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
+    }
+    var selectedProfileHasSavedProxyPassword: Bool {
+        KeychainService.passwordExists(
+            reference: KeychainService.credentialReference(profileID: selectedProfile.id, kind: .proxy)
+        )
     }
     var selectedSSHKeyRequiresUserPresence: Bool {
         sshKeyUserPresenceProfileIDs.contains(selectedProfile.id.uuidString)
@@ -925,6 +932,27 @@ final class AppModel: NSObject, ObservableObject {
             kind: .ssh,
             requiresUserPresence: selectedSSHPasswordRequiresUserPresence
         )
+    }
+
+    func saveProxyPassword() {
+        guard !proxyPassword.isEmpty else { return }
+        do {
+            try KeychainService.savePassword(proxyPassword, profileID: selectedProfile.id, kind: .proxy)
+            proxyPassword = ""
+            statusMessage = "Пароль прокси сохранён в Keychain"
+            errorMessage = nil
+            objectWillChange.send()
+        } catch { errorMessage = error.localizedDescription }
+    }
+
+    func deleteSavedProxyPassword() {
+        do {
+            try KeychainService.deletePassword(profileID: selectedProfile.id, kind: .proxy)
+            proxyPassword = ""
+            statusMessage = "Пароль прокси удалён из Keychain"
+            errorMessage = nil
+            objectWillChange.send()
+        } catch { errorMessage = error.localizedDescription }
     }
 
     func setSelectedSSHPasswordUserPresence(_ enabled: Bool) {
@@ -1360,6 +1388,10 @@ final class AppModel: NSObject, ObservableObject {
                     passwordCredential: KeychainService.credentialReference(
                         profileID: settings.profileID,
                         kind: .ssh
+                    ),
+                    proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                        profileID: settings.profileID,
+                        kind: .proxy
                     )
                 )
             ) { [weak self] exitCode in
@@ -1748,7 +1780,11 @@ final class AppModel: NSObject, ObservableObject {
                 arguments: SSHService.interactiveSSHArguments(settings: settings),
                 title: "SSH · \(settings.profileName)",
                 environment: try SSHKeyService.backgroundAuthenticationEnvironment(
-                    passwordCredential: credential
+                    passwordCredential: credential,
+                    proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                        profileID: settings.profileID,
+                        kind: .proxy
+                    )
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }
@@ -2386,7 +2422,7 @@ final class AppModel: NSObject, ObservableObject {
             case .rdp: statusMessage = "Введите новый RDP-пароль перед сохранением"
             case .gateway: statusMessage = "Введите новый пароль RD Gateway перед сохранением"
             case .ssh: statusMessage = "Введите SSH-пароль перед сохранением"
-            case .forwarding, .sshKeyAuthorization: return
+            case .forwarding, .sshKeyAuthorization, .proxy: return
             }
             return
         }
@@ -2408,7 +2444,7 @@ final class AppModel: NSObject, ObservableObject {
             case .ssh:
                 sshPassword = ""
                 statusMessage = "SSH-пароль сохранён в Keychain"
-            case .forwarding, .sshKeyAuthorization:
+            case .forwarding, .sshKeyAuthorization, .proxy:
                 break
             }
             errorMessage = nil
@@ -2436,7 +2472,7 @@ final class AppModel: NSObject, ObservableObject {
                     forKey: sshPasswordUserPresenceProfilesKey
                 )
                 statusMessage = "Сохранённый SSH-пароль удалён"
-            case .forwarding, .sshKeyAuthorization:
+            case .forwarding, .sshKeyAuthorization, .proxy:
                 break
             }
             errorMessage = nil
@@ -2473,7 +2509,7 @@ final class AppModel: NSObject, ObservableObject {
                 sshPasswordStoredProfileIDs.sorted(),
                 forKey: storedSSHPasswordProfilesKey
             )
-        case .forwarding, .sshKeyAuthorization:
+        case .forwarding, .sshKeyAuthorization, .proxy:
             break
         }
     }

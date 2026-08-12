@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="0.20.8"
+VERSION="0.20.9"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="98"
+BUILD_NUMBER="99"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
@@ -25,6 +25,7 @@ BIN_DIR="$APP/Contents/MacOS"
 RES_DIR="$APP/Contents/Resources"
 HELPERS_DIR="$APP/Contents/Helpers"
 SSH_ASKPASS_HELPER="$HELPERS_DIR/SelectiveRemoteSSHAskPass"
+SSH_PROXY_HELPER="$HELPERS_DIR/SelectiveRemoteSSHProxy"
 SESSION_APP="$HELPERS_DIR/Selective Remote Session.app"
 SESSION_BIN_DIR="$SESSION_APP/Contents/MacOS"
 SESSION_RES_DIR="$SESSION_APP/Contents/Resources"
@@ -210,6 +211,7 @@ xcrun swiftc \
     -framework AppKit \
     -framework Security \
     -o "$SSH_ASKPASS_HELPER"
+xcrun swiftc -O -parse-as-library -target "$BUILD_ARCH-apple-macos14.0" "$ROOT/Native/SSHProxyCommand.swift" -framework Foundation -o "$SSH_PROXY_HELPER"
 
 HOMEBREW_PREFIX="$(brew --prefix)"
 FREERDP_PREFIX="$(brew --prefix freerdp)"
@@ -1168,6 +1170,7 @@ printf '14.0\n' >"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$BIN_DIR/$EXECUTABLE_NAME" >>"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$SESSION_BIN" >>"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$SSH_ASKPASS_HELPER" >>"$MINIMUM_MACOS_VALUES"
+minimum_macos_for_binary "$SSH_PROXY_HELPER" >>"$MINIMUM_MACOS_VALUES"
 while IFS= read -r framework_binary; do
     minimum_macos_for_binary "$framework_binary" >>"$MINIMUM_MACOS_VALUES"
 done < <(/usr/bin/find "$FRAMEWORKS_DIR" -type f -print | /usr/bin/sort)
@@ -1239,6 +1242,7 @@ verify_portable_binary "$FN_SHORTCUT"
 verify_portable_binary "$PRIVACY_PREFLIGHT"
 verify_portable_binary "$BIN_DIR/$EXECUTABLE_NAME"
 verify_portable_binary "$SSH_ASKPASS_HELPER"
+verify_portable_binary "$SSH_PROXY_HELPER"
 if [[ ! -f "$OPENSSL_LEGACY_MODULE" ]]; then
     echo "Ошибка: portable-пакет не содержит OpenSSL legacy provider" >&2
     exit 1
@@ -1254,6 +1258,7 @@ while IFS= read -r framework_binary; do
 done < <(/usr/bin/find "$FRAMEWORKS_DIR" -type f -print | /usr/bin/sort)
 sign_code "$SESSION_APP" --entitlements "$SESSION_ENTITLEMENTS"
 sign_code "$SSH_ASKPASS_HELPER"
+sign_code "$SSH_PROXY_HELPER"
 sign_code "$APP" --entitlements "$APP_ENTITLEMENTS"
 codesign --verify --deep --strict --verbose=2 "$APP"
 

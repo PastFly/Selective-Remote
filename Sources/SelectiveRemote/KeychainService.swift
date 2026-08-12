@@ -65,6 +65,7 @@ enum KeychainCredentialKind: String {
     case ssh
     case forwarding
     case sshKeyAuthorization
+    case proxy
 
     func account(profileID: UUID) -> String {
         switch self {
@@ -78,6 +79,8 @@ enum KeychainCredentialKind: String {
             "\(profileID.uuidString).forwarding"
         case .sshKeyAuthorization:
             "\(profileID.uuidString).ssh-key-authorization"
+        case .proxy:
+            "\(profileID.uuidString).proxy"
         }
     }
 }
@@ -112,7 +115,7 @@ enum KeychainService {
 
     private static func credentialService(for kind: KeychainCredentialKind) -> String {
         switch kind {
-        case .ssh, .forwarding, .sshKeyAuthorization:
+        case .ssh, .forwarding, .sshKeyAuthorization, .proxy:
             return service
         case .rdp, .gateway:
             return legacyService
@@ -209,9 +212,14 @@ enum KeychainService {
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
+        var authenticationContext: LAContext?
         if let authenticationPrompt, !authenticationPrompt.isEmpty {
-            query[kSecUseOperationPrompt as String] = authenticationPrompt
+            let context = LAContext()
+            context.localizedReason = authenticationPrompt
+            authenticationContext = context
+            query[kSecUseAuthenticationContext as String] = context
         }
+        _ = authenticationContext
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }

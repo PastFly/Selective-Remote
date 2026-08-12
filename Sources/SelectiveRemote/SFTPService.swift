@@ -247,7 +247,11 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
             ? KeychainService.credentialReference(profileID: settings.profileID, kind: .ssh)
             : nil
         process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
-            passwordCredential: passwordCredential
+            passwordCredential: passwordCredential,
+            proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                profileID: settings.profileID,
+                kind: .proxy
+            )
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice

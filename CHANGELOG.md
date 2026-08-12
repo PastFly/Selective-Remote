@@ -1,3 +1,10 @@
+## 0.20.9
+
+- Added SSH diagnostics for TCP/proxy/authentication configuration.
+- Added secure HTTP CONNECT and SOCKS5 proxy username/password authentication with proxy passwords stored in macOS Keychain.
+- Migrated Keychain operation prompts to `LAContext` authentication contexts.
+- Refined SSH credentials and proxy UI.
+
 ## 0.20.8
 
 - Исправлена геометрия xterm в разделённых и сеточных терминалах: внутренний отступ больше не завышает доступную высоту FitAddon, поэтому последняя строка каждой панели полностью помещается.
