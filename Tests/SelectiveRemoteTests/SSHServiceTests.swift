@@ -30,19 +30,16 @@ func buildsEmbeddedSSHArguments() throws {
 
     let settings = try SSHConnectionSettings(profile: profile, identity: nil)
     let arguments = SSHService.interactiveSSHArguments(settings: settings)
-    let controlPath = SSHService.controlPath(settings: settings)
-
     #expect(
         arguments == [
             "-p", "2222",
             "-o", "StrictHostKeyChecking=accept-new",
-            "-o", "ControlPath=\(controlPath)",
-            "-o", "ControlMaster=auto",
+            "-S", "none",
+            "-o", "ControlMaster=no",
             "-o", "User=alice",
             "-o", "PreferredAuthentications=publickey,keyboard-interactive,password",
             "-o", "ServerAliveInterval=30",
             "-o", "ServerAliveCountMax=3",
-            "-o", "ControlPersist=60",
             "-tt",
             "server.example.com"
         ]
