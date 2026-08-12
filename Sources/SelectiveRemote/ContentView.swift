@@ -352,8 +352,8 @@ struct ContentView: View {
                                     .foregroundStyle(.green)
                             }
                             if area == .forwarding,
-                               model.runningSSHTunnelCount > 0 {
-                                Text("\(model.runningSSHTunnelCount)")
+                               model.runningIndependentSSHTunnelCount > 0 {
+                                Text("\(model.runningIndependentSSHTunnelCount)")
                                     .font(.caption.bold())
                                     .foregroundStyle(.orange)
                             }
@@ -395,6 +395,11 @@ struct ContentView: View {
                                 }.count
                             )
                                 .tag(item.id)
+                                .contentShape(Rectangle())
+                                .onTapGesture {
+                                    model.selectProfile(item.id)
+                                    setMainArea(.connections)
+                                }
                                 .contextMenu {
                                     if model.isSessionRunning(profileID: item.id)
                                         || model.isSSHTerminalRunning(profileID: item.id) {
@@ -592,6 +597,20 @@ struct ContentView: View {
                     }
                     .padding(28)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                } else if selectedTab == .forwarding {
+                    VStack(alignment: .leading, spacing: 20) {
+                        VStack(alignment: .leading, spacing: 20) {
+                            header
+                            profileTabPicker
+                        }
+                        .frame(maxWidth: 1120, alignment: .leading)
+
+                        PortForwardingView(profile: profile)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(1)
+                    }
+                    .padding(28)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 } else {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 20) {
@@ -772,7 +791,7 @@ struct ContentView: View {
         case .folders: folderSettings
         case .terminal: EmptyView()
         case .sftp: SFTPBrowserView(profile: profile, session: sftpSession)
-        case .forwarding: PortForwardingView(profile: profile)
+        case .forwarding: EmptyView()
         case .security: securitySettings
         }
     }

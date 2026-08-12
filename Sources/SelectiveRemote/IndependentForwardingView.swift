@@ -176,7 +176,7 @@ struct IndependentForwardingView: View {
     }
 
     private func tunnelRow(_ item: IndependentPortForward) -> some View {
-        let running = model.isSSHTunnelRunning(ruleID: item.id)
+        let running = model.isIndependentSSHTunnelRunning(tunnelID: item.id)
         return HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
@@ -204,6 +204,9 @@ struct IndependentForwardingView: View {
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
+        .onTapGesture {
+            selectedTunnelID = item.id
+        }
         .onTapGesture(count: 2) {
             selectedTunnelID = item.id
             if !running {
@@ -247,7 +250,7 @@ struct IndependentForwardingView: View {
     }
 
     private func tunnelInspector(_ item: IndependentPortForward) -> some View {
-        let running = model.isSSHTunnelRunning(ruleID: item.id)
+        let running = model.isIndependentSSHTunnelRunning(tunnelID: item.id)
         let binding = binding(for: item.id)
 
         return ScrollView {

@@ -58,6 +58,8 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let proxyPort: Int
     let proxyUsername: String
     let jumpHostDestination: String?
+    let jumpHostProfileID: UUID?
+    let jumpHostPromptTokens: [String]
     let hostKeyPolicy: SSHHostKeyPolicy
     let initialDirectory: String
     let compression: Bool
@@ -109,8 +111,16 @@ struct SSHConnectionSettings: Equatable, Sendable {
             jumpHostDestination = jumpHost.sshPort == 22
                 ? "\(userPrefix)\(jumpHostName)"
                 : "\(userPrefix)\(jumpHostName):\(jumpHost.sshPort)"
+            jumpHostProfileID = jumpHost.id
+            var promptTokens = [jumpHostName]
+            if !jumpUser.isEmpty {
+                promptTokens.append("\(jumpUser)@\(jumpHostName)")
+            }
+            jumpHostPromptTokens = promptTokens
         } else {
             jumpHostDestination = nil
+            jumpHostProfileID = nil
+            jumpHostPromptTokens = []
         }
         if proxyMode != .none {
             try SSHService.validateHost(proxyHost)
@@ -633,7 +643,11 @@ enum SSHService {
             proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                 profileID: settings.profileID,
                 kind: .proxy
-            )
+            ),
+            jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            },
+            jumpHostPromptTokens: settings.jumpHostPromptTokens
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = logHandle
@@ -840,7 +854,9 @@ enum SSHKeyService {
 
     static func backgroundAuthenticationEnvironment(
         passwordCredential: KeychainCredentialReference? = nil,
-        proxyPasswordCredential: KeychainCredentialReference? = nil
+        proxyPasswordCredential: KeychainCredentialReference? = nil,
+        jumpHostPasswordCredential: KeychainCredentialReference? = nil,
+        jumpHostPromptTokens: [String] = []
     ) throws -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
@@ -851,6 +867,8 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_PROXY_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PROMPT_TOKENS")
 
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
@@ -865,6 +883,25 @@ enum SSHKeyService {
             ), !password.isEmpty {
                 let secretURL = try makeAskPassSecretFile(password)
                 environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
+            }
+        }
+        if let jumpHostPasswordCredential {
+            let requiresTouchID = KeychainService.requiresTouchID(reference: jumpHostPasswordCredential)
+            let hasCurrentSecret = KeychainService.passwordExists(reference: jumpHostPasswordCredential)
+            if requiresTouchID && hasCurrentSecret {
+                try KeychainService.authenticateTouchID(
+                    reason: "Подтвердите Touch ID для использования пароля Jump Host"
+                )
+            }
+            if let jumpPassword = try KeychainService.readPassword(
+                reference: jumpHostPasswordCredential
+            ), !jumpPassword.isEmpty {
+                let secretURL = try makeSecretFile(jumpPassword, prefix: "jump")
+                environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"] = secretURL.path
+                if !jumpHostPromptTokens.isEmpty {
+                    environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"] =
+                        jumpHostPromptTokens.joined(separator: "\n")
+                }
             }
         }
         if let proxyPasswordCredential,

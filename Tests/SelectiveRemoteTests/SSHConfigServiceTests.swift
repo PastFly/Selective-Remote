@@ -60,6 +60,30 @@ func buildsProxyJumpArguments() throws {
     #expect(arguments.last == "internal.example.com")
 }
 
+
+@Test("Jump Host сохраняет данные для безопасного AskPass из Keychain")
+func jumpHostCarriesCredentialRoutingMetadata() throws {
+    var target = ConnectionProfile(connectionType: .ssh)
+    target.host = "internal.example.com"
+
+    var jump = ConnectionProfile(connectionType: .ssh)
+    jump.host = "bastion.example.com"
+    jump.username = "admin"
+    jump.sshPort = 2222
+    jump.sshAuthenticationMode = .password
+
+    let settings = try SSHConnectionSettings(
+        profile: target,
+        identity: nil,
+        jumpHost: jump
+    )
+
+    #expect(settings.jumpHostProfileID == jump.id)
+    #expect(settings.jumpHostPromptTokens.contains("bastion.example.com"))
+    #expect(settings.jumpHostPromptTokens.contains("admin@bastion.example.com"))
+    #expect(settings.jumpHostDestination == "admin@bastion.example.com:2222")
+}
+
 @Test("Jump Host имеет приоритет над HTTP/SOCKS proxy целевого профиля")
 func proxyJumpSuppressesTargetProxyCommand() throws {
     var target = ConnectionProfile(connectionType: .ssh)

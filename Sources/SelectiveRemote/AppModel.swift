@@ -476,6 +476,9 @@ final class AppModel: NSObject, ObservableObject {
     var isSessionRunning: Bool { !sessions.isEmpty }
     var runningSessionCount: Int { sessions.count }
     var runningSSHTunnelCount: Int { sshTunnels.count }
+    var runningIndependentSSHTunnelCount: Int {
+        sshTunnels.values.filter { $0.profileID == Self.globalForwardingProfileID }.count
+    }
     var runningSSHTerminalCount: Int {
         let workspaceProfileIDs = Set(terminalWorkspaces.keys)
         let workspaceCount = terminalWorkspaces.values.reduce(0) {
@@ -560,6 +563,16 @@ final class AppModel: NSObject, ObservableObject {
 
     func isSSHTunnelRunning(ruleID: UUID) -> Bool {
         managedSSHTunnels[ruleID]?.process.isRunning == true
+    }
+
+    func isIndependentSSHTunnelRunning(tunnelID: UUID) -> Bool {
+        guard managedSSHTunnels[tunnelID]?.process.isRunning == true else { return false }
+        return sshTunnels[tunnelID]?.profileID == Self.globalForwardingProfileID
+    }
+
+    func isProfileSSHTunnelRunning(ruleID: UUID, profileID: UUID) -> Bool {
+        guard managedSSHTunnels[ruleID]?.process.isRunning == true else { return false }
+        return sshTunnels[ruleID]?.profileID == profileID
     }
 
     func isSSHTerminalRunning(profileID: UUID) -> Bool {
@@ -1464,10 +1477,6 @@ final class AppModel: NSObject, ObservableObject {
         }
         do {
             let jumpHost = sshJumpHostProfile(for: profile)
-            if jumpHost?.sshAuthenticationMode == .password {
-                errorMessage = "Jump Host с парольной аутентификацией пока не поддерживается. Используйте SSH ID, Touch ID Key, ssh-agent или ~/.ssh/config для bastion-профиля."
-                return nil
-            }
             let settings = try SSHConnectionSettings(
                 profile: profile,
                 identity: identity,
@@ -1504,9 +1513,6 @@ final class AppModel: NSObject, ObservableObject {
             if let sourceProfileID = connection.profileID,
                let sourceProfile = profiles.first(where: { $0.id == sourceProfileID }),
                let jumpProfile = sshJumpHostProfile(for: sourceProfile) {
-                if jumpProfile.sshAuthenticationMode == .password {
-                    throw SSHServiceError.launchFailed("Jump Host с паролем не поддерживается; настройте ключ или ssh-agent")
-                }
                 if let jumpKeyID = jumpProfile.sshIdentityID,
                    let jumpKey = sshKeys.first(where: { $0.id == jumpKeyID }) {
                     if jumpProfile.sshAuthenticationMode == .touchIDKey
@@ -1620,7 +1626,11 @@ final class AppModel: NSObject, ObservableObject {
                     proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                         profileID: settings.profileID,
                         kind: .proxy
-                    )
+                    ),
+                    jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                    },
+                    jumpHostPromptTokens: settings.jumpHostPromptTokens
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }
@@ -1669,14 +1679,14 @@ final class AppModel: NSObject, ObservableObject {
     func updateIndependentPortForward(_ updated: IndependentPortForward) {
         guard let index = independentPortForwards.firstIndex(where: {
             $0.id == updated.id
-        }), !isSSHTunnelRunning(ruleID: updated.id) else { return }
+        }), !isIndependentSSHTunnelRunning(tunnelID: updated.id) else { return }
         var normalized = updated
         normalized.rule.id = updated.id
         independentPortForwards[index] = normalized
     }
 
     func removeIndependentPortForward(_ id: UUID) {
-        guard !isSSHTunnelRunning(ruleID: id) else {
+        guard !isIndependentSSHTunnelRunning(tunnelID: id) else {
             errorMessage = "Сначала остановите этот SSH-туннель"
             return
         }
@@ -1687,7 +1697,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func restartIndependentPortForward(_ id: UUID) {
-        if !isSSHTunnelRunning(ruleID: id) {
+        if !isIndependentSSHTunnelRunning(tunnelID: id) {
             startIndependentPortForward(id)
             return
         }
@@ -1695,7 +1705,7 @@ final class AppModel: NSObject, ObservableObject {
         Task { @MainActor [weak self] in
             guard let self else { return }
             for _ in 0..<30 {
-                if !self.isSSHTunnelRunning(ruleID: id) {
+                if !self.isIndependentSSHTunnelRunning(tunnelID: id) {
                     self.startIndependentPortForward(id)
                     return
                 }
@@ -1706,7 +1716,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func startIndependentPortForward(_ id: UUID) {
-        guard !isSSHTunnelRunning(ruleID: id),
+        guard !isIndependentSSHTunnelRunning(tunnelID: id),
               let item = independentPortForwards.first(where: { $0.id == id }),
               let settings = sshConnectionSettings(
                   connection: item.connection,
@@ -1777,7 +1787,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func removePortForward(_ ruleID: UUID) {
-        guard !isSSHTunnelRunning(ruleID: ruleID) else {
+        guard !isProfileSSHTunnelRunning(ruleID: ruleID, profileID: selectedProfile.id) else {
             errorMessage = "Сначала остановите этот SSH-туннель"
             return
         }
@@ -1787,7 +1797,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func startSSHTunnel(_ ruleID: UUID) {
-        guard !isSSHTunnelRunning(ruleID: ruleID),
+        guard !isProfileSSHTunnelRunning(ruleID: ruleID, profileID: selectedProfile.id),
               let rule = selectedProfile.portForwards.first(where: { $0.id == ruleID }),
               let settings = prepareSelectedSSHConnection(
                   requiresIndependentAuthentication: true
@@ -2068,7 +2078,11 @@ final class AppModel: NSObject, ObservableObject {
                     proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                         profileID: settings.profileID,
                         kind: .proxy
-                    )
+                    ),
+                    jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                    },
+                    jumpHostPromptTokens: settings.jumpHostPromptTokens
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }

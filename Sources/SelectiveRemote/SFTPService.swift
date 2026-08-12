@@ -251,7 +251,11 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
             proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                 profileID: settings.profileID,
                 kind: .proxy
-            )
+            ),
+            jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            },
+            jumpHostPromptTokens: settings.jumpHostPromptTokens
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice

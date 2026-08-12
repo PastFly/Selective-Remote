@@ -14,7 +14,7 @@ struct SSHKeychainAskPass {
         // avoids a second executable asking macOS Keychain for the same item,
         // which otherwise produces legacy “Always Allow” ACL dialogs on macOS.
         if isPasswordPrompt,
-           let password = preparedPasswordFromEnvironment() {
+           let password = preparedPasswordFromEnvironment(prompt: prompt) {
             FileHandle.standardOutput.write(Data((password + "\n").utf8))
             return
         }
@@ -60,8 +60,28 @@ struct SSHKeychainAskPass {
         FileHandle.standardOutput.write(Data((field.stringValue + "\n").utf8))
     }
 
-    private static func preparedPasswordFromEnvironment() -> String? {
-        guard let path = ProcessInfo.processInfo.environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"],
+    private static func preparedPasswordFromEnvironment(prompt: String) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        let normalizedPrompt = prompt.lowercased()
+        let jumpTokens = environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"]?
+            .split(separator: "\n")
+            .map { String($0).lowercased() }
+            .filter { !$0.isEmpty } ?? []
+
+        if jumpTokens.contains(where: { normalizedPrompt.contains($0) }),
+           let password = readPreparedSecret(
+               path: environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"]
+           ) {
+            return password
+        }
+
+        return readPreparedSecret(
+            path: environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"]
+        )
+    }
+
+    private static func readPreparedSecret(path: String?) -> String? {
+        guard let path,
               !path.isEmpty,
               let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               let mode = attributes[.posixPermissions] as? NSNumber,
