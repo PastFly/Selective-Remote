@@ -1296,13 +1296,14 @@ final class AppModel: NSObject, ObservableObject {
             if let key = settings.identity,
                let profileID = connection.profileID,
                (settings.authenticationMode == .touchIDKey
-                    || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)) {
+                    || (settings.authenticationMode == .key
+                        && sshKeyUserPresenceProfileIDs.contains(profileID.uuidString))) {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
                     reason: "Подтвердите Touch ID для использования SSH-ключа «\(key.name)»"
                 )
             }
-            if settings.authenticationMode != .touchIDKey,
+            if (settings.authenticationMode == .automatic || settings.authenticationMode == .key),
                let key = settings.identity,
                SSHKeyService.shouldLoadIdentityIntoAgent(
                    hasIdentity: true,
@@ -1353,7 +1354,12 @@ final class AppModel: NSObject, ObservableObject {
                     publicKeyPath: publicKeyPath
                 ),
                 title: "Установка ключа «\(key.name)»",
-                environment: SSHKeyService.processEnvironment()
+                environment: try SSHKeyService.backgroundAuthenticationEnvironment(
+                    passwordCredential: KeychainService.credentialReference(
+                        profileID: settings.profileID,
+                        kind: .ssh
+                    )
+                )
             ) { [weak self] exitCode in
                 guard let self else { return }
                 statusMessage = exitCode == 0
@@ -1361,7 +1367,7 @@ final class AppModel: NSObject, ObservableObject {
                     : "Установка SSH-ключа завершилась с кодом \(exitCode)"
             }
             requestedSSHConsoleProfileID = settings.profileID
-            statusMessage = "Подтвердите host key и введите пароль сервера в терминале"
+            statusMessage = selectedProfileHasSavedSSHPassword ? "Публичный ключ устанавливается с сохранённым SSH-паролем" : "Подтвердите host key и введите пароль сервера в терминале"
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -1720,7 +1726,8 @@ final class AppModel: NSObject, ObservableObject {
         do {
             if let profileID = connection.profileID,
                (settings.authenticationMode == .touchIDKey
-                    || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)),
+                    || (settings.authenticationMode == .key
+                        && sshKeyUserPresenceProfileIDs.contains(profileID.uuidString))),
                let identity = settings.identity {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,

@@ -305,8 +305,8 @@ struct ContentView: View {
                             Text(LocalizedStringKey(area.rawValue))
                             Spacer()
                             if area == .terminal,
-                               model.runningSSHTerminalCount > 0 {
-                                Text("\(model.runningSSHTerminalCount)")
+                               model.globalTerminalWorkspace().runningSessionCount > 0 {
+                                Text("\(model.globalTerminalWorkspace().runningSessionCount)")
                                     .font(.caption.bold())
                                     .foregroundStyle(.green)
                             }
@@ -488,6 +488,7 @@ struct ContentView: View {
                     }
 
                     terminalPanel
+                        .id(profile.id)
                         .padding(.horizontal, terminalFocusMode ? 10 : 28)
                         .padding(.top, terminalFocusMode ? 10 : 0)
                         .padding(.bottom, terminalFocusMode ? 10 : 20)
@@ -1171,9 +1172,17 @@ struct ContentView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 110)
                     }
-                    Text("Прокси применяется к Terminal, SFTP и Forwarding этого профиля через системный OpenSSH. Поддерживаются HTTP CONNECT и SOCKS5 без отдельной proxy-аутентификации.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    if profileBinding.wrappedValue.sshProxyMode == .http {
+                        TextField("Имя пользователя прокси (необязательно)", text: profileBinding.sshProxyUsername)
+                            .textFieldStyle(.roundedBorder)
+                        Text("HTTP CONNECT поддерживает proxy-аутентификацию через системный nc. Если прокси требует пароль, macOS запросит его при установке соединения. Для фоновых туннелей рекомендуется прокси без интерактивного запроса пароля.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("SOCKS5 применяется к Terminal, SFTP и Forwarding через системный OpenSSH. Встроенный системный nc не поддерживает отдельную username/password-аутентификацию SOCKS5.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             .padding(16)

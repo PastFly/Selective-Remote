@@ -623,7 +623,7 @@ struct SSHTerminalView: View {
 
             terminalWorkspace
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .frame(minHeight: 360)
+                .frame(minHeight: 280)
                 .layoutPriority(1)
                 .background(TerminalColorCodecView.color(appearance.palette.background))
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -634,8 +634,8 @@ struct SSHTerminalView: View {
 
             Text(
                 "Соединение выполняет системный /usr/bin/ssh внутри \(AppBrand.name). "
-                    + "Пароль сервера и passphrase ключа вводятся непосредственно в терминале "
-                    + "и приложением не сохраняются. История команд хранится только на этом Mac; "
+                    + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
+                    + "несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
                     + "строки с пробелом в начале и распространёнными признаками секретов "
                     + "автоматически пропускаются."
             )
@@ -1010,6 +1010,7 @@ struct SSHTerminalView: View {
                     }
                 )
             )
+            .id(tab.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if !tab.session.isRunning {

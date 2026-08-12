@@ -1015,7 +1015,11 @@
 
     window.selectiveTerminalClear = () => terminal.clear();
     window.selectiveTerminalFocus = () => terminal.focus();
-    window.selectiveTerminalFit = fitAndReport;
+    window.selectiveTerminalFit = () => {
+        fitAndReport();
+        window.setTimeout(fitAndReport, 120);
+        window.setTimeout(fitAndReport, 320);
+    };
 
     const resizeObserver = new ResizeObserver(fitAndReport);
     resizeObserver.observe(terminalHost);

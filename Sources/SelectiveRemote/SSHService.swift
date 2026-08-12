@@ -53,6 +53,7 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let proxyMode: SSHProxyMode
     let proxyHost: String
     let proxyPort: Int
+    let proxyUsername: String
     let hostKeyPolicy: SSHHostKeyPolicy
     let initialDirectory: String
     let compression: Bool
@@ -87,6 +88,7 @@ struct SSHConnectionSettings: Equatable, Sendable {
         proxyMode = profile.sshProxyMode
         proxyHost = profile.sshProxyHost.trimmingCharacters(in: .whitespacesAndNewlines)
         proxyPort = profile.sshProxyPort
+        proxyUsername = profile.sshProxyUsername.trimmingCharacters(in: .whitespacesAndNewlines)
         if proxyMode != .none {
             try SSHService.validateHost(proxyHost)
             guard (1...65_535).contains(proxyPort) else {
@@ -395,8 +397,16 @@ enum SSHService {
     static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
         guard settings.proxyMode != .none else { return [] }
         let mode = settings.proxyMode == .http ? "connect" : "5"
-        let command = "/usr/bin/nc -X \(mode) -x \(settings.proxyHost):\(settings.proxyPort) %h %p"
-        return ["-o", "ProxyCommand=\(command)"]
+        var parts = ["/usr/bin/nc", "-X", mode, "-x", "\(settings.proxyHost):\(settings.proxyPort)"]
+        if settings.proxyMode == .http, !settings.proxyUsername.isEmpty {
+            parts += ["-P", shellEscaped(settings.proxyUsername)]
+        }
+        parts += ["%h", "%p"]
+        return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
+    }
+
+    private static func shellEscaped(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 
     static func commonSSHArguments(
@@ -449,12 +459,11 @@ enum SSHService {
     }
 
     static func interactiveSSHArguments(settings: SSHConnectionSettings) -> [String] {
-        commonSSHArguments(settings: settings, batchMode: false)
-            + [
-                "-o", "ControlPersist=60",
-                "-tt",
-                settings.host
-            ]
+        // An explicit authentication mode must not silently reuse a ControlMaster
+        // that was authenticated using another credential. This also guarantees
+        // that Touch ID gates the connection selected in the profile.
+        commonSSHArguments(settings: settings, batchMode: false, multiplexing: false)
+            + ["-tt", settings.host]
     }
 
     static func copyPublicKeyArguments(

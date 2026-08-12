@@ -18,9 +18,9 @@ struct CredentialVaultView: View {
                     .font(.system(size: 28))
                     .foregroundStyle(Color.blue)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Keychain и SSH-ключи")
+                    Text("SSH ID и секреты")
                         .font(.title2.bold())
-                    Text("SSH-пароли и passphrase хранятся через Keychain; приватные SSH-ключи остаются файлами в ~/.ssh")
+                    Text("Ключи, Touch ID и сохранённые SSH-реквизиты — в одном месте")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -34,7 +34,7 @@ struct CredentialVaultView: View {
 
             HSplitView {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("SSH-ключи")
+                    Text("SSH ID")
                         .font(.headline)
                     List(selection: $selectedKeyID) {
                         ForEach(model.sshKeys) { key in
@@ -188,22 +188,23 @@ struct CredentialVaultView: View {
             .padding(8)
         }
 
-        GroupBox("SSH-ключ, passphrase и ssh-agent") {
+        GroupBox("Использование ключа") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Button("Добавить в ssh-agent и Keychain", systemImage: "plus.circle") {
+                    Button("Использовать через ssh-agent", systemImage: "plus.circle") {
                         model.addSSHKeyToAgent(key.id)
                     }
 
-                    Button("Удалить из agent и Keychain", role: .destructive) {
+                    Button("Удалить из ssh-agent и забыть passphrase", role: .destructive) {
                         model.removeSSHKeyFromAgentAndKeychain(key.id)
                     }
                 }
 
                 HStack {
-                    Button("Убрать из ssh-agent", systemImage: "minus.circle") {
+                    Button("Отключить от ssh-agent", systemImage: "minus.circle") {
                         model.removeSSHKeyFromAgent(key.id)
                     }
+                    .help("Убрать ключ из памяти ssh-agent; файл приватного ключа останется в ~/.ssh")
                     Button("Установить на сервер", systemImage: "arrow.up.to.line") {
                         model.mutateSelectedProfile { $0.sshIdentityID = key.id }
                         model.installSelectedSSHPublicKey()
@@ -214,6 +215,7 @@ struct CredentialVaultView: View {
                             || key.publicKeyPath == nil
                             || model.isSelectedSSHTerminalRunning
                     )
+                    .help("Добавить публичную часть ключа в ~/.ssh/authorized_keys выбранного SSH-профиля")
                     Spacer()
                     Button("Показать в Finder") { model.revealSSHKey(key.id) }
                     Button("Копировать .pub") { model.copySSHPublicKey(key.id) }
@@ -233,11 +235,11 @@ struct CredentialVaultView: View {
                     model.hasSavedSSHKeyPassphrase(keyID: key.id) ? Color.green : Color.secondary
                 )
 
-                Text(
-                    "Приватный ключ остаётся в файле ~/.ssh и не попадает в Keychain. "
-                        + "В Keychain Apple OpenSSH может хранить только passphrase. "
-                        + "Если в карточке профиля включён Touch ID, Selective Remote отдельно подтверждает использование ключа через биометрию."
-                )
+                VStack(alignment: .leading, spacing: 5) {
+                    Label("ssh-agent временно держит разблокированный ключ в памяти, чтобы OpenSSH не спрашивал passphrase при каждом подключении.", systemImage: "info.circle")
+                    Label("Keychain хранит только passphrase ключа и SSH-пароли. Сам приватный ключ остаётся файлом в ~/.ssh.", systemImage: "lock.shield")
+                    Label("Touch ID Key не добавляется в ssh-agent: перед каждым использованием Selective Remote запрашивает Touch ID.", systemImage: "touchid")
+                }
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
