@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 struct SSHCertificateAuthorityRecord: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
@@ -94,6 +95,7 @@ enum SSHCertificateAuthorityService {
         }
     }
 
+    @MainActor
     static func chooseAndRegister() throws -> SSHCertificateAuthorityRecord? {
         let panel = NSOpenPanel()
         panel.title = "Импортировать SSH CA public key"

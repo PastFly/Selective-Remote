@@ -170,6 +170,10 @@ struct CredentialVaultView: View {
     }
 
     var body: some View {
+        bodyWithSigningSheet
+    }
+
+    private var baseLayout: some View {
         VStack(spacing: 0) {
             header
             Divider()
@@ -186,59 +190,84 @@ struct CredentialVaultView: View {
             minWidth: presentation == .sheet ? 980 : nil,
             minHeight: presentation == .sheet ? 660 : nil
         )
-        .onAppear {
-            if selection == nil {
-                if let id = model.selectedSSHKey?.id ?? model.sshKeys.first?.id {
-                    selection = .key(id)
-                } else if let id = savedCredentialProfiles.first?.id {
-                    selection = .credential(id)
-                }
-            }
-            if installTargetProfileID == nil {
-                installTargetProfileID = model.selectedProfile.connectionType == .ssh
-                    ? model.selectedProfile.id
-                    : sshProfiles.first?.id
-            }
-            refreshAgentState()
-            refreshCertificateInfo()
-            refreshKnownHosts()
-            refreshAuthorities()
-        }
-        .onChange(of: selection) { _, _ in
-            refreshCertificateInfo()
-        }
-        .onChange(of: model.sshKeys) { _, keys in
-            if case let .key(id) = selection,
-               !keys.contains(where: { $0.id == id }) {
-                selection = keys.first.map { .key($0.id) }
-                    ?? savedCredentialProfiles.first.map { .credential($0.id) }
-            }
-            refreshAgentState()
-            refreshCertificateInfo()
-        }
-        .alert(
-            "Удалить Known Host?",
-            isPresented: Binding(
-                get: { knownHostPendingDeletion != nil },
-                set: { if !$0 { knownHostPendingDeletion = nil } }
-            ),
-            presenting: knownHostPendingDeletion
-        ) { entry in
-            Button("Удалить", role: .destructive) { deleteKnownHost(entry) }
-            Button("Отмена", role: .cancel) {}
-        } message: { entry in
-            Text("Запись «\(entry.displayHost)» будет удалена из ~/.ssh/known_hosts. Перед изменением создаётся резервная копия known_hosts.selectiveremote.bak.")
-        }
-        .sheet(isPresented: $showsKeyGenerator) {
-            SSHKeyGenerationView(touchIDPreset: touchIDGenerator) { request, session in
-                model.generateSSHKeyGlobally(request, session: session)
-            }
-        }
-        .sheet(item: $signingRequest) { request in
-            SSHCertificateSigningView(key: request.key, authority: request.authority) {
+    }
+
+    private var bodyWithLifecycle: some View {
+        baseLayout
+            .onAppear(perform: handleAppear)
+            .onChange(of: selection) { _, _ in
                 refreshCertificateInfo()
             }
+            .onChange(of: model.sshKeys) { _, keys in
+                handleSSHKeysChanged(keys)
+            }
+    }
+
+    private var bodyWithKnownHostAlert: some View {
+        bodyWithLifecycle
+            .alert(
+                "Удалить Known Host?",
+                isPresented: Binding(
+                    get: { knownHostPendingDeletion != nil },
+                    set: { if !$0 { knownHostPendingDeletion = nil } }
+                ),
+                presenting: knownHostPendingDeletion
+            ) { entry in
+                Button("Удалить", role: .destructive) { deleteKnownHost(entry) }
+                Button("Отмена", role: .cancel) {}
+            } message: { entry in
+                Text("Запись «\(entry.displayHost)» будет удалена из ~/.ssh/known_hosts. Перед изменением создаётся резервная копия known_hosts.selectiveremote.bak.")
+            }
+    }
+
+    private var bodyWithKeyGeneratorSheet: some View {
+        bodyWithKnownHostAlert
+            .sheet(isPresented: $showsKeyGenerator) {
+                SSHKeyGenerationView(touchIDPreset: touchIDGenerator) { request, session in
+                    model.generateSSHKeyGlobally(request, session: session)
+                }
+            }
+    }
+
+    private var bodyWithSigningSheet: some View {
+        bodyWithKeyGeneratorSheet
+            .sheet(item: $signingRequest) { request in
+                SSHCertificateSigningView(key: request.key, authority: request.authority) {
+                    refreshCertificateInfo()
+                }
+            }
+    }
+
+    private func handleAppear() {
+        if selection == nil {
+            if let id = model.selectedSSHKey?.id ?? model.sshKeys.first?.id {
+                selection = .key(id)
+            } else if let id = savedCredentialProfiles.first?.id {
+                selection = .credential(id)
+            }
         }
+
+        if installTargetProfileID == nil {
+            installTargetProfileID = model.selectedProfile.connectionType == .ssh
+                ? model.selectedProfile.id
+                : sshProfiles.first?.id
+        }
+
+        refreshAgentState()
+        refreshCertificateInfo()
+        refreshKnownHosts()
+        refreshAuthorities()
+    }
+
+    private func handleSSHKeysChanged(_ keys: [SSHKeyRecord]) {
+        if case let .key(id) = selection,
+           !keys.contains(where: { $0.id == id }) {
+            selection = keys.first.map { .key($0.id) }
+                ?? savedCredentialProfiles.first.map { .credential($0.id) }
+        }
+
+        refreshAgentState()
+        refreshCertificateInfo()
     }
 
     private var header: some View {
