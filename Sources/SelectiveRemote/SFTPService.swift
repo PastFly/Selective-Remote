@@ -242,7 +242,12 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = SFTPService.persistentMasterArguments(settings: settings)
-        process.environment = SSHKeyService.backgroundAuthenticationEnvironment()
+        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
+            passwordCredential: KeychainService.credentialReference(
+                profileID: settings.profileID,
+                kind: .ssh
+            )
+        )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
@@ -1165,7 +1170,12 @@ enum SFTPService {
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = connectionArguments(settings: settings)
-        process.environment = SSHKeyService.backgroundAuthenticationEnvironment()
+        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
+            passwordCredential: KeychainService.credentialReference(
+                profileID: settings.profileID,
+                kind: .ssh
+            )
+        )
         process.standardInput = input
         process.standardOutput = output
         process.standardError = output

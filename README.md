@@ -285,7 +285,7 @@ shasum -a 256 SelectiveRemote-0.19.6-arm64.dmg
 - Введённый пароль можно использовать один раз без сохранения.
 - Пароли не входят в UserDefaults, журналы, `.rdp`, `.selectiveremote`, DMG или список процессов.
 - Аргументы и секреты передаются FreeRDP через `/args-from:stdin`.
-- пароль SSH-сервера не хранится и запрашивается системным OpenSSH во встроенном PTY;
+- пароль SSH-сервера можно сохранить в системном Keychain; Terminal, SFTP и forwarding используют общие реквизиты SSH-профиля;
 - passphrase при генерации ключа вводится только во встроенном PTY и не передаётся через аргументы или окружение;
 - passphrase приватного ключа обслуживает Apple OpenSSH через `ssh-add --apple-use-keychain`;
 - askpass-helper печатает passphrase только в закрытый stdin/stdout-канал `ssh-add`; значение не передаётся в аргументах, окружении или журнале;

@@ -3,6 +3,13 @@
 
 [← Вернуться на главную страницу](README.md)
 
+## 0.20.0
+
+- SSH-профили получили отдельный пароль сервера, который хранится только в macOS Keychain и не попадает в экспорт профилей;
+- Terminal, SFTP и SSH forwarding умеют использовать сохранённый пароль профиля через защищённый AskPass helper без передачи секрета в аргументах процесса;
+- независимый forwarding для ручного SSH-сервера получил собственное поле пароля с сохранением и удалением записи Keychain;
+- фоновые туннели поддерживают password/keyboard-interactive аутентификацию, а не только SSH-ключ и ssh-agent.
+
 ## 0.19.9
 
 - Fixed SFTP upload progress totals for directories containing hidden files or hidden subdirectories. The calculated total now matches the tree that OpenSSH SFTP actually transfers recursively.

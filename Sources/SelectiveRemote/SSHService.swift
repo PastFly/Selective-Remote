@@ -449,6 +449,7 @@ enum SSHService {
     static func launchTunnel(
         settings: SSHConnectionSettings,
         rule: PortForwardRule,
+        passwordCredential: KeychainCredentialReference? = nil,
         fileManager: FileManager = .default
     ) throws -> RunningSSHTunnel {
         let forwarding = try forwardingArguments(rule)
@@ -468,18 +469,22 @@ enum SSHService {
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = commonSSHArguments(
             settings: settings,
-            batchMode: true,
+            batchMode: false,
             multiplexing: false
         )
             + [
                 "-N",
                 "-T",
                 "-o", "ExitOnForwardFailure=yes",
-                "-o", "LogLevel=ERROR"
+                "-o", "LogLevel=ERROR",
+                "-o", "NumberOfPasswordPrompts=1",
+                "-o", "PreferredAuthentications=publickey,keyboard-interactive,password"
             ]
             + forwarding
             + [settings.host]
-        process.environment = SSHKeyService.processEnvironment()
+        process.environment = SSHKeyService.backgroundAuthenticationEnvironment(
+            passwordCredential: passwordCredential
+        )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = logHandle
         process.standardError = logHandle
@@ -663,12 +668,21 @@ enum SSHKeyService {
             ?? ProcessInfo.processInfo.environment
     }
 
-    static func backgroundAuthenticationEnvironment() -> [String: String] {
+    static func backgroundAuthenticationEnvironment(
+        passwordCredential: KeychainCredentialReference? = nil
+    ) -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
         environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
         environment["SSH_ASKPASS"] = helper.path
         environment["SSH_ASKPASS_REQUIRE"] = "force"
+        if let passwordCredential {
+            environment["SELECTIVEREMOTE_KEYCHAIN_SERVICE"] = passwordCredential.service
+            environment["SELECTIVEREMOTE_KEYCHAIN_ACCOUNT"] = passwordCredential.account
+        } else {
+            environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_SERVICE")
+            environment.removeValue(forKey: "SELECTIVEREMOTE_KEYCHAIN_ACCOUNT")
+        }
         return environment
     }
 

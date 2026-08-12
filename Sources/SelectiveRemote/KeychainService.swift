@@ -20,6 +20,8 @@ enum KeychainError: LocalizedError {
 enum KeychainCredentialKind: String {
     case rdp
     case gateway
+    case ssh
+    case forwarding
 
     func account(profileID: UUID) -> String {
         switch self {
@@ -29,12 +31,26 @@ enum KeychainCredentialKind: String {
             profileID.uuidString
         case .gateway:
             "\(profileID.uuidString).gateway"
+        case .ssh:
+            "\(profileID.uuidString).ssh"
+        case .forwarding:
+            "\(profileID.uuidString).forwarding"
         }
     }
 }
 
 enum KeychainService {
-    private static let service = "local.selectiveremote.credentials"
+    static let service = "local.selectiveremote.credentials"
+
+    static func credentialReference(
+        profileID: UUID,
+        kind: KeychainCredentialKind
+    ) -> KeychainCredentialReference {
+        KeychainCredentialReference(
+            service: service,
+            account: kind.account(profileID: profileID)
+        )
+    }
 
     static func readPassword(
         profileID: UUID,
@@ -103,5 +119,11 @@ enum KeychainService {
     static func deleteAllPasswords(profileID: UUID) throws {
         try deletePassword(profileID: profileID, kind: .rdp)
         try deletePassword(profileID: profileID, kind: .gateway)
+        try deletePassword(profileID: profileID, kind: .ssh)
     }
+}
+
+struct KeychainCredentialReference: Equatable, Sendable {
+    let service: String
+    let account: String
 }

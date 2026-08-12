@@ -259,11 +259,13 @@ final class AppModel: NSObject, ObservableObject {
             saveSelectedProfileID()
             password = ""
             gatewayPassword = ""
+            sshPassword = ""
             errorMessage = nil
         }
     }
     @Published var password = ""
     @Published var gatewayPassword = ""
+    @Published var sshPassword = ""
     @Published var searchText = ""
     @Published var profileSortMode: ProfileSortMode {
         didSet { UserDefaults.standard.set(profileSortMode.rawValue, forKey: sortModeKey) }
@@ -277,6 +279,8 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
+    @Published private(set) var sshPasswordStoredProfileIDs: Set<String> = []
+    @Published private(set) var forwardingPasswordStoredIDs: Set<String> = []
     @Published private(set) var reconnectCandidateProfileIDs: Set<UUID> = []
     @Published var sshKeys: [SSHKeyRecord] {
         didSet { saveSSHKeys() }
@@ -296,6 +300,8 @@ final class AppModel: NSObject, ObservableObject {
     private let legacyProfileKey = "SelectiveRemote.connectionProfile.v1"
     private let storedPasswordProfilesKey = "SelectiveRemote.storedPasswordProfiles.v1"
     private let storedGatewayPasswordProfilesKey = "SelectiveRemote.storedGatewayPasswordProfiles.v1"
+    private let storedSSHPasswordProfilesKey = "SelectiveRemote.storedSSHPasswordProfiles.v1"
+    private let storedForwardingPasswordIDsKey = "SelectiveRemote.storedForwardingPasswordIDs.v1"
     private let sshKeysKey = "SelectiveRemote.sshKeys.v1"
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
@@ -373,6 +379,12 @@ final class AppModel: NSObject, ObservableObject {
         )
         gatewayPasswordStoredProfileIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedGatewayPasswordProfilesKey) ?? []
+        )
+        sshPasswordStoredProfileIDs = Set(
+            UserDefaults.standard.stringArray(forKey: storedSSHPasswordProfilesKey) ?? []
+        )
+        forwardingPasswordStoredIDs = Set(
+            UserDefaults.standard.stringArray(forKey: storedForwardingPasswordIDsKey) ?? []
         )
         sshKeyPassphraseStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHKeyPassphrasesKey) ?? []
@@ -468,6 +480,13 @@ final class AppModel: NSObject, ObservableObject {
     }
     var selectedProfileHasSavedGatewayPassword: Bool {
         gatewayPasswordStoredProfileIDs.contains(selectedProfile.id.uuidString)
+    }
+    var selectedProfileHasSavedSSHPassword: Bool {
+        sshPasswordStoredProfileIDs.contains(selectedProfile.id.uuidString)
+    }
+
+    func hasSavedForwardingPassword(_ tunnelID: UUID) -> Bool {
+        forwardingPasswordStoredIDs.contains(tunnelID.uuidString)
     }
     var sessionLogURL: URL? {
         guard selectedProfile.connectionType == .rdp else { return nil }
@@ -689,6 +708,7 @@ final class AppModel: NSObject, ObservableObject {
         try? KeychainService.deleteAllPasswords(profileID: id)
         setPasswordStored(false, profileID: id, kind: .rdp)
         setPasswordStored(false, profileID: id, kind: .gateway)
+        setPasswordStored(false, profileID: id, kind: .ssh)
         reconnectCandidateProfileIDs.remove(id)
         sshTerminalSessions.removeValue(forKey: id)
         sshTerminalObservers.removeValue(forKey: id)
@@ -870,6 +890,37 @@ final class AppModel: NSObject, ObservableObject {
 
     func deleteSavedGatewayPassword() {
         deleteCredential(kind: .gateway)
+    }
+
+    func saveSSHPassword() {
+        saveCredential(sshPassword, kind: .ssh)
+    }
+
+    func deleteSavedSSHPassword() {
+        deleteCredential(kind: .ssh)
+    }
+
+    func saveForwardingPassword(_ password: String, tunnelID: UUID) {
+        guard !password.isEmpty else { return }
+        do {
+            try KeychainService.savePassword(password, profileID: tunnelID, kind: .forwarding)
+            setForwardingPasswordStored(true, tunnelID: tunnelID)
+            statusMessage = "SSH-пароль туннеля сохранён в Keychain"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func deleteSavedForwardingPassword(_ tunnelID: UUID) {
+        do {
+            try KeychainService.deletePassword(profileID: tunnelID, kind: .forwarding)
+            setForwardingPasswordStored(false, tunnelID: tunnelID)
+            statusMessage = "Сохранённый SSH-пароль туннеля удалён"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 
     func importSSHKey() {
@@ -1249,6 +1300,8 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         independentPortForwards.removeAll { $0.id == id }
+        try? KeychainService.deletePassword(profileID: id, kind: .forwarding)
+        setForwardingPasswordStored(false, tunnelID: id)
         lastSSHTunnelLogURLs.removeValue(forKey: id)
     }
 
@@ -1273,9 +1326,22 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 setSSHKeyPassphraseStored(true, keyID: identity.id)
             }
+            let credential: KeychainCredentialReference?
+            switch item.connection.kind {
+            case .savedProfile:
+                credential = item.connection.profileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                }
+            case .custom:
+                credential = KeychainService.credentialReference(
+                    profileID: item.id,
+                    kind: .forwarding
+                )
+            }
             let running = try SSHService.launchTunnel(
                 settings: settings,
-                rule: item.rule
+                rule: item.rule,
+                passwordCredential: credential
             )
             managedSSHTunnels[id] = running
             sshTunnels[id] = SSHTunnelSummary(
@@ -1316,7 +1382,15 @@ final class AppModel: NSObject, ObservableObject {
         else { return }
 
         do {
-            let running = try SSHService.launchTunnel(settings: settings, rule: rule)
+            let credential = KeychainService.credentialReference(
+                profileID: selectedProfile.id,
+                kind: .ssh
+            )
+            let running = try SSHService.launchTunnel(
+                settings: settings,
+                rule: rule,
+                passwordCredential: credential
+            )
             managedSSHTunnels[ruleID] = running
             sshTunnels[ruleID] = SSHTunnelSummary(
                 id: ruleID,
@@ -1530,11 +1604,16 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
         do {
+            let credential = connection.profileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            }
             try session.start(
                 executable: "/usr/bin/ssh",
                 arguments: SSHService.interactiveSSHArguments(settings: settings),
                 title: "SSH · \(settings.profileName)",
-                environment: SSHKeyService.processEnvironment()
+                environment: SSHKeyService.backgroundAuthenticationEnvironment(
+                    passwordCredential: credential
+                )
             ) { [weak self] exitCode in
                 guard let self else { return }
                 statusMessage = exitCode == 0
@@ -2163,18 +2242,30 @@ final class AppModel: NSObject, ObservableObject {
 
     private func saveCredential(_ value: String, kind: KeychainCredentialKind) {
         guard !value.isEmpty else {
-            statusMessage = kind == .rdp
-                ? "Введите новый RDP-пароль перед сохранением"
-                : "Введите новый пароль RD Gateway перед сохранением"
+            switch kind {
+            case .rdp: statusMessage = "Введите новый RDP-пароль перед сохранением"
+            case .gateway: statusMessage = "Введите новый пароль RD Gateway перед сохранением"
+            case .ssh: statusMessage = "Введите SSH-пароль перед сохранением"
+            case .forwarding: return
+            }
             return
         }
         do {
             try KeychainService.savePassword(value, profileID: selectedProfile.id, kind: kind)
             setPasswordStored(true, profileID: selectedProfile.id, kind: kind)
-            if kind == .rdp { password = "" } else { gatewayPassword = "" }
-            statusMessage = kind == .rdp
-                ? "RDP-пароль сохранён в Keychain"
-                : "Пароль RD Gateway сохранён в Keychain"
+            switch kind {
+            case .rdp:
+                password = ""
+                statusMessage = "RDP-пароль сохранён в Keychain"
+            case .gateway:
+                gatewayPassword = ""
+                statusMessage = "Пароль RD Gateway сохранён в Keychain"
+            case .ssh:
+                sshPassword = ""
+                statusMessage = "SSH-пароль сохранён в Keychain"
+            case .forwarding:
+                break
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2185,10 +2276,19 @@ final class AppModel: NSObject, ObservableObject {
         do {
             try KeychainService.deletePassword(profileID: selectedProfile.id, kind: kind)
             setPasswordStored(false, profileID: selectedProfile.id, kind: kind)
-            if kind == .rdp { password = "" } else { gatewayPassword = "" }
-            statusMessage = kind == .rdp
-                ? "Сохранённый RDP-пароль удалён"
-                : "Сохранённый пароль RD Gateway удалён"
+            switch kind {
+            case .rdp:
+                password = ""
+                statusMessage = "Сохранённый RDP-пароль удалён"
+            case .gateway:
+                gatewayPassword = ""
+                statusMessage = "Сохранённый пароль RD Gateway удалён"
+            case .ssh:
+                sshPassword = ""
+                statusMessage = "Сохранённый SSH-пароль удалён"
+            case .forwarding:
+                break
+            }
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2201,21 +2301,41 @@ final class AppModel: NSObject, ObservableObject {
         kind: KeychainCredentialKind
     ) {
         let key = profileID.uuidString
-        if kind == .rdp {
+        switch kind {
+        case .rdp:
             if stored { passwordStoredProfileIDs.insert(key) }
             else { passwordStoredProfileIDs.remove(key) }
             UserDefaults.standard.set(
                 passwordStoredProfileIDs.sorted(),
                 forKey: storedPasswordProfilesKey
             )
-        } else {
+        case .gateway:
             if stored { gatewayPasswordStoredProfileIDs.insert(key) }
             else { gatewayPasswordStoredProfileIDs.remove(key) }
             UserDefaults.standard.set(
                 gatewayPasswordStoredProfileIDs.sorted(),
                 forKey: storedGatewayPasswordProfilesKey
             )
+        case .ssh:
+            if stored { sshPasswordStoredProfileIDs.insert(key) }
+            else { sshPasswordStoredProfileIDs.remove(key) }
+            UserDefaults.standard.set(
+                sshPasswordStoredProfileIDs.sorted(),
+                forKey: storedSSHPasswordProfilesKey
+            )
+        case .forwarding:
+            break
         }
+    }
+
+    private func setForwardingPasswordStored(_ stored: Bool, tunnelID: UUID) {
+        let key = tunnelID.uuidString
+        if stored { forwardingPasswordStoredIDs.insert(key) }
+        else { forwardingPasswordStoredIDs.remove(key) }
+        UserDefaults.standard.set(
+            forwardingPasswordStoredIDs.sorted(),
+            forKey: storedForwardingPasswordIDsKey
+        )
     }
 
     private func configureDefaultDisplays(for profile: inout ConnectionProfile) {

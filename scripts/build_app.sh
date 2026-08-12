@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="0.19.9"
+VERSION="0.20.0"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="89"
+BUILD_NUMBER="90"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
@@ -208,6 +208,7 @@ xcrun swiftc \
     -target "$BUILD_ARCH-apple-macos14.0" \
     "$ROOT/Native/SSHKeychainAskPass.swift" \
     -framework AppKit \
+    -framework Security \
     -o "$SSH_ASKPASS_HELPER"
 
 HOMEBREW_PREFIX="$(brew --prefix)"

@@ -1,31 +1,32 @@
 import AppKit
 import Foundation
+import Security
 
 @main
 struct SSHKeychainAskPass {
     @MainActor
     static func main() {
+        let prompt = CommandLine.arguments.dropFirst().first
+            ?? "Введите пароль или passphrase для SSH-подключения."
+        let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
+
+        if isPasswordPrompt,
+           let password = storedPasswordFromEnvironment() {
+            FileHandle.standardOutput.write(Data((password + "\n").utf8))
+            return
+        }
+
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
         application.activate(ignoringOtherApps: true)
 
-        let alert = NSAlert()
-        alert.alertStyle = .informational
-        let prompt = CommandLine.arguments.dropFirst().first
-            ?? "Введите пароль или passphrase для SSH-подключения."
-        let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
         let usesEnglish = Locale.preferredLanguages.first?
             .lowercased().hasPrefix("en") == true
-
         let editTitle = usesEnglish ? "Edit" : "Правка"
         let pasteTitle = usesEnglish ? "Paste" : "Вставить"
         let selectAllTitle = usesEnglish ? "Select All" : "Выбрать всё"
         let mainMenu = NSMenu()
-        let editMenuItem = NSMenuItem(
-            title: editTitle,
-            action: nil,
-            keyEquivalent: ""
-        )
+        let editMenuItem = NSMenuItem(title: editTitle, action: nil, keyEquivalent: "")
         let editMenu = NSMenu(title: editTitle)
         editMenu.addItem(
             withTitle: pasteTitle,
@@ -41,6 +42,8 @@ struct SSHKeychainAskPass {
         mainMenu.addItem(editMenuItem)
         application.mainMenu = mainMenu
 
+        let alert = NSAlert()
+        alert.alertStyle = .informational
         alert.messageText = isPasswordPrompt
             ? (usesEnglish ? "SSH Server Password" : "Пароль SSH-сервера")
             : (usesEnglish ? "SSH Key Passphrase" : "Passphrase SSH-ключа")
@@ -48,9 +51,7 @@ struct SSHKeychainAskPass {
         alert.addButton(withTitle: usesEnglish ? "Continue" : "Продолжить")
         alert.addButton(withTitle: usesEnglish ? "Cancel" : "Отмена")
 
-        let field = NSSecureTextField(
-            frame: NSRect(x: 0, y: 0, width: 360, height: 24)
-        )
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 360, height: 24))
         field.placeholderString = isPasswordPrompt
             ? (usesEnglish ? "Password" : "Пароль")
             : "Passphrase"
@@ -74,5 +75,29 @@ struct SSHKeychainAskPass {
             exit(1)
         }
         FileHandle.standardOutput.write(Data((field.stringValue + "\n").utf8))
+    }
+
+    private static func storedPasswordFromEnvironment() -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        guard let service = environment["SELECTIVEREMOTE_KEYCHAIN_SERVICE"],
+              let account = environment["SELECTIVEREMOTE_KEYCHAIN_ACCOUNT"],
+              !service.isEmpty,
+              !account.isEmpty
+        else { return nil }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let password = String(data: data, encoding: .utf8),
+              !password.isEmpty
+        else { return nil }
+        return password
     }
 }

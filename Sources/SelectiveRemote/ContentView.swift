@@ -952,6 +952,19 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             GroupBox("Аутентификация") {
                 VStack(alignment: .leading, spacing: 10) {
+                    Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 10) {
+                        GridRow {
+                            Text("SSH-пароль")
+                            credentialEditor(
+                                value: $model.sshPassword,
+                                hasSavedValue: model.selectedProfileHasSavedSSHPassword,
+                                placeholder: "Пароль SSH-сервера",
+                                savedText: "SSH-пароль сохранён в Keychain",
+                                onSave: model.saveSSHPassword,
+                                onDelete: model.deleteSavedSSHPassword
+                            )
+                        }
+                    }
                     Picker("SSH-ключ", selection: profileBinding.sshIdentityID) {
                         Text("Автоматически: ~/.ssh/config / ssh-agent")
                             .tag(nil as UUID?)
@@ -980,9 +993,9 @@ struct ContentView: View {
                     }
                     Text(
                         "Встроенный терминал запрашивает passphrase напрямую. "
-                            + "SFTP использует активную SSH-сессию, ssh-agent или защищённый "
-                            + "запрос пароля; forwarding использует SSH-ключ либо ssh-agent; "
-                            + "пароль SSH-сервера приложение не сохраняет."
+                            + "Пароль SSH-сервера можно сохранить в Keychain. Terminal, SFTP и "
+                            + "forwarding используют одни и те же реквизиты профиля; SSH-ключ и "
+                            + "ssh-agent остаются доступными как альтернативный способ входа."
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1570,7 +1583,7 @@ struct ContentView: View {
                             systemImage: "key.fill"
                         )
                         Label(
-                            "Пароль SSH-сервера не сохраняется",
+                            "SSH-пароли профилей хранятся только в системном Keychain",
                             systemImage: "eye.slash"
                         )
                     }

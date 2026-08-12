@@ -9,6 +9,7 @@ private struct ForwardConnectionRequest: Identifiable {
 struct IndependentForwardingView: View {
     @EnvironmentObject private var model: AppModel
     @State private var connectionRequest: ForwardConnectionRequest?
+    @State private var passwordInputs: [UUID: String] = [:]
 
     private var sshProfiles: [ConnectionProfile] {
         model.profiles
@@ -88,6 +89,7 @@ struct IndependentForwardingView: View {
                 initialConnection: request.connection,
                 allowsInteractivePassword: false,
                 actionTitle: "Сохранить",
+                customAuthenticationMessage: "Для ручного SSH-сервера пароль можно сохранить в Keychain прямо в карточке туннеля.",
                 onSave: { connection, _ in
                     guard var item = model.independentPortForwards.first(where: {
                         $0.id == request.tunnelID
@@ -151,6 +153,42 @@ struct IndependentForwardingView: View {
                 .disabled(running)
             }
 
+            if item.connection.kind == .custom {
+                HStack(spacing: 10) {
+                    Label("SSH-пароль", systemImage: "key.fill")
+                        .frame(width: 120, alignment: .leading)
+                    SecureField(
+                        model.hasSavedForwardingPassword(item.id)
+                            ? "Сохранён в Keychain — введите новый для замены"
+                            : "Пароль SSH-сервера",
+                        text: passwordBinding(for: item.id)
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(running)
+                    Button("Сохранить") {
+                        let value = passwordInputs[item.id] ?? ""
+                        guard !value.isEmpty else { return }
+                        model.saveForwardingPassword(value, tunnelID: item.id)
+                        passwordInputs[item.id] = ""
+                    }
+                    .disabled(running || (passwordInputs[item.id] ?? "").isEmpty)
+                    if model.hasSavedForwardingPassword(item.id) {
+                        Button("Удалить", role: .destructive) {
+                            model.deleteSavedForwardingPassword(item.id)
+                            passwordInputs[item.id] = ""
+                        }
+                        .disabled(running)
+                    }
+                }
+                Text("Пароль хранится только в macOS Keychain и не записывается в настройки туннеля.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("SSH-аутентификация берётся из выбранного сохранённого профиля.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Picker("Режим", selection: binding.rule.kind) {
                 ForEach(PortForwardKind.allCases) { kind in
                     Label {
@@ -203,6 +241,13 @@ struct IndependentForwardingView: View {
                     lineWidth: running ? 2 : 1
                 )
         }
+    }
+
+    private func passwordBinding(for id: UUID) -> Binding<String> {
+        Binding(
+            get: { passwordInputs[id] ?? "" },
+            set: { passwordInputs[id] = $0 }
+        )
     }
 
     private func binding(for id: UUID) -> Binding<IndependentPortForward> {
