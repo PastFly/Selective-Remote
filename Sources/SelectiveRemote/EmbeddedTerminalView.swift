@@ -512,6 +512,7 @@ struct SSHTerminalView: View {
     @State private var showsLayoutPicker = false
     @State private var broadcastsInput = false
     @State private var showsBroadcastConfirmation = false
+    @State private var reconnectingTabIDs: Set<UUID> = []
     @State private var showsCommandPalette = false
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
@@ -527,12 +528,7 @@ struct SSHTerminalView: View {
             terminalTabBar
 
             if broadcastsInput {
-                Label(
-                    "Групповой ввод включён: клавиши отправляются во все активные панели",
-                    systemImage: "exclamationmark.triangle.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.orange)
+                broadcastBanner
             }
 
             terminalWorkspace
@@ -623,71 +619,133 @@ struct SSHTerminalView: View {
             guard !Task.isCancelled else { return }
             await loadRemoteContext(forTabID: tab.id)
         }
+        .onChange(of: workspace.runningSessionCount) { _, count in
+            if count < 2 {
+                broadcastsInput = false
+            }
+        }
     }
 
-    private var terminalHeader: some View {
+    private var broadcastBanner: some View {
         HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(paneColor(for: workspace.selectedTab).opacity(0.16))
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(paneColor(for: workspace.selectedTab))
+                    .fill(Color.orange.opacity(0.22))
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundStyle(.orange)
             }
             .frame(width: 38, height: 38)
 
             VStack(alignment: .leading, spacing: 2) {
+                Text("BROADCAST · ГРУППОВОЙ ВВОД")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(.orange)
+                Text("Каждая клавиша отправляется во все активные SSH-панели · \(workspace.runningSessionCount) активных")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.primary)
+            }
+
+            Spacer(minLength: 12)
+
+            Button("Выключить", systemImage: "antenna.radiowaves.left.and.right.slash") {
+                broadcastsInput = false
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.orange)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.85), lineWidth: 2)
+        }
+        .shadow(color: Color.orange.opacity(0.12), radius: 8, y: 2)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Групповой ввод включён")
+    }
+
+    private var terminalHeader: some View {
+        let tab = workspace.selectedTab
+        let state = sessionState(for: tab)
+        return HStack(spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(paneColor(for: tab).opacity(0.16))
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(paneColor(for: tab))
+            }
+            .frame(width: 38, height: 38)
+
+            VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 7) {
-                    Text(workspace.selectedTab.title)
+                    Text(tab.title)
                         .font(.headline)
                         .lineLimit(1)
-                    if workspace.selectedTab.isPinned {
+                    if tab.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
-                    Text(session.phase.title)
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
-                        .background(
-                            session.isRunning ? Color.green.opacity(0.14) : Color.secondary.opacity(0.12),
-                            in: Capsule()
-                        )
-                        .foregroundStyle(session.isRunning ? Color.green : Color.secondary)
+                    terminalStatusBadge(for: tab, compact: false)
                 }
-                Text("\(connectionLabel(for: workspace.selectedTab)) · \(session.terminalColumns)×\(session.terminalRows)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+
+                HStack(spacing: 7) {
+                    Label(connectionHost(for: tab), systemImage: "server.rack")
+                        .labelStyle(.titleAndIcon)
+                    Text("·")
+                    Text(connectionLabel(for: tab))
+                        .monospaced()
+                    if tab.session.startedAt != nil, state != .disconnected {
+                        Text("·")
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text(uptimeText(for: tab, now: context.date))
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
             }
 
             Spacer(minLength: 12)
 
             if broadcastsInput {
-                Label("SYNC", systemImage: "antenna.radiowaves.left.and.right")
+                Label("BROADCAST", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(.orange)
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
-                    .background(Color.orange.opacity(0.14), in: Capsule())
+                    .background(Color.orange.opacity(0.16), in: Capsule())
+                    .overlay {
+                        Capsule().strokeBorder(Color.orange.opacity(0.7), lineWidth: 1)
+                    }
             }
 
             Button {
-                if session.isRunning {
-                    session.stop()
-                    Task { @MainActor in
-                        try? await Task.sleep(for: .milliseconds(350))
-                        requestConnection(for: workspace.selectedTab)
-                    }
+                if tab.session.isRunning {
+                    reconnectTab(tab.id)
                 } else {
-                    requestConnection(for: workspace.selectedTab)
+                    requestConnection(for: tab)
                 }
             } label: {
-                Image(systemName: session.isRunning ? "arrow.clockwise" : "play.fill")
+                Image(systemName: tab.session.isRunning ? "arrow.clockwise" : "play.fill")
             }
             .buttonStyle(.borderedProminent)
-            .help(session.isRunning ? "Переподключить" : "Подключиться")
+            .disabled(reconnectingTabIDs.contains(tab.id))
+            .help(tab.session.isRunning ? "Переподключить" : "Подключиться")
+
+            Button {
+                _ = duplicateAndConnect(tab.id)
+            } label: {
+                Image(systemName: "plus.square.on.square")
+            }
+            .buttonStyle(.bordered)
+            .disabled(workspace.displayedTabs.count >= 8 || workspace.isEmptyState)
+            .help("Дублировать с подключением")
 
             Button {
                 showsHistory.toggle()
@@ -701,14 +759,14 @@ struct SSHTerminalView: View {
             Menu {
                 Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
                     connectionEditorRequest = TerminalConnectionEditorRequest(
-                        tabID: workspace.selectedTab.id,
-                        initialConnection: workspace.selectedTab.connection
+                        tabID: tab.id,
+                        initialConnection: tab.connection
                     )
                 }
-                .disabled(session.isRunning || (workspace.selectedTab.isPrimary && locksPrimaryConnection))
+                .disabled(tab.session.isRunning || (tab.isPrimary && locksPrimaryConnection))
                 Button("Обновить контекст сервера", systemImage: "server.rack") { refreshRemoteContext() }
-                    .disabled(!session.isRunning || refreshingContextTabIDs.contains(workspace.selectedTabID))
-                Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(workspace.selectedTab) }
+                    .disabled(!tab.session.isRunning || refreshingContextTabIDs.contains(workspace.selectedTabID))
+                Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(tab) }
                     .disabled(workspace.isEmptyState)
                 Divider()
                 Button(
@@ -718,14 +776,14 @@ struct SSHTerminalView: View {
                     if broadcastsInput { broadcastsInput = false } else { showsBroadcastConfirmation = true }
                 }
                 .disabled(workspace.runningSessionCount < 2)
-                Button("Очистить терминал", systemImage: "eraser") { session.clear() }
+                Button("Очистить терминал", systemImage: "eraser") { tab.session.clear() }
                 Divider()
                 Button("Палитра действий", systemImage: "command") { showsCommandPalette = true }
                 Button("Оформление", systemImage: "paintpalette") { showsAppearance.toggle() }
                 Button(isFocusMode ? "Вернуть интерфейс" : "Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
                     toggleFocusMode()
                 }
-                if hasInstallableKey && workspace.selectedTab.isPrimary && !session.isRunning {
+                if hasInstallableKey && tab.isPrimary && !tab.session.isRunning {
                     Divider()
                     Button("Установить SSH-ключ", systemImage: "key.horizontal") { installKey() }
                 }
@@ -739,9 +797,12 @@ struct SSHTerminalView: View {
                 TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
             }
 
-            if session.isRunning {
-                Button("Отключить", systemImage: "stop.fill", role: .destructive) { session.stop() }
-                    .buttonStyle(.bordered)
+            if tab.session.isRunning {
+                Button("Отключить", systemImage: "stop.fill", role: .destructive) {
+                    reconnectingTabIDs.remove(tab.id)
+                    tab.session.stop()
+                }
+                .buttonStyle(.bordered)
             }
         }
         .padding(.horizontal, 12)
@@ -758,25 +819,37 @@ struct SSHTerminalView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     ForEach(workspace.displayedTabs) { tab in
+                        let isSelected = tab.id == workspace.selectedTabID
+                        let state = sessionState(for: tab)
+
                         HStack(spacing: 4) {
                             Button {
                                 workspace.selectedTabID = tab.id
                             } label: {
                                 HStack(spacing: 6) {
                                     Circle()
-                                        .fill(tab.session.isRunning ? Color.green : Color.secondary.opacity(0.45))
-                                        .frame(width: 7, height: 7)
+                                        .fill(statusColor(for: state))
+                                        .frame(width: 8, height: 8)
                                     if tab.isPinned {
                                         Image(systemName: "pin.fill")
                                             .font(.caption2)
                                             .foregroundStyle(paneColor(for: tab))
                                     }
-                                    Text(tab.title).lineLimit(1)
+                                    Text(tab.title)
+                                        .fontWeight(isSelected ? .semibold : .regular)
+                                        .lineLimit(1)
+                                    if state == .reconnecting {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.caption2.weight(.semibold))
+                                            .foregroundStyle(.orange)
+                                    }
                                 }
                             }
                             .buttonStyle(.plain)
+
                             if (!tab.isPrimary || !locksPrimaryConnection) && !tab.isPinned {
                                 Button {
+                                    reconnectingTabIDs.remove(tab.id)
                                     workspace.closeTab(tab.id)
                                 } label: {
                                     Image(systemName: "xmark")
@@ -787,16 +860,39 @@ struct SSHTerminalView: View {
                             }
                         }
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 7)
                         .background(
-                            tab.id == workspace.selectedTabID
-                                ? Color.accentColor.opacity(0.20)
+                            isSelected
+                                ? Color.accentColor.opacity(0.24)
                                 : Color.primary.opacity(0.055),
-                            in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            in: RoundedRectangle(cornerRadius: 9, style: .continuous)
                         )
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 9, style: .continuous)
+                                .strokeBorder(
+                                    isSelected
+                                        ? Color.accentColor.opacity(0.85)
+                                        : Color.primary.opacity(0.06),
+                                    lineWidth: isSelected ? 1.5 : 1
+                                )
+                        }
+                        .overlay(alignment: .bottom) {
+                            if isSelected {
+                                Capsule()
+                                    .fill(Color.accentColor)
+                                    .frame(height: 3)
+                                    .padding(.horizontal, 10)
+                                    .offset(y: 1)
+                            }
+                        }
                         .contextMenu {
                             if tab.session.isRunning {
+                                Button("Переподключить", systemImage: "arrow.clockwise") {
+                                    reconnectTab(tab.id)
+                                }
+                                .disabled(reconnectingTabIDs.contains(tab.id))
                                 Button("Отключить", systemImage: "stop.fill", role: .destructive) {
+                                    reconnectingTabIDs.remove(tab.id)
                                     tab.session.stop()
                                 }
                             } else {
@@ -805,27 +901,19 @@ struct SSHTerminalView: View {
                                     requestConnection(for: tab)
                                 }
                             }
+
                             Button(tab.isPinned ? "Открепить вкладку" : "Закрепить вкладку", systemImage: tab.isPinned ? "pin.slash" : "pin") {
                                 workspace.togglePinned(tab.id)
                             }
                             Button("Сменить цвет", systemImage: "paintpalette.fill") {
                                 workspace.cycleColor(tab.id)
                             }
-                            if tab.session.isRunning {
-                                Button("Переподключить", systemImage: "arrow.clockwise") {
-                                    tab.session.stop()
-                                    Task { @MainActor in
-                                        try? await Task.sleep(for: .milliseconds(350))
-                                        if let current = workspace.tabs.first(where: { $0.id == tab.id }) {
-                                            connect(current, nil)
-                                        }
-                                    }
-                                }
-                            }
                             Button("Очистить терминал", systemImage: "eraser") {
                                 tab.session.clear()
                             }
+
                             Divider()
+
                             Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
                                 connectionEditorRequest = TerminalConnectionEditorRequest(
                                     tabID: tab.id,
@@ -844,6 +932,11 @@ struct SSHTerminalView: View {
                                 _ = workspace.duplicateTab(tab.id)
                             }
                             .disabled(workspace.displayedTabs.count >= 8)
+                            Button("Дублировать с подключением", systemImage: "rectangle.on.rectangle.badge.plus") {
+                                _ = duplicateAndConnect(tab.id)
+                            }
+                            .disabled(workspace.displayedTabs.count >= 8)
+
                             if workspace.displayedTabs.count < 8 {
                                 Button("Новая вкладка", systemImage: "plus") {
                                     connectionEditorRequest = TerminalConnectionEditorRequest(
@@ -853,9 +946,11 @@ struct SSHTerminalView: View {
                                     )
                                 }
                             }
+
                             if (!tab.isPrimary || !locksPrimaryConnection) && !tab.isPinned {
                                 Divider()
                                 Button("Закрыть", systemImage: "xmark", role: .destructive) {
+                                    reconnectingTabIDs.remove(tab.id)
                                     workspace.closeTab(tab.id)
                                 }
                             }
@@ -866,6 +961,7 @@ struct SSHTerminalView: View {
                         }
                     }
                 }
+                .padding(.vertical, 1)
             }
 
             Button {
@@ -1056,28 +1152,119 @@ struct SSHTerminalView: View {
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
         let color = paneColor(for: tab)
+        let isSelected = tab.id == workspace.selectedTabID
+        let state = sessionState(for: tab)
+        let broadcastTarget = broadcastsInput && tab.session.isRunning
+
         return VStack(spacing: 0) {
             if workspace.layout != .single {
                 HStack(spacing: 8) {
                     Image(systemName: "line.3.horizontal")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(color)
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text(tab.title).font(.caption.weight(.semibold))
-                        Text(connectionLabel(for: tab))
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.62))
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(tab.title)
+                                .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                            if isSelected {
+                                Text("ACTIVE")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 2)
+                                    .background(Color.accentColor.opacity(0.16), in: Capsule())
+                            }
+                            if broadcastTarget {
+                                Image(systemName: "antenna.radiowaves.left.and.right")
+                                    .font(.caption2.weight(.bold))
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+
+                        HStack(spacing: 5) {
+                            Text(connectionHost(for: tab))
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.white.opacity(0.72))
+                                .lineLimit(1)
+                            if tab.session.startedAt != nil, state != .disconnected {
+                                Text("·")
+                                    .foregroundStyle(.white.opacity(0.42))
+                                TimelineView(.periodic(from: .now, by: 1)) { context in
+                                    Text(uptimeText(for: tab, now: context.date))
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.white.opacity(0.72))
+                                }
+                            }
+                        }
                     }
-                    Spacer()
-                    Text(tab.session.phase.title)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.62))
-                        .lineLimit(1)
+
+                    Spacer(minLength: 4)
+
+                    terminalStatusBadge(for: tab, compact: true)
+
+                    if tab.session.isRunning {
+                        Button {
+                            reconnectTab(tab.id)
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(reconnectingTabIDs.contains(tab.id))
+                        .help("Переподключить")
+                    } else {
+                        Button {
+                            selectTabIfNeeded(tab.id)
+                            requestConnection(for: tab)
+                        } label: {
+                            Image(systemName: "play.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Подключить")
+                    }
+
+                    Button {
+                        _ = duplicateAndConnect(tab.id)
+                    } label: {
+                        Image(systemName: "plus.square.on.square")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(workspace.displayedTabs.count >= 8)
+                    .help("Дублировать с подключением")
+
+                    if (!tab.isPrimary || !locksPrimaryConnection) && !tab.isPinned {
+                        Button {
+                            reconnectingTabIDs.remove(tab.id)
+                            workspace.closeTab(tab.id)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .help("Закрыть панель")
+                    }
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .foregroundStyle(.white)
-                .background(color.opacity(tab.id == workspace.selectedTabID ? 0.28 : 0.16))
+                .background(
+                    isSelected
+                        ? Color.accentColor.opacity(0.22)
+                        : (broadcastTarget ? Color.orange.opacity(0.16) : color.opacity(0.14))
+                )
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(
+                            isSelected
+                                ? Color.accentColor.opacity(0.9)
+                                : (broadcastTarget ? Color.orange.opacity(0.85) : color.opacity(0.4))
+                        )
+                        .frame(height: isSelected || broadcastTarget ? 2 : 1)
+                }
                 .contentShape(Rectangle())
                 .onTapGesture { selectTabIfNeeded(tab.id) }
                 .draggable(tab.id.uuidString)
@@ -1085,6 +1272,7 @@ struct SSHTerminalView: View {
                     reorderTabs(items, to: tab.id)
                 }
             }
+
             EmbeddedTerminalWebView(
                 session: tab.session,
                 appearance: appearance.snapshot,
@@ -1117,16 +1305,21 @@ struct SSHTerminalView: View {
             .overlay {
                 if !tab.session.isRunning {
                     VStack(spacing: 12) {
-                        Image(systemName: "terminal.fill")
+                        Image(systemName: state.systemImage)
                             .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(color)
-                        Text("Терминал не подключён")
+                            .foregroundStyle(statusColor(for: state))
+                        Text(LocalizedStringKey(state.title))
                             .font(.headline)
                             .foregroundStyle(.white)
                         Text(connectionLabel(for: tab))
                             .font(.caption.monospaced())
                             .foregroundStyle(.white.opacity(0.62))
                             .lineLimit(1)
+                        if let detail = state.detail {
+                            Text(detail)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.red.opacity(0.9))
+                        }
                         Button("Подключиться", systemImage: "play.fill") {
                             selectTabIfNeeded(tab.id)
                             requestConnection(for: tab)
@@ -1145,19 +1338,142 @@ struct SSHTerminalView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    tab.id == workspace.selectedTabID
+                    isSelected
                         ? Color.accentColor
-                        : color.opacity(0.65),
-                    lineWidth: tab.id == workspace.selectedTabID ? 3 : 1
+                        : (broadcastTarget ? Color.orange : color.opacity(0.65)),
+                    lineWidth: isSelected ? 3.5 : (broadcastTarget ? 3 : 1)
                 )
                 .allowsHitTesting(false)
         }
+        .shadow(
+            color: isSelected
+                ? Color.accentColor.opacity(0.20)
+                : (broadcastTarget ? Color.orange.opacity(0.16) : Color.clear),
+            radius: isSelected || broadcastTarget ? 8 : 0
+        )
     }
 
     private func paneColor(for tab: TerminalWorkspaceTab) -> Color {
         let colors: [Color] = [.blue, .teal, .orange, .purple, .pink, .green]
         let index = max(0, tab.colorIndex) % colors.count
         return colors[index]
+    }
+
+    private func sessionState(for tab: TerminalWorkspaceTab) -> TerminalWorkspaceSessionState {
+        TerminalWorkspaceSessionState.resolve(
+            phase: tab.session.phase,
+            isReconnecting: reconnectingTabIDs.contains(tab.id)
+        )
+    }
+
+    private func statusColor(for state: TerminalWorkspaceSessionState) -> Color {
+        switch state {
+        case .connected:
+            .green
+        case .connecting:
+            .blue
+        case .reconnecting, .stopping:
+            .orange
+        case .disconnected:
+            .secondary
+        case .error:
+            .red
+        }
+    }
+
+    private func terminalStatusBadge(
+        for tab: TerminalWorkspaceTab,
+        compact: Bool
+    ) -> some View {
+        let state = sessionState(for: tab)
+        let color = statusColor(for: state)
+        return HStack(spacing: compact ? 4 : 5) {
+            Image(systemName: state.systemImage)
+                .font(compact ? .system(size: 9, weight: .semibold) : .caption2)
+            Text(LocalizedStringKey(state.title))
+                .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
+                .lineLimit(1)
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, compact ? 6 : 7)
+        .padding(.vertical, compact ? 3 : 4)
+        .background(color.opacity(0.14), in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(color.opacity(0.35), lineWidth: 1)
+        }
+        .help(state.detail ?? state.title)
+    }
+
+    private func connectionHost(for tab: TerminalWorkspaceTab) -> String {
+        switch tab.connection.kind {
+        case .savedProfile:
+            guard let profileID = tab.connection.profileID,
+                  let profile = sshProfiles.first(where: { $0.id == profileID })
+            else { return "Недоступный профиль" }
+            let host = profile.host.trimmingCharacters(in: .whitespacesAndNewlines)
+            return host.isEmpty ? "—" : host
+        case .custom:
+            let host = tab.connection.normalizedHost
+            return host.isEmpty ? "—" : host
+        }
+    }
+
+    private func uptimeText(for tab: TerminalWorkspaceTab, now: Date) -> String {
+        guard let startedAt = tab.session.startedAt else { return "—" }
+        let seconds = max(0, Int(now.timeIntervalSince(startedAt)))
+        if seconds < 60 {
+            return "\(seconds)s"
+        }
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes)m \(seconds % 60)s"
+        }
+        let hours = minutes / 60
+        if hours < 24 {
+            return "\(hours)h \(minutes % 60)m"
+        }
+        let days = hours / 24
+        return "\(days)d \(hours % 24)h"
+    }
+
+    private func reconnectTab(_ tabID: UUID) {
+        guard !reconnectingTabIDs.contains(tabID),
+              let tab = workspace.tabs.first(where: { $0.id == tabID })
+        else { return }
+
+        reconnectingTabIDs.insert(tabID)
+        invalidateRemoteContext(for: tabID)
+
+        Task { @MainActor in
+            if tab.session.isRunning {
+                tab.session.stop()
+            }
+
+            var attempts = 0
+            while tab.session.isRunning, attempts < 40 {
+                attempts += 1
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+
+            guard !tab.session.isRunning,
+                  let current = workspace.tabs.first(where: { $0.id == tabID })
+            else {
+                reconnectingTabIDs.remove(tabID)
+                return
+            }
+
+            connect(current, nil)
+            try? await Task.sleep(for: .milliseconds(450))
+            reconnectingTabIDs.remove(tabID)
+        }
+    }
+
+    @discardableResult
+    private func duplicateAndConnect(_ tabID: UUID) -> TerminalWorkspaceTab? {
+        guard let created = workspace.duplicateTab(tabID) else { return nil }
+        connect(created, nil)
+        return created
     }
 
     private func requestConnection(for tab: TerminalWorkspaceTab) {

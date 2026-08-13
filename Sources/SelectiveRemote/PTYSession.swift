@@ -290,6 +290,7 @@ final class TerminalSessionModel: ObservableObject {
 
     @Published private(set) var phase = EmbeddedTerminalPhase.idle
     @Published private(set) var commandTitle = ""
+    @Published private(set) var startedAt: Date?
     @Published private(set) var terminalColumns = 100
     @Published private(set) var terminalRows = 30
 
@@ -336,6 +337,7 @@ final class TerminalSessionModel: ObservableObject {
         processEnvironment["TERM_PROGRAM_VERSION"] = AppBuildInfo.version
 
         commandTitle = title
+        startedAt = nil
         phase = .starting(title)
         self.completion = completion
         resetOutput()
@@ -361,8 +363,10 @@ final class TerminalSessionModel: ObservableObject {
                 rows: rows
             )
             process = newProcess
+            startedAt = Date()
             phase = .running(title)
         } catch {
+            startedAt = nil
             phase = .finished(255)
             self.completion = nil
             appendLocalText("\r\nНе удалось запустить команду: \(error.localizedDescription)\r\n")
@@ -453,6 +457,7 @@ final class TerminalSessionModel: ObservableObject {
 
     private func didTerminate(exitCode: Int32) {
         process = nil
+        startedAt = nil
         phase = .finished(exitCode)
         appendLocalText(
             "\r\n\r\n[\(AppBrand.name)] Процесс завершён"

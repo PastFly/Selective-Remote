@@ -28,6 +28,79 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum TerminalWorkspaceSessionState: Equatable {
+    case connecting
+    case connected
+    case reconnecting
+    case stopping
+    case disconnected
+    case error(Int32)
+
+    static func resolve(
+        phase: EmbeddedTerminalPhase,
+        isReconnecting: Bool = false
+    ) -> TerminalWorkspaceSessionState {
+        if isReconnecting {
+            return .reconnecting
+        }
+        switch phase {
+        case .idle:
+            return .disconnected
+        case .starting:
+            return .connecting
+        case .running:
+            return .connected
+        case .stopping:
+            return .stopping
+        case let .finished(code):
+            return code == 0 ? .disconnected : .error(code)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .connecting:
+            "Подключение…"
+        case .connected:
+            "Подключено"
+        case .reconnecting:
+            "Переподключение…"
+        case .stopping:
+            "Остановка…"
+        case .disconnected:
+            "Отключено"
+        case .error:
+            "Ошибка"
+        }
+    }
+
+    var detail: String? {
+        switch self {
+        case let .error(code):
+            "Exit code \(code)"
+        default:
+            nil
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .connecting:
+            "circle.dotted"
+        case .connected:
+            "checkmark.circle.fill"
+        case .reconnecting:
+            "arrow.triangle.2.circlepath.circle.fill"
+        case .stopping:
+            "stop.circle"
+        case .disconnected:
+            "circle"
+        case .error:
+            "exclamationmark.triangle.fill"
+        }
+    }
+}
+
 struct TerminalTabConnection: Codable, Equatable {
     enum Kind: String, Codable, CaseIterable, Identifiable {
         case savedProfile

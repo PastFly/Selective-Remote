@@ -266,3 +266,15 @@
 "Local открывает порт на Mac и передаёт TCP через SSH к фиксированному назначению." = "Local opens a port on the Mac and forwards TCP through SSH to a fixed destination.";
 "Remote открывает порт на SSH-сервере и ведёт входящий поток обратно через SSH к назначению." = "Remote opens a port on the SSH server and carries incoming traffic back through SSH to the destination.";
 "Dynamic открывает локальный SOCKS-порт; фиксированного Destination у него нет." = "Dynamic opens a local SOCKS port; it has no fixed destination.";
+
+// Terminal Workspace 2.0
+"Подключение…" = "Connecting…";
+"Подключено" = "Connected";
+"Переподключение…" = "Reconnecting…";
+"Остановка…" = "Stopping…";
+"Отключено" = "Disconnected";
+"BROADCAST · ГРУППОВОЙ ВВОД" = "BROADCAST INPUT";
+"Групповой ввод включён" = "Broadcast input is enabled";
+"Выключить" = "Disable";
+"Дублировать с подключением" = "Duplicate and Connect";
+"Недоступный профиль" = "Unavailable profile";
