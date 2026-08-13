@@ -640,9 +640,17 @@ struct ForwardingManagerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
             .simultaneousGesture(
+                TapGesture(count: 1).onEnded {
+                    // Table row selection and a per-cell double-click recognizer can
+                    // compete on macOS. Keep selection explicit so every ordinary
+                    // click selects the tunnel immediately, while the native Table
+                    // selection binding remains the source of the highlighted row.
+                    selectForAction(item)
+                }
+            )
+            .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
-                    selectedItemID = item.id
-                    inspectorTab = .overview
+                    selectForAction(item)
                     if item.state.canStart {
                         start(item)
                     }

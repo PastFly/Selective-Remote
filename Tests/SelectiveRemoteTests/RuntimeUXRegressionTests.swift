@@ -35,6 +35,8 @@ func forwardingManagerKeepsDoubleClickAndContextMenu() throws {
         encoding: .utf8
     )
 
+    #expect(source.contains("TapGesture(count: 1).onEnded"))
+    #expect(source.contains("selectForAction(item)"))
     #expect(source.contains("TapGesture(count: 2).onEnded"))
     #expect(source.contains("if item.state.canStart"))
     #expect(source.contains("start(item)"))

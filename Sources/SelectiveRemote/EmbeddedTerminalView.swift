@@ -235,7 +235,11 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             guard appliedHistoryVisibility != visible else { return }
             appliedHistoryVisibility = visible
             webView?.evaluateJavaScript(
-                "window.selectiveTerminalSetHistoryVisible?.(\(visible ? "true" : "false"))"
+                // Swift synchronizes history visibility when the active grid pane
+                // changes. Do not return focus to a pane merely because its history
+                // panel is being hidden programmatically: that focus event would
+                // select the old pane again and make two panes bounce forever.
+                "window.selectiveTerminalSetHistoryVisible?.(\(visible ? "true" : "false"), false, false)"
             )
         }
 

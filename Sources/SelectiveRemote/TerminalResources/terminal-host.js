@@ -985,14 +985,18 @@
         renderSuggestions();
     };
 
-    window.selectiveTerminalSetHistoryVisible = (visible, notifySwift = false) => {
+    window.selectiveTerminalSetHistoryVisible = (
+        visible,
+        notifySwift = false,
+        restoreTerminalFocus = true
+    ) => {
         const nextVisible = Boolean(visible);
         historyPanel.hidden = !nextVisible;
         hideSuggestions();
         if (nextVisible) {
             renderHistoryPanel();
             window.setTimeout(() => historyQuery.focus(), 0);
-        } else {
+        } else if (restoreTerminalFocus) {
             terminal.focus();
         }
         if (notifySwift) {
