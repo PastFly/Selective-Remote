@@ -253,6 +253,14 @@ func terminalServerContextUsesActiveTabAuthentication() throws {
         contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift"),
         encoding: .utf8
     )
+    let sshService = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/SSHService.swift"),
+        encoding: .utf8
+    )
+    let workspace = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/TerminalWorkspace.swift"),
+        encoding: .utf8
+    )
     let contentView = try String(
         contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
         encoding: .utf8
@@ -261,12 +269,22 @@ func terminalServerContextUsesActiveTabAuthentication() throws {
     #expect(contentView.contains("connection: tab.connection"))
     #expect(contentView.contains("tabID: tab.id"))
     #expect(appModel.contains("requiresIndependentAuthentication: true"))
+    #expect(appModel.contains("reuseRunningTerminalAuthorization: true"))
+    #expect(appModel.contains("isRunningTerminalTab(connection: connection, tabID: tabID)"))
+    #expect(appModel.contains("requiresUserPresence: false"))
     #expect(appModel.contains("SSHKeyService.backgroundAuthenticationEnvironment"))
     #expect(appModel.contains("jumpHostPasswordCredential: settings.jumpHostProfileID.map"))
+    #expect(sshService.contains("requiresUserPresence: Bool = true"))
+    #expect(sshService.contains("requiresUserPresence && requiresTouchID"))
     #expect(embedded.contains("remoteContextRequestIDs"))
+    #expect(embedded.contains("workspace.remoteContext(for: tab.id)"))
+    #expect(workspace.contains("@Published private(set) var remoteContexts"))
+    #expect(workspace.contains("func invalidateRemoteContext(for tabID: UUID)"))
+    #expect(workspace.contains("tab.session.$phase.sink"))
     #expect(embedded.contains("currentTab.connection == expectedConnection"))
     #expect(embedded.contains("if action == \"retryRemoteContext\""))
     #expect(embedded.contains("onRemoteContextRetry()"))
+    #expect(embedded.contains(".help(\"История и подсказки\")"))
 }
 
 @Test("Перезагрузка WebView повторно выводит активную SSH-сессию")

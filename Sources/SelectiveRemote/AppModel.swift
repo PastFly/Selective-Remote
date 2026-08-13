@@ -580,6 +580,19 @@ final class AppModel: NSObject, ObservableObject {
             || sshTerminalSessions[profileID]?.isRunning == true
     }
 
+    private func isRunningTerminalTab(
+        connection: TerminalTabConnection,
+        tabID: UUID
+    ) -> Bool {
+        terminalWorkspaces.values.contains { workspace in
+            workspace.tabs.contains { tab in
+                tab.id == tabID
+                    && tab.connection == connection
+                    && tab.session.isRunning
+            }
+        }
+    }
+
     func terminalSession(profileID: UUID) -> TerminalSessionModel {
         if let existing = sshTerminalSessions[profileID] {
             return existing
@@ -1503,20 +1516,24 @@ final class AppModel: NSObject, ObservableObject {
     func prepareSSHConnection(
         connection: TerminalTabConnection,
         clientID: UUID,
-        requiresIndependentAuthentication: Bool = false
+        requiresIndependentAuthentication: Bool = false,
+        reuseRunningTerminalAuthorization: Bool = false
     ) -> SSHConnectionSettings? {
         guard let settings = sshConnectionSettings(
             connection: connection,
             tabID: clientID
         ) else { return nil }
+        let reusesTerminalAuthorization = reuseRunningTerminalAuthorization
+            && isRunningTerminalTab(connection: connection, tabID: clientID)
         do {
             if let sourceProfileID = connection.profileID,
                let sourceProfile = profiles.first(where: { $0.id == sourceProfileID }),
                let jumpProfile = sshJumpHostProfile(for: sourceProfile) {
                 if let jumpKeyID = jumpProfile.sshIdentityID,
                    let jumpKey = sshKeys.first(where: { $0.id == jumpKeyID }) {
-                    if jumpProfile.sshAuthenticationMode == .touchIDKey
-                        || sshKeyUserPresenceProfileIDs.contains(jumpProfile.id.uuidString) {
+                    if !reusesTerminalAuthorization
+                        && (jumpProfile.sshAuthenticationMode == .touchIDKey
+                            || sshKeyUserPresenceProfileIDs.contains(jumpProfile.id.uuidString)) {
                         try KeychainService.authorizeSSHKeyUse(
                             profileID: jumpProfile.id,
                             reason: "Подтвердите Touch ID для Jump Host «\(jumpProfile.friendlyName)»"
@@ -1535,7 +1552,8 @@ final class AppModel: NSObject, ObservableObject {
             } ?? false
             let hasActiveControlSession = !requiresIndependentAuthentication
                 && matchingTerminalIsRunning
-            if let key = settings.identity,
+            if !reusesTerminalAuthorization,
+               let key = settings.identity,
                let profileID = connection.profileID,
                (settings.authenticationMode == .touchIDKey
                     || (settings.authenticationMode == .key
@@ -2113,10 +2131,16 @@ final class AppModel: NSObject, ObservableObject {
         connection: TerminalTabConnection,
         tabID: UUID
     ) async throws -> TerminalRemoteContextSnapshot {
+        guard isRunningTerminalTab(connection: connection, tabID: tabID) else {
+            throw TerminalRemoteContextError.commandFailed(
+                "активная SSH-сессия этой вкладки уже завершена"
+            )
+        }
         guard let settings = prepareSSHConnection(
             connection: connection,
             clientID: tabID,
-            requiresIndependentAuthentication: true
+            requiresIndependentAuthentication: true,
+            reuseRunningTerminalAuthorization: true
         ) else {
             throw TerminalRemoteContextError.commandFailed(
                 errorMessage ?? "подключение SSH больше недоступно"
@@ -2151,7 +2175,8 @@ final class AppModel: NSObject, ObservableObject {
             jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                 KeychainService.credentialReference(profileID: $0, kind: .ssh)
             },
-            jumpHostPromptTokens: settings.jumpHostPromptTokens
+            jumpHostPromptTokens: settings.jumpHostPromptTokens,
+            requiresUserPresence: false
         )
         return try await TerminalRemoteContextService.discover(
             settings: settings,

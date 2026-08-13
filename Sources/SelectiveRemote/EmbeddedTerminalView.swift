@@ -504,7 +504,6 @@ struct SSHTerminalView: View {
 
     @State private var showsAppearance = false
     @State private var showsHistory = false
-    @State private var remoteContexts: [UUID: TerminalRemoteContextSnapshot] = [:]
     @State private var refreshingContextTabIDs: Set<UUID> = []
     @State private var remoteContextRequestIDs: [UUID: UUID] = [:]
     @State private var renameTabID: UUID?
@@ -615,7 +614,7 @@ struct SSHTerminalView: View {
                 invalidateRemoteContext(for: tab.id)
                 return
             }
-            guard remoteContexts[tab.id]?.refreshedAt == nil else { return }
+            guard workspace.remoteContext(for: tab.id)?.refreshedAt == nil else { return }
             do {
                 try await Task.sleep(for: .seconds(1))
             } catch {
@@ -690,6 +689,15 @@ struct SSHTerminalView: View {
             .buttonStyle(.borderedProminent)
             .help(session.isRunning ? "Переподключить" : "Подключиться")
 
+            Button {
+                showsHistory.toggle()
+            } label: {
+                Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
+            }
+            .buttonStyle(.bordered)
+            .help("История и подсказки")
+
             Menu {
                 Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
                     connectionEditorRequest = TerminalConnectionEditorRequest(
@@ -703,7 +711,6 @@ struct SSHTerminalView: View {
                 Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(workspace.selectedTab) }
                     .disabled(workspace.isEmptyState)
                 Divider()
-                Button("История и подсказки", systemImage: "clock.arrow.circlepath") { showsHistory.toggle() }
                 Button(
                     broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
                     systemImage: "antenna.radiowaves.left.and.right"
@@ -1084,7 +1091,7 @@ struct SSHTerminalView: View {
                 historyContext: TerminalHistoryContext(
                     profileID: historyContextID(for: tab)
                 ),
-                remoteContext: remoteContexts[tab.id] ?? .empty,
+                remoteContext: workspace.remoteContext(for: tab.id) ?? .empty,
                 onRemoteContextRetry: {
                     selectTabIfNeeded(tab.id)
                     refreshRemoteContext(for: tab.id)
@@ -1186,7 +1193,7 @@ struct SSHTerminalView: View {
 
     @MainActor
     private func invalidateRemoteContext(for tabID: UUID) {
-        remoteContexts[tabID] = nil
+        workspace.invalidateRemoteContext(for: tabID)
         remoteContextRequestIDs[tabID] = nil
         refreshingContextTabIDs.remove(tabID)
     }
@@ -1203,7 +1210,7 @@ struct SSHTerminalView: View {
         let requestID = UUID()
         remoteContextRequestIDs[tabID] = requestID
         refreshingContextTabIDs.insert(tabID)
-        remoteContexts[tabID] = .loading(hostLabel: expectedHostLabel)
+        workspace.setRemoteContext(.loading(hostLabel: expectedHostLabel), for: tabID)
         defer {
             if remoteContextRequestIDs[tabID] == requestID {
                 remoteContextRequestIDs[tabID] = nil
@@ -1218,20 +1225,23 @@ struct SSHTerminalView: View {
                   currentTab.connection == expectedConnection,
                   case .running = currentTab.session.phase
             else { return }
-            remoteContexts[tabID] = snapshot
+            workspace.setRemoteContext(snapshot, for: tabID)
         } catch {
             guard remoteContextRequestIDs[tabID] == requestID,
                   let currentTab = workspace.tabs.first(where: { $0.id == tabID }),
                   currentTab.connection == expectedConnection,
                   case .running = currentTab.session.phase
             else { return }
-            remoteContexts[tabID] = TerminalRemoteContextSnapshot(
-                hostLabel: expectedHostLabel,
-                systemLabel: expectedHostLabel,
-                refreshedAt: Date(),
-                suggestions: [],
-                message: error.localizedDescription,
-                canRetry: true
+            workspace.setRemoteContext(
+                TerminalRemoteContextSnapshot(
+                    hostLabel: expectedHostLabel,
+                    systemLabel: expectedHostLabel,
+                    refreshedAt: Date(),
+                    suggestions: [],
+                    message: error.localizedDescription,
+                    canRetry: true
+                ),
+                for: tabID
             )
         }
     }

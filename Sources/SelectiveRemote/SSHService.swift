@@ -856,7 +856,8 @@ enum SSHKeyService {
         passwordCredential: KeychainCredentialReference? = nil,
         proxyPasswordCredential: KeychainCredentialReference? = nil,
         jumpHostPasswordCredential: KeychainCredentialReference? = nil,
-        jumpHostPromptTokens: [String] = []
+        jumpHostPromptTokens: [String] = [],
+        requiresUserPresence: Bool = true
     ) throws -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
@@ -873,7 +874,7 @@ enum SSHKeyService {
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
             let hasCurrentSecret = KeychainService.passwordExists(reference: passwordCredential)
-            if requiresTouchID && hasCurrentSecret {
+            if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: "Подтвердите Touch ID для использования SSH-пароля"
                 )
@@ -888,7 +889,7 @@ enum SSHKeyService {
         if let jumpHostPasswordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: jumpHostPasswordCredential)
             let hasCurrentSecret = KeychainService.passwordExists(reference: jumpHostPasswordCredential)
-            if requiresTouchID && hasCurrentSecret {
+            if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
                     reason: "Подтвердите Touch ID для использования пароля Jump Host"
                 )

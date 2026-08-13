@@ -151,11 +151,13 @@ final class TerminalWorkspaceModel: ObservableObject {
     @Published var layout: TerminalWorkspaceLayout {
         didSet { normalizeSelectionAndPersist() }
     }
+    @Published private(set) var remoteContexts: [UUID: TerminalRemoteContextSnapshot] = [:]
 
     let profileID: UUID
 
     private let defaults: UserDefaults
     private var sessionObservers: [UUID: AnyCancellable] = [:]
+    private var sessionPhaseObservers: [UUID: AnyCancellable] = [:]
     private var isRestoring = true
     private var storageKey: String {
         "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
@@ -360,6 +362,7 @@ final class TerminalWorkspaceModel: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }), !tabs[index].isPinned else { return }
         if tabs.count == 1 {
             tabs[0].session.stop()
+            remoteContexts[id] = nil
             tabs[0].title = "Новый терминал"
             tabs[0].connection = .custom(host: "", username: "")
             tabs[0].isPrimary = true
@@ -371,7 +374,9 @@ final class TerminalWorkspaceModel: ObservableObject {
         }
         let wasPrimary = tabs[index].isPrimary
         tabs[index].session.stop()
+        remoteContexts[id] = nil
         sessionObservers[id] = nil
+        sessionPhaseObservers[id] = nil
         tabs.remove(at: index)
         if wasPrimary {
             tabs[0].isPrimary = true
@@ -404,6 +409,7 @@ final class TerminalWorkspaceModel: ObservableObject {
               !tabs[index].session.isRunning
         else { return false }
         tabs[index].connection = connection
+        remoteContexts[tabID] = nil
         tabs[index].title = Self.normalizedTitle(
             suggestedTitle,
             fallback: "Терминал \(index + 1)"
@@ -411,6 +417,25 @@ final class TerminalWorkspaceModel: ObservableObject {
         persist()
         objectWillChange.send()
         return true
+    }
+
+    func remoteContext(for tabID: UUID) -> TerminalRemoteContextSnapshot? {
+        remoteContexts[tabID]
+    }
+
+    func setRemoteContext(
+        _ context: TerminalRemoteContextSnapshot?,
+        for tabID: UUID
+    ) {
+        if let context {
+            remoteContexts[tabID] = context
+        } else {
+            remoteContexts.removeValue(forKey: tabID)
+        }
+    }
+
+    func invalidateRemoteContext(for tabID: UUID) {
+        remoteContexts.removeValue(forKey: tabID)
     }
 
     func setLayout(_ newLayout: TerminalWorkspaceLayout) {
@@ -465,6 +490,12 @@ final class TerminalWorkspaceModel: ObservableObject {
         sessionObservers[tab.id] = tab.session.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.objectWillChange.send()
+            }
+        }
+        sessionPhaseObservers[tab.id] = tab.session.$phase.sink { [weak self] phase in
+            guard !phase.isRunning else { return }
+            Task { @MainActor [weak self] in
+                self?.invalidateRemoteContext(for: tab.id)
             }
         }
     }
