@@ -155,15 +155,20 @@ struct PortForwardingView: View {
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
-        .onTapGesture {
+        .onTapGesture(count: 1) {
             selectedRuleID = rule.id
         }
-        .onTapGesture(count: 2) {
-            selectedRuleID = rule.id
-            if !running {
-                model.startSSHTunnel(rule.id)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                selectedRuleID = rule.id
+                if !model.isProfileSSHTunnelRunning(
+                    ruleID: rule.id,
+                    profileID: profile.id
+                ) {
+                    model.startSSHTunnel(rule.id)
+                }
             }
-        }
+        )
         .contextMenu {
             if running {
                 Button("Остановить", systemImage: "stop.fill", role: .destructive) {

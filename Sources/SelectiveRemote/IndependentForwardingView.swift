@@ -204,15 +204,17 @@ struct IndependentForwardingView: View {
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
-        .onTapGesture {
+        .onTapGesture(count: 1) {
             selectedTunnelID = item.id
         }
-        .onTapGesture(count: 2) {
-            selectedTunnelID = item.id
-            if !running {
-                model.startIndependentPortForward(item.id)
+        .simultaneousGesture(
+            TapGesture(count: 2).onEnded {
+                selectedTunnelID = item.id
+                if !model.isIndependentSSHTunnelRunning(tunnelID: item.id) {
+                    model.startIndependentPortForward(item.id)
+                }
             }
-        }
+        )
         .contextMenu {
             if running {
                 Button("Остановить", systemImage: "stop.fill", role: .destructive) {

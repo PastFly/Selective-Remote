@@ -376,6 +376,34 @@ func exposesGlobalSSHWorkspaces() throws {
     #expect(forwarding.contains("model.startIndependentPortForward"))
 }
 
+@Test("Двойной клик запускает профильный и независимый SSH-туннель")
+func forwardingRowsKeepDoubleClickStartGesture() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+
+    let independent = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/IndependentForwardingView.swift"
+        ),
+        encoding: .utf8
+    )
+    let profile = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/PortForwardingView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(independent.contains(".simultaneousGesture("))
+    #expect(independent.contains("TapGesture(count: 2).onEnded"))
+    #expect(independent.contains("model.startIndependentPortForward(item.id)"))
+    #expect(profile.contains(".simultaneousGesture("))
+    #expect(profile.contains("TapGesture(count: 2).onEnded"))
+    #expect(profile.contains("model.startSSHTunnel(rule.id)"))
+}
+
 @Test("Публичный проект содержит английский интерфейс и README")
 func includesEnglishLocalizationAndDocumentation() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
