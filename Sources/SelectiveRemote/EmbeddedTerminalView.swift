@@ -1154,9 +1154,11 @@ struct SSHTerminalView: View {
         } else if workspace.layout == .grid {
             GeometryReader { proxy in
                 let tabs = workspace.visibleTabs()
+                let canAddPane = tabs.count < 4 && workspace.displayedTabs.count < 8
+                let gridItemCount = tabs.count + (canAddPane ? 1 : 0)
                 let gap: CGFloat = 8
-                let columnCount = tabs.count == 1 ? 1 : 2
-                let rowCount = max(1, Int(ceil(Double(tabs.count) / Double(columnCount))))
+                let columnCount = gridItemCount == 1 ? 1 : 2
+                let rowCount = max(1, Int(ceil(Double(gridItemCount) / Double(columnCount))))
                 let paneWidth = max(
                     1,
                     (proxy.size.width - gap * CGFloat(columnCount - 1))
@@ -1178,6 +1180,10 @@ struct SSHTerminalView: View {
                         terminalPane(tab)
                             .frame(width: paneWidth, height: paneHeight)
                     }
+                    if canAddPane {
+                        gridAddPane
+                            .frame(width: paneWidth, height: paneHeight)
+                    }
                 }
                 .frame(
                     width: proxy.size.width,
@@ -1188,6 +1194,42 @@ struct SSHTerminalView: View {
         } else {
             terminalPane(workspace.selectedTab)
         }
+    }
+
+    private var gridAddPane: some View {
+        Button {
+            connectionEditorRequest = TerminalConnectionEditorRequest(
+                tabID: nil,
+                initialConnection: defaultProfileID.map { .savedProfile($0) }
+                    ?? .custom(host: "", username: "")
+            )
+        } label: {
+            VStack(spacing: 10) {
+                Image(systemName: "plus")
+                    .font(.system(size: 24, weight: .semibold))
+                    .frame(width: 48, height: 48)
+                    .background(Color.white.opacity(0.08), in: Circle())
+                Text("Добавить SSH-панель")
+                    .font(.callout.weight(.semibold))
+                Text("Выбрать сервер или указать новый адрес")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.58))
+                    .multilineTextAlignment(.center)
+            }
+            .foregroundStyle(.white.opacity(0.82))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    Color.white.opacity(0.20),
+                    style: StrokeStyle(lineWidth: 1.5, dash: [7, 6])
+                )
+        }
+        .help("Добавить SSH-панель")
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
@@ -1335,7 +1377,11 @@ struct SSHTerminalView: View {
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
-                        if visible { workspace.selectedTabID = tab.id }
+                        // Each pane owns a WKWebView and can report its history visibility
+                        // asynchronously. Ignore stale callbacks from a pane that stopped
+                        // being active, otherwise two grid panes can keep re-selecting each
+                        // other while the history panel is open.
+                        guard tab.id == workspace.selectedTabID else { return }
                         showsHistory = visible
                     }
                 )
@@ -1570,10 +1616,32 @@ struct SSHTerminalView: View {
             connect(tab, nil)
             return
         }
+
+        // A disconnected pane keeps its connection. The primary action should
+        // reconnect that same server; changing the server remains available
+        // through “Изменить подключение…”. Only an empty/stale pane opens the
+        // connection editor.
+        if canReuseConnection(tab.connection) {
+            connect(tab, nil)
+            return
+        }
+
         connectionEditorRequest = TerminalConnectionEditorRequest(
             tabID: tab.id,
             initialConnection: tab.connection
         )
+    }
+
+    private func canReuseConnection(_ connection: TerminalTabConnection) -> Bool {
+        switch connection.kind {
+        case .savedProfile:
+            guard let profileID = connection.profileID else { return false }
+            return sshProfiles.contains { profile in
+                profile.id == profileID && profile.connectionType == .ssh
+            }
+        case .custom:
+            return connection.isValidCustomConnection
+        }
     }
 
     private func reorderTabs(_ items: [String], to targetID: UUID) -> Bool {

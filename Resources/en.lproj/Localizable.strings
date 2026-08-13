@@ -391,3 +391,7 @@
 "Предпросмотр отчёта" = "Report preview";
 "Проблемы" = "Problems";
 "Не удалось экспортировать диагностику" = "Could not export diagnostics";
+"Активные" = "Active";
+"Неактивные" = "Inactive";
+"Добавить SSH-панель" = "Add SSH pane";
+"Выбрать сервер или указать новый адрес" = "Choose a server or enter a new address";

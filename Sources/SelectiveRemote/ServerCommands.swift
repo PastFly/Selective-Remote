@@ -308,6 +308,22 @@ enum ServerCommandCatalog {
     }
 }
 
+private enum ServerServiceFilter: String, CaseIterable, Identifiable {
+    case all
+    case active
+    case inactive
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: "Все"
+        case .active: "Активные"
+        case .inactive: "Неактивные"
+        }
+    }
+}
+
 struct ServerCommandsView: View {
     let context: TerminalRemoteContextSnapshot
     let isRefreshing: Bool
@@ -317,6 +333,7 @@ struct ServerCommandsView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var category: ServerCommandCategory = .system
     @State private var searchText = ""
+    @State private var serviceFilter: ServerServiceFilter = .all
 
     var body: some View {
         HStack(spacing: 0) {
@@ -388,7 +405,8 @@ struct ServerCommandsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                Spacer()
+                Spacer(minLength: 12)
+                commandSearchField
                 if isRefreshing {
                     ProgressView().controlSize(.small)
                 }
@@ -397,6 +415,29 @@ struct ServerCommandsView: View {
             .padding(16)
 
             Divider()
+
+            if category == .services {
+                HStack(spacing: 12) {
+                    Picker("Службы", selection: $serviceFilter) {
+                        ForEach(ServerServiceFilter.allCases) { filter in
+                            Text(LocalizedStringKey(filter.title)).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(maxWidth: 360)
+
+                    Spacer()
+
+                    Text("\(filteredServices.count) из \(context.services.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 9)
+
+                Divider()
+            }
 
             Group {
                 if category == .services {
@@ -407,7 +448,32 @@ struct ServerCommandsView: View {
                     actionsView
                 }
             }
-            .searchable(text: $searchText, prompt: "Поиск команд")
+        }
+    }
+
+    private var commandSearchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Поиск команд", text: $searchText)
+                .textFieldStyle(.plain)
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .frame(width: 240)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.10))
         }
     }
 
@@ -421,12 +487,29 @@ struct ServerCommandsView: View {
     }
 
     private var filteredServices: [TerminalRemoteService] {
-        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return context.services
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let services = context.services.filter { service in
+            let matchesState: Bool
+            switch serviceFilter {
+            case .all:
+                matchesState = true
+            case .active:
+                matchesState = service.isActive
+            case .inactive:
+                matchesState = !service.isActive
+            }
+
+            let matchesSearch = query.isEmpty
+                || service.name.localizedCaseInsensitiveContains(query)
+                || service.statusLabel.localizedCaseInsensitiveContains(query)
+            return matchesState && matchesSearch
         }
-        return context.services.filter {
-            $0.name.localizedCaseInsensitiveContains(searchText)
-                || $0.statusLabel.localizedCaseInsensitiveContains(searchText)
+
+        return services.sorted { lhs, rhs in
+            if serviceFilter == .all, lhs.isActive != rhs.isActive {
+                return lhs.isActive && !rhs.isActive
+            }
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
         }
     }
 

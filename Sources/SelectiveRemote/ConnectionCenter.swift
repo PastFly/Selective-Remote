@@ -340,7 +340,9 @@ struct ConnectionCenterView: View {
                 Text(title)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.82)
+                    .layoutPriority(1)
                 Text("\(value)")
                     .font(.title2.bold().monospacedDigit())
             }

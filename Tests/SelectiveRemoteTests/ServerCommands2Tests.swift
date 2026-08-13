@@ -123,3 +123,25 @@ func serverCommandsRejectsUnsafeRuntimeNames() throws {
     #expect(ServerCommandCatalog.isSafeRemoteIdentifier("ssh.service"))
     #expect(!ServerCommandCatalog.isSafeRemoteIdentifier("ssh.service; reboot"))
 }
+
+@Test("Server Commands фильтрует службы по активности и держит поиск в header")
+func serverCommandsFiltersServiceStateAndAlignsSearch() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/ServerCommands.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("ServerServiceFilter"))
+    #expect(source.contains("case active"))
+    #expect(source.contains("case inactive"))
+    #expect(source.contains("matchesState = service.isActive"))
+    #expect(source.contains("matchesState = !service.isActive"))
+    #expect(source.contains("commandSearchField"))
+    #expect(!source.contains(".searchable(text: $searchText"))
+}

@@ -71,3 +71,22 @@ func manualTerminalStopIsPresentedAsDisconnect() throws {
     #expect(pty.contains("Сессия отключена пользователем"))
     #expect(appModel.contains("terminationRequested || exitCode == 0"))
 }
+
+@Test("Runtime summary cards не обрезают длинные заголовки одной строкой")
+func runtimeSummaryCardsAllowTwoLineTitles() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    for relativePath in [
+        "Sources/SelectiveRemote/ConnectionCenter.swift",
+        "Sources/SelectiveRemote/ForwardingManager.swift",
+    ] {
+        let source = try String(
+            contentsOf: projectRoot.appendingPathComponent(relativePath),
+            encoding: .utf8
+        )
+        #expect(source.contains(".lineLimit(2)"))
+        #expect(source.contains(".minimumScaleFactor(0.82)"))
+    }
+}
