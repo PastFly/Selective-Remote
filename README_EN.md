@@ -10,6 +10,22 @@
 
 The project targets Apple Silicon and macOS 14 or later. The interface is available in English and Russian.
 
+<!-- SELECTIVE_REMOTE_0_21_2_BEGIN -->
+## What's new in 0.21.2
+
+**0.21.2** is a UX/stability release on top of the larger Connection Center / Forwarding / Terminal update in the 0.21.x line.
+
+- Connection Center: sortable columns and right-click runtime actions;
+- Forwarding Manager: double-click start is restored for stopped tunnels, with a new context menu;
+- Terminal: a user-requested disconnect is no longer reported as an `Exit code 255` error;
+- Terminal Grid: fixed History & Suggestions bouncing between panes and added a large `+` action in the next empty grid cell;
+- reconnecting an existing Terminal pane now uses the same server without an unnecessary profile picker;
+- Server Commands: All / Active / Inactive service filters, active-first ordering, and aligned search UI;
+- summary-card labels no longer get unnecessarily truncated.
+
+Connection Center and Forwarding Manager screenshots remain available below in this README.
+<!-- SELECTIVE_REMOTE_0_21_2_END -->
+
 <!-- SELECTIVE_REMOTE_0_21_1_BEGIN -->
 ## What's new in 0.21.1
 

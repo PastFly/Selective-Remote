@@ -1,3 +1,15 @@
+## 0.21.2
+
+- Connection Center получил сортировку по столбцам и контекстные действия для runtime-подключений.
+- В Forwarding Manager восстановлен запуск остановленного туннеля двойным кликом и добавлено контекстное меню действий для Profile и Independent tunnels.
+- Ручное отключение Terminal больше не отображается как ошибка `Exit code 255`; пользовательский Disconnect остаётся нормальным состоянием `Disconnected` и не запускает Smart Reconnect.
+- Исправлена гонка панели «История и подсказки» при переключении между активными terminal panes в split/grid-компоновке.
+- Исправлено обрезание подписей верхних summary-карточек в Connection Center и Forwarding Manager.
+- Кнопка подключения в существующей Terminal pane теперь повторно подключает к тому же серверу; выбор нового сервера остаётся отдельным действием.
+- В свободной ячейке Terminal Grid добавлена кнопка `+` для быстрого создания новой SSH-панели.
+- Server Commands 2.0 получил фильтр `Все / Активные / Неактивные`, сортировку активных служб и выровненный поиск в header.
+- Добавлены regression tests для новых Terminal/Grid, Connection Center, Forwarding и Server Commands сценариев.
+
 ## 0.21.1
 
 - Добавлен Connection Center — единый центр реальных runtime-подключений RDP, Terminal, SFTP, Profile Forwarding и Independent Forwarding с состояниями, uptime, инспектором и действиями.
