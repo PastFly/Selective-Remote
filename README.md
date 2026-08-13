@@ -10,6 +10,35 @@
 
 Проект ориентирован на Apple Silicon и macOS 14+. Интерфейс доступен на русском и английском языках.
 
+<!-- SELECTIVE_REMOTE_0_21_1_BEGIN -->
+## Что нового в 0.21.1
+
+**0.21.1** — крупное обновление runtime-интерфейса Selective Remote. Основные подключения теперь можно наблюдать и обслуживать как единое рабочее пространство, не создавая параллельных SSH/RDP session managers.
+
+### Connection Center
+
+Connection Center собирает **реальное состояние** активных RDP, Terminal, SFTP и SSH Forwarding-сессий: тип подключения, профиль, host/port, Jump Host или RDP Gateway, способ аутентификации, состояние, uptime и доступные действия. Для RDP используется состояние фактического SDL-FreeRDP process/session, а не просто наличие профиля.
+
+![Connection Center в Selective Remote 0.21.1](docs/images/connection-center-0.21.1.png)
+
+### Forwarding Manager 2.0
+
+Глобальный Forwarding объединяет Profile и Independent tunnels в одном менеджере, сохраняя их раздельные ownership, persistence и runtime state. Inspector показывает параметры и маршрут, а схема меняется для Local, Remote и Dynamic/SOCKS и отображает Jump Host/proxy только когда они действительно участвуют в соединении.
+
+![Forwarding Manager 2.0 в Selective Remote 0.21.1](docs/images/forwarding-manager-0.21.1.png)
+
+### Terminal, восстановление и диагностика
+
+- **Terminal Workspace 2.0** — более заметные active tab/pane, состояния и uptime, быстрый reconnect и duplicate-with-connect, усиленный Broadcast Input;
+- **Smart Reconnect** — ограниченные попытки с backoff после временных сетевых сбоев без бесконечных reconnect loops;
+- **Server Commands 2.0** — discovery реального Linux-сервера и контекстные команды для systemd, журналов, сети, дисков и Docker/Podman через существующую Terminal/SSH-сессию;
+- **Quick Connect 2.0** — `user@host`, нестандартный порт, выбор auth mode, SSH ID, Touch ID Key, ssh-agent, Jump Host, recent targets и Save as Profile;
+- **Diagnostics Center 2.0** — безопасные Copy/Export Diagnostic для RDP/Terminal/SFTP/Forwarding без password, passphrase, Keychain и proxy secrets.
+
+> В визуальных превью выше адреса внешних серверов анонимизированы.
+<!-- SELECTIVE_REMOTE_0_21_1_END -->
+
+
 ## Что умеет Selective Remote
 
 ### RDP

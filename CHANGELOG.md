@@ -1,3 +1,15 @@
+## 0.21.1
+
+- Добавлен Connection Center — единый центр реальных runtime-подключений RDP, Terminal, SFTP, Profile Forwarding и Independent Forwarding с состояниями, uptime, инспектором и действиями.
+- Forwarding переработан в единый Forwarding Manager 2.0 с раздельным ownership Profile/Independent, инспектором, логами и наглядной схемой Local / Remote / Dynamic с Jump Host и proxy там, где они реально используются.
+- Terminal Workspace 2.0 получил более заметные active tab/pane, runtime-состояния и uptime, быстрый reconnect, duplicate-with-connect и усиленную индикацию Broadcast Input.
+- Добавлен Smart Reconnect с ограниченными попытками и backoff для временных сетевых сбоев; ручное отключение не запускает автоматическое переподключение, а Touch ID не вызывается циклически.
+- Server Commands 2.0 теперь формирует команды на основе реального remote discovery: systemd, журналы, сеть, диски, Docker/Podman и другие доступные инструменты, используя существующую Terminal/SSH-сессию.
+- Quick Connect 2.0 понимает user@host, user@host:port и ssh-команды, поддерживает recent targets, auth mode, SSH ID, Touch ID Key, ssh-agent, Jump Host и Save as Profile.
+- Добавлен безопасный Diagnostics Center 2.0 с Copy Diagnostic и Export Diagnostic для runtime-состояния приложения; пароли, passphrase, Keychain secrets и proxy secrets в отчёт не попадают.
+- Обновлены README.md и README_EN.md; добавлены анонимизированные визуальные превью Connection Center и Forwarding Manager 2.0.
+- Расширены regression tests для новых runtime-сценариев, reconnect, Server Commands, Quick Connect и безопасной диагностики.
+
 ## 0.20.18
 
 - Исправлен запуск SSH-туннелей двойным кликом в разделе Forwarding.

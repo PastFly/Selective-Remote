@@ -10,6 +10,35 @@
 
 The project targets Apple Silicon and macOS 14 or later. The interface is available in English and Russian.
 
+<!-- SELECTIVE_REMOTE_0_21_1_BEGIN -->
+## What's new in 0.21.1
+
+**0.21.1** is a major runtime-workflow update for Selective Remote. Active connections can now be observed and operated from unified workspaces without introducing parallel SSH or RDP session managers.
+
+### Connection Center
+
+Connection Center aggregates the **real runtime state** of active RDP, Terminal, SFTP, and SSH Forwarding sessions, including connection type, profile, host/port, Jump Host or RDP Gateway, authentication mode, state, uptime, and relevant actions. RDP entries are backed by the actual SDL-FreeRDP process/session state rather than profile existence alone.
+
+![Connection Center in Selective Remote 0.21.1](docs/images/connection-center-0.21.1.png)
+
+### Forwarding Manager 2.0
+
+The global Forwarding workspace presents Profile and Independent tunnels in one manager while preserving their distinct ownership, persistence, and runtime state. The inspector exposes route details, and the diagram adapts to Local, Remote, and Dynamic/SOCKS forwarding while showing Jump Hosts and proxies only when they are actually part of the route.
+
+![Forwarding Manager 2.0 in Selective Remote 0.21.1](docs/images/forwarding-manager-0.21.1.png)
+
+### Terminal, recovery, and diagnostics
+
+- **Terminal Workspace 2.0** — clearer active tab/pane state, runtime status and uptime, quick reconnect, duplicate-with-connect, and stronger Broadcast Input indication;
+- **Smart Reconnect** — bounded retry attempts with backoff for temporary transport failures, with no infinite reconnect loops;
+- **Server Commands 2.0** — real remote Linux discovery and contextual systemd, logs, network, disk, and Docker/Podman actions through the existing Terminal/SSH session;
+- **Quick Connect 2.0** — `user@host`, custom ports, authentication mode, SSH ID, Touch ID Key, ssh-agent, Jump Host, recent targets, and Save as Profile;
+- **Diagnostics Center 2.0** — safe Copy/Export Diagnostic reports for RDP/Terminal/SFTP/Forwarding that exclude passwords, passphrases, Keychain secrets, and proxy secrets.
+
+> External server addresses in the UI previews above have been anonymized.
+<!-- SELECTIVE_REMOTE_0_21_1_END -->
+
+
 ## Highlights
 
 ### RDP
