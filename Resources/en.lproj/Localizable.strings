@@ -370,3 +370,17 @@
 "Открыть интерактивный shell контейнера" = "Open an interactive container shell";
 "Shell" = "Shell";
 "Журнал" = "Log";
+"Быстрое SSH-подключение" = "Quick SSH Connection";
+"Недавние адреса" = "Recent Targets";
+"Временное подключение через системный /usr/bin/ssh" = "Temporary connection through the system /usr/bin/ssh";
+"Прямое подключение" = "Direct connection";
+"Необязательно" = "Optional";
+"По умолчанию" = "Default";
+"Не выбран" = "Not selected";
+"Сохранить как SSH-профиль" = "Save as SSH Profile";
+"Название профиля" = "Profile Name";
+"Пароль временного подключения хранится только в macOS Keychain на время SSH-сессии и удаляется после её завершения." = "The temporary connection password is kept only in macOS Keychain for the SSH session and is removed when it ends.";
+"Для выбранного способа входа требуется SSH ID." = "The selected authentication method requires an SSH ID.";
+"Пароли не сохраняются в истории" = "Passwords are not stored in history";
+"Импортировать и открыть" = "Import and Open";
+"Достигнут лимит вкладок Terminal Workspace" = "Terminal Workspace tab limit reached";

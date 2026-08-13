@@ -121,6 +121,9 @@ struct TerminalTabConnection: Codable, Equatable {
     var host: String
     var username: String
     var port: Int
+    var authenticationMode: SSHAuthenticationMode?
+    var identityID: UUID?
+    var jumpHostProfileID: UUID?
 
     static func savedProfile(_ id: UUID) -> TerminalTabConnection {
         TerminalTabConnection(
@@ -128,21 +131,30 @@ struct TerminalTabConnection: Codable, Equatable {
             profileID: id,
             host: "",
             username: "",
-            port: 22
+            port: 22,
+            authenticationMode: nil,
+            identityID: nil,
+            jumpHostProfileID: nil
         )
     }
 
     static func custom(
         host: String,
         username: String,
-        port: Int = 22
+        port: Int = 22,
+        authenticationMode: SSHAuthenticationMode? = nil,
+        identityID: UUID? = nil,
+        jumpHostProfileID: UUID? = nil
     ) -> TerminalTabConnection {
         TerminalTabConnection(
             kind: .custom,
             profileID: nil,
             host: host.trimmingCharacters(in: .whitespacesAndNewlines),
             username: username.trimmingCharacters(in: .whitespacesAndNewlines),
-            port: port
+            port: port,
+            authenticationMode: authenticationMode,
+            identityID: identityID,
+            jumpHostProfileID: jumpHostProfileID
         )
     }
 

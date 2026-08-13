@@ -1643,6 +1643,73 @@ final class AppModel: NSObject, ObservableObject {
         return profile.id
     }
 
+    @discardableResult
+    func saveQuickConnectSSHProfile(_ request: QuickConnectSSHRequest) -> UUID? {
+        let target = request.target
+        guard !target.host.isEmpty, (1...65_535).contains(target.port) else {
+            errorMessage = "Укажите корректный SSH-адрес и порт"
+            return nil
+        }
+        do {
+            try SSHService.validateHost(SSHService.normalizedHost(target.host))
+            try SSHService.validateUsername(target.username)
+        } catch {
+            errorMessage = error.localizedDescription
+            return nil
+        }
+        if (request.authenticationMode == .key || request.authenticationMode == .touchIDKey),
+           request.identityID == nil {
+            errorMessage = "Для выбранного способа входа укажите SSH ID"
+            return nil
+        }
+        if request.authenticationMode == .touchIDKey,
+           let identityID = request.identityID,
+           let identity = sshKeys.first(where: { $0.id == identityID }),
+           !SSHKeyService.isTouchIDCompatible(identity) {
+            errorMessage = "Touch ID Key использует только ECDSA-ключи"
+            return nil
+        }
+        if let identityID = request.identityID,
+           !sshKeys.contains(where: { $0.id == identityID }) {
+            errorMessage = "Выбранный SSH ID больше недоступен"
+            return nil
+        }
+        if let jumpID = request.jumpHostProfileID,
+           !profiles.contains(where: { $0.id == jumpID && $0.connectionType == .ssh }) {
+            errorMessage = "Выбранный Jump Host больше недоступен"
+            return nil
+        }
+
+        var profile = ConnectionProfile(connectionType: .ssh)
+        let requestedName = request.profileName.trimmingCharacters(in: .whitespacesAndNewlines)
+        profile.friendlyName = requestedName.isEmpty ? target.destination : requestedName
+        profile.host = target.host
+        profile.username = target.username
+        profile.sshPort = target.port
+        profile.sshAuthenticationMode = request.authenticationMode
+        profile.sshIdentityID = request.identityID
+        profile.sshJumpHostProfileID = request.jumpHostProfileID
+        profiles.append(profile)
+
+        let password = request.password
+        if !password.isEmpty,
+           request.authenticationMode == .password || request.authenticationMode == .automatic {
+            do {
+                try KeychainService.savePassword(password, profileID: profile.id, kind: .ssh)
+                setPasswordStored(true, profileID: profile.id, kind: .ssh)
+            } catch {
+                profiles.removeAll { $0.id == profile.id }
+                errorMessage = error.localizedDescription
+                return nil
+            }
+        }
+
+        selectedProfileID = profile.id
+        statusMessage = "SSH-подключение «\(profile.friendlyName)» сохранено"
+        errorMessage = nil
+        return profile.id
+    }
+
     func duplicateSelectedProfile() {
         var copy = selectedProfile
         copy.id = UUID()
@@ -2989,10 +3056,27 @@ final class AppModel: NSObject, ObservableObject {
             profile.host = connection.normalizedHost
             profile.username = connection.normalizedUsername
             profile.sshPort = connection.port
+            profile.sshAuthenticationMode = connection.authenticationMode ?? .automatic
+            profile.sshIdentityID = connection.identityID
+            profile.sshJumpHostProfileID = connection.jumpHostProfileID
+
+            let identity = connection.identityID.flatMap { keyID in
+                sshKeys.first(where: { $0.id == keyID })
+            }
+            if connection.identityID != nil, identity == nil {
+                errorMessage = "Выбранный SSH-ключ больше недоступен. Выберите другой ключ."
+                return nil
+            }
+            if profile.sshAuthenticationMode == .touchIDKey,
+               let identity,
+               !SSHKeyService.isTouchIDCompatible(identity) {
+                errorMessage = "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый."
+                return nil
+            }
             do {
                 let settings = try SSHConnectionSettings(
                     profile: profile,
-                    identity: nil,
+                    identity: identity,
                     jumpHost: sshJumpHostProfile(for: profile)
                 )
                 errorMessage = nil
@@ -3032,13 +3116,13 @@ final class AppModel: NSObject, ObservableObject {
                     kind: .ssh
                 )
             }
-            if let profileID = connection.profileID,
-               (settings.authenticationMode == .touchIDKey
+            let authorizationProfileID = connection.profileID ?? settings.profileID
+            if (settings.authenticationMode == .touchIDKey
                     || (settings.authenticationMode == .key
-                        && sshKeyUserPresenceProfileIDs.contains(profileID.uuidString))),
+                        && sshKeyUserPresenceProfileIDs.contains(authorizationProfileID.uuidString))),
                let identity = settings.identity {
                 try KeychainService.authorizeSSHKeyUse(
-                    profileID: profileID,
+                    profileID: authorizationProfileID,
                     reason: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»"
                 )
             }
@@ -3151,12 +3235,12 @@ final class AppModel: NSObject, ObservableObject {
     ) -> Bool {
         if temporaryPassword?.isEmpty == false { return false }
         if settings.authenticationMode == .touchIDKey { return false }
-        guard let profileID = connection.profileID else { return connection.kind == .custom }
-        if sshProfileRequiresUserPresenceForReconnect(profileID) { return false }
         if let jumpHostProfileID = settings.jumpHostProfileID,
            sshProfileRequiresUserPresenceForReconnect(jumpHostProfileID) {
             return false
         }
+        guard let profileID = connection.profileID else { return connection.kind == .custom }
+        if sshProfileRequiresUserPresenceForReconnect(profileID) { return false }
         return true
     }
 

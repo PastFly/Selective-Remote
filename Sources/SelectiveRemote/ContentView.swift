@@ -140,20 +140,23 @@ struct ContentView: View {
             Text(model.updateMessage ?? "")
         }
         .sheet(isPresented: $model.quickConnectPresented) {
-            QuickConnectView { profileID, action in
-                model.selectProfile(profileID)
-                switch action {
-                case .terminal:
-                    setMainArea(.connections)
-                    selectedTab = .terminal
-                case .sftp:
-                    setMainArea(.connections)
-                    selectedTab = .sftp
-                case .connect:
-                    setMainArea(.connections)
-                    model.connect()
-                }
-            }
+            QuickConnectView(
+                onOpenProfile: { profileID, action in
+                    model.selectProfile(profileID)
+                    switch action {
+                    case .terminal:
+                        setMainArea(.connections)
+                        selectedTab = .terminal
+                    case .sftp:
+                        setMainArea(.connections)
+                        selectedTab = .sftp
+                    case .connect:
+                        setMainArea(.connections)
+                        model.connect()
+                    }
+                },
+                onOpenSSH: openQuickConnectSSH
+            )
             .environmentObject(model)
         }
         .sheet(isPresented: $showsCaptureDiagnostics) {
@@ -918,6 +921,43 @@ struct ContentView: View {
             return .general
         }
         return stored
+    }
+
+    private func openQuickConnectSSH(_ request: QuickConnectSSHRequest) {
+        let connection: TerminalTabConnection
+        let temporaryPassword: String?
+
+        if request.saveAsProfile {
+            guard let profileID = model.saveQuickConnectSSHProfile(request) else { return }
+            connection = .savedProfile(profileID)
+            temporaryPassword = nil
+        } else {
+            connection = .custom(
+                host: request.target.host,
+                username: request.target.username,
+                port: request.target.port,
+                authenticationMode: request.authenticationMode,
+                identityID: request.identityID,
+                jumpHostProfileID: request.jumpHostProfileID
+            )
+            temporaryPassword = request.password.isEmpty ? nil : request.password
+        }
+
+        let workspace = model.globalTerminalWorkspace()
+        guard let tab = workspace.addTab(
+            connection: connection,
+            title: connection.displayLabel(profiles: sortedSSHProfiles)
+        ) else {
+            model.errorMessage = "Достигнут лимит вкладок Terminal Workspace"
+            return
+        }
+        model.connectSSHTerminal(
+            connection: connection,
+            tabID: tab.id,
+            session: tab.session,
+            temporaryPassword: temporaryPassword
+        )
+        setMainArea(.terminal)
     }
 
     private func openForwardingTerminal(_ connection: TerminalTabConnection) {
