@@ -203,6 +203,12 @@ struct RDPSessionSummary: Identifiable, Equatable {
     let id: UUID
     let profileName: String
     let host: String
+    let username: String
+    let gatewayHost: String
+    let windowMode: RDPWindowMode
+    let windowWidth: Int
+    let windowHeight: Int
+    let processIdentifier: Int32
     let startedAt: Date
     let selectedDisplayIDs: Set<String>
     var phase: RDPSessionPhase
@@ -214,6 +220,11 @@ private final class ManagedRDPSession {
     let profileID: UUID
     let profileName: String
     let host: String
+    let username: String
+    let gatewayHost: String
+    let windowMode: RDPWindowMode
+    let windowWidth: Int
+    let windowHeight: Int
     let selectedDisplayIDs: Set<String>
     let connection: RunningRDPSession
     let startedAt = Date()
@@ -228,6 +239,11 @@ private final class ManagedRDPSession {
         profileID = profile.id
         profileName = profile.friendlyName
         host = profile.host
+        username = profile.username
+        gatewayHost = profile.gatewayHost
+        windowMode = profile.rdpWindowMode
+        windowWidth = profile.windowWidth
+        windowHeight = profile.windowHeight
         selectedDisplayIDs = profile.selectedDisplayIDs
         self.connection = connection
     }
@@ -237,6 +253,12 @@ private final class ManagedRDPSession {
             id: profileID,
             profileName: profileName,
             host: host,
+            username: username,
+            gatewayHost: gatewayHost,
+            windowMode: windowMode,
+            windowWidth: windowWidth,
+            windowHeight: windowHeight,
+            processIdentifier: connection.process.processIdentifier,
             startedAt: startedAt,
             selectedDisplayIDs: selectedDisplayIDs,
             phase: phase,
@@ -331,6 +353,9 @@ final class AppModel: NSObject, ObservableObject {
     private var sshTerminalObservers: [UUID: AnyCancellable] = [:]
     private var terminalWorkspaces: [UUID: TerminalWorkspaceModel] = [:]
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
+    private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
+    private var terminalStartedAt: [UUID: Date] = [:]
+    private var sftpObservers: [AnyCancellable] = []
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
@@ -407,6 +432,18 @@ final class AppModel: NSObject, ObservableObject {
         sshKeyPassphraseStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHKeyPassphrasesKey) ?? []
         )
+        sftpObservers = [
+            sftpSession.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.objectWillChange.send()
+                }
+            },
+            globalSFTPSession.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.objectWillChange.send()
+                }
+            }
+        ]
         refreshDisplays(configureEmptyProfile: true)
         refreshCameras(announce: false)
         installNotifications()
@@ -637,6 +674,590 @@ final class AppModel: NSObject, ObservableObject {
             profileID: Self.globalTerminalWorkspaceID,
             primaryConnection: initialConnection
         )
+    }
+
+    func connectionCenterSnapshot(now: Date = Date()) -> ConnectionCenterSnapshot {
+        _ = now
+        var items: [ConnectionCenterItem] = []
+
+        for session in runningSessions {
+            let port = connectionCenterRDPPort(for: session.host)
+            let resolution: String
+            switch session.windowMode {
+            case .fixedWindow:
+                resolution = "\(session.windowWidth) × \(session.windowHeight)"
+            case .dynamicWindow:
+                resolution = "Динамическое окно"
+            case .fullScreen:
+                resolution = session.selectedDisplayIDs.isEmpty
+                    ? "Полный экран"
+                    : "Полный экран · \(session.selectedDisplayIDs.count) диспл."
+            }
+            let gateway = session.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            let state: ConnectionCenterState = switch session.phase {
+            case .starting: .connecting
+            case .connected: .connected
+            case .disconnecting: .stopping
+            }
+            var routeRows = [ConnectionCenterDetailRow(label: "Тип", value: gateway.isEmpty ? "Direct" : "RD Gateway")]
+            if !gateway.isEmpty {
+                routeRows.append(ConnectionCenterDetailRow(label: "Gateway", value: gateway))
+            }
+            routeRows.append(ConnectionCenterDetailRow(label: "Target", value: session.host))
+            items.append(
+                ConnectionCenterItem(
+                    source: .rdp(profileID: session.id),
+                    kind: .rdp,
+                    profileName: session.profileName,
+                    userHost: connectionCenterUserHost(username: session.username, host: session.host),
+                    port: port,
+                    route: gateway.isEmpty ? nil : gateway,
+                    authentication: "Password",
+                    state: state,
+                    startedAt: session.startedAt,
+                    errorMessage: nil,
+                    detailSections: [
+                        ConnectionCenterDetailSection(
+                            title: "Основное",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Профиль", value: session.profileName),
+                                ConnectionCenterDetailRow(label: "Host", value: session.host),
+                                ConnectionCenterDetailRow(label: "Port", value: port.map(String.init) ?? "—"),
+                                ConnectionCenterDetailRow(label: "Протокол", value: "RDP"),
+                                ConnectionCenterDetailRow(label: "Режим", value: session.windowMode.title),
+                                ConnectionCenterDetailRow(label: "Разрешение", value: resolution)
+                            ]
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Аутентификация",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Метод", value: "Password"),
+                                ConnectionCenterDetailRow(label: "Пользователь", value: session.username.isEmpty ? "—" : session.username)
+                            ]
+                        ),
+                        ConnectionCenterDetailSection(title: "Маршрут", rows: routeRows),
+                        ConnectionCenterDetailSection(
+                            title: "Сессия",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "PID", value: String(session.processIdentifier)),
+                                ConnectionCenterDetailRow(label: "Запущено", value: connectionCenterDate(session.startedAt)),
+                                ConnectionCenterDetailRow(label: "Лог", value: session.logURL.lastPathComponent)
+                            ]
+                        )
+                    ]
+                )
+            )
+        }
+
+        let workspaceProfileIDs = Set(terminalWorkspaces.keys)
+        for (workspaceID, workspace) in terminalWorkspaces {
+            let scope: ConnectionCenterTerminalScope = workspaceID == Self.globalTerminalWorkspaceID
+                ? .global
+                : .profile(workspaceID)
+            for tab in workspace.tabs where tab.session.isRunning {
+                guard let fields = connectionCenterTerminalFields(tab: tab) else { continue }
+                items.append(
+                    ConnectionCenterItem(
+                        source: .terminal(scope: scope, tabID: tab.id),
+                        kind: .terminal,
+                        profileName: fields.profileName,
+                        userHost: connectionCenterUserHost(username: fields.username, host: fields.host),
+                        port: fields.port,
+                        route: fields.route,
+                        authentication: fields.authentication,
+                        state: connectionCenterTerminalState(tab.session.phase),
+                        startedAt: terminalStartedAt[tab.id],
+                        errorMessage: nil,
+                        detailSections: [
+                            ConnectionCenterDetailSection(
+                                title: "Основное",
+                                rows: [
+                                    ConnectionCenterDetailRow(label: "Профиль", value: fields.profileName),
+                                    ConnectionCenterDetailRow(label: "Вкладка", value: tab.title),
+                                    ConnectionCenterDetailRow(label: "Host", value: fields.host),
+                                    ConnectionCenterDetailRow(label: "Port", value: String(fields.port)),
+                                    ConnectionCenterDetailRow(label: "Протокол", value: "SSH")
+                                ]
+                            ),
+                            ConnectionCenterDetailSection(
+                                title: "Аутентификация",
+                                rows: connectionCenterAuthenticationRows(
+                                    method: fields.authentication,
+                                    identityName: fields.identityName
+                                )
+                            ),
+                            ConnectionCenterDetailSection(
+                                title: "Маршрут",
+                                rows: connectionCenterRouteRows(
+                                    jumpHost: fields.jumpHost,
+                                    proxy: fields.proxy
+                                )
+                            ),
+                            ConnectionCenterDetailSection(
+                                title: "Сессия",
+                                rows: [
+                                    ConnectionCenterDetailRow(label: "State", value: tab.session.phase.title),
+                                    ConnectionCenterDetailRow(label: "Terminal", value: "\(tab.session.terminalColumns) × \(tab.session.terminalRows)")
+                                ]
+                            )
+                        ]
+                    )
+                )
+            }
+        }
+
+        for (profileID, session) in sshTerminalSessions
+        where !workspaceProfileIDs.contains(profileID) && session.isRunning {
+            guard let profile = profiles.first(where: { $0.id == profileID && $0.connectionType == .ssh }) else {
+                continue
+            }
+            let route = connectionCenterProfileRoute(profile)
+            let identityName = profile.sshIdentityID
+                .flatMap { keyID in sshKeys.first(where: { $0.id == keyID })?.name }
+            items.append(
+                ConnectionCenterItem(
+                    source: .terminal(scope: .profile(profileID), tabID: profileID),
+                    kind: .terminal,
+                    profileName: profile.friendlyName,
+                    userHost: connectionCenterUserHost(username: profile.username, host: profile.host),
+                    port: profile.sshPort,
+                    route: route.summary,
+                    authentication: profile.sshAuthenticationMode.title,
+                    state: connectionCenterTerminalState(session.phase),
+                    startedAt: terminalStartedAt[profileID],
+                    errorMessage: nil,
+                    detailSections: [
+                        ConnectionCenterDetailSection(
+                            title: "Основное",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Профиль", value: profile.friendlyName),
+                                ConnectionCenterDetailRow(label: "Host", value: profile.host),
+                                ConnectionCenterDetailRow(label: "Port", value: String(profile.sshPort)),
+                                ConnectionCenterDetailRow(label: "Протокол", value: "SSH")
+                            ]
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Аутентификация",
+                            rows: connectionCenterAuthenticationRows(
+                                method: profile.sshAuthenticationMode.title,
+                                identityName: identityName
+                            )
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Маршрут",
+                            rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Сессия",
+                            rows: [ConnectionCenterDetailRow(label: "State", value: session.phase.title)]
+                        )
+                    ]
+                )
+            )
+        }
+
+        appendConnectionCenterSFTP(
+            session: sftpSession,
+            scope: sftpSession.profileID.map(ConnectionCenterSFTPScope.profile),
+            into: &items
+        )
+        appendConnectionCenterSFTP(
+            session: globalSFTPSession,
+            scope: .global,
+            into: &items
+        )
+
+        for tunnel in sshTunnels.values.sorted(by: { $0.startedAt < $1.startedAt }) {
+            let independent = tunnel.profileID == Self.globalForwardingProfileID
+            let source: ConnectionCenterSource = independent
+                ? .independentTunnel(tunnelID: tunnel.id)
+                : .profileTunnel(profileID: tunnel.profileID, ruleID: tunnel.id)
+            let route = connectionCenterRoute(
+                jumpHost: tunnel.jumpHostDestination,
+                proxyMode: tunnel.proxyMode,
+                proxyHost: tunnel.proxyHost,
+                proxyPort: tunnel.proxyPort
+            )
+            let destination: String = switch tunnel.rule.kind {
+            case .dynamic:
+                "SOCKS dynamic"
+            case .local, .remote:
+                "\(tunnel.rule.destinationHost):\(tunnel.rule.destinationPort)"
+            }
+            items.append(
+                ConnectionCenterItem(
+                    source: source,
+                    kind: .forwarding,
+                    profileName: tunnel.ruleName,
+                    userHost: connectionCenterUserHost(username: tunnel.username, host: tunnel.host),
+                    port: tunnel.port,
+                    route: route.summary,
+                    authentication: tunnel.authenticationMode.title,
+                    state: stoppingSSHTunnelIDs.contains(tunnel.id) ? .stopping : .connected,
+                    startedAt: tunnel.startedAt,
+                    errorMessage: nil,
+                    detailSections: [
+                        ConnectionCenterDetailSection(
+                            title: "Основное",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Имя", value: tunnel.ruleName),
+                                ConnectionCenterDetailRow(label: "Тип", value: tunnel.rule.kind.title),
+                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? "Independent" : "Profile"),
+                                ConnectionCenterDetailRow(label: "SSH-профиль", value: tunnel.profileName),
+                                ConnectionCenterDetailRow(label: "SSH-host", value: tunnel.host)
+                            ]
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Маршрут",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Bind", value: "\(tunnel.rule.bindAddress):\(tunnel.rule.sourcePort)"),
+                                ConnectionCenterDetailRow(label: "Назначение", value: destination)
+                            ] + connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Аутентификация",
+                            rows: connectionCenterAuthenticationRows(
+                                method: tunnel.authenticationMode.title,
+                                identityName: tunnel.identityName
+                            )
+                        ),
+                        ConnectionCenterDetailSection(
+                            title: "Сессия",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Запущено", value: connectionCenterDate(tunnel.startedAt)),
+                                ConnectionCenterDetailRow(label: "Лог", value: tunnel.logURL.lastPathComponent)
+                            ]
+                        )
+                    ]
+                )
+            )
+        }
+
+        items.sort {
+            let lhsDate = $0.startedAt ?? .distantPast
+            let rhsDate = $1.startedAt ?? .distantPast
+            if lhsDate != rhsDate { return lhsDate > rhsDate }
+            return $0.profileName.localizedCaseInsensitiveCompare($1.profileName) == .orderedAscending
+        }
+        return ConnectionCenterSnapshot(items: items)
+    }
+
+    func refreshConnectionCenterRuntimeState() {
+        checkSessionProcesses()
+        checkSSHTunnelProcesses()
+        objectWillChange.send()
+    }
+
+    func reconnectConnectionCenterSource(_ source: ConnectionCenterSource) {
+        guard case let .rdp(profileID) = source else { return }
+        reconnect(profileID: profileID)
+    }
+
+    func disconnectConnectionCenterSource(_ source: ConnectionCenterSource) {
+        switch source {
+        case let .rdp(profileID):
+            requestDisconnect(profileID: profileID, interruptionReason: nil)
+        case let .terminal(scope, tabID):
+            let workspaceID: UUID = switch scope {
+            case let .profile(profileID): profileID
+            case .global: Self.globalTerminalWorkspaceID
+            }
+            if let tab = terminalWorkspaces[workspaceID]?.tabs.first(where: { $0.id == tabID }) {
+                tab.session.stop()
+            } else if case let .profile(profileID) = scope {
+                sshTerminalSessions[profileID]?.stop()
+            }
+        case let .sftp(scope):
+            switch scope {
+            case let .profile(profileID):
+                if sftpSession.profileID == profileID {
+                    sftpSession.disconnect()
+                }
+            case .global:
+                globalSFTPSession.disconnect()
+            }
+        case let .profileTunnel(_, ruleID):
+            stopSSHTunnel(ruleID)
+        case let .independentTunnel(tunnelID):
+            stopSSHTunnel(tunnelID)
+        }
+    }
+
+    @discardableResult
+    func selectConnectionCenterTerminal(
+        scope: ConnectionCenterTerminalScope,
+        tabID: UUID
+    ) -> UUID? {
+        let workspaceID: UUID = switch scope {
+        case let .profile(profileID): profileID
+        case .global: Self.globalTerminalWorkspaceID
+        }
+        guard let workspace = terminalWorkspaces[workspaceID] else { return nil }
+        if workspace.tabs.contains(where: { $0.id == tabID }) {
+            workspace.selectedTabID = tabID
+        }
+        return workspaceID
+    }
+
+    func activateRDP(profileID: UUID) {
+        guard let pid = managedSessions[profileID]?.connection.process.processIdentifier,
+              let application = NSRunningApplication(processIdentifier: pid)
+        else { return }
+        application.activate(options: [.activateIgnoringOtherApps])
+    }
+
+    private struct ConnectionCenterTerminalFields {
+        let profileName: String
+        let host: String
+        let username: String
+        let port: Int
+        let authentication: String
+        let identityName: String?
+        let route: String?
+        let jumpHost: String?
+        let proxy: String?
+    }
+
+    private func connectionCenterTerminalFields(
+        tab: TerminalWorkspaceTab
+    ) -> ConnectionCenterTerminalFields? {
+        if let settings = terminalRuntimeSettings[tab.id] {
+            let route = connectionCenterRoute(settings: settings)
+            return ConnectionCenterTerminalFields(
+                profileName: settings.profileName,
+                host: settings.host,
+                username: settings.username,
+                port: settings.port,
+                authentication: settings.authenticationMode.title,
+                identityName: settings.identity?.name,
+                route: route.summary,
+                jumpHost: route.jumpHost,
+                proxy: route.proxy
+            )
+        }
+
+        switch tab.connection.kind {
+        case .savedProfile:
+            guard let profileID = tab.connection.profileID,
+                  let profile = profiles.first(where: { $0.id == profileID && $0.connectionType == .ssh })
+            else { return nil }
+            let route = connectionCenterProfileRoute(profile)
+            return ConnectionCenterTerminalFields(
+                profileName: profile.friendlyName,
+                host: profile.host,
+                username: profile.username,
+                port: profile.sshPort,
+                authentication: profile.sshAuthenticationMode.title,
+                identityName: profile.sshIdentityID.flatMap { keyID in
+                    sshKeys.first(where: { $0.id == keyID })?.name
+                },
+                route: route.summary,
+                jumpHost: route.jumpHost,
+                proxy: route.proxy
+            )
+        case .custom:
+            let host = tab.connection.normalizedHost
+            guard !host.isEmpty else { return nil }
+            return ConnectionCenterTerminalFields(
+                profileName: tab.title,
+                host: host,
+                username: tab.connection.normalizedUsername,
+                port: tab.connection.port,
+                authentication: "Автоматически",
+                identityName: nil,
+                route: nil,
+                jumpHost: nil,
+                proxy: nil
+            )
+        }
+    }
+
+    private func appendConnectionCenterSFTP(
+        session: SFTPBrowserSession,
+        scope: ConnectionCenterSFTPScope?,
+        into items: inout [ConnectionCenterItem]
+    ) {
+        guard let scope, let settings = session.settings,
+              session.connectionState != .disconnected
+        else { return }
+        let route = connectionCenterRoute(settings: settings)
+        let state: ConnectionCenterState = switch session.connectionState {
+        case .disconnected: .disconnected
+        case .connecting: .connecting
+        case .connected: .connected
+        case .error: .error
+        }
+        items.append(
+            ConnectionCenterItem(
+                source: .sftp(scope: scope),
+                kind: .sftp,
+                profileName: settings.profileName,
+                userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
+                port: settings.port,
+                route: route.summary,
+                authentication: settings.authenticationMode.title,
+                state: state,
+                startedAt: session.connectedAt,
+                errorMessage: session.lastErrorMessage,
+                detailSections: [
+                    ConnectionCenterDetailSection(
+                        title: "Основное",
+                        rows: [
+                            ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
+                            ConnectionCenterDetailRow(label: "Host", value: settings.host),
+                            ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
+                            ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
+                            ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
+                        ]
+                    ),
+                    ConnectionCenterDetailSection(
+                        title: "Аутентификация",
+                        rows: connectionCenterAuthenticationRows(
+                            method: settings.authenticationMode.title,
+                            identityName: settings.identity?.name
+                        )
+                    ),
+                    ConnectionCenterDetailSection(
+                        title: "Маршрут",
+                        rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                    )
+                ]
+            )
+        )
+    }
+
+    private func connectionCenterTerminalState(
+        _ phase: EmbeddedTerminalPhase
+    ) -> ConnectionCenterState {
+        switch phase {
+        case .starting: .connecting
+        case .running: .connected
+        case .stopping: .stopping
+        case .idle, .finished: .disconnected
+        }
+    }
+
+    private func connectionCenterRDPPort(for host: String) -> Int? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.hasPrefix("["),
+           let closing = trimmed.lastIndex(of: "]"),
+           closing < trimmed.index(before: trimmed.endIndex) {
+            let suffix = trimmed[trimmed.index(after: closing)...]
+            if suffix.hasPrefix(":"),
+               let port = Int(suffix.dropFirst()),
+               (1...65_535).contains(port) {
+                return port
+            }
+            return 3389
+        }
+        let colonCount = trimmed.filter { $0 == ":" }.count
+        if colonCount == 1,
+           let separator = trimmed.lastIndex(of: ":"),
+           let port = Int(trimmed[trimmed.index(after: separator)...]),
+           (1...65_535).contains(port) {
+            return port
+        }
+        return colonCount == 0 ? 3389 : nil
+    }
+
+    private func connectionCenterUserHost(username: String, host: String) -> String {
+        let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+        return user.isEmpty ? host : "\(user)@\(host)"
+    }
+
+    private func connectionCenterDate(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .standard)
+    }
+
+    private func connectionCenterAuthenticationRows(
+        method: String,
+        identityName: String?
+    ) -> [ConnectionCenterDetailRow] {
+        var rows = [ConnectionCenterDetailRow(label: "Метод", value: method)]
+        if let identityName, !identityName.isEmpty {
+            rows.append(ConnectionCenterDetailRow(label: "SSH ID", value: identityName))
+        }
+        return rows
+    }
+
+    private func connectionCenterProfileRoute(
+        _ profile: ConnectionProfile
+    ) -> (summary: String?, jumpHost: String?, proxy: String?) {
+        let jumpHost: String? = profile.sshJumpHostProfileID.flatMap { jumpID in
+            guard let jump = profiles.first(where: { $0.id == jumpID && $0.connectionType == .ssh }) else {
+                return nil
+            }
+            let user = jump.username.trimmingCharacters(in: .whitespacesAndNewlines)
+            let destination = user.isEmpty ? jump.host : "\(user)@\(jump.host)"
+            return jump.sshPort == 22 ? destination : "\(destination):\(jump.sshPort)"
+        }
+        let proxy: String? = profile.sshProxyMode == .none
+            ? nil
+            : "\(profile.sshProxyMode.title) · \(profile.sshProxyHost):\(profile.sshProxyPort)"
+        return connectionCenterRoute(jumpHost: jumpHost, proxy: proxy)
+    }
+
+    private func connectionCenterRoute(
+        settings: SSHConnectionSettings
+    ) -> (summary: String?, jumpHost: String?, proxy: String?) {
+        connectionCenterRoute(
+            jumpHost: settings.jumpHostDestination,
+            proxyMode: settings.proxyMode,
+            proxyHost: settings.proxyHost,
+            proxyPort: settings.proxyPort
+        )
+    }
+
+    private func connectionCenterRoute(
+        jumpHost: String?,
+        proxyMode: SSHProxyMode,
+        proxyHost: String,
+        proxyPort: Int
+    ) -> (summary: String?, jumpHost: String?, proxy: String?) {
+        let proxy = proxyMode == .none
+            ? nil
+            : "\(proxyMode.title) · \(proxyHost):\(proxyPort)"
+        return connectionCenterRoute(jumpHost: jumpHost, proxy: proxy)
+    }
+
+    private func connectionCenterRoute(
+        jumpHost: String?,
+        proxy: String?
+    ) -> (summary: String?, jumpHost: String?, proxy: String?) {
+        let normalizedJump = jumpHost?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let jump = normalizedJump?.isEmpty == false ? normalizedJump : nil
+        let normalizedProxy = proxy?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let proxyValue = normalizedProxy?.isEmpty == false ? normalizedProxy : nil
+        let summary: String?
+        switch (proxyValue, jump) {
+        case let (.some(proxyValue), .some(jump)):
+            summary = "\(proxyValue) → \(jump)"
+        case let (.some(proxyValue), .none):
+            summary = proxyValue
+        case let (.none, .some(jump)):
+            summary = jump
+        case (.none, .none):
+            summary = nil
+        }
+        return (summary, jump, proxyValue)
+    }
+
+    private func connectionCenterRouteRows(
+        jumpHost: String?,
+        proxy: String?
+    ) -> [ConnectionCenterDetailRow] {
+        var rows: [ConnectionCenterDetailRow] = []
+        if let proxy, !proxy.isEmpty {
+            rows.append(ConnectionCenterDetailRow(label: "Proxy", value: proxy))
+        }
+        if let jumpHost, !jumpHost.isEmpty {
+            rows.append(ConnectionCenterDetailRow(label: "Jump Host", value: jumpHost))
+        }
+        if rows.isEmpty {
+            rows.append(ConnectionCenterDetailRow(label: "Маршрут", value: "Direct"))
+        }
+        return rows
     }
 
     func consumeSSHConsoleNavigationRequest() {
@@ -1791,7 +2412,17 @@ final class AppModel: NSObject, ObservableObject {
                 profileName: settings.profileName,
                 ruleName: item.rule.name,
                 startedAt: Date(),
-                logURL: running.logURL
+                logURL: running.logURL,
+                host: settings.host,
+                username: settings.username,
+                port: settings.port,
+                authenticationMode: settings.authenticationMode,
+                identityName: settings.identity?.name,
+                jumpHostDestination: settings.jumpHostDestination,
+                proxyMode: settings.proxyMode,
+                proxyHost: settings.proxyHost,
+                proxyPort: settings.proxyPort,
+                rule: item.rule
             )
             lastSSHTunnelLogURLs[id] = running.logURL
             stoppingSSHTunnelIDs.remove(id)
@@ -1842,7 +2473,17 @@ final class AppModel: NSObject, ObservableObject {
                 profileName: selectedProfile.friendlyName,
                 ruleName: rule.name,
                 startedAt: Date(),
-                logURL: running.logURL
+                logURL: running.logURL,
+                host: settings.host,
+                username: settings.username,
+                port: settings.port,
+                authenticationMode: settings.authenticationMode,
+                identityName: settings.identity?.name,
+                jumpHostDestination: settings.jumpHostDestination,
+                proxyMode: settings.proxyMode,
+                proxyHost: settings.proxyHost,
+                proxyPort: settings.proxyPort,
+                rule: rule
             )
             lastSSHTunnelLogURLs[ruleID] = running.logURL
             stoppingSSHTunnelIDs.remove(ruleID)
@@ -2104,13 +2745,18 @@ final class AppModel: NSObject, ObservableObject {
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }
+                terminalRuntimeSettings.removeValue(forKey: tabID)
+                terminalStartedAt.removeValue(forKey: tabID)
                 if connection.kind == .custom, temporaryPassword?.isEmpty == false {
                     try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
                 }
                 statusMessage = exitCode == 0
                     ? "SSH-сессия завершена"
                     : "SSH-сессия завершилась с кодом \(exitCode)"
+                objectWillChange.send()
             }
+            terminalRuntimeSettings[tabID] = settings
+            terminalStartedAt[tabID] = Date()
             if connection.kind == .savedProfile,
                let profileID = connection.profileID,
                let index = profiles.firstIndex(where: { $0.id == profileID }) {

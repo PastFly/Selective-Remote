@@ -27,16 +27,18 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 }
 
 private enum MainArea: String, CaseIterable, Identifiable {
+    case connectionCenter = "Connection Center"
     case connections = "Подключения"
     case terminal = "Терминал"
     case sftp = "SFTP"
-    case keychain = "Keychain"
     case forwarding = "Forwarding"
+    case keychain = "Keychain"
 
     var id: String { rawValue }
 
     var systemImage: String {
         switch self {
+        case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
@@ -56,7 +58,7 @@ struct ContentView: View {
     @StateObject private var appAppearance = AppAppearanceStore()
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
-    @State private var mainArea = MainArea.connections
+    @State private var mainArea = MainArea.connectionCenter
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
@@ -548,6 +550,8 @@ struct ContentView: View {
             .ignoresSafeArea()
 
             switch mainArea {
+            case .connectionCenter:
+                connectionCenterDetail
             case .connections:
                 profileDetail
             case .terminal:
@@ -560,6 +564,16 @@ struct ContentView: View {
                 IndependentForwardingView()
             }
         }
+    }
+
+    private var connectionCenterDetail: some View {
+        ConnectionCenterView(
+            model: model,
+            onOpen: openConnectionCenterSource,
+            onReconnect: model.reconnectConnectionCenterSource,
+            onDisconnect: model.disconnectConnectionCenterSource,
+            onRefresh: model.refreshConnectionCenterRuntimeState
+        )
     }
 
     private var profileDetail: some View {
@@ -900,6 +914,38 @@ struct ContentView: View {
             return .general
         }
         return stored
+    }
+
+    private func openConnectionCenterSource(_ source: ConnectionCenterSource) {
+        switch source {
+        case let .rdp(profileID):
+            model.activateRDP(profileID: profileID)
+        case let .terminal(scope, tabID):
+            _ = model.selectConnectionCenterTerminal(scope: scope, tabID: tabID)
+            switch scope {
+            case let .profile(profileID):
+                model.selectProfile(profileID)
+                selectedTab = .terminal
+                setMainArea(.connections)
+            case .global:
+                setMainArea(.terminal)
+            }
+        case let .sftp(scope):
+            switch scope {
+            case let .profile(profileID):
+                model.selectProfile(profileID)
+                selectedTab = .sftp
+                setMainArea(.connections)
+            case .global:
+                setMainArea(.sftp)
+            }
+        case let .profileTunnel(profileID, _):
+            model.selectProfile(profileID)
+            selectedTab = .forwarding
+            setMainArea(.connections)
+        case .independentTunnel:
+            setMainArea(.forwarding)
+        }
     }
 
     private func setMainArea(_ area: MainArea) {

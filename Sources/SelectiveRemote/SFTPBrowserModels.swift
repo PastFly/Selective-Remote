@@ -726,18 +726,20 @@ final class SFTPBrowserModel: ObservableObject {
         }
         guard !directories.isEmpty, directories.count <= 50 else { return }
 
-        // Snapshot the filtered names before crossing the MainActor boundary.
-        // `directories` is mutable actor-isolated state within this method;
-        // capturing it directly in Task.detached is rejected by newer Swift 6
-        // concurrency checking even though [String] itself is Sendable.
+        // Take immutable Sendable snapshots before crossing the MainActor boundary.
+        // Capturing the actor-isolated local `directories` variable directly in a
+        // Task.detached closure is rejected by Swift 6 as a potential data race.
+        let sizeSettings = settings
+        let sizeDirectory = directory
         let directoryNames = directories
+
         Task {
             let sizes = await Task.detached(
                 priority: .utility,
-                operation: { [settings, directory, directoryNames] in
+                operation: { @Sendable [sizeSettings, sizeDirectory, directoryNames] in
                     SFTPService.directorySizes(
-                        settings: settings,
-                        directory: directory,
+                        settings: sizeSettings,
+                        directory: sizeDirectory,
                         names: directoryNames
                     )
                 }
@@ -1555,12 +1557,31 @@ final class SFTPBrowserModel: ObservableObject {
     }
 }
 
+enum SFTPConnectionState: String, Equatable {
+    case disconnected
+    case connecting
+    case connected
+    case error
+
+    var title: String {
+        switch self {
+        case .disconnected: "Disconnected"
+        case .connecting: "Connecting"
+        case .connected: "Connected"
+        case .error: "Error"
+        }
+    }
+}
+
 @MainActor
 final class SFTPBrowserSession: ObservableObject {
     let transfers: SFTPTransferQueue
     let remote: SFTPBrowserModel
     let local = SFTPLocalBrowserModel()
     @Published var settings: SSHConnectionSettings?
+    @Published private(set) var connectionState = SFTPConnectionState.disconnected
+    @Published private(set) var connectedAt: Date?
+    @Published private(set) var lastErrorMessage: String?
 
     private(set) var profileID: UUID?
 
@@ -1573,8 +1594,7 @@ final class SFTPBrowserSession: ObservableObject {
     func prepare(for profileID: UUID) {
         guard self.profileID != profileID else { return }
         self.profileID = profileID
-        settings = nil
-        remote.reset()
+        disconnect()
     }
 
     func connect(
@@ -1582,10 +1602,35 @@ final class SFTPBrowserSession: ObservableObject {
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
         self.settings = settings
+        connectionState = .connecting
+        connectedAt = nil
+        lastErrorMessage = nil
         remote.load(
             settings: settings,
-            directory: settings.initialDirectory,
-            completion: completion
-        )
+            directory: settings.initialDirectory
+        ) { [weak self] success in
+            guard let self else {
+                completion?(success)
+                return
+            }
+            if success {
+                connectionState = .connected
+                connectedAt = Date()
+                lastErrorMessage = nil
+            } else {
+                connectionState = .error
+                connectedAt = nil
+                lastErrorMessage = remote.errorMessage
+            }
+            completion?(success)
+        }
+    }
+
+    func disconnect() {
+        settings = nil
+        connectionState = .disconnected
+        connectedAt = nil
+        lastErrorMessage = nil
+        remote.reset()
     }
 }

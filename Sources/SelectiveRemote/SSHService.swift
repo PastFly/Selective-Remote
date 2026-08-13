@@ -354,6 +354,16 @@ struct SSHTunnelSummary: Identifiable, Equatable {
     let ruleName: String
     let startedAt: Date
     let logURL: URL
+    let host: String
+    let username: String
+    let port: Int
+    let authenticationMode: SSHAuthenticationMode
+    let identityName: String?
+    let jumpHostDestination: String?
+    let proxyMode: SSHProxyMode
+    let proxyHost: String
+    let proxyPort: Int
+    let rule: PortForwardRule
 }
 
 enum SSHService {
