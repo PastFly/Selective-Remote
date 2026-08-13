@@ -384,3 +384,10 @@
 "Пароли не сохраняются в истории" = "Passwords are not stored in history";
 "Импортировать и открыть" = "Import and Open";
 "Достигнут лимит вкладок Terminal Workspace" = "Terminal Workspace tab limit reached";
+"Центр диагностики" = "Diagnostics Center";
+"Один безопасный отчёт по конфигурации и реальному runtime приложения" = "One safe report for application configuration and live runtime state";
+"Безопасный диагностический отчёт" = "Safe diagnostic report";
+"Пароли, passphrase, значения Keychain и proxy secrets не читаются и не экспортируются. SSH-ключи и сертификаты указываются только по имени файла." = "Passwords, passphrases, Keychain values, and proxy secrets are never read or exported. SSH keys and certificates are shown by filename only.";
+"Предпросмотр отчёта" = "Report preview";
+"Проблемы" = "Problems";
+"Не удалось экспортировать диагностику" = "Could not export diagnostics";

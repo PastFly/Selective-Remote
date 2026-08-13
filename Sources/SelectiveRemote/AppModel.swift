@@ -1236,16 +1236,29 @@ final class AppModel: NSObject, ObservableObject {
         case .custom:
             let host = tab.connection.normalizedHost
             guard !host.isEmpty else { return nil }
+            let authentication = tab.connection.authenticationMode ?? .automatic
+            let identityName = tab.connection.identityID.flatMap { keyID in
+                sshKeys.first(where: { $0.id == keyID })?.name
+            }
+            let jumpHost: String? = tab.connection.jumpHostProfileID.flatMap { jumpID in
+                guard let jump = profiles.first(where: {
+                    $0.id == jumpID && $0.connectionType == .ssh
+                }) else { return nil }
+                let user = jump.username.trimmingCharacters(in: .whitespacesAndNewlines)
+                let destination = user.isEmpty ? jump.host : "\(user)@\(jump.host)"
+                return jump.sshPort == 22 ? destination : "\(destination):\(jump.sshPort)"
+            }
+            let route = connectionCenterRoute(jumpHost: jumpHost, proxy: nil)
             return ConnectionCenterTerminalFields(
                 profileName: tab.title,
                 host: host,
                 username: tab.connection.normalizedUsername,
                 port: tab.connection.port,
-                authentication: "Автоматически",
-                identityName: nil,
-                route: nil,
-                jumpHost: nil,
-                proxy: nil
+                authentication: authentication.title,
+                identityName: identityName,
+                route: route.summary,
+                jumpHost: route.jumpHost,
+                proxy: route.proxy
             )
         }
     }

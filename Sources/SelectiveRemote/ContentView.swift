@@ -32,6 +32,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
+    case diagnostics = "Диагностика"
     case keychain = "Keychain"
 
     var id: String { rawValue }
@@ -42,6 +43,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connections: "rectangle.stack"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
+        case .diagnostics: "stethoscope"
         case .keychain: "key.viewfinder"
         case .forwarding: "arrow.left.arrow.right"
         }
@@ -561,6 +563,8 @@ struct ContentView: View {
                 globalTerminalDetail
             case .sftp:
                 globalSFTPDetail
+            case .diagnostics:
+                DiagnosticsCenterView(model: model)
             case .keychain:
                 credentialVaultDetail
             case .forwarding:
