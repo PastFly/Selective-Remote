@@ -513,7 +513,7 @@ struct ConnectionCenterView: View {
                     }
 
                     VStack(spacing: 9) {
-                        if item.kind == .rdp {
+                        if item.kind == .rdp || item.kind == .terminal || item.kind == .forwarding {
                             Button {
                                 onReconnect(item.source)
                             } label: {

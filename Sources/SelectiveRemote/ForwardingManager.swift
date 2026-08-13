@@ -43,6 +43,7 @@ enum ForwardingManagerOwnership: String, Hashable {
 
 enum ForwardingManagerState: String, Hashable {
     case running
+    case reconnecting
     case stopping
     case stopped
     case error
@@ -50,6 +51,7 @@ enum ForwardingManagerState: String, Hashable {
     var title: String {
         switch self {
         case .running: "Работает"
+        case .reconnecting: "Переподключается"
         case .stopping: "Останавливается"
         case .stopped: "Остановлен"
         case .error: "Ошибка"
@@ -59,6 +61,7 @@ enum ForwardingManagerState: String, Hashable {
     var color: Color {
         switch self {
         case .running: .green
+        case .reconnecting: .orange
         case .stopping: .orange
         case .stopped: .secondary
         case .error: .red
@@ -66,8 +69,8 @@ enum ForwardingManagerState: String, Hashable {
     }
 
     var canStart: Bool { self == .stopped || self == .error }
-    var canStop: Bool { self == .running }
-    var canRestart: Bool { self == .running || self == .error || self == .stopped }
+    var canStop: Bool { self == .running || self == .reconnecting }
+    var canRestart: Bool { self != .stopping }
     var canEdit: Bool { self == .stopped || self == .error }
 }
 
@@ -88,6 +91,7 @@ struct ForwardingManagerItem: Identifiable {
     let startedAt: Date?
     let lastError: String?
     let hasLog: Bool
+    var reconnectProgress: SmartReconnectProgress? = nil
 
     var id: String { source.stableID }
 
@@ -145,7 +149,8 @@ private enum ForwardingManagerFilter: String, CaseIterable, Identifiable {
     func matches(_ item: ForwardingManagerItem) -> Bool {
         switch self {
         case .all: true
-        case .running: item.state == .running || item.state == .stopping
+        case .running:
+            item.state == .running || item.state == .reconnecting || item.state == .stopping
         case .errors: item.state == .error
         }
     }
@@ -704,7 +709,9 @@ struct ForwardingManagerView: View {
     private func overviewInspector(item: ForwardingManagerItem, now: Date) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let error = item.lastError, item.state == .error {
+                if let progress = item.reconnectProgress {
+                    reconnectBanner(progress)
+                } else if let error = item.lastError, item.state == .error {
                     errorBanner(error)
                 }
 
@@ -905,9 +912,15 @@ struct ForwardingManagerView: View {
                     Button("Копировать команду", systemImage: "doc.on.doc") {
                         copyCommand(item)
                     }
-                    Button(item.state == .running ? "Reconnect SSH" : "Запустить") {
+                    Button(
+                        item.state == .running
+                            ? "Reconnect SSH"
+                            : (item.state == .reconnecting ? "Отменить reconnect" : "Запустить")
+                    ) {
                         if item.state == .running {
                             restart(item)
+                        } else if item.state == .reconnecting {
+                            model.stopSSHTunnel(item.source.tunnelID)
                         } else {
                             start(item)
                         }
@@ -923,7 +936,9 @@ struct ForwardingManagerView: View {
     private func schemeInspector(item: ForwardingManagerItem) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
-                if let error = item.lastError, item.state == .error {
+                if let progress = item.reconnectProgress {
+                    reconnectBanner(progress)
+                } else if let error = item.lastError, item.state == .error {
                     errorBanner(error)
                 }
                 Text("Схема туннеля")
@@ -1066,6 +1081,33 @@ struct ForwardingManagerView: View {
         }
     }
 
+    private func reconnectBanner(_ progress: SmartReconnectProgress) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Smart Reconnect · \(progress.attemptLabel)")
+                        .font(.subheadline.bold())
+                    Text(progress.reason)
+                        .font(.caption)
+                    if let countdown = progress.countdownText(now: context.date) {
+                        Text(countdown)
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(11)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.orange.opacity(0.45), lineWidth: 1)
+            }
+        }
+    }
+
     private func errorBanner(_ error: String) -> some View {
         Label {
             Text(error)
@@ -1153,7 +1195,8 @@ struct ForwardingManagerView: View {
                         state: state,
                         startedAt: runtime?.startedAt,
                         lastError: model.sshTunnelLastErrors[rule.id],
-                        hasLog: model.sshTunnelLogURL(for: rule.id) != nil
+                        hasLog: model.sshTunnelLogURL(for: rule.id) != nil,
+                        reconnectProgress: model.sshTunnelReconnectProgress[rule.id]
                     )
                 )
             }
@@ -1196,15 +1239,17 @@ struct ForwardingManagerView: View {
                     state: runtimeState(tunnelID: tunnel.id, isRunning: isRunning),
                     startedAt: runtime?.startedAt,
                     lastError: model.sshTunnelLastErrors[tunnel.id],
-                    hasLog: model.sshTunnelLogURL(for: tunnel.id) != nil
+                    hasLog: model.sshTunnelLogURL(for: tunnel.id) != nil,
+                    reconnectProgress: model.sshTunnelReconnectProgress[tunnel.id]
                 )
             )
         }
 
         return ForwardingManagerSnapshot(
             items: items.sorted {
-                if $0.state == .running, $1.state != .running { return true }
-                if $0.state != .running, $1.state == .running { return false }
+                let lhsActive = $0.state == .running || $0.state == .reconnecting
+                let rhsActive = $1.state == .running || $1.state == .reconnecting
+                if lhsActive != rhsActive { return lhsActive }
                 return $0.rule.name.localizedStandardCompare($1.rule.name) == .orderedAscending
             }
         )
@@ -1212,6 +1257,7 @@ struct ForwardingManagerView: View {
 
     private func runtimeState(tunnelID: UUID, isRunning: Bool) -> ForwardingManagerState {
         if model.isSSHTunnelStopping(tunnelID) { return .stopping }
+        if model.sshTunnelReconnectProgress[tunnelID] != nil { return .reconnecting }
         if isRunning { return .running }
         if model.sshTunnelLastErrors[tunnelID]?.isEmpty == false { return .error }
         return .stopped

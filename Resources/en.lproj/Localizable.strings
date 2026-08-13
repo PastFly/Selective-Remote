@@ -278,3 +278,11 @@
 "Выключить" = "Disable";
 "Дублировать с подключением" = "Duplicate and Connect";
 "Недоступный профиль" = "Unavailable profile";
+
+// Smart Reconnect
+"Переподключается" = "Reconnecting";
+"Smart Reconnect" = "Smart Reconnect";
+"Отменить reconnect" = "Cancel reconnect";
+"Попытка" = "Attempt";
+"Следующая" = "Next";
+"Повторное подключение…" = "Reconnecting…";

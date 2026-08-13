@@ -291,6 +291,7 @@ final class TerminalSessionModel: ObservableObject {
     @Published private(set) var phase = EmbeddedTerminalPhase.idle
     @Published private(set) var commandTitle = ""
     @Published private(set) var startedAt: Date?
+    @Published private(set) var reconnectProgress: SmartReconnectProgress?
     @Published private(set) var terminalColumns = 100
     @Published private(set) var terminalRows = 30
 
@@ -302,6 +303,8 @@ final class TerminalSessionModel: ObservableObject {
     private var rows: UInt16 = 30
     private let maximumReplayBytes = 2 * 1_024 * 1_024
     private var displayRefreshTask: Task<Void, Never>?
+    private var stopRequested = false
+    private(set) var lastTerminationWasRequested = false
 
     var isRunning: Bool { phase.isRunning }
 
@@ -338,6 +341,8 @@ final class TerminalSessionModel: ObservableObject {
 
         commandTitle = title
         startedAt = nil
+        stopRequested = false
+        lastTerminationWasRequested = false
         phase = .starting(title)
         self.completion = completion
         resetOutput()
@@ -421,11 +426,24 @@ final class TerminalSessionModel: ObservableObject {
     }
 
     func stop() {
+        stopRequested = true
+        reconnectProgress = nil
         guard isRunning else { return }
         displayRefreshTask?.cancel()
         displayRefreshTask = nil
         phase = .stopping
         process?.terminate()
+    }
+
+    func setReconnectProgress(_ progress: SmartReconnectProgress?) {
+        reconnectProgress = progress
+    }
+
+    func recentOutputText(maximumBytes: Int = 16_384) -> String {
+        let count = min(maximumBytes, replayBuffer.count)
+        guard count > 0 else { return "" }
+        let data = Data(replayBuffer.suffix(count))
+        return String(decoding: data, as: UTF8.self)
     }
 
     func clear() {
@@ -458,6 +476,8 @@ final class TerminalSessionModel: ObservableObject {
     private func didTerminate(exitCode: Int32) {
         process = nil
         startedAt = nil
+        lastTerminationWasRequested = stopRequested
+        stopRequested = false
         phase = .finished(exitCode)
         appendLocalText(
             "\r\n\r\n[\(AppBrand.name)] Процесс завершён"

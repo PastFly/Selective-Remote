@@ -234,8 +234,13 @@ private final class ManagedRDPSession {
     var desktopReadyDetected = false
     var startupWarningShown = false
     var privacyReadyAt: Date?
+    var smartReconnectAttempt: Int?
 
-    init(profile: ConnectionProfile, connection: RunningRDPSession) {
+    init(
+        profile: ConnectionProfile,
+        connection: RunningRDPSession,
+        smartReconnectAttempt: Int? = nil
+    ) {
         profileID = profile.id
         profileName = profile.friendlyName
         host = profile.host
@@ -246,6 +251,7 @@ private final class ManagedRDPSession {
         windowHeight = profile.windowHeight
         selectedDisplayIDs = profile.selectedDisplayIDs
         self.connection = connection
+        self.smartReconnectAttempt = smartReconnectAttempt
     }
 
     var summary: RDPSessionSummary {
@@ -316,6 +322,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sshKeyPassphraseStoredIDs: Set<String> = []
     @Published private(set) var sshTunnels: [UUID: SSHTunnelSummary] = [:]
     @Published private(set) var sshTunnelLastErrors: [UUID: String] = [:]
+    @Published private(set) var sshTunnelReconnectProgress: [UUID: SmartReconnectProgress] = [:]
+    @Published private(set) var rdpReconnectProgress: [UUID: SmartReconnectProgress] = [:]
+    private var sshTunnelReconnectSummaries: [UUID: SSHTunnelSummary] = [:]
     @Published private(set) var requestedSSHConsoleProfileID: UUID? = nil
     @Published var independentPortForwards: [IndependentPortForward] {
         didSet { saveIndependentPortForwards() }
@@ -356,12 +365,18 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
     private var terminalStartedAt: [UUID: Date] = [:]
+    private var terminalReconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var sshTunnelReconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var rdpReconnectTasks: [UUID: Task<Void, Never>] = [:]
+    private var sshTunnelReconnectAttempts: [UUID: Int] = [:]
     private var sftpObservers: [AnyCancellable] = []
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
     private var displayRefreshTask: Task<Void, Never>?
     private var sleepInterruptedProfileIDs: Set<UUID> = []
+    private var sleepInterruptedTerminalTabIDs: Set<UUID> = []
+    private var sleepInterruptedTunnelIDs: Set<UUID> = []
 
     override init() {
         let savedProfiles: [ConnectionProfile]
@@ -711,10 +726,15 @@ final class AppModel: NSObject, ObservableObject {
                     : "Полный экран · \(session.selectedDisplayIDs.count) диспл."
             }
             let gateway = session.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
-            let state: ConnectionCenterState = switch session.phase {
-            case .starting: .connecting
-            case .connected: .connected
-            case .disconnecting: .stopping
+            let state: ConnectionCenterState
+            if rdpReconnectProgress[session.id] != nil {
+                state = .reconnecting
+            } else {
+                state = switch session.phase {
+                case .starting: .connecting
+                case .connected: .connected
+                case .disconnecting: .stopping
+                }
             }
             var routeRows = [ConnectionCenterDetailRow(label: "Тип", value: gateway.isEmpty ? "Direct" : "RD Gateway")]
             if !gateway.isEmpty {
@@ -732,7 +752,7 @@ final class AppModel: NSObject, ObservableObject {
                     authentication: "Password",
                     state: state,
                     startedAt: session.startedAt,
-                    errorMessage: nil,
+                    errorMessage: rdpReconnectProgress[session.id]?.reason,
                     detailSections: [
                         ConnectionCenterDetailSection(
                             title: "Основное",
@@ -766,12 +786,46 @@ final class AppModel: NSObject, ObservableObject {
             )
         }
 
+        for (profileID, progress) in rdpReconnectProgress
+        where managedSessions[profileID] == nil {
+            guard let profile = profiles.first(where: {
+                $0.id == profileID && $0.connectionType == .rdp
+            }) else { continue }
+            let gateway = profile.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
+            var rows = [
+                ConnectionCenterDetailRow(label: "Профиль", value: profile.friendlyName),
+                ConnectionCenterDetailRow(label: "Host", value: profile.host),
+                ConnectionCenterDetailRow(label: "State", value: "Reconnecting"),
+                ConnectionCenterDetailRow(label: "Попытка", value: "\(progress.attempt)/\(progress.maximumAttempts)")
+            ]
+            if let countdown = progress.countdownText() {
+                rows.append(ConnectionCenterDetailRow(label: "Следующая", value: countdown))
+            }
+            items.append(
+                ConnectionCenterItem(
+                    source: .rdp(profileID: profileID),
+                    kind: .rdp,
+                    profileName: profile.friendlyName,
+                    userHost: connectionCenterUserHost(username: profile.username, host: profile.host),
+                    port: connectionCenterRDPPort(for: profile.host),
+                    route: gateway.isEmpty ? nil : gateway,
+                    authentication: "Password",
+                    state: .reconnecting,
+                    startedAt: nil,
+                    errorMessage: progress.reason,
+                    detailSections: [
+                        ConnectionCenterDetailSection(title: "Smart Reconnect", rows: rows)
+                    ]
+                )
+            )
+        }
+
         let workspaceProfileIDs = Set(terminalWorkspaces.keys)
         for (workspaceID, workspace) in terminalWorkspaces {
             let scope: ConnectionCenterTerminalScope = workspaceID == Self.globalTerminalWorkspaceID
                 ? .global
                 : .profile(workspaceID)
-            for tab in workspace.tabs where tab.session.isRunning {
+            for tab in workspace.tabs where tab.session.isRunning || tab.session.reconnectProgress != nil {
                 guard let fields = connectionCenterTerminalFields(tab: tab) else { continue }
                 items.append(
                     ConnectionCenterItem(
@@ -782,9 +836,9 @@ final class AppModel: NSObject, ObservableObject {
                         port: fields.port,
                         route: fields.route,
                         authentication: fields.authentication,
-                        state: connectionCenterTerminalState(tab.session.phase),
+                        state: connectionCenterTerminalState(tab.session),
                         startedAt: terminalStartedAt[tab.id],
-                        errorMessage: nil,
+                        errorMessage: tab.session.reconnectProgress?.reason,
                         detailSections: [
                             ConnectionCenterDetailSection(
                                 title: "Основное",
@@ -840,7 +894,7 @@ final class AppModel: NSObject, ObservableObject {
                     port: profile.sshPort,
                     route: route.summary,
                     authentication: profile.sshAuthenticationMode.title,
-                    state: connectionCenterTerminalState(session.phase),
+                    state: connectionCenterTerminalState(session),
                     startedAt: terminalStartedAt[profileID],
                     errorMessage: nil,
                     detailSections: [
@@ -910,9 +964,11 @@ final class AppModel: NSObject, ObservableObject {
                     port: tunnel.port,
                     route: route.summary,
                     authentication: tunnel.authenticationMode.title,
-                    state: stoppingSSHTunnelIDs.contains(tunnel.id) ? .stopping : .connected,
+                    state: stoppingSSHTunnelIDs.contains(tunnel.id)
+                        ? .stopping
+                        : (sshTunnelReconnectProgress[tunnel.id] != nil ? .reconnecting : .connected),
                     startedAt: tunnel.startedAt,
-                    errorMessage: nil,
+                    errorMessage: sshTunnelReconnectProgress[tunnel.id]?.reason,
                     detailSections: [
                         ConnectionCenterDetailSection(
                             title: "Основное",
@@ -950,6 +1006,66 @@ final class AppModel: NSObject, ObservableObject {
             )
         }
 
+        for (ruleID, progress) in sshTunnelReconnectProgress
+        where sshTunnels[ruleID] == nil {
+            guard let tunnel = sshTunnelReconnectSummaries[ruleID] else { continue }
+            let independent = tunnel.profileID == Self.globalForwardingProfileID
+            let source: ConnectionCenterSource = independent
+                ? .independentTunnel(tunnelID: tunnel.id)
+                : .profileTunnel(profileID: tunnel.profileID, ruleID: tunnel.id)
+            let route = connectionCenterRoute(
+                jumpHost: tunnel.jumpHostDestination,
+                proxyMode: tunnel.proxyMode,
+                proxyHost: tunnel.proxyHost,
+                proxyPort: tunnel.proxyPort
+            )
+            let destination: String = switch tunnel.rule.kind {
+            case .dynamic:
+                "SOCKS dynamic"
+            case .local, .remote:
+                "\(tunnel.rule.destinationHost):\(tunnel.rule.destinationPort)"
+            }
+            var reconnectRows = [
+                ConnectionCenterDetailRow(label: "State", value: "Reconnecting"),
+                ConnectionCenterDetailRow(label: "Попытка", value: "\(progress.attempt)/\(progress.maximumAttempts)"),
+                ConnectionCenterDetailRow(label: "Причина", value: progress.reason)
+            ]
+            if let countdown = progress.countdownText() {
+                reconnectRows.append(ConnectionCenterDetailRow(label: "Следующая", value: countdown))
+            }
+            items.append(
+                ConnectionCenterItem(
+                    source: source,
+                    kind: .forwarding,
+                    profileName: tunnel.ruleName,
+                    userHost: connectionCenterUserHost(username: tunnel.username, host: tunnel.host),
+                    port: tunnel.port,
+                    route: route.summary,
+                    authentication: tunnel.authenticationMode.title,
+                    state: .reconnecting,
+                    startedAt: nil,
+                    errorMessage: progress.reason,
+                    detailSections: [
+                        ConnectionCenterDetailSection(
+                            title: "Основное",
+                            rows: [
+                                ConnectionCenterDetailRow(label: "Имя", value: tunnel.ruleName),
+                                ConnectionCenterDetailRow(label: "Тип", value: tunnel.rule.kind.title),
+                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? "Independent" : "Profile"),
+                                ConnectionCenterDetailRow(label: "SSH-host", value: tunnel.host),
+                                ConnectionCenterDetailRow(label: "Назначение", value: destination)
+                            ]
+                        ),
+                        ConnectionCenterDetailSection(title: "Smart Reconnect", rows: reconnectRows),
+                        ConnectionCenterDetailSection(
+                            title: "Маршрут",
+                            rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                        )
+                    ]
+                )
+            )
+        }
+
         items.sort {
             let lhsDate = $0.startedAt ?? .distantPast
             let rhsDate = $1.startedAt ?? .distantPast
@@ -966,13 +1082,58 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func reconnectConnectionCenterSource(_ source: ConnectionCenterSource) {
-        guard case let .rdp(profileID) = source else { return }
-        reconnect(profileID: profileID)
+        switch source {
+        case let .rdp(profileID):
+            reconnect(profileID: profileID)
+        case let .terminal(scope, tabID):
+            let workspaceID: UUID = switch scope {
+            case let .profile(profileID): profileID
+            case .global: Self.globalTerminalWorkspaceID
+            }
+            guard let workspace = terminalWorkspaces[workspaceID],
+                  let tab = workspace.tabs.first(where: { $0.id == tabID })
+            else { return }
+            cancelTerminalSmartReconnect(tabID: tabID, session: tab.session)
+            if !tab.session.isRunning {
+                connectSSHTerminal(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session
+                )
+                return
+            }
+            tab.session.stop()
+            Task { @MainActor [weak self, weak session = tab.session] in
+                guard let self, let session else { return }
+                for _ in 0..<40 {
+                    if !session.isRunning {
+                        guard let current = workspace.tabs.first(where: { $0.id == tabID }) else {
+                            return
+                        }
+                        self.connectSSHTerminal(
+                            connection: current.connection,
+                            tabID: current.id,
+                            session: current.session
+                        )
+                        return
+                    }
+                    try? await Task.sleep(for: .milliseconds(50))
+                }
+                self.errorMessage = "SSH-сессия не успела завершиться для reconnect"
+            }
+        case let .profileTunnel(profileID, ruleID):
+            restartProfileSSHTunnel(ruleID: ruleID, profileID: profileID)
+        case let .independentTunnel(tunnelID):
+            restartIndependentPortForward(tunnelID)
+        case .sftp:
+            break
+        }
     }
 
     func disconnectConnectionCenterSource(_ source: ConnectionCenterSource) {
         switch source {
         case let .rdp(profileID):
+            cancelRDPSmartReconnect(profileID)
             requestDisconnect(profileID: profileID, interruptionReason: nil)
         case let .terminal(scope, tabID):
             let workspaceID: UUID = switch scope {
@@ -1144,13 +1305,18 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func connectionCenterTerminalState(
-        _ phase: EmbeddedTerminalPhase
+        _ session: TerminalSessionModel
     ) -> ConnectionCenterState {
-        switch phase {
-        case .starting: .connecting
-        case .running: .connected
-        case .stopping: .stopping
-        case .idle, .finished: .disconnected
+        if session.reconnectProgress != nil { return .reconnecting }
+        switch session.phase {
+        case .starting:
+            return .connecting
+        case .running:
+            return .connected
+        case .stopping:
+            return .stopping
+        case .idle, .finished:
+            return .disconnected
         }
     }
 
@@ -2361,6 +2527,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func removeIndependentPortForward(_ id: UUID) {
+        cancelSSHTunnelSmartReconnect(id)
         guard !isIndependentSSHTunnelRunning(tunnelID: id) else {
             errorMessage = "Сначала остановите этот SSH-туннель"
             return
@@ -2392,6 +2559,14 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func startIndependentPortForward(_ id: UUID) {
+        cancelSSHTunnelSmartReconnect(id)
+        launchIndependentPortForward(id, smartReconnectAttempt: nil)
+    }
+
+    private func launchIndependentPortForward(
+        _ id: UUID,
+        smartReconnectAttempt: Int?
+    ) {
         guard !isIndependentSSHTunnelRunning(tunnelID: id),
               let item = independentPortForwards.first(where: { $0.id == id })
         else { return }
@@ -2401,6 +2576,9 @@ final class AppModel: NSObject, ObservableObject {
         ) else {
             if let errorMessage, !errorMessage.isEmpty {
                 sshTunnelLastErrors[id] = errorMessage
+            }
+            if smartReconnectAttempt != nil {
+                cancelSSHTunnelSmartReconnect(id)
             }
             return
         }
@@ -2469,12 +2647,32 @@ final class AppModel: NSObject, ObservableObject {
             lastSSHTunnelLogURLs[id] = running.logURL
             stoppingSSHTunnelIDs.remove(id)
             sshTunnelLastErrors.removeValue(forKey: id)
+            if let smartReconnectAttempt {
+                sshTunnelReconnectAttempts[id] = smartReconnectAttempt
+                sshTunnelReconnectProgress[id] = SmartReconnectProgress(
+                    attempt: smartReconnectAttempt,
+                    maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                    nextAttemptAt: nil,
+                    reason: "Восстановление SSH-туннеля"
+                )
+                markSSHTunnelReconnectEstablishedAfterGrace(
+                    id,
+                    process: running.process,
+                    attempt: smartReconnectAttempt
+                )
+            } else {
+                sshTunnelReconnectAttempts.removeValue(forKey: id)
+                sshTunnelReconnectProgress.removeValue(forKey: id)
+            }
             startSSHTunnelMonitorIfNeeded()
-            statusMessage = "Независимый SSH-туннель «\(item.rule.name)» запущен"
+            statusMessage = smartReconnectAttempt == nil
+                ? "Независимый SSH-туннель «\(item.rule.name)» запущен"
+                : "SSH-туннель «\(item.rule.name)» восстанавливается"
             errorMessage = nil
         } catch {
             let message = error.localizedDescription
             sshTunnelLastErrors[id] = message
+            cancelSSHTunnelSmartReconnect(id)
             errorMessage = message
             statusMessage = "SSH-туннель не запущен"
         }
@@ -2485,6 +2683,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func removePortForward(_ ruleID: UUID, profileID: UUID) {
+        cancelSSHTunnelSmartReconnect(ruleID)
         guard !isProfileSSHTunnelRunning(ruleID: ruleID, profileID: profileID) else {
             errorMessage = "Сначала остановите этот SSH-туннель"
             return
@@ -2501,6 +2700,19 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func startProfileSSHTunnel(ruleID: UUID, profileID: UUID) {
+        cancelSSHTunnelSmartReconnect(ruleID)
+        launchProfileSSHTunnel(
+            ruleID: ruleID,
+            profileID: profileID,
+            smartReconnectAttempt: nil
+        )
+    }
+
+    private func launchProfileSSHTunnel(
+        ruleID: UUID,
+        profileID: UUID,
+        smartReconnectAttempt: Int?
+    ) {
         guard !isProfileSSHTunnelRunning(ruleID: ruleID, profileID: profileID),
               let profile = profiles.first(where: {
                   $0.id == profileID && $0.connectionType == .ssh
@@ -2515,6 +2727,9 @@ final class AppModel: NSObject, ObservableObject {
         ) else {
             if let errorMessage, !errorMessage.isEmpty {
                 sshTunnelLastErrors[ruleID] = errorMessage
+            }
+            if smartReconnectAttempt != nil {
+                cancelSSHTunnelSmartReconnect(ruleID)
             }
             return
         }
@@ -2554,12 +2769,32 @@ final class AppModel: NSObject, ObservableObject {
             lastSSHTunnelLogURLs[ruleID] = running.logURL
             stoppingSSHTunnelIDs.remove(ruleID)
             sshTunnelLastErrors.removeValue(forKey: ruleID)
+            if let smartReconnectAttempt {
+                sshTunnelReconnectAttempts[ruleID] = smartReconnectAttempt
+                sshTunnelReconnectProgress[ruleID] = SmartReconnectProgress(
+                    attempt: smartReconnectAttempt,
+                    maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                    nextAttemptAt: nil,
+                    reason: "Восстановление SSH-туннеля"
+                )
+                markSSHTunnelReconnectEstablishedAfterGrace(
+                    ruleID,
+                    process: running.process,
+                    attempt: smartReconnectAttempt
+                )
+            } else {
+                sshTunnelReconnectAttempts.removeValue(forKey: ruleID)
+                sshTunnelReconnectProgress.removeValue(forKey: ruleID)
+            }
             startSSHTunnelMonitorIfNeeded()
-            statusMessage = "SSH-туннель «\(rule.name)» запущен"
+            statusMessage = smartReconnectAttempt == nil
+                ? "SSH-туннель «\(rule.name)» запущен"
+                : "SSH-туннель «\(rule.name)» восстанавливается"
             errorMessage = nil
         } catch {
             let message = error.localizedDescription
             sshTunnelLastErrors[ruleID] = message
+            cancelSSHTunnelSmartReconnect(ruleID)
             errorMessage = message
             statusMessage = "SSH-туннель не запущен"
         }
@@ -2585,6 +2820,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func stopSSHTunnel(_ ruleID: UUID) {
+        cancelSSHTunnelSmartReconnect(ruleID)
         guard let running = managedSSHTunnels[ruleID] else { return }
         stoppingSSHTunnelIDs.insert(ruleID)
         objectWillChange.send()
@@ -2772,8 +3008,12 @@ final class AppModel: NSObject, ObservableObject {
         connection: TerminalTabConnection,
         tabID: UUID,
         session: TerminalSessionModel,
-        temporaryPassword: String? = nil
+        temporaryPassword: String? = nil,
+        smartReconnectAttempt: Int? = nil
     ) {
+        if smartReconnectAttempt == nil {
+            cancelTerminalSmartReconnect(tabID: tabID, session: session)
+        }
         guard let settings = sshConnectionSettings(
             connection: connection,
             tabID: tabID
@@ -2832,34 +3072,185 @@ final class AppModel: NSObject, ObservableObject {
                     },
                     jumpHostPromptTokens: settings.jumpHostPromptTokens
                 )
-            ) { [weak self] exitCode in
-                guard let self else { return }
+            ) { [weak self, weak session] exitCode in
+                guard let self, let session else { return }
+                let recentOutput = session.recentOutputText()
+                let terminationRequested = session.lastTerminationWasRequested
                 terminalRuntimeSettings.removeValue(forKey: tabID)
                 terminalStartedAt.removeValue(forKey: tabID)
                 if connection.kind == .custom, temporaryPassword?.isEmpty == false {
                     try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
                 }
-                statusMessage = exitCode == 0
-                    ? "SSH-сессия завершена"
-                    : "SSH-сессия завершилась с кодом \(exitCode)"
+
+                let nextAttempt = (smartReconnectAttempt ?? 0) + 1
+                if !terminationRequested,
+                   canAutomaticallyReconnectSSH(
+                       settings: settings,
+                       connection: connection,
+                       temporaryPassword: temporaryPassword
+                   ),
+                   SmartReconnectClassifier.shouldRetrySSH(
+                       exitCode: exitCode,
+                       output: recentOutput
+                   ) {
+                    scheduleTerminalSmartReconnect(
+                        connection: connection,
+                        tabID: tabID,
+                        session: session,
+                        attempt: nextAttempt,
+                        reason: SmartReconnectClassifier.sshReason(output: recentOutput)
+                    )
+                } else {
+                    cancelTerminalSmartReconnect(tabID: tabID, session: session)
+                    statusMessage = exitCode == 0
+                        ? "SSH-сессия завершена"
+                        : "SSH-сессия завершилась с кодом \(exitCode)"
+                }
                 objectWillChange.send()
             }
             terminalRuntimeSettings[tabID] = settings
             terminalStartedAt[tabID] = Date()
+            if let smartReconnectAttempt {
+                session.setReconnectProgress(
+                    SmartReconnectProgress(
+                        attempt: smartReconnectAttempt,
+                        maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                        nextAttemptAt: nil,
+                        reason: "Проверяем восстановленное SSH-соединение"
+                    )
+                )
+                markTerminalReconnectEstablishedAfterGrace(
+                    tabID: tabID,
+                    session: session,
+                    attempt: smartReconnectAttempt
+                )
+                statusMessage = "SSH: проверяем reconnect \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
+            } else {
+                statusMessage = "SSH подключается к \(settings.host)"
+            }
             if connection.kind == .savedProfile,
                let profileID = connection.profileID,
                let index = profiles.firstIndex(where: { $0.id == profileID }) {
                 profiles[index].lastConnectedAt = Date()
             }
-            statusMessage = "SSH подключается к \(settings.host)"
             errorMessage = nil
         } catch {
             if connection.kind == .custom, temporaryPassword?.isEmpty == false {
                 try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
             }
+            cancelTerminalSmartReconnect(tabID: tabID, session: session)
             errorMessage = error.localizedDescription
             statusMessage = "SSH не запущен"
         }
+    }
+
+    private func canAutomaticallyReconnectSSH(
+        settings: SSHConnectionSettings,
+        connection: TerminalTabConnection,
+        temporaryPassword: String?
+    ) -> Bool {
+        if temporaryPassword?.isEmpty == false { return false }
+        if settings.authenticationMode == .touchIDKey { return false }
+        guard let profileID = connection.profileID else { return connection.kind == .custom }
+        if sshProfileRequiresUserPresenceForReconnect(profileID) { return false }
+        if let jumpHostProfileID = settings.jumpHostProfileID,
+           sshProfileRequiresUserPresenceForReconnect(jumpHostProfileID) {
+            return false
+        }
+        return true
+    }
+
+    private func sshProfileRequiresUserPresenceForReconnect(_ profileID: UUID) -> Bool {
+        if sshKeyUserPresenceProfileIDs.contains(profileID.uuidString) { return true }
+        if sshPasswordUserPresenceProfileIDs.contains(profileID.uuidString) { return true }
+        return profiles.first(where: { $0.id == profileID })?.sshAuthenticationMode == .touchIDKey
+    }
+
+    private func scheduleTerminalSmartReconnect(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel,
+        attempt: Int,
+        reason: String
+    ) {
+        guard attempt <= SmartReconnectPolicy.maximumAttempts else {
+            cancelTerminalSmartReconnect(tabID: tabID, session: session)
+            statusMessage = "SSH не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток"
+            errorMessage = reason
+            return
+        }
+
+        terminalReconnectTasks[tabID]?.cancel()
+        let progress = SmartReconnectProgress(
+            attempt: attempt,
+            maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+            nextAttemptAt: SmartReconnectPolicy.nextAttemptDate(for: attempt),
+            reason: reason
+        )
+        session.setReconnectProgress(progress)
+        statusMessage = "SSH: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+
+        terminalReconnectTasks[tabID] = Task { @MainActor [weak self, weak session] in
+            do {
+                try await Task.sleep(for: SmartReconnectPolicy.delay(for: attempt))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  let session,
+                  session.reconnectProgress?.attempt == attempt,
+                  !session.isRunning
+            else { return }
+            session.setReconnectProgress(
+                SmartReconnectProgress(
+                    attempt: attempt,
+                    maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                    nextAttemptAt: nil,
+                    reason: reason
+                )
+            )
+            self.connectSSHTerminal(
+                connection: connection,
+                tabID: tabID,
+                session: session,
+                temporaryPassword: nil,
+                smartReconnectAttempt: attempt
+            )
+        }
+    }
+
+    private func markTerminalReconnectEstablishedAfterGrace(
+        tabID: UUID,
+        session: TerminalSessionModel,
+        attempt: Int
+    ) {
+        terminalReconnectTasks[tabID]?.cancel()
+        terminalReconnectTasks[tabID] = Task { @MainActor [weak self, weak session] in
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  let session,
+                  session.isRunning,
+                  session.reconnectProgress?.attempt == attempt
+            else { return }
+            session.setReconnectProgress(nil)
+            self.terminalReconnectTasks[tabID] = nil
+            self.statusMessage = "SSH восстановлен: попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+            self.objectWillChange.send()
+        }
+    }
+
+    private func cancelTerminalSmartReconnect(
+        tabID: UUID,
+        session: TerminalSessionModel
+    ) {
+        terminalReconnectTasks.removeValue(forKey: tabID)?.cancel()
+        session.setReconnectProgress(nil)
     }
 
     func discoverTerminalContext(
@@ -3003,6 +3394,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func disconnect(profileID: UUID) {
+        cancelRDPSmartReconnect(profileID)
         if isSSHTerminalRunning(profileID: profileID) {
             if let workspace = terminalWorkspaces[profileID] {
                 workspace.stopAll()
@@ -3017,6 +3409,14 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func disconnectAll() {
+        for profileID in Array(rdpReconnectTasks.keys) {
+            cancelRDPSmartReconnect(profileID)
+        }
+        terminalReconnectTasks.values.forEach { $0.cancel() }
+        terminalReconnectTasks.removeAll()
+        for ruleID in Array(sshTunnelReconnectTasks.keys) {
+            cancelSSHTunnelSmartReconnect(ruleID)
+        }
         for profileID in Array(managedSessions.keys) {
             requestDisconnect(profileID: profileID, interruptionReason: nil)
         }
@@ -3027,7 +3427,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func stopAllSSHTunnels() {
-        for ruleID in Array(managedSSHTunnels.keys) {
+        let ruleIDs = Set(managedSSHTunnels.keys).union(sshTunnelReconnectProgress.keys)
+        for ruleID in ruleIDs {
             stopSSHTunnel(ruleID)
         }
     }
@@ -3127,8 +3528,12 @@ final class AppModel: NSObject, ObservableObject {
         _ profileID: UUID,
         typedPassword: String,
         typedGatewayPassword: String,
-        automatic: Bool
+        automatic: Bool,
+        smartReconnectAttempt: Int? = nil
     ) {
+        if smartReconnectAttempt == nil {
+            cancelRDPSmartReconnect(profileID)
+        }
         guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
         guard profile.connectionType == .rdp else { return }
         guard !isSessionRunning(profileID: profileID) else {
@@ -3194,7 +3599,11 @@ final class AppModel: NSObject, ObservableObject {
                 password: connectionPassword,
                 gatewayPassword: resolvedGatewayPassword
             )
-            let runtime = ManagedRDPSession(profile: runtimeProfile, connection: connection)
+            let runtime = ManagedRDPSession(
+                profile: runtimeProfile,
+                connection: connection,
+                smartReconnectAttempt: smartReconnectAttempt
+            )
             managedSessions[profileID] = runtime
             sessions[profileID] = runtime.summary
             reconnectCandidateProfileIDs.remove(profileID)
@@ -3205,14 +3614,28 @@ final class AppModel: NSObject, ObservableObject {
             if let index = profiles.firstIndex(where: { $0.id == profileID }) {
                 profiles[index].lastConnectedAt = Date()
             }
+            if let smartReconnectAttempt {
+                rdpReconnectTasks[profileID] = nil
+                rdpReconnectProgress[profileID] = SmartReconnectProgress(
+                    attempt: smartReconnectAttempt,
+                    maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                    nextAttemptAt: nil,
+                    reason: "Восстановление RDP-сессии"
+                )
+            }
             startSessionMonitorIfNeeded()
-            if missingCount > 0 {
+            if let smartReconnectAttempt {
+                statusMessage = "RDP: переподключение, попытка \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
+            } else if missingCount > 0 {
                 statusMessage = "FreeRDP запущен; недоступные мониторы временно пропущены: \(missingCount)"
             } else {
                 statusMessage = "FreeRDP запущен для «\(profile.friendlyName)», ожидаем окно…"
             }
             errorMessage = nil
         } catch {
+            if smartReconnectAttempt != nil {
+                cancelRDPSmartReconnect(profileID)
+            }
             if !automatic || selectedProfileID == profileID {
                 errorMessage = error.localizedDescription
                 statusMessage = "Подключение не запущено"
@@ -3337,6 +3760,7 @@ final class AppModel: NSObject, ObservableObject {
     private func finishSSHTunnel(_ ruleID: UUID, status: Int32) {
         guard let running = managedSSHTunnels.removeValue(forKey: ruleID) else { return }
         let summary = sshTunnels.removeValue(forKey: ruleID)
+        let reconnectAttempt = sshTunnelReconnectAttempts[ruleID]
         let requested = stoppingSSHTunnelIDs.remove(ruleID) != nil
         let termination = running.process.terminationReason == .exit
             ? "код \(status)"
@@ -3347,6 +3771,7 @@ final class AppModel: NSObject, ObservableObject {
         try? running.logHandle.close()
 
         if requested {
+            cancelSSHTunnelSmartReconnect(ruleID)
             statusMessage = "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен"
             return
         }
@@ -3357,11 +3782,149 @@ final class AppModel: NSObject, ObservableObject {
             ? "процесс завершился: \(termination)"
             : String(details.suffix(3_000))
         sshTunnelLastErrors[ruleID] = message
+
+        if let summary,
+           canAutomaticallyReconnectSSHTunnel(summary),
+           SmartReconnectClassifier.shouldRetryTunnel(status: status, log: log) {
+            scheduleSSHTunnelSmartReconnect(
+                summary: summary,
+                attempt: (reconnectAttempt ?? 0) + 1,
+                reason: SmartReconnectClassifier.sshReason(output: log)
+            )
+            if summary.profileID == selectedProfileID
+                || summary.profileID == Self.globalForwardingProfileID {
+                errorMessage = nil
+            }
+            return
+        }
+
+        cancelSSHTunnelSmartReconnect(ruleID)
         if summary?.profileID == selectedProfileID
             || summary?.profileID == Self.globalForwardingProfileID {
             errorMessage = "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен:\n\(message)"
         }
         statusMessage = "SSH-туннель неожиданно завершён"
+    }
+
+    private func canAutomaticallyReconnectSSHTunnel(_ summary: SSHTunnelSummary) -> Bool {
+        if summary.authenticationMode == .touchIDKey { return false }
+        if summary.profileID == Self.globalForwardingProfileID {
+            guard let tunnel = independentPortForwards.first(where: { $0.id == summary.id }) else {
+                return false
+            }
+            switch tunnel.connection.kind {
+            case .savedProfile:
+                guard let profileID = tunnel.connection.profileID else { return false }
+                if sshProfileRequiresUserPresenceForReconnect(profileID) { return false }
+                if let profile = profiles.first(where: { $0.id == profileID }),
+                   let jumpHostProfileID = profile.sshJumpHostProfileID,
+                   sshProfileRequiresUserPresenceForReconnect(jumpHostProfileID) {
+                    return false
+                }
+            case .custom:
+                if forwardingPasswordUserPresenceIDs.contains(summary.id.uuidString) { return false }
+            }
+            return true
+        }
+        if sshProfileRequiresUserPresenceForReconnect(summary.profileID) { return false }
+        if let profile = profiles.first(where: { $0.id == summary.profileID }),
+           let jumpHostProfileID = profile.sshJumpHostProfileID,
+           sshProfileRequiresUserPresenceForReconnect(jumpHostProfileID) {
+            return false
+        }
+        return true
+    }
+
+    private func scheduleSSHTunnelSmartReconnect(
+        summary: SSHTunnelSummary,
+        attempt: Int,
+        reason: String
+    ) {
+        let ruleID = summary.id
+        guard attempt <= SmartReconnectPolicy.maximumAttempts else {
+            cancelSSHTunnelSmartReconnect(ruleID)
+            statusMessage = "SSH-туннель «\(summary.ruleName)» не восстановлен"
+            errorMessage = "\(reason). Исчерпаны \(SmartReconnectPolicy.maximumAttempts) попытки переподключения."
+            return
+        }
+
+        sshTunnelReconnectTasks[ruleID]?.cancel()
+        sshTunnelReconnectAttempts[ruleID] = attempt
+        sshTunnelReconnectSummaries[ruleID] = summary
+        sshTunnelReconnectProgress[ruleID] = SmartReconnectProgress(
+            attempt: attempt,
+            maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+            nextAttemptAt: SmartReconnectPolicy.nextAttemptDate(for: attempt),
+            reason: reason
+        )
+        statusMessage = "SSH-туннель «\(summary.ruleName)»: переподключение \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+
+        sshTunnelReconnectTasks[ruleID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: SmartReconnectPolicy.delay(for: attempt))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.sshTunnelReconnectProgress[ruleID]?.attempt == attempt,
+                  self.managedSSHTunnels[ruleID] == nil
+            else { return }
+
+            self.sshTunnelReconnectProgress[ruleID] = SmartReconnectProgress(
+                attempt: attempt,
+                maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                nextAttemptAt: nil,
+                reason: reason
+            )
+            if summary.profileID == Self.globalForwardingProfileID {
+                self.launchIndependentPortForward(
+                    ruleID,
+                    smartReconnectAttempt: attempt
+                )
+            } else {
+                self.launchProfileSSHTunnel(
+                    ruleID: ruleID,
+                    profileID: summary.profileID,
+                    smartReconnectAttempt: attempt
+                )
+            }
+        }
+    }
+
+    private func markSSHTunnelReconnectEstablishedAfterGrace(
+        _ ruleID: UUID,
+        process: Process,
+        attempt: Int
+    ) {
+        sshTunnelReconnectTasks[ruleID]?.cancel()
+        sshTunnelReconnectTasks[ruleID] = Task { @MainActor [weak self, weak process] in
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  let process,
+                  process.isRunning,
+                  self.managedSSHTunnels[ruleID]?.process === process,
+                  self.sshTunnelReconnectProgress[ruleID]?.attempt == attempt
+            else { return }
+            self.sshTunnelReconnectProgress.removeValue(forKey: ruleID)
+            self.sshTunnelReconnectAttempts.removeValue(forKey: ruleID)
+            self.sshTunnelReconnectSummaries.removeValue(forKey: ruleID)
+            self.sshTunnelReconnectTasks[ruleID] = nil
+            self.sshTunnelLastErrors.removeValue(forKey: ruleID)
+            self.statusMessage = "SSH-туннель восстановлен"
+        }
+    }
+
+    private func cancelSSHTunnelSmartReconnect(_ ruleID: UUID) {
+        sshTunnelReconnectTasks.removeValue(forKey: ruleID)?.cancel()
+        sshTunnelReconnectProgress.removeValue(forKey: ruleID)
+        sshTunnelReconnectAttempts.removeValue(forKey: ruleID)
+        sshTunnelReconnectSummaries.removeValue(forKey: ruleID)
     }
 
     private func checkSessionStartup(_ runtime: ManagedRDPSession) {
@@ -3420,6 +3983,10 @@ final class AppModel: NSObject, ObservableObject {
     ) {
         runtime.desktopReadyDetected = true
         runtime.phase = .connected
+        if runtime.smartReconnectAttempt != nil {
+            cancelRDPSmartReconnect(runtime.profileID)
+            runtime.smartReconnectAttempt = nil
+        }
         sessions[runtime.profileID] = runtime.summary
 
         if detectedFromWindow,
@@ -3460,6 +4027,7 @@ final class AppModel: NSObject, ObservableObject {
             log: log,
             disconnectRequested: runtime.disconnectRequested
         )
+        let previousReconnectAttempt = runtime.smartReconnectAttempt
         lastSessionLogURLs[profileID] = runtime.connection.logURL
         managedSessions.removeValue(forKey: profileID)
         sessions.removeValue(forKey: profileID)
@@ -3468,6 +4036,24 @@ final class AppModel: NSObject, ObservableObject {
             sessionTimer = nil
         }
 
+        if !endedNormally,
+           let profile = profiles.first(where: { $0.id == profileID }),
+           profile.autoReconnect,
+           passwordStoredProfileIDs.contains(profileID.uuidString),
+           SmartReconnectClassifier.shouldRetryRDP(status: status, log: log) {
+            reconnectCandidateProfileIDs.insert(profileID)
+            scheduleRDPSmartReconnect(
+                profileID: profileID,
+                attempt: (previousReconnectAttempt ?? 0) + 1,
+                reason: SmartReconnectClassifier.rdpReason(log: log)
+            )
+            if selectedProfileID == profileID {
+                errorMessage = nil
+            }
+            return
+        }
+
+        cancelRDPSmartReconnect(profileID)
         if selectedProfileID == profileID {
             if endedNormally {
                 statusMessage = runtime.interruptionReason ?? "RDP-сессия завершена"
@@ -3477,6 +4063,71 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage = sessionFailureMessage(log: log, status: status)
             }
         }
+    }
+
+    private func scheduleRDPSmartReconnect(
+        profileID: UUID,
+        attempt: Int,
+        reason: String
+    ) {
+        guard attempt <= SmartReconnectPolicy.maximumAttempts else {
+            cancelRDPSmartReconnect(profileID)
+            reconnectCandidateProfileIDs.insert(profileID)
+            statusMessage = "RDP не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток"
+            if selectedProfileID == profileID {
+                errorMessage = reason
+            }
+            return
+        }
+        guard let profile = profiles.first(where: { $0.id == profileID }),
+              profile.connectionType == .rdp,
+              profile.autoReconnect,
+              passwordStoredProfileIDs.contains(profileID.uuidString)
+        else {
+            cancelRDPSmartReconnect(profileID)
+            reconnectCandidateProfileIDs.insert(profileID)
+            return
+        }
+
+        rdpReconnectTasks[profileID]?.cancel()
+        rdpReconnectProgress[profileID] = SmartReconnectProgress(
+            attempt: attempt,
+            maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+            nextAttemptAt: SmartReconnectPolicy.nextAttemptDate(for: attempt),
+            reason: reason
+        )
+        statusMessage = "RDP: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+
+        rdpReconnectTasks[profileID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: SmartReconnectPolicy.delay(for: attempt))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                  let self,
+                  self.rdpReconnectProgress[profileID]?.attempt == attempt,
+                  self.managedSessions[profileID] == nil
+            else { return }
+            self.rdpReconnectProgress[profileID] = SmartReconnectProgress(
+                attempt: attempt,
+                maximumAttempts: SmartReconnectPolicy.maximumAttempts,
+                nextAttemptAt: nil,
+                reason: reason
+            )
+            self.connectProfile(
+                profileID,
+                typedPassword: "",
+                typedGatewayPassword: "",
+                automatic: true,
+                smartReconnectAttempt: attempt
+            )
+        }
+    }
+
+    private func cancelRDPSmartReconnect(_ profileID: UUID) {
+        rdpReconnectTasks.removeValue(forKey: profileID)?.cancel()
+        rdpReconnectProgress.removeValue(forKey: profileID)
     }
 
     private func sessionFailureMessage(log: String, status: Int32) -> String {
@@ -3836,8 +4487,37 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     @objc private func workspaceWillSleep() {
-        sleepInterruptedProfileIDs = Set(managedSessions.keys)
-        for profileID in managedSessions.keys {
+        sleepInterruptedProfileIDs = Set(managedSessions.keys).union(rdpReconnectProgress.keys)
+        sleepInterruptedTerminalTabIDs = Set(
+            terminalWorkspaces.values.flatMap { workspace in
+                workspace.tabs.compactMap { tab in
+                    (tab.session.isRunning || tab.session.reconnectProgress != nil) ? tab.id : nil
+                }
+            }
+        )
+        sleepInterruptedTunnelIDs = Set(managedSSHTunnels.keys).union(sshTunnelReconnectProgress.keys)
+
+        rdpReconnectTasks.values.forEach { $0.cancel() }
+        rdpReconnectTasks.removeAll()
+        rdpReconnectProgress.removeAll()
+        terminalReconnectTasks.values.forEach { $0.cancel() }
+        terminalReconnectTasks.removeAll()
+        sshTunnelReconnectTasks.values.forEach { $0.cancel() }
+        sshTunnelReconnectTasks.removeAll()
+        sshTunnelReconnectProgress.removeAll()
+        sshTunnelReconnectAttempts.removeAll()
+        sshTunnelReconnectSummaries.removeAll()
+
+        for workspace in terminalWorkspaces.values {
+            for tab in workspace.tabs
+            where tab.session.isRunning || tab.session.reconnectProgress != nil {
+                tab.session.stop()
+            }
+        }
+        for ruleID in Array(managedSSHTunnels.keys) {
+            stopSSHTunnel(ruleID)
+        }
+        for profileID in Array(managedSessions.keys) {
             guard let runtime = managedSessions[profileID] else { continue }
             requestDisconnect(
                 profileID: profileID,
@@ -3847,13 +4527,19 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     @objc private func workspaceDidWake() {
-        let interrupted = sleepInterruptedProfileIDs
+        let interruptedRDP = sleepInterruptedProfileIDs
+        let interruptedTerminals = sleepInterruptedTerminalTabIDs
+        let interruptedTunnels = sleepInterruptedTunnelIDs
         sleepInterruptedProfileIDs = []
+        sleepInterruptedTerminalTabIDs = []
+        sleepInterruptedTunnelIDs = []
+
         Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(2))
             guard let self else { return }
             refreshDisplays(configureEmptyProfile: false)
-            for profileID in interrupted {
+
+            for profileID in interruptedRDP {
                 reconnectCandidateProfileIDs.insert(profileID)
                 guard let profile = profiles.first(where: { $0.id == profileID }),
                       profile.autoReconnect,
@@ -3867,8 +4553,48 @@ final class AppModel: NSObject, ObservableObject {
                     automatic: true
                 )
             }
-            if !reconnectCandidateProfileIDs.isEmpty {
-                statusMessage = "Mac вышел из сна — доступно восстановление прерванных сессий"
+
+            for tabID in interruptedTerminals {
+                guard let tab = terminalWorkspaces.values
+                    .lazy
+                    .compactMap({ workspace in workspace.tabs.first(where: { $0.id == tabID }) })
+                    .first,
+                    !tab.session.isRunning,
+                    let settings = sshConnectionSettings(
+                        connection: tab.connection,
+                        tabID: tab.id
+                    ),
+                    canAutomaticallyReconnectSSH(
+                        settings: settings,
+                        connection: tab.connection,
+                        temporaryPassword: nil
+                    )
+                else { continue }
+                scheduleTerminalSmartReconnect(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session,
+                    attempt: 1,
+                    reason: "Mac вышел из сна"
+                )
+            }
+
+            for ruleID in interruptedTunnels {
+                if independentPortForwards.contains(where: { $0.id == ruleID }) {
+                    startIndependentPortForward(ruleID)
+                    continue
+                }
+                guard let profile = profiles.first(where: { profile in
+                    profile.connectionType == .ssh
+                        && profile.portForwards.contains(where: { $0.id == ruleID })
+                }) else { continue }
+                startProfileSSHTunnel(ruleID: ruleID, profileID: profile.id)
+            }
+
+            if !reconnectCandidateProfileIDs.isEmpty
+                || !interruptedTerminals.isEmpty
+                || !interruptedTunnels.isEmpty {
+                statusMessage = "Mac вышел из сна — восстанавливаем прерванные подключения"
             }
         }
     }
@@ -3878,6 +4604,12 @@ final class AppModel: NSObject, ObservableObject {
         profileSaveTask = nil
         saveProfiles()
         displayRefreshTask?.cancel()
+        terminalReconnectTasks.values.forEach { $0.cancel() }
+        terminalReconnectTasks.removeAll()
+        sshTunnelReconnectTasks.values.forEach { $0.cancel() }
+        sshTunnelReconnectTasks.removeAll()
+        rdpReconnectTasks.values.forEach { $0.cancel() }
+        rdpReconnectTasks.removeAll()
         sessionTimer?.invalidate()
         sshTunnelTimer?.invalidate()
         for runtime in managedSessions.values where runtime.connection.process.isRunning {

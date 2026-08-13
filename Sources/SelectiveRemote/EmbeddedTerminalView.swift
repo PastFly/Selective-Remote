@@ -1304,31 +1304,35 @@ struct SSHTerminalView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .overlay {
                 if !tab.session.isRunning {
-                    VStack(spacing: 12) {
-                        Image(systemName: state.systemImage)
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(statusColor(for: state))
-                        Text(LocalizedStringKey(state.title))
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                        Text(connectionLabel(for: tab))
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.white.opacity(0.62))
-                            .lineLimit(1)
-                        if let detail = state.detail {
-                            Text(detail)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.red.opacity(0.9))
+                    if let progress = tab.session.reconnectProgress {
+                        terminalReconnectOverlay(tab: tab, progress: progress)
+                    } else {
+                        VStack(spacing: 12) {
+                            Image(systemName: state.systemImage)
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(statusColor(for: state))
+                            Text(LocalizedStringKey(state.title))
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                            Text(connectionLabel(for: tab))
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.white.opacity(0.62))
+                                .lineLimit(1)
+                            if let detail = state.detail {
+                                Text(detail)
+                                    .font(.caption2.monospaced())
+                                    .foregroundStyle(.red.opacity(0.9))
+                            }
+                            Button("Подключиться", systemImage: "play.fill") {
+                                selectTabIfNeeded(tab.id)
+                                requestConnection(for: tab)
+                            }
+                            .buttonStyle(.borderedProminent)
                         }
-                        Button("Подключиться", systemImage: "play.fill") {
-                            selectTabIfNeeded(tab.id)
-                            requestConnection(for: tab)
-                        }
-                        .buttonStyle(.borderedProminent)
+                        .padding(.horizontal, 26)
+                        .padding(.vertical, 22)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                     }
-                    .padding(.horizontal, 26)
-                    .padding(.vertical, 22)
-                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
                 }
             }
         }
@@ -1353,6 +1357,43 @@ struct SSHTerminalView: View {
         )
     }
 
+    private func terminalReconnectOverlay(
+        tab: TerminalWorkspaceTab,
+        progress: SmartReconnectProgress
+    ) -> some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            VStack(spacing: 10) {
+                Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundStyle(.orange)
+                Text("Smart Reconnect · \(progress.attemptLabel)")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                Text(progress.reason)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                if let countdown = progress.countdownText(now: context.date) {
+                    Text(countdown)
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.orange)
+                }
+                Button("Отменить reconnect", systemImage: "xmark.circle") {
+                    reconnectingTabIDs.remove(tab.id)
+                    tab.session.stop()
+                }
+                .buttonStyle(.bordered)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(Color.orange.opacity(0.55), lineWidth: 1)
+            }
+        }
+    }
+
     private func paneColor(for tab: TerminalWorkspaceTab) -> Color {
         let colors: [Color] = [.blue, .teal, .orange, .purple, .pink, .green]
         let index = max(0, tab.colorIndex) % colors.count
@@ -1363,6 +1404,7 @@ struct SSHTerminalView: View {
         TerminalWorkspaceSessionState.resolve(
             phase: tab.session.phase,
             isReconnecting: reconnectingTabIDs.contains(tab.id)
+                || tab.session.reconnectProgress != nil
         )
     }
 
@@ -1390,9 +1432,15 @@ struct SSHTerminalView: View {
         return HStack(spacing: compact ? 4 : 5) {
             Image(systemName: state.systemImage)
                 .font(compact ? .system(size: 9, weight: .semibold) : .caption2)
-            Text(LocalizedStringKey(state.title))
-                .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
-                .lineLimit(1)
+            if let progress = tab.session.reconnectProgress {
+                Text("Reconnect \(progress.attempt)/\(progress.maximumAttempts)")
+                    .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
+                    .lineLimit(1)
+            } else {
+                Text(LocalizedStringKey(state.title))
+                    .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
+                    .lineLimit(1)
+            }
         }
         .foregroundStyle(color)
         .padding(.horizontal, compact ? 6 : 7)
