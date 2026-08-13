@@ -3723,6 +3723,14 @@ final class AppModel: NSObject, ObservableObject {
         UserDefaults.standard.set(version, forKey: lastSeenUpdateVersionKey)
     }
 
+    private nonisolated static func notificationAuthorizationStatusRawValue() async -> Int {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus.rawValue)
+            }
+        }
+    }
+
     private func notifyUpdateIfNeeded(_ manifest: SelectiveRemoteUpdateManifest) {
         let defaults = UserDefaults.standard
         let lastVersion = defaults.string(forKey: lastNotifiedUpdateVersionKey)
@@ -3742,10 +3750,10 @@ final class AppModel: NSObject, ObservableObject {
             guard let self else { return }
             let center = UNUserNotificationCenter.current()
             do {
-                let settings = await center.notificationSettings()
-                var allowed = settings.authorizationStatus == .authorized
-                    || settings.authorizationStatus == .provisional
-                if settings.authorizationStatus == .notDetermined {
+                let authorizationStatus = await Self.notificationAuthorizationStatusRawValue()
+                var allowed = authorizationStatus == UNAuthorizationStatus.authorized.rawValue
+                    || authorizationStatus == UNAuthorizationStatus.provisional.rawValue
+                if authorizationStatus == UNAuthorizationStatus.notDetermined.rawValue {
                     allowed = try await center.requestAuthorization(options: [.alert, .sound])
                 }
                 guard allowed else { return }

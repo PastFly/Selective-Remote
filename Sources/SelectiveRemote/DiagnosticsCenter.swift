@@ -920,7 +920,9 @@ struct DiagnosticsCenterView: View {
             item.state.title,
             item.errorMessage ?? ""
         ]
-        return values.contains(where: matchesSearch)
+        return values.contains { value in
+            matchesSearch(value)
+        }
     }
 
     private func matchesSearch(_ value: String) -> Bool {
