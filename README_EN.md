@@ -10,6 +10,16 @@
 
 The project targets Apple Silicon and macOS 14 or later. The interface is available in English and Russian.
 
+<!-- SELECTIVE_REMOTE_0_21_3_BEGIN -->
+## What's new in 0.21.3
+
+**0.21.3** is a small stability release following 0.21.2.
+
+- Forwarding Manager: single-click selection is reliable again while double-click still starts a stopped tunnel;
+- Terminal Grid: fixed the focus loop that could make History & Suggestions bounce endlessly between two connected panes;
+- Forwarding context actions and the earlier 0.21.x UX fixes are preserved.
+<!-- SELECTIVE_REMOTE_0_21_3_END -->
+
 <!-- SELECTIVE_REMOTE_0_21_2_BEGIN -->
 ## What's new in 0.21.2
 
