@@ -504,6 +504,7 @@ struct SSHTerminalView: View {
 
     @State private var showsAppearance = false
     @State private var showsHistory = false
+    @State private var showsServerCommands = false
     @State private var refreshingContextTabIDs: Set<UUID> = []
     @State private var remoteContextRequestIDs: [UUID: UUID] = [:]
     @State private var renameTabID: UUID?
@@ -603,6 +604,17 @@ struct SSHTerminalView: View {
         }
         .sheet(isPresented: $showsCommandPalette) {
             terminalCommandPalette
+        }
+        .sheet(isPresented: $showsServerCommands) {
+            let tabID = workspace.selectedTabID
+            ServerCommandsView(
+                context: workspace.remoteContext(for: tabID) ?? .empty,
+                isRefreshing: refreshingContextTabIDs.contains(tabID),
+                onRefresh: { refreshRemoteContext(for: tabID) },
+                onRun: { command in
+                    runServerCommand(command, in: tabID)
+                }
+            )
         }
         .task(id: remoteContextTaskID) {
             let tab = workspace.selectedTab
@@ -748,6 +760,19 @@ struct SSHTerminalView: View {
             .help("Дублировать с подключением")
 
             Button {
+                showsServerCommands = true
+                if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
+                    refreshRemoteContext(for: tab.id)
+                }
+            } label: {
+                Image(systemName: "server.rack")
+                    .font(.title3)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!tab.session.isRunning)
+            .help("Команды сервера")
+
+            Button {
                 showsHistory.toggle()
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
@@ -764,7 +789,14 @@ struct SSHTerminalView: View {
                     )
                 }
                 .disabled(tab.session.isRunning || (tab.isPrimary && locksPrimaryConnection))
-                Button("Обновить контекст сервера", systemImage: "server.rack") { refreshRemoteContext() }
+                Button("Команды сервера", systemImage: "server.rack") {
+                    showsServerCommands = true
+                    if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
+                        refreshRemoteContext(for: tab.id)
+                    }
+                }
+                .disabled(!tab.session.isRunning)
+                Button("Обновить контекст сервера", systemImage: "arrow.clockwise") { refreshRemoteContext() }
                     .disabled(!tab.session.isRunning || refreshingContextTabIDs.contains(workspace.selectedTabID))
                 Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(tab) }
                     .disabled(workspace.isEmptyState)
@@ -1053,6 +1085,14 @@ struct SSHTerminalView: View {
                 openSFTP(workspace.selectedTab)
             }
             .disabled(workspace.isEmptyState)
+            Button("Команды сервера", systemImage: "server.rack") {
+                showsCommandPalette = false
+                showsServerCommands = true
+                if workspace.remoteContext(for: workspace.selectedTabID)?.refreshedAt == nil {
+                    refreshRemoteContext()
+                }
+            }
+            .disabled(!workspace.selectedTab.session.isRunning)
             Button(
                 broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
                 systemImage: "antenna.radiowaves.left.and.right"
@@ -1608,6 +1648,22 @@ struct SSHTerminalView: View {
                 for: tabID
             )
         }
+    }
+
+    private func runServerCommand(_ rawCommand: String, in tabID: UUID) {
+        let command = rawCommand.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !command.isEmpty,
+              !command.contains("\0"),
+              command.count <= 4_096,
+              let tab = workspace.tabs.first(where: { $0.id == tabID }),
+              case .running = tab.session.phase
+        else { return }
+
+        _ = TerminalCommandHistoryStore.shared.record(
+            command: command,
+            profileID: historyContextID(for: tab)
+        )
+        tab.session.sendInput(Data((command + "\n").utf8))
     }
 
     private func connectionLabel(for tab: TerminalWorkspaceTab) -> String {

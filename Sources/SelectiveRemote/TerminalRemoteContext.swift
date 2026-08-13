@@ -15,6 +15,15 @@ struct TerminalRemoteContextSnapshot: Codable, Equatable, Sendable {
     var suggestions: [TerminalRemoteSuggestion]
     var message: String
     var canRetry: Bool
+    var osID: String = ""
+    var osLike: String = ""
+    var availableCommands: [String] = []
+    var services: [TerminalRemoteService] = []
+    var containers: [TerminalRemoteContainer] = []
+
+    func hasCommand(_ name: String) -> Bool {
+        availableCommands.contains(name)
+    }
 
     static let empty = TerminalRemoteContextSnapshot(
         hostLabel: "",
@@ -84,18 +93,27 @@ enum TerminalRemoteContextService {
     private static let probeCommand = #"""
 LC_ALL=C; export LC_ALL
 printf 'SYSTEM\t'
-if [ -r /etc/os-release ]; then . /etc/os-release; printf '%s %s\n' "${NAME:-Linux}" "${VERSION_ID:-}"; else uname -srm; fi
-for command_name in systemctl journalctl docker podman kubectl helm git nginx apachectl caddy ufw firewall-cmd apt apt-get dnf yum pacman zypper brew; do
+if [ -r /etc/os-release ]; then
+    . /etc/os-release
+    printf '%s %s\n' "${NAME:-Linux}" "${VERSION_ID:-}"
+    printf 'OS\t%s\t%s\n' "${ID:-}" "${ID_LIKE:-}"
+else
+    uname -srm
+fi
+for command_name in systemctl journalctl docker podman kubectl helm git nginx apachectl caddy ufw firewall-cmd apt apt-get dnf yum pacman zypper brew uptime uname hostnamectl free vmstat ip ss ping traceroute tracepath dig nslookup resolvectl df lsblk findmnt mount du dmesg last who w users getenforce sestatus fail2ban-client sort tail; do
     if command -v "$command_name" >/dev/null 2>&1; then printf 'COMMAND\t%s\n' "$command_name"; fi
 done
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl list-unit-files --type=service --no-legend --no-pager 2>/dev/null | awk 'NR <= 80 { sub(/[[:space:]].*/, "", $1); if ($1 != "") print "SERVICE\t" $1 }'
+    systemctl list-units --type=service --all --no-legend --no-pager 2>/dev/null \
+        | awk 'NR <= 100 { if ($1 != "") print "SERVICE\t" $1 "\t" $3 "\t" $4 }'
 fi
 if command -v docker >/dev/null 2>&1; then
-    docker ps -a --format 'CONTAINER\t{{.Names}}' 2>/dev/null | head -60
+    docker ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null | head -60 \
+        | while IFS='|' read -r name status; do printf 'CONTAINER\tdocker\t%s\t%s\n' "$name" "$status"; done
 fi
 if command -v podman >/dev/null 2>&1; then
-    podman ps -a --format 'CONTAINER\t{{.Names}}' 2>/dev/null | head -60
+    podman ps -a --format '{{.Names}}|{{.Status}}' 2>/dev/null | head -60 \
+        | while IFS='|' read -r name status; do printf 'CONTAINER\tpodman\t%s\t%s\n' "$name" "$status"; done
 fi
 """#
 
@@ -184,14 +202,16 @@ fi
         settings: SSHConnectionSettings
     ) -> TerminalRemoteContextSnapshot {
         var systemLabel = "Удалённый сервер"
+        var osID = ""
+        var osLike = ""
         var commands = Set<String>()
-        var services: [String] = []
-        var containers: [String] = []
+        var services: [TerminalRemoteService] = []
+        var containers: [TerminalRemoteContainer] = []
         let safeName = try? NSRegularExpression(pattern: #"^[A-Za-z0-9@_.:-]{1,160}$"#)
 
-        for rawLine in output.split(whereSeparator: \.isNewline).prefix(500) {
-            let parts = rawLine.split(separator: "\t", maxSplits: 1).map(String.init)
-            guard parts.count == 2 else { continue }
+        for rawLine in output.split(whereSeparator: \.isNewline).prefix(800) {
+            let parts = rawLine.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 2 else { continue }
             let kind = parts[0]
             let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
             guard !value.isEmpty else { continue }
@@ -199,13 +219,53 @@ fi
                 systemLabel = String(value.prefix(120))
                 continue
             }
+            if kind == "OS" {
+                osID = String(value.prefix(80)).lowercased()
+                if parts.count >= 3 {
+                    osLike = String(parts[2].trimmingCharacters(in: .whitespacesAndNewlines).prefix(120)).lowercased()
+                }
+                continue
+            }
             let range = NSRange(value.startIndex..., in: value)
             guard safeName?.firstMatch(in: value, range: range) != nil else { continue }
             switch kind {
-            case "COMMAND": commands.insert(value)
-            case "SERVICE" where services.count < 80: services.append(value)
-            case "CONTAINER" where containers.count < 80: containers.append(value)
-            default: break
+            case "COMMAND":
+                commands.insert(value)
+            case "SERVICE" where services.count < 100:
+                let active = parts.count >= 3
+                    ? String(parts[2].trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+                    : "unknown"
+                let sub = parts.count >= 4
+                    ? String(parts[3].trimmingCharacters(in: .whitespacesAndNewlines).prefix(40))
+                    : ""
+                services.append(
+                    TerminalRemoteService(name: value, activeState: active, subState: sub)
+                )
+            case "CONTAINER" where containers.count < 80:
+                let tool: String
+                let name: String
+                let status: String
+                if parts.count >= 3 {
+                    tool = value
+                    name = parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+                    status = parts.count >= 4
+                        ? String(parts[3].trimmingCharacters(in: .whitespacesAndNewlines).prefix(160))
+                        : ""
+                } else {
+                    // Compatibility with the original probe format: CONTAINER\t<name>.
+                    tool = commands.contains("docker") ? "docker" : (commands.contains("podman") ? "podman" : "")
+                    name = value
+                    status = ""
+                }
+                let nameRange = NSRange(name.startIndex..., in: name)
+                guard ["docker", "podman"].contains(tool),
+                      safeName?.firstMatch(in: name, range: nameRange) != nil
+                else { continue }
+                containers.append(
+                    TerminalRemoteContainer(tool: tool, name: name, status: status)
+                )
+            default:
+                break
             }
         }
 
@@ -225,20 +285,18 @@ fi
 
         if commands.contains("systemctl") {
             for service in services {
-                add("systemctl status \(service)", "Состояние службы \(service)", "Службы сервера", "status service unit")
-                add("sudo systemctl restart \(service)", "Перезапустить службу \(service)", "Службы сервера", "restart service unit")
+                add("systemctl status \(service.name) --no-pager", "Состояние службы \(service.name)", "Службы сервера", "status service unit")
+                add("sudo systemctl restart \(service.name)", "Перезапустить службу \(service.name)", "Службы сервера", "restart service unit")
+                add("sudo systemctl reload \(service.name)", "Перечитать конфигурацию службы \(service.name)", "Службы сервера", "reload service unit")
                 if commands.contains("journalctl") {
-                    add("journalctl -u \(service) -n 100 --no-pager", "Последние записи журнала \(service)", "Журналы сервера", "logs journal service")
+                    add("journalctl -u \(service.name) -n 100 --no-pager", "Последние записи журнала \(service.name)", "Журналы сервера", "logs journal service")
                 }
             }
         }
-        let containerTool = commands.contains("docker") ? "docker" : (commands.contains("podman") ? "podman" : nil)
-        if let containerTool {
-            for container in containers {
-                add("\(containerTool) logs --tail 100 -f \(container)", "Следить за журналом контейнера \(container)", "Контейнеры сервера", "logs container")
-                add("\(containerTool) restart \(container)", "Перезапустить контейнер \(container)", "Контейнеры сервера", "restart container")
-                add("\(containerTool) exec -it \(container) sh", "Открыть shell контейнера \(container)", "Контейнеры сервера", "exec shell container")
-            }
+        for container in containers {
+            add("\(container.tool) logs --tail 100 -f \(container.name)", "Следить за журналом контейнера \(container.name)", "Контейнеры сервера", "logs container")
+            add("\(container.tool) restart \(container.name)", "Перезапустить контейнер \(container.name)", "Контейнеры сервера", "restart container")
+            add("\(container.tool) exec -it \(container.name) sh", "Открыть shell контейнера \(container.name)", "Контейнеры сервера", "exec shell container")
         }
         if commands.contains("apt") || commands.contains("apt-get") {
             add("sudo apt update && apt list --upgradable", "Проверить обновления пакетов", "Пакеты сервера", "apt update upgrade")
@@ -248,15 +306,40 @@ fi
             add("sudo pacman -Syu", "Обновить пакеты Arch Linux", "Пакеты сервера", "pacman update")
         }
 
+        if commands.contains("ip") {
+            add("ip -brief address", "Сетевые интерфейсы и адреса", "Сеть сервера", "network ip address")
+            add("ip route", "Таблица маршрутизации", "Сеть сервера", "network route")
+        }
+        if commands.contains("ss") {
+            add("ss -lntup", "Слушающие TCP/UDP порты", "Сеть сервера", "network sockets ports")
+        }
+        if commands.contains("df") {
+            add("df -hT", "Использование файловых систем", "Диски сервера", "disk filesystem space")
+        }
+        if commands.contains("lsblk") {
+            add("lsblk -o NAME,SIZE,FSTYPE,MOUNTPOINTS", "Блочные устройства и точки монтирования", "Диски сервера", "disk block mount")
+        }
+        if commands.contains("journalctl") {
+            add("journalctl -p warning -n 100 --no-pager", "Последние предупреждения systemd journal", "Журналы сервера", "logs warning journal")
+        }
+        if commands.contains("who") {
+            add("who", "Активные пользовательские сеансы", "Безопасность сервера", "security users sessions")
+        }
+
         return TerminalRemoteContextSnapshot(
             hostLabel: settings.host,
             systemLabel: systemLabel,
             refreshedAt: Date(),
             suggestions: suggestions,
             message: suggestions.isEmpty
-                ? "Подходящие службы и контейнеры не обнаружены"
+                ? "Подходящие команды для сервера не обнаружены"
                 : "Найдено команд: \(suggestions.count)",
-            canRetry: false
+            canRetry: false,
+            osID: osID,
+            osLike: osLike,
+            availableCommands: commands.sorted(),
+            services: services.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            containers: containers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
         )
     }
 }
