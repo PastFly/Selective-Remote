@@ -613,6 +613,29 @@ enum SSHService {
         return String(hash, radix: 16)
     }
 
+    static func tunnelCommandPreview(
+        settings: SSHConnectionSettings,
+        rule: PortForwardRule
+    ) throws -> String {
+        let arguments = commonSSHArguments(
+            settings: settings,
+            batchMode: false,
+            multiplexing: false
+        )
+            + [
+                "-N",
+                "-T",
+                "-o", "ExitOnForwardFailure=yes",
+                "-o", "LogLevel=ERROR",
+                "-o", "NumberOfPasswordPrompts=1"
+            ]
+            + (try forwardingArguments(rule))
+            + [settings.host]
+        return ([sshPath] + arguments)
+            .map(shellEscaped)
+            .joined(separator: " ")
+    }
+
     static func launchTunnel(
         settings: SSHConnectionSettings,
         rule: PortForwardRule,

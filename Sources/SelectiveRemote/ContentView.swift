@@ -561,7 +561,11 @@ struct ContentView: View {
             case .keychain:
                 credentialVaultDetail
             case .forwarding:
-                IndependentForwardingView()
+                ForwardingManagerView(
+                    model: model,
+                    onOpenTerminal: openForwardingTerminal,
+                    onOpenProfile: openForwardingProfile
+                )
             }
         }
     }
@@ -914,6 +918,25 @@ struct ContentView: View {
             return .general
         }
         return stored
+    }
+
+    private func openForwardingTerminal(_ connection: TerminalTabConnection) {
+        let workspace = model.globalTerminalWorkspace()
+        if let existing = workspace.tabs.first(where: { $0.connection == connection }) {
+            workspace.selectedTabID = existing.id
+        } else {
+            _ = workspace.addTab(
+                connection: connection,
+                title: connection.displayLabel(profiles: sortedSSHProfiles)
+            )
+        }
+        setMainArea(.terminal)
+    }
+
+    private func openForwardingProfile(_ profileID: UUID) {
+        model.selectProfile(profileID)
+        selectedTab = .forwarding
+        setMainArea(.connections)
     }
 
     private func openConnectionCenterSource(_ source: ConnectionCenterSource) {

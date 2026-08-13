@@ -617,3 +617,28 @@ func touchIDModeRejectsEd25519Identity() throws {
         }
     }
 }
+
+@Test("Preview команды SSH-туннеля повторяет реальные аргументы без секретов")
+func forwardingCommandPreviewUsesRealArgumentsWithoutSecrets() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.friendlyName = "Database"
+    profile.host = "ssh.example.com"
+    profile.username = "alice"
+    profile.sshPort = 2_222
+
+    var rule = PortForwardRule(kind: .local)
+    rule.bindAddress = "127.0.0.1"
+    rule.sourcePort = 5_432
+    rule.destinationHost = "db.internal"
+    rule.destinationPort = 5_432
+
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let command = try SSHService.tunnelCommandPreview(settings: settings, rule: rule)
+
+    #expect(command.contains("'/usr/bin/ssh'"))
+    #expect(command.contains("'-L' '127.0.0.1:5432:db.internal:5432'"))
+    #expect(command.contains("'ExitOnForwardFailure=yes'"))
+    #expect(command.contains("'ssh.example.com'"))
+    #expect(!command.localizedCaseInsensitiveContains("password="))
+    #expect(!command.contains("SELECTIVEREMOTE_PASSWORD"))
+}

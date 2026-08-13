@@ -373,6 +373,7 @@ func exposesGlobalSSHWorkspaces() throws {
     #expect(content.contains("model.globalTerminalWorkspace()"))
     #expect(content.contains("model.globalSFTPSession"))
     #expect(content.contains("showsGlobalSFTPConnectionEditor"))
+    #expect(content.contains("ForwardingManagerView("))
     #expect(forwarding.contains("model.startIndependentPortForward"))
 }
 
