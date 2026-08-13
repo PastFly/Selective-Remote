@@ -395,3 +395,18 @@
 "Неактивные" = "Inactive";
 "Добавить SSH-панель" = "Add SSH pane";
 "Выбрать сервер или указать новый адрес" = "Choose a server or enter a new address";
+
+
+// Forwarding runtime evidence 0.21.4
+"Local listener" = "Local listener";
+"Подтверждён OpenSSH" = "Confirmed by OpenSSH";
+"Ожидание данных" = "Waiting for data";
+"Подтверждено трафиком" = "Confirmed by traffic";
+"Ошибка подключения" = "Connection error";
+"Проверяется" = "Checking";
+"Ожидает первого обращения" = "Waiting for first connection";
+"Схема отражает фактическое runtime-состояние процесса OpenSSH." = "The diagram reflects the actual OpenSSH process runtime state.";
+"Dynamic/SOCKS не имеет фиксированного Destination: конечный адрес выбирает SOCKS-клиент." = "Dynamic/SOCKS has no fixed destination: the SOCKS client chooses the target.";
+"Для Remote forwarding точка Destination остаётся неизвестной, пока OpenSSH не даст подтверждаемое событие канала." = "For Remote forwarding, Destination remains unknown until OpenSSH reports a verifiable channel event.";
+"Destination подтверждён фактическим обращением через этот Local tunnel в журнале OpenSSH." = "Destination was confirmed by actual traffic through this Local tunnel in the OpenSSH log.";
+"Local bind и SSH-сессия активны. Destination станет зелёным после первого фактического подключения через локальный порт." = "The local bind and SSH session are active. Destination will turn green after the first actual connection through the local port.";

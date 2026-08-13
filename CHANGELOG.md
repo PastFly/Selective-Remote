@@ -1,3 +1,13 @@
+## 0.21.4
+
+- Улучшена схема Forwarding: для узлов маршрута увеличена ширина и добавлено масштабирование текста, поэтому IPv4/IPv6 endpoint и порт больше не должны обрезаться.
+- Destination у Local tunnel теперь может перейти в подтверждённое зелёное состояние по реальным событиям OpenSSH: после фактического обращения через локальный порт и при отсутствии последующего `connect failed` в журнале.
+- Ошибка открытия конечного TCP-канала (`open failed: connect failed`) отображается на Destination как ошибка, а до первого реального обращения конечный узел остаётся неизвестным.
+- Журнал SSH-туннеля переведён на `LogLevel=DEBUG1`, чтобы видеть создание listener, реальные попытки forwarding и ошибки открытия канала.
+- В начало журнала добавлена безопасная runtime-сводка: mode, ownership, bind, destination, SSH endpoint, auth type, Jump Host/Proxy, KeepAlive и последняя ошибка — без password/passphrase.
+- В диагностике Forwarding добавлены подтверждение local listener и состояние Destination по журналу OpenSSH.
+- Добавлены regression tests для runtime evidence Local forwarding и подробного DEBUG1 logging.
+
 ## 0.21.3
 
 - Исправлено нестабильное выделение туннелей в Forwarding Manager: одиночный клик снова надёжно выбирает Profile и Independent tunnel, при этом запуск остановленного туннеля двойным кликом сохранён.

@@ -221,6 +221,71 @@ private enum ForwardingRouteNodeState {
     case unknown
 }
 
+struct ForwardingTunnelLogEvidence: Equatable {
+    let listenerReady: Bool
+    let trafficObserved: Bool
+    let destinationReachable: Bool
+    let destinationFailure: String?
+
+    static let empty = ForwardingTunnelLogEvidence(
+        listenerReady: false,
+        trafficObserved: false,
+        destinationReachable: false,
+        destinationFailure: nil
+    )
+
+    static func parse(_ log: String, rule: PortForwardRule) -> ForwardingTunnelLogEvidence {
+        guard !log.isEmpty else { return .empty }
+
+        var listenerReady = false
+        var lastTrafficLine: Int?
+        var lastDestinationFailureLine: Int?
+        var destinationFailure: String?
+
+        for (index, rawLine) in log.split(whereSeparator: \.isNewline).enumerated() {
+            let line = String(rawLine)
+            let lower = line.lowercased()
+
+            if lower.contains("local forwarding listening on")
+                || lower.contains("remote connections from")
+                || lower.contains("local connections to") {
+                listenerReady = true
+            }
+
+            if lower.contains("connection to port")
+                && lower.contains("forwarding to")
+                && lower.contains("requested") {
+                lastTrafficLine = index
+            }
+
+            if lower.contains("open failed: connect failed:")
+                || lower.contains("connect_to ") && lower.contains("failed") {
+                lastDestinationFailureLine = index
+                destinationFailure = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        let trafficObserved = lastTrafficLine != nil
+        let destinationReachable: Bool
+        if rule.kind == .local, let lastTrafficLine {
+            destinationReachable = lastDestinationFailureLine.map { $0 < lastTrafficLine } ?? true
+        } else {
+            destinationReachable = false
+        }
+
+        if destinationReachable {
+            destinationFailure = nil
+        }
+
+        return ForwardingTunnelLogEvidence(
+            listenerReady: listenerReady,
+            trafficObserved: trafficObserved,
+            destinationReachable: destinationReachable,
+            destinationFailure: destinationFailure
+        )
+    }
+}
+
 private struct ForwardingRouteStep: Identifiable {
     let id: String
     let role: ForwardingRouteNodeRole
@@ -258,7 +323,7 @@ struct ForwardingManagerView: View {
     }
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 10)) { timeline in
+        TimelineView(.periodic(from: .now, by: 3)) { timeline in
             let snapshot = makeSnapshot()
             let items = filteredItems(snapshot.items)
             HStack(spacing: 0) {
@@ -983,11 +1048,16 @@ struct ForwardingManagerView: View {
     }
 
     private func diagnosticsCard(_ item: ForwardingManagerItem, now: Date) -> some View {
-        inspectorCard("Диагностика", systemImage: "stethoscope") {
+        let evidence = runtimeEvidence(for: item)
+        return inspectorCard("Диагностика", systemImage: "stethoscope") {
             VStack(alignment: .leading, spacing: 8) {
                 detailRow("Статус", item.state.title)
                 detailRow("Uptime", item.uptimeText(now: now))
                 detailRow("Keepalive", keepAliveText(item))
+                if item.rule.kind == .local, item.state == .running {
+                    detailRow("Local listener", evidence.listenerReady ? "Подтверждён OpenSSH" : "Ожидание данных")
+                    detailRow("Destination", destinationEvidenceText(evidence))
+                }
                 if let lastError = item.lastError, !lastError.isEmpty {
                     Divider()
                     Text(lastError)
@@ -1050,7 +1120,7 @@ struct ForwardingManagerView: View {
                 Text("Схема туннеля")
                     .font(.headline)
                 routeDiagram(item)
-                Text("Состояние Destination отмечается как неизвестное, пока runtime не выполняет отдельную проверку конечного узла.")
+                Text(routeEvidenceDescription(item))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1060,10 +1130,11 @@ struct ForwardingManagerView: View {
 
     private func routeDiagram(_ item: ForwardingManagerItem) -> some View {
         let steps = routeSteps(item)
+        let evidence = runtimeEvidence(for: item)
         return ScrollView(.horizontal) {
             HStack(alignment: .top, spacing: 8) {
                 ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                    routeNode(step, state: nodeState(step.role, item: item))
+                    routeNode(step, state: nodeState(step.role, item: item, evidence: evidence))
                     if index < steps.count - 1 {
                         routeConnector(
                             step.connectorAfter ?? "",
@@ -1107,9 +1178,11 @@ struct ForwardingManagerView: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+                .minimumScaleFactor(0.72)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity)
         }
-        .frame(width: 108)
+        .frame(width: 138)
     }
 
     @ViewBuilder
@@ -1180,9 +1253,11 @@ struct ForwardingManagerView: View {
                     Text(logText)
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .padding(16)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
     }
@@ -1580,7 +1655,75 @@ struct ForwardingManagerView: View {
             logText = ""
             return
         }
-        logText = model.sshTunnelLogExcerpt(item.source.tunnelID)
+        let rawLog = model.sshTunnelLogExcerpt(item.source.tunnelID, maximumCharacters: 24_000)
+        let evidence = ForwardingTunnelLogEvidence.parse(rawLog, rule: item.rule)
+        logText = formattedTunnelLog(item: item, evidence: evidence, rawLog: rawLog)
+    }
+
+    private func runtimeEvidence(for item: ForwardingManagerItem) -> ForwardingTunnelLogEvidence {
+        let rawLog = model.sshTunnelLogExcerpt(item.source.tunnelID, maximumCharacters: 24_000)
+        return ForwardingTunnelLogEvidence.parse(rawLog, rule: item.rule)
+    }
+
+    private func destinationEvidenceText(_ evidence: ForwardingTunnelLogEvidence) -> String {
+        if evidence.destinationReachable { return "Подтверждено трафиком" }
+        if evidence.destinationFailure != nil { return "Ошибка подключения" }
+        if evidence.trafficObserved { return "Проверяется" }
+        return "Ожидает первого обращения"
+    }
+
+    private func routeEvidenceDescription(_ item: ForwardingManagerItem) -> String {
+        guard item.state == .running else {
+            return "Схема отражает фактическое runtime-состояние процесса OpenSSH."
+        }
+        guard item.rule.kind == .local else {
+            return item.rule.kind == .dynamic
+                ? "Dynamic/SOCKS не имеет фиксированного Destination: конечный адрес выбирает SOCKS-клиент."
+                : "Для Remote forwarding точка Destination остаётся неизвестной, пока OpenSSH не даст подтверждаемое событие канала."
+        }
+        let evidence = runtimeEvidence(for: item)
+        if evidence.destinationReachable {
+            return "Destination подтверждён фактическим обращением через этот Local tunnel в журнале OpenSSH."
+        }
+        if let failure = evidence.destinationFailure {
+            return "Последняя попытка пройти через tunnel завершилась ошибкой: \(failure)"
+        }
+        return "Local bind и SSH-сессия активны. Destination станет зелёным после первого фактического подключения через локальный порт."
+    }
+
+    private func formattedTunnelLog(
+        item: ForwardingManagerItem,
+        evidence: ForwardingTunnelLogEvidence,
+        rawLog: String
+    ) -> String {
+        var lines = [
+            "[Selective Remote] Tunnel runtime summary",
+            "State: \(item.state.title)",
+            "Mode: \(item.rule.kind.title)",
+            "Ownership: \(item.ownership.title)",
+            "Local/remote bind: \(item.localAddress)",
+            "Destination: \(item.destination)",
+            "SSH: \(item.sshEndpoint)",
+            "Authentication: \(item.authentication)",
+            "Jump Host: \(item.jumpHost ?? "—")",
+            "Proxy: \(item.proxy ?? "—")",
+        ]
+
+        if item.rule.kind == .local {
+            lines.append("Local listener: \(evidence.listenerReady ? "confirmed by OpenSSH" : "not confirmed yet")")
+            lines.append("Destination evidence: \(destinationEvidenceText(evidence))")
+        }
+        if let error = item.lastError, !error.isEmpty {
+            lines.append("Last runtime error: \(error)")
+        }
+        if let failure = evidence.destinationFailure {
+            lines.append("Last forwarding failure: \(failure)")
+        }
+
+        lines.append("")
+        lines.append("--- OpenSSH DEBUG1 ---")
+        lines.append(rawLog.isEmpty ? "Журнал OpenSSH пока пуст." : rawLog)
+        return lines.joined(separator: "\n")
     }
 
     private func keepAliveText(_ item: ForwardingManagerItem) -> String {
@@ -1772,11 +1915,16 @@ struct ForwardingManagerView: View {
 
     private func nodeState(
         _ role: ForwardingRouteNodeRole,
-        item: ForwardingManagerItem
+        item: ForwardingManagerItem,
+        evidence: ForwardingTunnelLogEvidence
     ) -> ForwardingRouteNodeState {
         if item.state == .running {
             switch role {
-            case .destination, .dynamicDestination:
+            case .destination:
+                if evidence.destinationReachable { return .ok }
+                if evidence.destinationFailure != nil { return .failed }
+                return .unknown
+            case .dynamicDestination:
                 return .unknown
             default:
                 return .ok

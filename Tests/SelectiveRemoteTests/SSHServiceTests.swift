@@ -638,6 +638,7 @@ func forwardingCommandPreviewUsesRealArgumentsWithoutSecrets() throws {
     #expect(command.contains("'/usr/bin/ssh'"))
     #expect(command.contains("'-L' '127.0.0.1:5432:db.internal:5432'"))
     #expect(command.contains("'ExitOnForwardFailure=yes'"))
+    #expect(command.contains("'LogLevel=DEBUG1'"))
     #expect(command.contains("'ssh.example.com'"))
     #expect(!command.localizedCaseInsensitiveContains("password="))
     #expect(!command.contains("SELECTIVEREMOTE_PASSWORD"))

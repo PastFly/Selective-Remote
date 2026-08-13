@@ -626,7 +626,7 @@ enum SSHService {
                 "-N",
                 "-T",
                 "-o", "ExitOnForwardFailure=yes",
-                "-o", "LogLevel=ERROR",
+                "-o", "LogLevel=DEBUG1",
                 "-o", "NumberOfPasswordPrompts=1"
             ]
             + (try forwardingArguments(rule))
@@ -666,7 +666,7 @@ enum SSHService {
                 "-N",
                 "-T",
                 "-o", "ExitOnForwardFailure=yes",
-                "-o", "LogLevel=ERROR",
+                "-o", "LogLevel=DEBUG1",
                 "-o", "NumberOfPasswordPrompts=1"
             ]
             + forwarding
@@ -686,16 +686,36 @@ enum SSHService {
         process.standardOutput = logHandle
         process.standardError = logHandle
 
+        let bindHost = rule.bindAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bindEndpoint = "\(bindHost.isEmpty ? "localhost" : bindHost):\(rule.sourcePort)"
+        let destinationEndpoint = rule.kind == .dynamic
+            ? "Dynamic / SOCKS"
+            : "\(rule.destinationHost):\(rule.destinationPort)"
+        let sshUserPrefix = settings.username.isEmpty ? "" : "\(settings.username)@"
+        let sshEndpoint = "\(sshUserPrefix)\(settings.host):\(settings.port)"
+        let proxyDescription = settings.proxyMode == .none
+            ? "none"
+            : "\(settings.proxyMode.title) \(settings.proxyHost):\(settings.proxyPort)"
         let marker = """
         [SelectiveRemote SSH] Starting \(rule.kind.rawValue) forwarding
         [SelectiveRemote SSH] Profile: \(settings.profileName)
         [SelectiveRemote SSH] Rule: \(rule.name)
+        [SelectiveRemote SSH] Bind: \(bindEndpoint)
+        [SelectiveRemote SSH] Destination: \(destinationEndpoint)
+        [SelectiveRemote SSH] SSH endpoint: \(sshEndpoint)
+        [SelectiveRemote SSH] Authentication: \(settings.authenticationMode.title)
+        [SelectiveRemote SSH] Jump Host: \(settings.jumpHostDestination ?? "none")
+        [SelectiveRemote SSH] Proxy: \(proxyDescription)
+        [SelectiveRemote SSH] KeepAlive: \(settings.keepAliveSeconds)s
+        [SelectiveRemote SSH] OpenSSH LogLevel: DEBUG1
 
         """
         try logHandle.write(contentsOf: Data(marker.utf8))
 
         do {
             try process.run()
+            let launched = "[SelectiveRemote SSH] OpenSSH process started · PID \(process.processIdentifier)\n"
+            try? logHandle.write(contentsOf: Data(launched.utf8))
         } catch {
             try? logHandle.close()
             throw SSHServiceError.launchFailed(error.localizedDescription)

@@ -83,7 +83,7 @@ func forwardingManagerSourceContainsRequiredRouteBranches() throws {
     #expect(source.contains("title: \"Jump Host\""))
     #expect(source.contains("title: \"Proxy\""))
     #expect(source.contains("title: \"Dynamic destination\""))
-    #expect(source.contains("Destination отмечается как неизвестное"))
+    #expect(source.contains("Destination станет зелёным"))
 }
 
 @Test("Forwarding Manager агрегирует существующие stores и не создаёт второй tunnel manager")
@@ -105,4 +105,52 @@ func forwardingManagerUsesExistingRuntimeStores() throws {
     #expect(source.contains("model.sshTunnelLastErrors"))
     #expect(!source.contains("ForwardingSessionManager"))
     #expect(!source.contains("Traffic: 24 MB"))
+}
+
+
+@Test("Forwarding Manager подтверждает Destination только по реальным событиям OpenSSH")
+func forwardingManagerUsesOpenSSHLogEvidenceForDestination() {
+    var rule = PortForwardRule(kind: .local)
+    rule.bindAddress = "127.0.0.1"
+    rule.sourcePort = 8_282
+    rule.destinationHost = "195.63.142.128"
+    rule.destinationPort = 2_553
+
+    let successful = """
+    debug1: Local forwarding listening on 127.0.0.1 port 8282.
+    debug1: Connection to port 8282 forwarding to 195.63.142.128 port 2553 requested.
+    debug1: channel 2: new [direct-tcpip]
+    """
+    let ok = ForwardingTunnelLogEvidence.parse(successful, rule: rule)
+    #expect(ok.listenerReady)
+    #expect(ok.trafficObserved)
+    #expect(ok.destinationReachable)
+    #expect(ok.destinationFailure == nil)
+
+    let failed = successful + "\nchannel 2: open failed: connect failed: Connection refused\n"
+    let broken = ForwardingTunnelLogEvidence.parse(failed, rule: rule)
+    #expect(broken.listenerReady)
+    #expect(broken.trafficObserved)
+    #expect(!broken.destinationReachable)
+    #expect(broken.destinationFailure?.contains("Connection refused") == true)
+}
+
+@Test("Forwarding route не обрезает host:port и показывает runtime evidence")
+func forwardingManagerRouteHasRoomForEndpointAndEvidence() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/ForwardingManager.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains(".frame(width: 138)"))
+    #expect(source.contains(".minimumScaleFactor(0.72)"))
+    #expect(source.contains("Destination станет зелёным после первого фактического подключения"))
+    #expect(source.contains("ForwardingTunnelLogEvidence.parse"))
+    #expect(source.contains("--- OpenSSH DEBUG1 ---"))
 }
