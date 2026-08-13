@@ -47,11 +47,11 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .midnight: "Midnight"
+        case .midnight: "Selective Dark"
         case .hackerGreen: "Hacker Green"
         case .solarizedDark: "Solarized Dark"
         case .dracula: "Dracula"
-        case .light: "Light"
+        case .light: "Selective Light"
         case .tokyoNight: "Tokyo Night"
         case .nord: "Nord"
         case .oneDark: "One Dark"
@@ -601,7 +601,7 @@ struct TerminalAppearanceView: View {
                     )
                 ) {
                     ForEach(TerminalThemePreset.allCases) { preset in
-                        Text(preset.title).tag(preset)
+                        Text(LocalizedStringKey(preset.title)).tag(preset)
                     }
                 }
 
@@ -633,7 +633,7 @@ struct TerminalAppearanceView: View {
 
                 Picker("Курсор", selection: $store.cursorStyle) {
                     ForEach(TerminalCursorStyle.allCases) { style in
-                        Text(style.title).tag(style)
+                        Text(LocalizedStringKey(style.title)).tag(style)
                     }
                 }
                 Toggle("Мигающий курсор", isOn: $store.cursorBlink)

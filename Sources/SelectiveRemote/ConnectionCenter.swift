@@ -222,6 +222,7 @@ private enum ConnectionCenterTypeFilter: String, CaseIterable, Identifiable {
 
 struct ConnectionCenterView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpen: (ConnectionCenterSource) -> Void
     let onReconnect: (ConnectionCenterSource) -> Void
     let onDisconnect: (ConnectionCenterSource) -> Void
@@ -255,6 +256,9 @@ struct ConnectionCenterView: View {
                     now: timeline.date
                 )
                 .frame(width: 340)
+                .id(selectedItemID)
+                .transition(.opacity)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             }
             .onAppear {
                 normalizeSelection(items: items)
@@ -385,7 +389,7 @@ struct ConnectionCenterView: View {
 
             Picker("Тип", selection: $filter) {
                 ForEach(ConnectionCenterTypeFilter.allCases) { option in
-                    Text(option.rawValue).tag(option)
+                    Text(LocalizedStringKey(option.rawValue)).tag(option)
                 }
             }
             .labelsHidden()
@@ -401,7 +405,7 @@ struct ConnectionCenterView: View {
                         Image(systemName: item.kind.systemImage)
                             .foregroundStyle(kindColor(item.kind))
                             .frame(width: 18)
-                        Text(item.kind.title)
+                        Text(LocalizedStringKey(item.kind.title))
                             .lineLimit(1)
                     }
                 }
@@ -460,7 +464,7 @@ struct ConnectionCenterView: View {
                         Circle()
                             .fill(item.state.color)
                             .frame(width: 7, height: 7)
-                        Text(item.state.title)
+                        Text(LocalizedStringKey(item.state.title))
                             .lineLimit(1)
                     }
                 }
@@ -561,7 +565,7 @@ struct ConnectionCenterView: View {
                                 Circle()
                                     .fill(item.state.color)
                                     .frame(width: 7, height: 7)
-                                Text(item.state.title)
+                                Text(LocalizedStringKey(item.state.title))
                                     .font(.caption)
                                 if item.startedAt != nil {
                                     Text("·")

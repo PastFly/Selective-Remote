@@ -303,6 +303,7 @@ private struct ForwardingConnectionRequest: Identifiable {
 
 struct ForwardingManagerView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpenTerminal: (TerminalTabConnection) -> Void
     let onOpenProfile: (UUID) -> Void
 
@@ -341,6 +342,9 @@ struct ForwardingManagerView: View {
 
                 inspector(item: selectedItem(from: items), now: timeline.date)
                     .frame(minWidth: 380, idealWidth: 430, maxWidth: 500)
+                    .id(selectedItemID)
+                    .transition(.opacity)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             }
             .onAppear {
                 normalizeSelection(items: items)
@@ -408,7 +412,7 @@ struct ForwardingManagerView: View {
                                         inspectorTab = .overview
                                     }
                                 } label: {
-                                    Label(kind.title, systemImage: kind.systemImage)
+                                    Label(LocalizedStringKey(kind.title), systemImage: kind.systemImage)
                                 }
                             }
                         }
@@ -427,7 +431,7 @@ struct ForwardingManagerView: View {
                             inspectorTab = .overview
                         }
                     } label: {
-                        Label(kind.title, systemImage: kind.systemImage)
+                        Label(LocalizedStringKey(kind.title), systemImage: kind.systemImage)
                     }
                 }
             }
@@ -599,7 +603,7 @@ struct ForwardingManagerView: View {
 
             Picker("Фильтр", selection: $filter) {
                 ForEach(ForwardingManagerFilter.allCases) { option in
-                    Text(option.rawValue).tag(option)
+                    Text(LocalizedStringKey(option.rawValue)).tag(option)
                 }
             }
             .labelsHidden()
@@ -617,7 +621,7 @@ struct ForwardingManagerView: View {
                         Circle()
                             .fill(item.state.color)
                             .frame(width: 7, height: 7)
-                        Text(item.state.title)
+                        Text(LocalizedStringKey(item.state.title))
                             .lineLimit(1)
                     }
                 }
@@ -639,7 +643,7 @@ struct ForwardingManagerView: View {
 
             TableColumn("Тип") { item in
                 tunnelCell(item) {
-                    Text(item.ownership.title)
+                    Text(LocalizedStringKey(item.ownership.title))
                         .font(.caption.weight(.medium))
                         .foregroundStyle(item.ownership.color)
                         .padding(.horizontal, 7)
@@ -812,7 +816,7 @@ struct ForwardingManagerView: View {
 
                 Picker("Инспектор", selection: $inspectorTab) {
                     ForEach(ForwardingInspectorTab.allCases) { tab in
-                        Text(tab.rawValue).tag(tab)
+                        Text(LocalizedStringKey(tab.rawValue)).tag(tab)
                     }
                 }
                 .pickerStyle(.segmented)
@@ -858,7 +862,7 @@ struct ForwardingManagerView: View {
                     .lineLimit(2)
                 HStack(spacing: 6) {
                     Circle().fill(item.state.color).frame(width: 7, height: 7)
-                    Text(item.state.title)
+                    Text(LocalizedStringKey(item.state.title))
                     if item.startedAt != nil {
                         Text("·").foregroundStyle(.tertiary)
                         Text(item.uptimeText(now: now)).monospacedDigit()
@@ -868,7 +872,7 @@ struct ForwardingManagerView: View {
                 .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
-            Text(item.ownership.title)
+            Text(LocalizedStringKey(item.ownership.title))
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(item.ownership.color)
                 .padding(.horizontal, 8)
@@ -920,7 +924,7 @@ struct ForwardingManagerView: View {
                 .disabled(!item.state.canEdit)
 
                 HStack {
-                    Text(item.rule.kind == .remote ? "Remote bind" : "Local bind")
+                    Text(LocalizedStringKey(item.rule.kind == .remote ? "Remote bind" : "Local bind"))
                         .foregroundStyle(.secondary)
                         .frame(width: 92, alignment: .leading)
                     TextField("127.0.0.1", text: binding.bindAddress)
@@ -1131,30 +1135,66 @@ struct ForwardingManagerView: View {
     private func routeDiagram(_ item: ForwardingManagerItem) -> some View {
         let steps = routeSteps(item)
         let evidence = runtimeEvidence(for: item)
-        return ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                    routeNode(step, state: nodeState(step.role, item: item, evidence: evidence))
-                    if index < steps.count - 1 {
-                        routeConnector(
-                            step.connectorAfter ?? "",
-                            active: item.state == .running
-                        )
-                    }
-                }
-            }
-            .padding(.vertical, 8)
+        return ViewThatFits(in: .horizontal) {
+            routeHorizontal(steps: steps, item: item, evidence: evidence)
+            routeVertical(steps: steps, item: item, evidence: evidence)
         }
-        .scrollIndicators(.hidden)
         .padding(12)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07))
         }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: item.state)
     }
 
-    private func routeNode(
+    private func routeHorizontal(
+        steps: [ForwardingRouteStep],
+        item: ForwardingManagerItem,
+        evidence: ForwardingTunnelLogEvidence
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                routeHorizontalNode(
+                    step,
+                    state: nodeState(step.role, item: item, evidence: evidence)
+                )
+                if index < steps.count - 1 {
+                    routeHorizontalConnector(
+                        step.connectorAfter ?? "",
+                        active: item.state == .running
+                    )
+                }
+            }
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .padding(.vertical, 8)
+    }
+
+    private func routeVertical(
+        steps: [ForwardingRouteStep],
+        item: ForwardingManagerItem,
+        evidence: ForwardingTunnelLogEvidence
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
+                routeVerticalNode(
+                    step,
+                    state: nodeState(step.role, item: item, evidence: evidence)
+                )
+                if index < steps.count - 1 {
+                    routeVerticalConnector(
+                        step.connectorAfter ?? "",
+                        active: item.state == .running
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+    }
+
+    private func routeHorizontalNode(
         _ step: ForwardingRouteStep,
         state: ForwardingRouteNodeState
     ) -> some View {
@@ -1170,19 +1210,47 @@ struct ForwardingManagerView: View {
                     .padding(5)
             }
             .frame(width: 72, height: 58)
-
-            Text(step.title)
+            Text(LocalizedStringKey(step.title))
                 .font(.caption.weight(.semibold))
-                .lineLimit(1)
             Text(step.detail)
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .minimumScaleFactor(0.72)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
                 .frame(maxWidth: .infinity)
         }
-        .frame(width: 138)
+        .frame(width: 150)
+    }
+
+    private func routeVerticalNode(
+        _ step: ForwardingRouteStep,
+        state: ForwardingRouteNodeState
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack(alignment: .topTrailing) {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(nodeColor(state).opacity(0.12))
+                Image(systemName: step.icon)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(nodeColor(state))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                nodeStateIcon(state)
+                    .padding(4)
+            }
+            .frame(width: 52, height: 46)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(LocalizedStringKey(step.title))
+                    .font(.caption.weight(.semibold))
+                Text(step.detail)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -1205,7 +1273,7 @@ struct ForwardingManagerView: View {
         }
     }
 
-    private func routeConnector(_ label: String, active: Bool) -> some View {
+    private func routeHorizontalConnector(_ label: String, active: Bool) -> some View {
         VStack(spacing: 5) {
             HStack(spacing: 2) {
                 Rectangle().frame(height: 1.5)
@@ -1213,7 +1281,7 @@ struct ForwardingManagerView: View {
                     .font(.caption2.bold())
             }
             .foregroundStyle(active ? Color.green : Color.secondary)
-            Text(label)
+            Text(LocalizedStringKey(label))
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -1222,6 +1290,18 @@ struct ForwardingManagerView: View {
         .padding(.top, 19)
     }
 
+    private func routeVerticalConnector(_ label: String, active: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.down")
+                .font(.caption.bold())
+                .foregroundStyle(active ? Color.green : Color.secondary)
+                .frame(width: 52)
+            Text(LocalizedStringKey(label))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 4)
+    }
     private func logInspector(item: ForwardingManagerItem) -> some View {
         VStack(spacing: 0) {
             HStack {
@@ -1309,7 +1389,7 @@ struct ForwardingManagerView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 11) {
-            Label(title, systemImage: systemImage)
+            Label(LocalizedStringKey(title), systemImage: systemImage)
                 .font(.subheadline.bold())
             content()
         }
@@ -1324,7 +1404,7 @@ struct ForwardingManagerView: View {
 
     private func detailRow(_ label: String, _ value: String) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(label)
+            Text(LocalizedStringKey(label))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(width: 92, alignment: .leading)

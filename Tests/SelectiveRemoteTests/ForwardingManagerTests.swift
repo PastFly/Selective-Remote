@@ -148,8 +148,8 @@ func forwardingManagerRouteHasRoomForEndpointAndEvidence() throws {
         encoding: .utf8
     )
 
-    #expect(source.contains(".frame(width: 138)"))
-    #expect(source.contains(".minimumScaleFactor(0.72)"))
+    #expect(source.contains("ViewThatFits(in: .horizontal)"))
+    #expect(source.contains(".fixedSize(horizontal: false, vertical: true)"))
     #expect(source.contains("Destination станет зелёным после первого фактического подключения"))
     #expect(source.contains("ForwardingTunnelLogEvidence.parse"))
     #expect(source.contains("--- OpenSSH DEBUG1 ---"))

@@ -4,6 +4,7 @@ import Combine
 import Darwin
 import Foundation
 import UniformTypeIdentifiers
+import UserNotifications
 
 private enum SelectiveRemoteAppError: LocalizedError {
     case rdpPasswordRequired
@@ -307,6 +308,27 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var availableUpdateURL: URL?
     @Published private(set) var availableReleaseNotesURL: URL?
+    @Published private(set) var availableUpdateManifest: SelectiveRemoteUpdateManifest?
+    @Published private(set) var isDownloadingUpdate = false
+    @Published private(set) var updateDownloadProgress = 0.0
+    @Published private(set) var downloadedUpdateDMGURL: URL?
+    @Published var updateInstallError: String?
+    @Published var automaticallyDownloadUpdates = UserDefaults.standard.bool(
+        forKey: "SelectiveRemote.update.autoDownload.v1"
+    ) {
+        didSet {
+            UserDefaults.standard.set(
+                automaticallyDownloadUpdates,
+                forKey: "SelectiveRemote.update.autoDownload.v1"
+            )
+            if automaticallyDownloadUpdates,
+               availableUpdateManifest != nil,
+               downloadedUpdateDMGURL == nil,
+               !isDownloadingUpdate {
+                downloadAvailableUpdate()
+            }
+        }
+    }
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
@@ -347,6 +369,9 @@ final class AppModel: NSObject, ObservableObject {
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
     private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
+    private let lastNotifiedUpdateVersionKey = "SelectiveRemote.update.lastNotifiedVersion.v1"
+    private let lastNotifiedUpdateDateKey = "SelectiveRemote.update.lastNotifiedDate.v1"
+    private let lastSeenUpdateVersionKey = "SelectiveRemote.update.lastSeenVersion.v1"
     private let independentPortForwardsKey = "SelectiveRemote.independentPortForwards.v1"
     private static let globalTerminalWorkspaceID = UUID(
         uuidString: "72A7656C-289F-4E2D-9775-8AC0C24EFD55"
@@ -374,6 +399,7 @@ final class AppModel: NSObject, ObservableObject {
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
     private var displayRefreshTask: Task<Void, Never>?
+    private var updateCheckTask: Task<Void, Never>?
     private var sleepInterruptedProfileIDs: Set<UUID> = []
     private var sleepInterruptedTerminalTabIDs: Set<UUID> = []
     private var sleepInterruptedTunnelIDs: Set<UUID> = []
@@ -463,9 +489,19 @@ final class AppModel: NSObject, ObservableObject {
         refreshDisplays(configureEmptyProfile: true)
         refreshCameras(announce: false)
         installNotifications()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
-            self?.checkForUpdatesAutomatically()
+        updateCheckTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(3))
+            guard let self, !Task.isCancelled else { return }
+            self.checkForUpdates(announcesUpToDate: false)
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(18_000))
+                } catch {
+                    return
+                }
+                guard !Task.isCancelled else { return }
+                self.checkForUpdatesAutomatically()
+            }
         }
     }
 
@@ -3560,17 +3596,17 @@ final class AppModel: NSObject, ObservableObject {
 
     private func checkForUpdatesAutomatically() {
         let lastCheck = UserDefaults.standard.double(forKey: lastSuccessfulUpdateCheckKey)
-        let day: TimeInterval = 24 * 60 * 60
-        guard Date().timeIntervalSince1970 - lastCheck >= day else { return }
+        let interval: TimeInterval = 5 * 60 * 60
+        guard Date().timeIntervalSince1970 - lastCheck >= interval else { return }
         checkForUpdates(announcesUpToDate: false)
     }
 
     private func checkForUpdates(announcesUpToDate: Bool) {
         guard !isCheckingForUpdates else { return }
         isCheckingForUpdates = true
-        updateMessage = nil
-        availableUpdateURL = nil
-        availableReleaseNotesURL = nil
+        if announcesUpToDate {
+            updateMessage = nil
+        }
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isCheckingForUpdates = false }
@@ -3590,35 +3626,145 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 switch result {
                 case .upToDate:
+                    availableUpdateManifest = nil
+                    availableUpdateURL = nil
+                    availableReleaseNotesURL = nil
+                    downloadedUpdateDMGURL = nil
+                    updateInstallError = nil
                     if announcesUpToDate {
-                        updateMessage = "Установлена актуальная версия \(AppBrand.name) \(version)."
+                        updateMessage = UpdateLocalization.text(ru: "Установлена актуальная версия \(AppBrand.name) \(version).", en: "The current version \(AppBrand.name) \(version) is installed.")
                     }
                 case let .available(manifest):
+                    let versionChanged = availableUpdateManifest?.version != manifest.version
+                    availableUpdateManifest = manifest
                     availableUpdateURL = manifest.downloadURL
                     availableReleaseNotesURL = manifest.releaseNotesURL
-                    updateMessage = "Доступна новая версия \(AppBrand.name) \(manifest.version)."
+                    if versionChanged {
+                        downloadedUpdateDMGURL = nil
+                        updateInstallError = nil
+                        updateDownloadProgress = 0
+                    }
+                    if announcesUpToDate {
+                        updateMessage = UpdateLocalization.text(ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).", en: "A new version \(AppBrand.name) \(manifest.version) is available.")
+                    }
+                    notifyUpdateIfNeeded(manifest)
+                    if automaticallyDownloadUpdates && downloadedUpdateDMGURL == nil {
+                        downloadAvailableUpdate()
+                    }
                 case let .incompatible(manifest):
+                    availableUpdateManifest = nil
+                    availableUpdateURL = nil
                     availableReleaseNotesURL = manifest.releaseNotesURL
-                    let minimum = manifest.minimumMacOS ?? "более новая версия macOS"
-                    updateMessage = "Доступна \(AppBrand.name) \(manifest.version), "
-                        + "но для неё требуется macOS \(minimum) или новее."
+                    let minimum = manifest.minimumMacOS
+                        ?? UpdateLocalization.text(ru: "более новая версия macOS", en: "a newer version of macOS")
+                    if announcesUpToDate {
+                        updateMessage = UpdateLocalization.text(
+                            ru: "Доступна \(AppBrand.name) \(manifest.version), но для неё требуется macOS \(minimum) или новее.",
+                            en: "\(AppBrand.name) \(manifest.version) is available, but it requires macOS \(minimum) or later."
+                        )
+                    }
                 }
             } catch {
                 if announcesUpToDate {
-                    updateMessage = "Не удалось проверить обновления: \(error.localizedDescription)"
+                    updateMessage = UpdateLocalization.text(ru: "Не удалось проверить обновления: \(error.localizedDescription)", en: "Unable to check for updates: \(error.localizedDescription)")
                 }
             }
         }
     }
 
     func openAvailableUpdate() {
-        guard let availableUpdateURL else { return }
-        NSWorkspace.shared.open(availableUpdateURL)
+        downloadAvailableUpdate()
+    }
+
+    func downloadAvailableUpdate() {
+        guard let manifest = availableUpdateManifest,
+              !isDownloadingUpdate else { return }
+        isDownloadingUpdate = true
+        updateDownloadProgress = 0
+        updateInstallError = nil
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.isDownloadingUpdate = false }
+            do {
+                self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
+                    from: manifest.downloadURL
+                ) { [weak self] value in
+                    self?.updateDownloadProgress = value
+                }
+            } catch {
+                self.updateInstallError = error.localizedDescription
+            }
+        }
+    }
+
+    func installDownloadedUpdateAndRestart() {
+        guard let downloadedUpdateDMGURL else { return }
+        updateInstallError = nil
+        do {
+            let mounted = try UpdateInstaller.mountValidatedDMG(downloadedUpdateDMGURL)
+            try UpdateInstaller.installAndRestart(mounted)
+        } catch {
+            updateInstallError = error.localizedDescription
+        }
+    }
+
+    func revealDownloadedUpdate() {
+        guard let downloadedUpdateDMGURL else { return }
+        UpdateInstaller.revealDMG(downloadedUpdateDMGURL)
     }
 
     func openAvailableReleaseNotes() {
         guard let availableReleaseNotesURL else { return }
         NSWorkspace.shared.open(availableReleaseNotesURL)
+    }
+
+    func markAvailableUpdateSeen() {
+        guard let version = availableUpdateManifest?.version else { return }
+        UserDefaults.standard.set(version, forKey: lastSeenUpdateVersionKey)
+    }
+
+    private func notifyUpdateIfNeeded(_ manifest: SelectiveRemoteUpdateManifest) {
+        let defaults = UserDefaults.standard
+        let lastVersion = defaults.string(forKey: lastNotifiedUpdateVersionKey)
+        let lastTimestamp = defaults.double(forKey: lastNotifiedUpdateDateKey)
+        let lastDate = lastTimestamp > 0 ? Date(timeIntervalSince1970: lastTimestamp) : nil
+        let now = Date()
+        let seenVersion = defaults.string(forKey: lastSeenUpdateVersionKey)
+        guard UpdateNotificationPolicy.shouldNotify(
+            version: manifest.version,
+            seenVersion: seenVersion,
+            lastVersion: lastVersion,
+            lastDate: lastDate,
+            now: now
+        ) else { return }
+
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let center = UNUserNotificationCenter.current()
+            do {
+                let settings = await center.notificationSettings()
+                var allowed = settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional
+                if settings.authorizationStatus == .notDetermined {
+                    allowed = try await center.requestAuthorization(options: [.alert, .sound])
+                }
+                guard allowed else { return }
+                let content = UNMutableNotificationContent()
+                content.title = AppBrand.name
+                content.body = UpdateLocalization.text(ru: "Доступно обновление \(manifest.version)", en: "Update \(manifest.version) is available")
+                content.sound = .default
+                let request = UNNotificationRequest(
+                    identifier: "selective-remote-update-\(manifest.version)",
+                    content: content,
+                    trigger: nil
+                )
+                try await center.add(request)
+                UserDefaults.standard.set(manifest.version, forKey: self.lastNotifiedUpdateVersionKey)
+                UserDefaults.standard.set(now.timeIntervalSince1970, forKey: self.lastNotifiedUpdateDateKey)
+            } catch {
+                // Notifications are optional; update discovery must remain usable without permission.
+            }
+        }
     }
 
     private func connectProfile(
@@ -4697,6 +4843,8 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     @objc private func applicationWillTerminate() {
+        updateCheckTask?.cancel()
+        updateCheckTask = nil
         profileSaveTask?.cancel()
         profileSaveTask = nil
         saveProfiles()

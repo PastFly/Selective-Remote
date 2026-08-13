@@ -56,6 +56,7 @@ struct ContentView: View {
     )!
 
     @EnvironmentObject private var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
     @State private var selectedTab = ProfileTab.general
@@ -67,6 +68,7 @@ struct ContentView: View {
     @State private var showsSSHKeyGenerator = false
     @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
+    @State private var showsUpdatePopover = false
     @State private var showsGlobalSFTPConnectionEditor = false
     @State private var globalSFTPConnection: TerminalTabConnection?
 
@@ -115,7 +117,10 @@ struct ContentView: View {
             AppWindowBackdrop(appearance: appAppearance.snapshot)
                 .ignoresSafeArea()
         }
-        .tint(Color(red: 0.10, green: 0.52, blue: 0.72))
+        .preferredColorScheme(appAppearance.theme.colorScheme)
+        .dynamicTypeSize(appAppearance.textSize.dynamicTypeSize)
+        .controlSize(appAppearance.density.controlSize)
+        .tint(.accentColor)
         .alert("Ошибка", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -273,6 +278,33 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if let manifest = model.availableUpdateManifest {
+                    Button {
+                        showsUpdatePopover.toggle()
+                    } label: {
+                        Label {
+                            HStack(spacing: 4) {
+                                Text("Обновление")
+                                Text(manifest.version).monospacedDigit()
+                            }
+                        } icon: {
+                            Image(systemName: "arrow.down.circle.fill")
+                        }
+                        .font(.caption.bold())
+                        .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.borderless)
+                    .focusable(false)
+                    .help("Доступно обновление \(manifest.version)")
+                    .popover(isPresented: $showsUpdatePopover, arrowEdge: .top) {
+                        UpdateExperiencePopover(model: model)
+                    }
+                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                    .animation(
+                        reduceMotion ? nil : .easeInOut(duration: 0.2),
+                        value: manifest.version
+                    )
+                }
                 Button {
                     showsAppearanceSettings.toggle()
                 } label: {
@@ -522,7 +554,7 @@ struct ContentView: View {
                 Menu {
                     Picker("Сортировка", selection: $model.profileSortMode) {
                         ForEach(ProfileSortMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                            Text(LocalizedStringKey(mode.title)).tag(mode)
                         }
                     }
                 } label: {
@@ -1295,7 +1327,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                     Picker("Способ входа", selection: profileBinding.sshAuthenticationMode) {
                         ForEach(SSHAuthenticationMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                            Label(LocalizedStringKey(mode.title), systemImage: mode.systemImage).tag(mode)
                         }
                     }
                     .labelsHidden()
@@ -1533,7 +1565,7 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
                 Picker("Proxy", selection: profileBinding.sshProxyMode) {
-                    ForEach(SSHProxyMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    ForEach(SSHProxyMode.allCases) { mode in Text(LocalizedStringKey(mode.title)).tag(mode) }
                 }
                 .pickerStyle(.segmented)
                 .disabled(profileBinding.wrappedValue.sshJumpHostProfileID != nil)
@@ -1711,7 +1743,7 @@ struct ContentView: View {
                             )
                         ) {
                             ForEach(DisplayLayoutMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
+                                Text(LocalizedStringKey(mode.title)).tag(mode)
                             }
                         }
                         .pickerStyle(.segmented)
@@ -1786,7 +1818,7 @@ struct ContentView: View {
                     .frame(maxWidth: 380)
                     Picker("Режим окна", selection: rdpWindowModeBinding) {
                         ForEach(RDPWindowMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                            Text(LocalizedStringKey(mode.title)).tag(mode)
                         }
                     }
                     .pickerStyle(.segmented)
@@ -1885,7 +1917,7 @@ struct ContentView: View {
             GroupBox("Звук") {
                 Picker("Воспроизводить звук", selection: profileBinding.audioMode) {
                     ForEach(AudioMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+                        Text(LocalizedStringKey(mode.title)).tag(mode)
                     }
                 }
                 .pickerStyle(.radioGroup)
@@ -1896,7 +1928,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Picker("Направление", selection: profileBinding.clipboardMode) {
                         ForEach(ClipboardMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
+                            Text(LocalizedStringKey(mode.title)).tag(mode)
                         }
                     }
                     .pickerStyle(.radioGroup)

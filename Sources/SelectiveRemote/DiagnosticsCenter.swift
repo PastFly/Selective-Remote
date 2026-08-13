@@ -434,10 +434,43 @@ private extension String {
 
 struct DiagnosticsCenterView: View {
     @ObservedObject var model: AppModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private enum Pane: String, CaseIterable, Identifiable {
+        case overview
+        case connections
+        case rdp
+        case ssh
+        case sftp
+        case forwarding
+        case errors
+        case environment
+        case raw
+
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .overview: "Общее"
+            case .connections: "Подключения"
+            case .rdp: "RDP"
+            case .ssh: "SSH / Terminal"
+            case .sftp: "SFTP"
+            case .forwarding: "Forwarding"
+            case .errors: "Ошибки"
+            case .environment: "Environment"
+            case .raw: "Raw Report"
+            }
+        }
+    }
 
     @State private var generatedAt = Date()
     @State private var exportError: String?
+    @State private var selectedPane: Pane = .overview
+    @State private var searchText = ""
 
+    private var snapshot: ConnectionCenterSnapshot {
+        model.connectionCenterSnapshot(now: generatedAt)
+    }
     private var report: DiagnosticsReport {
         DiagnosticsReportBuilder.build(
             appVersion: AppBuildInfo.version,
@@ -445,7 +478,7 @@ struct DiagnosticsCenterView: View {
             architecture: DiagnosticsSystemInfo.architecture,
             profiles: model.profiles,
             sshKeys: model.sshKeys,
-            runtimeItems: model.connectionCenterSnapshot(now: generatedAt).items,
+            runtimeItems: snapshot.items,
             currentError: model.errorMessage,
             forwardingErrors: model.sshTunnelLastErrors,
             generatedAt: generatedAt
@@ -453,11 +486,22 @@ struct DiagnosticsCenterView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             header
             summary
-            safetyBanner
-            reportPreview
+            toolbar
+            if selectedPane == .raw {
+                rawReport
+            } else {
+                ScrollView {
+                    selectedPaneContent
+                        .id(selectedPane)
+                        .transition(.opacity)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(.bottom, 18)
+                }
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedPane)
+            }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -476,7 +520,7 @@ struct DiagnosticsCenterView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Центр диагностики")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
-                Text("Один безопасный отчёт по конфигурации и реальному runtime приложения")
+                Text("Структурированное представление безопасного runtime-отчёта")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -496,55 +540,39 @@ struct DiagnosticsCenterView: View {
 
     private var summary: some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 170), spacing: 12)],
+            columns: [GridItem(.adaptive(minimum: 165), spacing: 12)],
             alignment: .leading,
             spacing: 12
         ) {
+            summaryCard("Version", AppBuildInfo.displayText, "app.badge", .blue)
+            summaryCard("macOS", shortMacOSVersion, "macbook", .secondary)
+            summaryCard("Runtime", "\(report.runtimeCount)", "point.3.connected.trianglepath.dotted", .green)
             summaryCard(
-                title: "Selective Remote",
-                value: AppBuildInfo.displayText,
-                systemImage: "app.badge",
-                color: .blue
-            )
-            summaryCard(
-                title: "macOS",
-                value: shortMacOSVersion,
-                systemImage: "macbook",
-                color: .secondary
-            )
-            summaryCard(
-                title: "Runtime",
-                value: "\(report.runtimeCount)",
-                systemImage: "point.3.connected.trianglepath.dotted",
-                color: .green
-            )
-            summaryCard(
-                title: "Проблемы",
-                value: "\(report.problemCount)",
-                systemImage: "exclamationmark.triangle.fill",
-                color: report.problemCount == 0 ? .secondary : .red
+                "Problems",
+                "\(report.problemCount)",
+                "exclamationmark.triangle.fill",
+                report.problemCount == 0 ? .secondary : .red
             )
         }
     }
 
     private func summaryCard(
-        title: String,
-        value: String,
-        systemImage: String,
-        color: Color
+        _ title: String,
+        _ value: String,
+        _ systemImage: String,
+        _ color: Color
     ) -> some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 11) {
             ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(color.opacity(0.13))
                 Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(color)
             }
-            .frame(width: 40, height: 40)
-
+            .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title)
+                Text(LocalizedStringKey(title))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(value)
@@ -553,11 +581,72 @@ struct DiagnosticsCenterView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(13)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07))
+        }
+    }
+
+    private var toolbar: some View {
+        HStack(spacing: 10) {
+            Picker("Раздел", selection: $selectedPane) {
+                ForEach(Pane.allCases) { pane in
+                    Text(LocalizedStringKey(pane.title)).tag(pane)
+                }
+            }
+            .frame(width: 180)
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Поиск в диагностике", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(minWidth: 220, maxWidth: 420, minHeight: 34)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+            Spacer()
+            Text("\(visibleRuntimeItems.count) runtime")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var selectedPaneContent: some View {
+        switch selectedPane {
+        case .overview:
+            VStack(alignment: .leading, spacing: 14) {
+                safetyBanner
+                overviewCounts
+                if report.problemCount > 0 {
+                    problemList
+                } else {
+                    ContentUnavailableView(
+                        "Проблем не обнаружено",
+                        systemImage: "checkmark.circle",
+                        description: Text("Runtime не сообщает ошибок или reconnect-состояний.")
+                    )
+                }
+            }
+        case .connections, .rdp, .ssh, .sftp, .forwarding:
+            runtimeList
+        case .errors:
+            problemList
+        case .environment:
+            environmentView
+        case .raw:
+            EmptyView()
         }
     }
 
@@ -569,7 +658,7 @@ struct DiagnosticsCenterView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Безопасный диагностический отчёт")
                     .font(.headline)
-                Text("Пароли, passphrase, значения Keychain и proxy secrets не читаются и не экспортируются. SSH-ключи и сертификаты указываются только по имени файла.")
+                Text("Пароли, passphrase, значения Keychain, proxy secrets и содержимое private keys не читаются. SSH key / CertificateFile показываются только по basename.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -577,23 +666,218 @@ struct DiagnosticsCenterView: View {
         }
         .padding(14)
         .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.green.opacity(0.2))
+    }
+
+    private var overviewCounts: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 180), spacing: 10)], spacing: 10) {
+            compactCount("RDP", snapshot.rdpCount, "desktopcomputer")
+            compactCount("SSH / Terminal", snapshot.terminalCount, "terminal")
+            compactCount("SFTP", snapshot.sftpCount, "folder")
+            compactCount("Forwarding", snapshot.tunnelCount, "arrow.left.arrow.right")
         }
     }
 
-    private var reportPreview: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Предпросмотр отчёта")
-                    .font(.headline)
+    private func compactCount(_ title: String, _ value: Int, _ icon: String) -> some View {
+        HStack {
+            Label {
+                Text(LocalizedStringKey(title))
+            } icon: {
+                Image(systemName: icon)
+            }
+            Spacer()
+            Text("\(value)")
+                .font(.headline.monospacedDigit())
+        }
+        .padding(12)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var runtimeList: some View {
+        LazyVStack(alignment: .leading, spacing: 12) {
+            if visibleRuntimeItems.isEmpty {
+                ContentUnavailableView(
+                    "Нет подходящих runtime-подключений",
+                    systemImage: "line.3.horizontal.decrease.circle"
+                )
+            } else {
+                ForEach(visibleRuntimeItems) { item in
+                    runtimeCard(item)
+                }
+            }
+        }
+    }
+
+    private func runtimeCard(_ item: ConnectionCenterItem) -> some View {
+        VStack(alignment: .leading, spacing: 11) {
+            HStack(alignment: .top, spacing: 11) {
+                Image(systemName: item.kind.systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(item.state.color.opacity(0.11), in: RoundedRectangle(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.profileName)
+                        .font(.headline)
+                    Text(targetText(item))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
                 Spacer()
-                Text("\(report.profileCount) профилей · \(report.runtimeCount) runtime")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(item.state.color)
+                        .frame(width: 7, height: 7)
+                    Text(LocalizedStringKey(item.state.title))
+                    if item.startedAt != nil {
+                        Text("· \(item.uptimeText(now: generatedAt))")
+                            .monospacedDigit()
+                    }
+                }
+                .font(.caption)
             }
 
+            HStack(spacing: 14) {
+                diagnosticFact("Type", item.kind.title)
+                diagnosticFact("Auth", safeValue(label: "Auth", value: item.authentication))
+                if let route = item.route, !route.isEmpty {
+                    diagnosticFact("Route", safeValue(label: "Route", value: route))
+                }
+            }
+
+            if let error = item.errorMessage, !error.isEmpty {
+                Label(DiagnosticRedactor.sanitize(error), systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+            }
+
+            DisclosureGroup("Details") {
+                VStack(alignment: .leading, spacing: 9) {
+                    ForEach(item.detailSections) { section in
+                        let rows = safeRows(section.rows)
+                        if !rows.isEmpty {
+                            Text(LocalizedStringKey(section.title))
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            ForEach(rows) { row in
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text(LocalizedStringKey(row.label))
+                                        .foregroundStyle(.secondary)
+                                        .frame(width: 130, alignment: .leading)
+                                    Text(safeValue(label: row.label, value: row.value))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .font(.caption)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 6)
+            }
+
+            HStack {
+                Spacer()
+                Button("Copy section", systemImage: "doc.on.doc") {
+                    copyRuntimeItem(item)
+                }
+                .controlSize(.small)
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
+        }
+    }
+
+    private func diagnosticFact(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(LocalizedStringKey(label))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .font(.caption)
+                .lineLimit(2)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var problemList: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Ошибки и предупреждения")
+                .font(.headline)
+            if let error = model.errorMessage, !error.isEmpty, matchesSearch(error) {
+                problemRow("Application", DiagnosticRedactor.sanitize(error))
+            }
+            ForEach(model.sshTunnelLastErrors.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
+                if let value = model.sshTunnelLastErrors[id], matchesSearch(value) {
+                    problemRow("Forwarding", DiagnosticRedactor.sanitize(value))
+                }
+            }
+            ForEach(snapshot.items.filter { $0.state.isProblem && matchesRuntimeSearch($0) }) { item in
+                problemRow(item.profileName, item.errorMessage.map(DiagnosticRedactor.sanitize) ?? item.state.title)
+            }
+            if report.problemCount == 0 && model.errorMessage == nil && model.sshTunnelLastErrors.isEmpty {
+                Text("Нет активных проблем")
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func problemRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.bold())
+                Text(value)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(11)
+        .background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 11))
+    }
+
+    private var environmentView: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Environment")
+                .font(.headline)
+            diagnosticEnvironmentRow("Version", AppBuildInfo.displayText)
+            diagnosticEnvironmentRow("macOS", DiagnosticsSystemInfo.macOSVersion)
+            diagnosticEnvironmentRow("Architecture", DiagnosticsSystemInfo.architecture)
+            diagnosticEnvironmentRow("Profiles", "\(report.profileCount)")
+            diagnosticEnvironmentRow("Runtime", "\(report.runtimeCount)")
+            Text("Переменные окружения и секреты здесь намеренно не отображаются.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private func diagnosticEnvironmentRow(_ label: String, _ value: String) -> some View {
+        LabeledContent {
+            Text(DiagnosticRedactor.sanitize(value))
+                .textSelection(.enabled)
+        } label: {
+            Text(LocalizedStringKey(label))
+        }
+    }
+
+    private var rawReport: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Raw Report")
+                    .font(.headline)
+                Spacer()
+                Text("safe text")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             ScrollView([.vertical, .horizontal]) {
                 Text(report.text)
                     .font(.system(size: 12, design: .monospaced))
@@ -603,12 +887,96 @@ struct DiagnosticsCenterView: View {
             }
             .background(Color(nsColor: .textBackgroundColor).opacity(0.72))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
-            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var visibleRuntimeItems: [ConnectionCenterItem] {
+        snapshot.items.filter { item in
+            paneMatches(item) && matchesRuntimeSearch(item)
+        }
+    }
+
+    private func paneMatches(_ item: ConnectionCenterItem) -> Bool {
+        switch selectedPane {
+        case .overview, .connections: true
+        case .rdp: item.kind == .rdp
+        case .ssh: item.kind == .terminal
+        case .sftp: item.kind == .sftp
+        case .forwarding: item.kind == .forwarding
+        case .errors: item.state.isProblem
+        case .environment, .raw: false
+        }
+    }
+
+    private func matchesRuntimeSearch(_ item: ConnectionCenterItem) -> Bool {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        let values = [
+            item.kind.title,
+            item.profileName,
+            item.userHost,
+            item.route ?? "",
+            item.authentication,
+            item.state.title,
+            item.errorMessage ?? ""
+        ]
+        return values.contains(where: matchesSearch)
+    }
+
+    private func matchesSearch(_ value: String) -> Bool {
+        guard !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return true }
+        return value.localizedCaseInsensitiveContains(searchText)
+    }
+
+    private func targetText(_ item: ConnectionCenterItem) -> String {
+        guard let port = item.port else { return item.userHost }
+        return "\(item.userHost):\(port)"
+    }
+
+    private func safeRows(_ rows: [ConnectionCenterDetailRow]) -> [ConnectionCenterDetailRow] {
+        rows.filter { !isSensitiveLabel($0.label) }
+    }
+
+    private func isSensitiveLabel(_ label: String) -> Bool {
+        let lower = label.lowercased()
+        return ["password", "passphrase", "keychain value", "proxy secret", "private key contents"]
+            .contains(where: lower.contains)
+    }
+
+    private func safeValue(label: String, value: String) -> String {
+        var safe = DiagnosticRedactor.sanitize(value)
+        let lower = label.lowercased()
+        if lower.contains("identity") || lower.contains("ssh key") || lower.contains("certificate") || lower.contains("certificatefile") {
+            if safe.contains("/") {
+                safe = URL(fileURLWithPath: safe).lastPathComponent
+            }
+        }
+        return safe
+    }
+
+    private func copyRuntimeItem(_ item: ConnectionCenterItem) {
+        var lines = [
+            "Type: \(item.kind.title)",
+            "Profile: \(DiagnosticRedactor.sanitize(item.profileName))",
+            "Target: \(DiagnosticRedactor.sanitize(targetText(item)))",
+            "State: \(item.state.title)",
+            "Auth: \(safeValue(label: "Auth", value: item.authentication))"
+        ]
+        if let route = item.route, !route.isEmpty {
+            lines.append("Route: \(safeValue(label: "Route", value: route))")
+        }
+        for section in item.detailSections {
+            let rows = safeRows(section.rows)
+            guard !rows.isEmpty else { continue }
+            lines.append("")
+            lines.append("[\(section.title)]")
+            for row in rows {
+                lines.append("\(row.label): \(safeValue(label: row.label, value: row.value))")
+            }
+        }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(lines.joined(separator: "\n"), forType: .string)
     }
 
     private var shortMacOSVersion: String {
