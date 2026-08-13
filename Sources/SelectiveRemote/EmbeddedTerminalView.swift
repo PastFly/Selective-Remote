@@ -1444,7 +1444,8 @@ struct SSHTerminalView: View {
         TerminalWorkspaceSessionState.resolve(
             phase: tab.session.phase,
             isReconnecting: reconnectingTabIDs.contains(tab.id)
-                || tab.session.reconnectProgress != nil
+                || tab.session.reconnectProgress != nil,
+            terminationRequested: tab.session.lastTerminationWasRequested
         )
     }
 

@@ -545,64 +545,78 @@ struct ForwardingManagerView: View {
     private func tunnelTable(items: [ForwardingManagerItem], now: Date) -> some View {
         Table(items, selection: $selectedItemID) {
             TableColumn("Состояние") { item in
-                HStack(spacing: 7) {
-                    Circle()
-                        .fill(item.state.color)
-                        .frame(width: 7, height: 7)
-                    Text(item.state.title)
-                        .lineLimit(1)
+                tunnelCell(item) {
+                    HStack(spacing: 7) {
+                        Circle()
+                            .fill(item.state.color)
+                            .frame(width: 7, height: 7)
+                        Text(item.state.title)
+                            .lineLimit(1)
+                    }
                 }
             }
             .width(min: 100, ideal: 118)
 
             TableColumn("Имя") { item in
-                HStack(spacing: 6) {
-                    Image(systemName: item.rule.kind.systemImage)
-                        .foregroundStyle(item.ownership.color)
-                    Text(item.rule.name)
-                        .lineLimit(1)
-                        .help(item.rule.name)
+                tunnelCell(item) {
+                    HStack(spacing: 6) {
+                        Image(systemName: item.rule.kind.systemImage)
+                            .foregroundStyle(item.ownership.color)
+                        Text(item.rule.name)
+                            .lineLimit(1)
+                            .help(item.rule.name)
+                    }
                 }
             }
             .width(min: 130, ideal: 180)
 
             TableColumn("Тип") { item in
-                Text(item.ownership.title)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(item.ownership.color)
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 2)
-                    .background(item.ownership.color.opacity(0.10), in: Capsule())
+                tunnelCell(item) {
+                    Text(item.ownership.title)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(item.ownership.color)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(item.ownership.color.opacity(0.10), in: Capsule())
+                }
             }
             .width(min: 92, ideal: 105)
 
             TableColumn("Локальный адрес") { item in
-                Text(item.localAddress)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
+                tunnelCell(item) {
+                    Text(item.localAddress)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                }
             }
             .width(min: 125, ideal: 150)
 
             TableColumn("Назначение") { item in
-                Text(item.destination)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(item.rule.kind == .dynamic ? Color.secondary : Color.primary)
-                    .lineLimit(1)
-                    .help(item.destination)
+                tunnelCell(item) {
+                    Text(item.destination)
+                        .font(.system(.body, design: .monospaced))
+                        .foregroundStyle(item.rule.kind == .dynamic ? Color.secondary : Color.primary)
+                        .lineLimit(1)
+                        .help(item.destination)
+                }
             }
             .width(min: 125, ideal: 160)
 
             TableColumn("SSH-host") { item in
-                Text(item.sshEndpoint)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                    .help(item.sshEndpoint)
+                tunnelCell(item) {
+                    Text(item.sshEndpoint)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .help(item.sshEndpoint)
+                }
             }
             .width(min: 135, ideal: 180)
 
             TableColumn("Uptime") { item in
-                Text(item.uptimeText(now: now))
-                    .monospacedDigit()
+                tunnelCell(item) {
+                    Text(item.uptimeText(now: now))
+                        .monospacedDigit()
+                }
             }
             .width(min: 62, ideal: 75, max: 90)
         }
@@ -614,6 +628,88 @@ struct ForwardingManagerView: View {
                 .allowsHitTesting(false)
         }
 
+    }
+
+    private func tunnelCell<Content: View>(
+        _ item: ForwardingManagerItem,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    selectedItemID = item.id
+                    inspectorTab = .overview
+                    if item.state.canStart {
+                        start(item)
+                    }
+                }
+            )
+            .contextMenu {
+                forwardingContextMenu(item)
+            }
+    }
+
+    @ViewBuilder
+    private func forwardingContextMenu(_ item: ForwardingManagerItem) -> some View {
+        if item.state.canStart {
+            Button("Запустить", systemImage: "play.fill") {
+                selectForAction(item)
+                start(item)
+            }
+        } else if item.state.canStop {
+            Button("Остановить", systemImage: "stop.fill", role: .destructive) {
+                selectForAction(item)
+                model.stopSSHTunnel(item.source.tunnelID)
+            }
+            Button("Перезапустить", systemImage: "arrow.clockwise") {
+                selectForAction(item)
+                restart(item)
+            }
+        }
+
+        if item.state.canStart || item.state.canStop {
+            Divider()
+        }
+
+        Button("Open Terminal", systemImage: "terminal") {
+            selectForAction(item)
+            onOpenTerminal(item.connection)
+        }
+        if case let .profile(profileID, _) = item.source {
+            Button("Открыть профиль", systemImage: "rectangle.stack") {
+                selectForAction(item)
+                onOpenProfile(profileID)
+            }
+        }
+        Button("Показать журнал", systemImage: "doc.text.magnifyingglass") {
+            selectForAction(item)
+            model.revealSSHTunnelLog(item.source.tunnelID)
+        }
+        .disabled(!item.hasLog)
+        Button("Копировать команду", systemImage: "doc.on.doc") {
+            selectForAction(item)
+            copyCommand(item)
+        }
+
+        if item.ownership == .independent {
+            Divider()
+            Button("Создать копию", systemImage: "plus.square.on.square") {
+                selectForAction(item)
+                if let id = model.duplicateIndependentPortForward(item.source.tunnelID) {
+                    selectedItemID = ForwardingManagerSource.independent(tunnelID: id).stableID
+                }
+            }
+        }
+
+        Divider()
+
+        Button("Удалить", systemImage: "trash", role: .destructive) {
+            selectForAction(item)
+            delete(item)
+        }
+        .disabled(!item.state.canEdit)
     }
 
     private func footer(items: [ForwardingManagerItem]) -> some View {
@@ -1369,6 +1465,11 @@ struct ForwardingManagerView: View {
             return
         }
         selectedItemID = items.first?.id
+    }
+
+    private func selectForAction(_ item: ForwardingManagerItem) {
+        selectedItemID = item.id
+        inspectorTab = .overview
     }
 
     private func start(_ item: ForwardingManagerItem) {

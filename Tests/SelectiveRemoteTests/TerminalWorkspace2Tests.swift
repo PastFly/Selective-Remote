@@ -10,6 +10,12 @@ func terminalWorkspaceNormalizesSessionStates() {
     #expect(TerminalWorkspaceSessionState.resolve(phase: .stopping) == .stopping)
     #expect(TerminalWorkspaceSessionState.resolve(phase: .finished(0)) == .disconnected)
     #expect(TerminalWorkspaceSessionState.resolve(phase: .finished(255)) == .error(255))
+    #expect(
+        TerminalWorkspaceSessionState.resolve(
+            phase: .finished(255),
+            terminationRequested: true
+        ) == .disconnected
+    )
 }
 
 @Test("Reconnecting имеет приоритет над промежуточной фазой PTY")

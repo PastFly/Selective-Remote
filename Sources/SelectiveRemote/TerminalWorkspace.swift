@@ -38,7 +38,8 @@ enum TerminalWorkspaceSessionState: Equatable {
 
     static func resolve(
         phase: EmbeddedTerminalPhase,
-        isReconnecting: Bool = false
+        isReconnecting: Bool = false,
+        terminationRequested: Bool = false
     ) -> TerminalWorkspaceSessionState {
         if isReconnecting {
             return .reconnecting
@@ -53,7 +54,7 @@ enum TerminalWorkspaceSessionState: Equatable {
         case .stopping:
             return .stopping
         case let .finished(code):
-            return code == 0 ? .disconnected : .error(code)
+            return code == 0 || terminationRequested ? .disconnected : .error(code)
         }
     }
 

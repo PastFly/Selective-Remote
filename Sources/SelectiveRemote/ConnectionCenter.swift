@@ -133,6 +133,24 @@ struct ConnectionCenterItem: Hashable, Identifiable {
 
     var id: String { source.stableID }
 
+    var sortKind: String { kind.title }
+    var sortPort: Int { port ?? Int.max }
+    var sortRoute: String { route ?? "" }
+    var sortState: Int {
+        switch state {
+        case .connected: 0
+        case .connecting: 1
+        case .reconnecting: 2
+        case .stopping: 3
+        case .disconnected: 4
+        case .error: 5
+        }
+    }
+    var sortUptime: TimeInterval {
+        guard let startedAt else { return .greatestFiniteMagnitude }
+        return -startedAt.timeIntervalSinceReferenceDate
+    }
+
     func uptimeText(now: Date = Date()) -> String {
         guard let startedAt else { return "—" }
         let seconds = max(0, Int(now.timeIntervalSince(startedAt)))
@@ -212,11 +230,12 @@ struct ConnectionCenterView: View {
     @State private var selectedItemID: String?
     @State private var filter = ConnectionCenterTypeFilter.all
     @State private var searchText = ""
+    @State private var sortOrder: [KeyPathComparator<ConnectionCenterItem>] = []
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
             let snapshot = model.connectionCenterSnapshot(now: timeline.date)
-            let items = filteredItems(snapshot.items)
+            let items = sortedItems(filteredItems(snapshot.items))
 
             HStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 16) {
@@ -373,68 +392,84 @@ struct ConnectionCenterView: View {
     }
 
     private func connectionTable(items: [ConnectionCenterItem], now: Date) -> some View {
-        Table(items, selection: $selectedItemID) {
-            TableColumn("Тип") { item in
-                HStack(spacing: 7) {
-                    Image(systemName: item.kind.systemImage)
-                        .foregroundStyle(kindColor(item.kind))
-                        .frame(width: 18)
-                    Text(item.kind.title)
-                        .lineLimit(1)
+        Table(items, selection: $selectedItemID, sortOrder: $sortOrder) {
+            TableColumn("Тип", value: \.sortKind) { item in
+                connectionCell(item) {
+                    HStack(spacing: 7) {
+                        Image(systemName: item.kind.systemImage)
+                            .foregroundStyle(kindColor(item.kind))
+                            .frame(width: 18)
+                        Text(item.kind.title)
+                            .lineLimit(1)
+                    }
                 }
             }
             .width(min: 96, ideal: 112)
 
-            TableColumn("Профиль") { item in
-                Text(item.profileName)
-                    .lineLimit(1)
-                    .help(item.profileName)
+            TableColumn("Профиль", value: \.profileName) { item in
+                connectionCell(item) {
+                    Text(item.profileName)
+                        .lineLimit(1)
+                        .help(item.profileName)
+                }
             }
             .width(min: 110, ideal: 150)
 
-            TableColumn("User@Host") { item in
-                Text(item.userHost)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(1)
-                    .help(item.userHost)
+            TableColumn("User@Host", value: \.userHost) { item in
+                connectionCell(item) {
+                    Text(item.userHost)
+                        .font(.system(.body, design: .monospaced))
+                        .lineLimit(1)
+                        .help(item.userHost)
+                }
             }
             .width(min: 150, ideal: 210)
 
-            TableColumn("Port") { item in
-                Text(item.port.map(String.init) ?? "—")
-                    .monospacedDigit()
+            TableColumn("Port", value: \.sortPort) { item in
+                connectionCell(item) {
+                    Text(item.port.map(String.init) ?? "—")
+                        .monospacedDigit()
+                }
             }
             .width(min: 48, ideal: 58, max: 70)
 
-            TableColumn("Jump Host / Gateway") { item in
-                Text(item.route ?? "—")
-                    .lineLimit(1)
-                    .foregroundStyle(item.route == nil ? Color.secondary : Color.primary)
-                    .help(item.route ?? "Маршрут без промежуточного узла")
+            TableColumn("Jump Host / Gateway", value: \.sortRoute) { item in
+                connectionCell(item) {
+                    Text(item.route ?? "—")
+                        .lineLimit(1)
+                        .foregroundStyle(item.route == nil ? Color.secondary : Color.primary)
+                        .help(item.route ?? "Маршрут без промежуточного узла")
+                }
             }
             .width(min: 140, ideal: 190)
 
-            TableColumn("Auth") { item in
-                Text(item.authentication)
-                    .lineLimit(1)
-                    .help(item.authentication)
+            TableColumn("Auth", value: \.authentication) { item in
+                connectionCell(item) {
+                    Text(item.authentication)
+                        .lineLimit(1)
+                        .help(item.authentication)
+                }
             }
             .width(min: 90, ideal: 125)
 
-            TableColumn("State") { item in
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(item.state.color)
-                        .frame(width: 7, height: 7)
-                    Text(item.state.title)
-                        .lineLimit(1)
+            TableColumn("State", value: \.sortState) { item in
+                connectionCell(item) {
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(item.state.color)
+                            .frame(width: 7, height: 7)
+                        Text(item.state.title)
+                            .lineLimit(1)
+                    }
                 }
             }
             .width(min: 105, ideal: 125)
 
-            TableColumn("Uptime") { item in
-                Text(item.uptimeText(now: now))
-                    .monospacedDigit()
+            TableColumn("Uptime", value: \.sortUptime) { item in
+                connectionCell(item) {
+                    Text(item.uptimeText(now: now))
+                        .monospacedDigit()
+                }
             }
             .width(min: 68, ideal: 82, max: 100)
         }
@@ -444,6 +479,45 @@ struct ConnectionCenterView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07))
                 .allowsHitTesting(false)
+        }
+    }
+
+    private func connectionCell<Content: View>(
+        _ item: ConnectionCenterItem,
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        content()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .contextMenu {
+                connectionContextMenu(item)
+            }
+    }
+
+    @ViewBuilder
+    private func connectionContextMenu(_ item: ConnectionCenterItem) -> some View {
+        if item.kind == .rdp || item.kind == .terminal || item.kind == .forwarding {
+            Button("Reconnect", systemImage: "arrow.clockwise") {
+                selectedItemID = item.id
+                onReconnect(item.source)
+            }
+        }
+
+        Button(openActionTitle(item.kind), systemImage: openActionIcon(item.kind)) {
+            selectedItemID = item.id
+            onOpen(item.source)
+        }
+
+        Button("Copy Diagnostic", systemImage: "doc.on.doc") {
+            selectedItemID = item.id
+            copyDiagnostic(item)
+        }
+
+        Divider()
+
+        Button(disconnectActionTitle(item.kind), systemImage: "xmark.circle", role: .destructive) {
+            selectedItemID = item.id
+            onDisconnect(item.source)
         }
     }
 
@@ -600,6 +674,11 @@ struct ConnectionCenterView: View {
                     .strokeBorder(Color.primary.opacity(0.06))
             }
         }
+    }
+
+    private func sortedItems(_ items: [ConnectionCenterItem]) -> [ConnectionCenterItem] {
+        guard !sortOrder.isEmpty else { return items }
+        return items.sorted(using: sortOrder)
     }
 
     private func filteredItems(_ items: [ConnectionCenterItem]) -> [ConnectionCenterItem] {

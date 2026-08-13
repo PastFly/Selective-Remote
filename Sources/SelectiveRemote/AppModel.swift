@@ -3199,7 +3199,7 @@ final class AppModel: NSObject, ObservableObject {
                     )
                 } else {
                     cancelTerminalSmartReconnect(tabID: tabID, session: session)
-                    statusMessage = exitCode == 0
+                    statusMessage = terminationRequested || exitCode == 0
                         ? "SSH-сессия завершена"
                         : "SSH-сессия завершилась с кодом \(exitCode)"
                 }

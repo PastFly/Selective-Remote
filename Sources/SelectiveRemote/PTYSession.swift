@@ -476,13 +476,18 @@ final class TerminalSessionModel: ObservableObject {
     private func didTerminate(exitCode: Int32) {
         process = nil
         startedAt = nil
-        lastTerminationWasRequested = stopRequested
+        let terminationRequested = stopRequested
+        lastTerminationWasRequested = terminationRequested
         stopRequested = false
         phase = .finished(exitCode)
-        appendLocalText(
-            "\r\n\r\n[\(AppBrand.name)] Процесс завершён"
-                + (exitCode == 0 ? ".\r\n" : " с кодом \(exitCode).\r\n")
-        )
+        if terminationRequested {
+            appendLocalText("\r\n\r\n[\(AppBrand.name)] Сессия отключена пользователем.\r\n")
+        } else {
+            appendLocalText(
+                "\r\n\r\n[\(AppBrand.name)] Процесс завершён"
+                    + (exitCode == 0 ? ".\r\n" : " с кодом \(exitCode).\r\n")
+            )
+        }
         let handler = completion
         completion = nil
         handler?(exitCode)
