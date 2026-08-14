@@ -1,6 +1,21 @@
+import Foundation
 import SwiftUI
 
+enum ProjectSupport {
+    static let yoomoneyURL = URL(
+        string: "https://yoomoney.ru/to/4100119600001192"
+    )!
+    static let boostyURL = URL(
+        string: "https://boosty.to/pastfly/single-payment/donation/821124/target?share=target_link"
+    )!
+    static let sberbankURL = URL(
+        string: "https://messenger.sbrf.ru/sl/0pRZ8zDZzpoim1on3"
+    )!
+}
+
 struct AppHelpView: View {
+    @Environment(\.openURL) private var openURL
+
     private struct HelpSection: Identifiable {
         let id = UUID()
         let title: String
@@ -90,6 +105,60 @@ struct AppHelpView: View {
                                 .strokeBorder(Color.primary.opacity(0.07))
                         }
                     }
+                }
+
+                HStack(alignment: .center, spacing: 16) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.12))
+                        Image(systemName: "heart.circle.fill")
+                            .font(.system(size: 24, weight: .semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .frame(width: 48, height: 48)
+
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Поддержать проект")
+                            .font(.headline)
+                        Text("Selective Remote остаётся бесплатным и открытым. Если приложение оказалось полезным, вы можете поддержать дальнейшую разработку.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Выбранный способ поддержки откроется в браузере")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+
+                    Spacer(minLength: 12)
+
+                    Menu {
+                        Button("ЮMoney", systemImage: "creditcard") {
+                            openURL(ProjectSupport.yoomoneyURL)
+                        }
+                        .accessibilityIdentifier("supportProjectYoomoneyButton")
+                        Button("Boosty", systemImage: "heart") {
+                            openURL(ProjectSupport.boostyURL)
+                        }
+                        .accessibilityIdentifier("supportProjectBoostyButton")
+                        Button("СберБанк", systemImage: "building.columns") {
+                            openURL(ProjectSupport.sberbankURL)
+                        }
+                        .accessibilityIdentifier("supportProjectSberbankButton")
+                    } label: {
+                        Label("Поддержать проект", systemImage: "heart.fill")
+                            .frame(minWidth: 160)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .fixedSize()
+                    .help("Выбрать способ поддержки")
+                    .accessibilityIdentifier("supportProjectMenu")
+                }
+                .padding(18)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 16, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.07))
                 }
 
                 GroupBox("Полезные сочетания клавиш") {

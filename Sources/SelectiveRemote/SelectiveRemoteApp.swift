@@ -59,6 +59,18 @@ struct SelectiveRemoteApp: App {
                     appDelegate.showHelpWindow()
                 }
                     .keyboardShortcut("?", modifiers: [.command])
+                Divider()
+                Menu("Поддержать проект", systemImage: "heart") {
+                    Button("ЮMoney…") {
+                        NSWorkspace.shared.open(ProjectSupport.yoomoneyURL)
+                    }
+                    Button("Boosty…") {
+                        NSWorkspace.shared.open(ProjectSupport.boostyURL)
+                    }
+                    Button("СберБанк…") {
+                        NSWorkspace.shared.open(ProjectSupport.sberbankURL)
+                    }
+                }
             }
             CommandMenu("Сессия") {
                 Button("Quick Connect…", systemImage: "bolt.fill") {
