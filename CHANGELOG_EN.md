@@ -1,3 +1,12 @@
+## 0.21.8
+
+- The What's New button now opens a native Selective Remote window instead of sending the user to GitHub.
+- Release history shows every skipped version between the installed and available versions, ordered from newest to oldest.
+- Added loading, retry, and error states; the window remains readable when several releases were skipped.
+- Added a separate `CHANGELOG_EN.md`; the application selects RU/EN release-note sources from the interface language and falls back to the other language when the preferred source is temporarily unavailable.
+- The update manifest now includes separate RU/EN release-history URLs while preserving `releaseNotesURL` for compatibility with older application versions.
+- Added regression tests for skipped-version filtering, release ordering, and localized history-URL decoding.
+
 ## 0.21.7
 
 - Finished the application text-size work: Small / Normal / Large / Very Large now use four clearly distinct native point sizes without scaling the whole window or interfering with Retina/DPI.
