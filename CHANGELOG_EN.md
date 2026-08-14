@@ -1,3 +1,14 @@
+## 0.21.9
+
+- Added a permanent `Help → What's New…` command: release history can now be opened at any time, and a newly installed version is shown once automatically after an upgrade.
+- Update Experience 2.0 now presents clearer update stages, the last successful check time, and bundled release history so installed notes remain available without GitHub access.
+- Connection Center gained clickable summary cards, a separate state filter, persisted filters and sorting, configurable column visibility, and additional context actions.
+- Terminal Workspace gained output search with `⌘F`, match navigation, keyboard tab switching, and double-click tab renaming.
+- Keychain gained search and sorting across SSH IDs, saved SSH passwords, Known Hosts, and SSH CAs without changing the existing Inspector.
+- Diagnostics Center gained a System Check section with safe preflight checks for the app, SSH, Keychain, Touch ID, macOS permissions, FreeRDP helpers, and the update feed without starting real RDP/SSH sessions or reading secrets.
+- Preserved macOS 14.0 compatibility for configurable Connection Center columns and fixed Keychain search/sort compatibility with the Swift compiler used by GitHub Actions.
+- Added regression tests for Update Experience, Connection Center, Terminal, Keychain, and Diagnostics; the 0.21.9 functional build passed the full CI workflow.
+
 ## 0.21.8
 
 - The What's New button now opens a native Selective Remote window instead of sending the user to GitHub.
