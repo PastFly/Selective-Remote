@@ -538,3 +538,64 @@ input {
         grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 }
+
+
+#terminal-search {
+    position: absolute;
+    z-index: 45;
+    top: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    width: min(480px, calc(100% - 24px));
+    box-sizing: border-box;
+    padding: 8px 9px;
+    color: #dce6f5;
+    background: color-mix(in srgb, var(--terminal-background) 78%, #3b4660 22%);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 12px;
+    box-shadow: 0 14px 38px rgba(0, 0, 0, 0.34);
+    backdrop-filter: blur(18px);
+}
+
+.terminal-search-icon {
+    color: #8f9ab0;
+    font-size: 20px;
+    line-height: 1;
+}
+
+#terminal-search-query {
+    min-width: 0;
+    flex: 1;
+    color: #e8eef8;
+    background: transparent;
+    border: 0;
+    outline: 0;
+}
+
+#terminal-search-query::placeholder {
+    color: #7f899e;
+}
+
+#terminal-search-count {
+    min-width: 62px;
+    color: #9ba6ba;
+    font: 11px -apple-system, BlinkMacSystemFont, sans-serif;
+    text-align: right;
+}
+
+#terminal-search button {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    color: #dce6f5;
+    background: rgba(255, 255, 255, 0.07);
+    border: 0;
+    border-radius: 7px;
+    cursor: default;
+}
+
+#terminal-search button:disabled {
+    opacity: 0.4;
+}

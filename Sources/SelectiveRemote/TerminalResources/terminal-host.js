@@ -3,6 +3,12 @@
 
     const terminalHost = document.getElementById("terminal");
     const terminalShell = document.getElementById("terminal-shell");
+    const terminalSearchPanel = document.getElementById("terminal-search");
+    const terminalSearchQuery = document.getElementById("terminal-search-query");
+    const terminalSearchCount = document.getElementById("terminal-search-count");
+    const terminalSearchPrevious = document.getElementById("terminal-search-previous");
+    const terminalSearchNext = document.getElementById("terminal-search-next");
+    const terminalSearchClose = document.getElementById("terminal-search-close");
     const suggestionsElement = document.getElementById("terminal-suggestions");
     const historyPanel = document.getElementById("terminal-history");
     const historyQuery = document.getElementById("history-query");
@@ -96,6 +102,8 @@
     let recentVisibleOutput = "";
     let activePanelSection = "history";
     let alternateScreenWasActive = false;
+    let terminalSearchResults = [];
+    let terminalSearchIndex = -1;
     const outputTextDecoder = new TextDecoder("utf-8");
 
     const postHistory = (payload) => {
@@ -645,6 +653,101 @@
         historyEnabledInput.checked = historyEnabled;
     };
 
+    const updateTerminalSearchCount = () => {
+        const total = terminalSearchResults.length;
+        const current = total > 0 && terminalSearchIndex >= 0
+            ? terminalSearchIndex + 1
+            : 0;
+        terminalSearchCount.textContent = `${current} из ${total}`;
+        terminalSearchPrevious.disabled = total === 0;
+        terminalSearchNext.disabled = total === 0;
+    };
+
+    const selectTerminalSearchResult = (index) => {
+        const total = terminalSearchResults.length;
+        if (total === 0) {
+            terminalSearchIndex = -1;
+            terminal.clearSelection();
+            updateTerminalSearchCount();
+            return;
+        }
+        terminalSearchIndex = ((index % total) + total) % total;
+        const result = terminalSearchResults[terminalSearchIndex];
+        terminal.select(result.column, result.row, result.length);
+        terminal.scrollToLine(result.row);
+        updateTerminalSearchCount();
+    };
+
+    const refreshTerminalSearch = (preserveIndex = true) => {
+        const query = terminalSearchQuery.value.trim();
+        const previousIndex = terminalSearchIndex;
+        terminalSearchResults = [];
+        if (!query) {
+            terminalSearchIndex = -1;
+            terminal.clearSelection();
+            updateTerminalSearchCount();
+            return;
+        }
+
+        const normalized = query.toLocaleLowerCase();
+        const buffer = terminal.buffer.active;
+        for (let row = 0; row < buffer.length; row += 1) {
+            const line = buffer.getLine(row)?.translateToString(true) || "";
+            const lower = line.toLocaleLowerCase();
+            let from = 0;
+            while (from <= lower.length - normalized.length) {
+                const column = lower.indexOf(normalized, from);
+                if (column < 0) {
+                    break;
+                }
+                terminalSearchResults.push({ row, column, length: query.length });
+                from = column + Math.max(1, normalized.length);
+            }
+        }
+
+        if (terminalSearchResults.length === 0) {
+            terminalSearchIndex = -1;
+            terminal.clearSelection();
+            updateTerminalSearchCount();
+            return;
+        }
+        selectTerminalSearchResult(
+            preserveIndex && previousIndex >= 0
+                ? Math.min(previousIndex, terminalSearchResults.length - 1)
+                : 0
+        );
+    };
+
+    const openTerminalSearch = () => {
+        hideSuggestions();
+        if (!historyPanel.hidden) {
+            window.selectiveTerminalSetHistoryVisible(false, true, false);
+        }
+        terminalSearchPanel.hidden = false;
+        refreshTerminalSearch(false);
+        window.setTimeout(() => {
+            terminalSearchQuery.focus();
+            terminalSearchQuery.select();
+        }, 0);
+    };
+
+    const closeTerminalSearch = () => {
+        terminalSearchPanel.hidden = true;
+        terminalSearchResults = [];
+        terminalSearchIndex = -1;
+        terminal.clearSelection();
+        updateTerminalSearchCount();
+        terminal.focus();
+    };
+
+    const moveTerminalSearch = (delta) => {
+        if (terminalSearchResults.length === 0) {
+            refreshTerminalSearch(false);
+            return;
+        }
+        selectTerminalSearchResult(terminalSearchIndex + delta);
+    };
+
     const resetTrackedLine = () => {
         currentLine = [];
         inputCursor = 0;
@@ -772,7 +875,30 @@
         if (event.type !== "keydown") {
             return true;
         }
+        if (event.metaKey && event.key.toLocaleLowerCase() === "f") {
+            openTerminalSearch();
+            return false;
+        }
+        if (event.metaKey && /^[1-8]$/.test(event.key)) {
+            window.webkit?.messageHandlers?.terminalNavigation?.postMessage(
+                Number.parseInt(event.key, 10) - 1
+            );
+            return false;
+        }
+        if (event.ctrlKey && event.key === "Tab") {
+            window.webkit?.messageHandlers?.terminalNavigation?.postMessage(
+                event.shiftKey ? -2 : -1
+            );
+            return false;
+        }
+        if (!terminalSearchPanel.hidden && event.key === "Escape") {
+            closeTerminalSearch();
+            return false;
+        }
         if (event.metaKey && event.shiftKey && event.key.toLocaleLowerCase() === "y") {
+            if (!terminalSearchPanel.hidden) {
+                closeTerminalSearch();
+            }
             window.selectiveTerminalSetHistoryVisible(historyPanel.hidden, true);
             return false;
         }
@@ -875,6 +1001,9 @@
                 if (!suggestionsElement.hidden) {
                     positionSuggestions();
                 }
+            }
+            if (!terminalSearchPanel.hidden && terminalSearchQuery.value.trim()) {
+                refreshTerminalSearch(true);
             }
             drainOutputQueue();
         });
@@ -1003,6 +1132,20 @@
             postHistory({ action: "visibility", visible: nextVisible });
         }
     };
+
+    terminalSearchQuery.addEventListener("input", () => refreshTerminalSearch(false));
+    terminalSearchQuery.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+            event.preventDefault();
+            closeTerminalSearch();
+        } else if (event.key === "Enter") {
+            event.preventDefault();
+            moveTerminalSearch(event.shiftKey ? -1 : 1);
+        }
+    });
+    terminalSearchPrevious.addEventListener("click", () => moveTerminalSearch(-1));
+    terminalSearchNext.addEventListener("click", () => moveTerminalSearch(1));
+    terminalSearchClose.addEventListener("click", closeTerminalSearch);
 
     historyQuery.addEventListener("input", renderHistoryPanel);
     remoteContextRetryButton.addEventListener("click", () => {

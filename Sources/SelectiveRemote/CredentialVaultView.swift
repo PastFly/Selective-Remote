@@ -49,6 +49,33 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
     }
 }
 
+private enum VaultSortMode: String, CaseIterable, Identifiable {
+    case name
+    case type
+    case usage
+    case fingerprint
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: "По имени"
+        case .type: "По типу"
+        case .usage: "По использованию"
+        case .fingerprint: "По fingerprint"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .name: "textformat"
+        case .type: "square.grid.2x2"
+        case .usage: "rectangle.stack"
+        case .fingerprint: "number"
+        }
+    }
+}
+
 private enum VaultSelection: Hashable {
     case key(UUID)
     case credential(UUID)
@@ -65,6 +92,9 @@ struct CredentialVaultView: View {
 
     @State private var selection: VaultSelection?
     @State private var filter: VaultFilter = .all
+    @State private var searchText = ""
+    @AppStorage("SelectiveRemote.keychain.sort.v1")
+    private var sortModeRaw = VaultSortMode.name.rawValue
     @State private var showsKeyGenerator = false
     @State private var touchIDGenerator = false
     @State private var installTargetProfileID: UUID?
@@ -109,44 +139,60 @@ struct CredentialVaultView: View {
         }
     }
 
+    private var sortMode: VaultSortMode {
+        VaultSortMode(rawValue: sortModeRaw) ?? .name
+    }
+
+    private var normalizedSearchText: String {
+        searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private var visibleKeys: [SSHKeyRecord] {
+        let base: [SSHKeyRecord]
         switch filter {
         case .all, .keys:
-            model.sshKeys
+            base = model.sshKeys
         case .certificates:
-            model.sshKeys.filter { SSHKeyService.certificateURL(for: $0) != nil }
+            base = model.sshKeys.filter { SSHKeyService.certificateURL(for: $0) != nil }
         case .touchID:
-            model.sshKeys.filter(SSHKeyService.isTouchIDCompatible)
+            base = model.sshKeys.filter(SSHKeyService.isTouchIDCompatible)
         case .passwords, .authorities, .knownHosts:
-            []
+            base = []
         }
+        return base.filter(keyMatchesSearch).sorted(by: keySort)
     }
 
     private var visibleCredentials: [ConnectionProfile] {
+        let base: [ConnectionProfile]
         switch filter {
         case .all, .passwords:
-            savedCredentialProfiles
+            base = savedCredentialProfiles
         case .keys, .certificates, .touchID, .authorities, .knownHosts:
-            []
+            base = []
         }
+        return base.filter(profileMatchesSearch).sorted(by: profileSort)
     }
 
     private var visibleKnownHosts: [SSHKnownHostEntry] {
+        let base: [SSHKnownHostEntry]
         switch filter {
         case .all, .knownHosts:
-            knownHosts
+            base = knownHosts
         case .keys, .certificates, .touchID, .passwords, .authorities:
-            []
+            base = []
         }
+        return base.filter(knownHostMatchesSearch).sorted(by: knownHostSort)
     }
 
     private var visibleAuthorities: [SSHCertificateAuthorityRecord] {
+        let base: [SSHCertificateAuthorityRecord]
         switch filter {
         case .all, .authorities:
-            authorities
+            base = authorities
         case .keys, .certificates, .touchID, .passwords, .knownHosts:
-            []
+            base = []
         }
+        return base.filter(authorityMatchesSearch).sorted(by: authoritySort)
     }
 
     private var selectedAuthority: SSHCertificateAuthorityRecord? {
@@ -363,6 +409,7 @@ struct CredentialVaultView: View {
                 }
             }
             .padding(12)
+            keychainSearchToolbar
             Divider()
 
             List(selection: $selection) {
@@ -437,6 +484,170 @@ struct CredentialVaultView: View {
             agentStrip
         }
         .background(.ultraThinMaterial)
+    }
+
+    private var keychainSearchToolbar: some View {
+        HStack(spacing: 9) {
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField("Поиск в Связке ключей", text: $searchText)
+                    .textFieldStyle(.plain)
+                if !searchText.isEmpty {
+                    Button {
+                        searchText = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(minHeight: 34)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+
+            Menu {
+                Picker("Сортировка", selection: $sortModeRaw) {
+                    ForEach(VaultSortMode.allCases) { mode in
+                        Label {
+                            Text(LocalizedStringKey(mode.title))
+                        } icon: {
+                            Image(systemName: mode.systemImage)
+                        }
+                        .tag(mode.rawValue)
+                    }
+                }
+            } label: {
+                Label {
+                    Text(LocalizedStringKey(sortMode.title))
+                } icon: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 12)
+        .onChange(of: searchText) { _, _ in
+            normalizeSelectionForFilter()
+        }
+    }
+
+    private func matchesSearch(_ values: [String]) -> Bool {
+        let query = normalizedSearchText
+        guard !query.isEmpty else { return true }
+        return values.contains { $0.localizedCaseInsensitiveContains(query) }
+    }
+
+    private func keyMatchesSearch(_ key: SSHKeyRecord) -> Bool {
+        var values = [key.name, key.algorithm, key.fingerprint, key.privateKeyPath]
+        if SSHKeyService.certificateURL(for: key) != nil {
+            values += ["certificate", "сертификат"]
+        }
+        if SSHKeyService.isTouchIDCompatible(key) {
+            values += ["Touch ID", "ECDSA"]
+        }
+        for profile in profilesUsing(key) {
+            values += [profile.friendlyName, profile.host, profile.username]
+        }
+        return matchesSearch(values)
+    }
+
+    private func profileMatchesSearch(_ profile: ConnectionProfile) -> Bool {
+        matchesSearch([profile.friendlyName, profile.host, profile.username, "password", "пароль"])
+    }
+
+    private func knownHostMatchesSearch(_ entry: SSHKnownHostEntry) -> Bool {
+        var values = [entry.displayHost, entry.hosts, entry.algorithm, entry.fingerprint]
+        values += profilesUsingKnownHost(entry).flatMap { [$0.friendlyName, $0.host] }
+        return matchesSearch(values)
+    }
+
+    private func authorityMatchesSearch(_ authority: SSHCertificateAuthorityRecord) -> Bool {
+        matchesSearch([
+            authority.name,
+            authority.algorithm,
+            authority.fingerprint,
+            authority.publicKeyPath,
+            authority.privateKeyPath,
+            "SSH CA"
+        ])
+    }
+
+    private func keySort(_ lhs: SSHKeyRecord, _ rhs: SSHKeyRecord) -> Bool {
+        switch sortMode {
+        case .name:
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        case .type:
+            let type = lhs.algorithm.localizedStandardCompare(rhs.algorithm)
+            return type == .orderedSame
+                ? lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                : type == .orderedAscending
+        case .usage:
+            let left = profilesUsing(lhs).count
+            let right = profilesUsing(rhs).count
+            return left == right
+                ? lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                : left > right
+        case .fingerprint:
+            return lhs.fingerprint.localizedStandardCompare(rhs.fingerprint) == .orderedAscending
+        }
+    }
+
+    private func profileSort(_ lhs: ConnectionProfile, _ rhs: ConnectionProfile) -> Bool {
+        switch sortMode {
+        case .type:
+            let left = sshPasswordRequiresTouchID(lhs) ? 0 : 1
+            let right = sshPasswordRequiresTouchID(rhs) ? 0 : 1
+            return left == right
+                ? lhs.friendlyName.localizedStandardCompare(rhs.friendlyName) == .orderedAscending
+                : left < right
+        default:
+            return lhs.friendlyName.localizedStandardCompare(rhs.friendlyName) == .orderedAscending
+        }
+    }
+
+    private func knownHostSort(_ lhs: SSHKnownHostEntry, _ rhs: SSHKnownHostEntry) -> Bool {
+        switch sortMode {
+        case .type:
+            let result = lhs.algorithm.localizedStandardCompare(rhs.algorithm)
+            return result == .orderedSame
+                ? lhs.displayHost.localizedStandardCompare(rhs.displayHost) == .orderedAscending
+                : result == .orderedAscending
+        case .usage:
+            let left = profilesUsingKnownHost(lhs).count
+            let right = profilesUsingKnownHost(rhs).count
+            return left == right
+                ? lhs.displayHost.localizedStandardCompare(rhs.displayHost) == .orderedAscending
+                : left > right
+        case .fingerprint:
+            return lhs.fingerprint.localizedStandardCompare(rhs.fingerprint) == .orderedAscending
+        case .name:
+            return lhs.displayHost.localizedStandardCompare(rhs.displayHost) == .orderedAscending
+        }
+    }
+
+    private func authoritySort(
+        _ lhs: SSHCertificateAuthorityRecord,
+        _ rhs: SSHCertificateAuthorityRecord
+    ) -> Bool {
+        switch sortMode {
+        case .type:
+            let result = lhs.algorithm.localizedStandardCompare(rhs.algorithm)
+            return result == .orderedSame
+                ? lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+                : result == .orderedAscending
+        case .fingerprint:
+            return lhs.fingerprint.localizedStandardCompare(rhs.fingerprint) == .orderedAscending
+        case .name, .usage:
+            return lhs.name.localizedStandardCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    private func sshPasswordRequiresTouchID(_ profile: ConnectionProfile) -> Bool {
+        model.sshPasswordRequiresUserPresence(profileID: profile.id)
     }
 
     private func keyRow(_ key: SSHKeyRecord) -> some View {

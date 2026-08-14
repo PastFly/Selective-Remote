@@ -18,6 +18,14 @@ enum UpdateLocalization {
 }
 
 
+enum UpdateDownloadStage: Equatable, Sendable {
+    case idle
+    case downloading
+    case verifying
+    case ready
+    case installing
+}
+
 struct UpdateNotificationPolicy {
     static let minimumRepeatInterval: TimeInterval = 24 * 60 * 60
 
@@ -164,7 +172,8 @@ private final class UpdateDownloadOperation: @unchecked Sendable {
 enum UpdateInstaller {
     static func downloadAndValidateDMG(
         from sourceURL: URL,
-        progress: @escaping @MainActor (Double) -> Void
+        progress: @escaping @MainActor (Double) -> Void,
+        stage: @escaping @MainActor (UpdateDownloadStage) -> Void
     ) async throws -> URL {
         guard sourceURL.scheme?.lowercased() == "https",
               sourceURL.pathExtension.lowercased() == "dmg" else {
@@ -181,6 +190,7 @@ enum UpdateInstaller {
         .appendingPathComponent("Updates", isDirectory: true)
         let destinationURL = cacheRoot.appendingPathComponent(sourceURL.lastPathComponent)
         let operation = UpdateDownloadOperation(sourceURL: sourceURL, destinationURL: destinationURL)
+        stage(.downloading)
 
         let progressTask = Task { @MainActor in
             while !Task.isCancelled && !operation.isFinished {
@@ -192,6 +202,7 @@ enum UpdateInstaller {
 
         let downloadedURL = try await operation.start()
         progress(0.985)
+        stage(.verifying)
         try await validatePublishedChecksum(for: downloadedURL, sourceURL: sourceURL)
         progress(1)
         return downloadedURL

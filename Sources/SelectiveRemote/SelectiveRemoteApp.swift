@@ -43,11 +43,18 @@ struct SelectiveRemoteApp: App {
                 .environmentObject(language)
                 .environment(\.locale, language.locale)
                 .frame(minWidth: 1050, minHeight: 700)
+                .onAppear {
+                    model.presentWhatsNewAfterUpgradeIfNeeded()
+                }
         }
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .newItem) { }
             CommandGroup(replacing: .help) {
+                Button("Что нового…", systemImage: "sparkles") {
+                    model.openInstalledReleaseNotes()
+                }
+                Divider()
                 Button("Справка Selective Remote") {
                     appDelegate.showHelpWindow()
                 }

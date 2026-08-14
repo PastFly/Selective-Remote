@@ -23,6 +23,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let onRemoteContextRetry: () -> Void
     let onFocus: () -> Void
     let onInput: (Data) -> Void
+    let onTabNavigation: (Int) -> Void
     @Binding var historyVisible: Bool
 
     init(
@@ -33,6 +34,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         onRemoteContextRetry: @escaping () -> Void = {},
         onFocus: @escaping () -> Void = {},
         onInput: ((Data) -> Void)? = nil,
+        onTabNavigation: @escaping (Int) -> Void = { _ in },
         historyVisible: Binding<Bool> = .constant(false)
     ) {
         self.session = session
@@ -42,6 +44,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         self.onRemoteContextRetry = onRemoteContextRetry
         self.onFocus = onFocus
         self.onInput = onInput ?? { _ in }
+        self.onTabNavigation = onTabNavigation
         _historyVisible = historyVisible
     }
 
@@ -54,6 +57,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onRemoteContextRetry: onRemoteContextRetry,
             onFocus: onFocus,
             onInput: onInput,
+            onTabNavigation: onTabNavigation,
             historyVisible: _historyVisible
         )
     }
@@ -77,6 +81,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         configuration.userContentController.add(
             context.coordinator,
             name: Coordinator.focusMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Coordinator.navigationMessageName
         )
 
         let webView = TerminalWKWebView(frame: .zero, configuration: configuration)
@@ -114,6 +122,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         context.coordinator.updateRemoteContextRetryHandler(onRemoteContextRetry)
         context.coordinator.updateFocusHandler(onFocus)
         context.coordinator.updateInputHandler(onInput)
+        context.coordinator.updateTabNavigationHandler(onTabNavigation)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
         context.coordinator.updateHistoryVisibility(historyVisible)
@@ -135,6 +144,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.focusMessageName
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Coordinator.navigationMessageName
+        )
         webView.navigationDelegate = nil
     }
 
@@ -144,6 +156,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         static let resizeMessageName = "terminalResize"
         static let historyMessageName = "terminalHistory"
         static let focusMessageName = "terminalFocus"
+        static let navigationMessageName = "terminalNavigation"
 
         private weak var session: TerminalSessionModel?
         private weak var webView: WKWebView?
@@ -154,6 +167,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var onRemoteContextRetry: () -> Void
         private var onFocus: () -> Void
         private var onInput: (Data) -> Void
+        private var onTabNavigation: (Int) -> Void
         private var historyVisible: Binding<Bool>
         private var appliedHistoryVisibility: Bool?
         private var pageReady = false
@@ -169,6 +183,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onRemoteContextRetry: @escaping () -> Void,
             onFocus: @escaping () -> Void,
             onInput: @escaping (Data) -> Void,
+            onTabNavigation: @escaping (Int) -> Void,
             historyVisible: Binding<Bool>
         ) {
             self.session = session
@@ -178,6 +193,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             self.onRemoteContextRetry = onRemoteContextRetry
             self.onFocus = onFocus
             self.onInput = onInput
+            self.onTabNavigation = onTabNavigation
             self.historyVisible = historyVisible
         }
 
@@ -225,6 +241,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
 
         func updateInputHandler(_ updated: @escaping (Data) -> Void) {
             onInput = updated
+        }
+
+        func updateTabNavigationHandler(_ updated: @escaping (Int) -> Void) {
+            onTabNavigation = updated
         }
 
         func updateHistoryVisibility(_ visible: Bool) {
@@ -289,6 +309,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 handleHistoryMessage(message.body)
             case Self.focusMessageName:
                 onFocus()
+            case Self.navigationMessageName:
+                guard let value = message.body as? NSNumber else { return }
+                onTabNavigation(value.intValue)
             default:
                 break
             }
@@ -921,6 +944,13 @@ struct SSHTerminalView: View {
                                     .offset(y: 1)
                             }
                         }
+                        .simultaneousGesture(
+                            TapGesture(count: 2).onEnded {
+                                workspace.selectedTabID = tab.id
+                                renameValue = tab.title
+                                renameTabID = tab.id
+                            }
+                        )
                         .contextMenu {
                             if tab.session.isRunning {
                                 Button("Переподключить", systemImage: "arrow.clockwise") {
@@ -1378,6 +1408,9 @@ struct SSHTerminalView: View {
                         broadcast: broadcastsInput
                     )
                 },
+                onTabNavigation: { token in
+                    navigateTabs(token)
+                },
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
@@ -1574,6 +1607,25 @@ struct SSHTerminalView: View {
         }
         let days = hours / 24
         return "\(days)d \(hours % 24)h"
+    }
+
+    private func navigateTabs(_ token: Int) {
+        let tabs = workspace.displayedTabs
+        guard !tabs.isEmpty else { return }
+
+        if token >= 0 {
+            guard token < tabs.count else { return }
+            workspace.selectedTabID = tabs[token].id
+            return
+        }
+
+        guard let currentIndex = tabs.firstIndex(where: { $0.id == workspace.selectedTabID }) else {
+            workspace.selectedTabID = tabs[0].id
+            return
+        }
+        let delta = token == -2 ? -1 : 1
+        let nextIndex = (currentIndex + delta + tabs.count) % tabs.count
+        workspace.selectedTabID = tabs[nextIndex].id
     }
 
     private func reconnectTab(_ tabID: UUID) {

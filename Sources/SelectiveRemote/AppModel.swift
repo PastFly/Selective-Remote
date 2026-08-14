@@ -311,7 +311,9 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var availableUpdateManifest: SelectiveRemoteUpdateManifest?
     @Published private(set) var isDownloadingUpdate = false
     @Published private(set) var updateDownloadProgress = 0.0
+    @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
     @Published private(set) var downloadedUpdateDMGURL: URL?
+    @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
     @Published var updateInstallError: String?
     @Published var automaticallyDownloadUpdates = UserDefaults.standard.bool(
         forKey: "SelectiveRemote.update.autoDownload.v1"
@@ -369,6 +371,8 @@ final class AppModel: NSObject, ObservableObject {
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
     private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
+    private let lastLaunchedVersionKey = "SelectiveRemote.update.lastLaunchedVersion.v1"
+    private let lastShownPostUpdateVersionKey = "SelectiveRemote.update.lastShownPostUpdateVersion.v1"
     private let lastNotifiedUpdateVersionKey = "SelectiveRemote.update.lastNotifiedVersion.v1"
     private let lastNotifiedUpdateDateKey = "SelectiveRemote.update.lastNotifiedDate.v1"
     private let lastSeenUpdateVersionKey = "SelectiveRemote.update.lastSeenVersion.v1"
@@ -450,6 +454,14 @@ final class AppModel: NSObject, ObservableObject {
         }
 
         super.init()
+        let lastUpdateCheckTimestamp = UserDefaults.standard.double(
+            forKey: lastSuccessfulUpdateCheckKey
+        )
+        if lastUpdateCheckTimestamp > 0 {
+            lastSuccessfulUpdateCheckDate = Date(
+                timeIntervalSince1970: lastUpdateCheckTimestamp
+            )
+        }
         passwordStoredProfileIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedPasswordProfilesKey) ?? []
         )
@@ -3590,6 +3602,26 @@ final class AppModel: NSObject, ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    func hasConnectionCenterLog(_ source: ConnectionCenterSource) -> Bool {
+        connectionCenterLogURL(for: source) != nil
+    }
+
+    func revealConnectionCenterLog(_ source: ConnectionCenterSource) {
+        guard let url = connectionCenterLogURL(for: source) else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func connectionCenterLogURL(for source: ConnectionCenterSource) -> URL? {
+        switch source {
+        case let .rdp(profileID):
+            sessions[profileID]?.logURL ?? lastSessionLogURLs[profileID]
+        case let .profileTunnel(_, ruleID), let .independentTunnel(ruleID):
+            managedSSHTunnels[ruleID]?.logURL ?? lastSSHTunnelLogURLs[ruleID]
+        case .terminal, .sftp:
+            nil
+        }
+    }
+
     func checkForUpdates() {
         checkForUpdates(announcesUpToDate: true)
     }
@@ -3620,8 +3652,10 @@ final class AppModel: NSObject, ObservableObject {
                     currentVersion: version,
                     currentBuild: build
                 )
+                let successfulCheckDate = Date()
+                lastSuccessfulUpdateCheckDate = successfulCheckDate
                 UserDefaults.standard.set(
-                    Date().timeIntervalSince1970,
+                    successfulCheckDate.timeIntervalSince1970,
                     forKey: lastSuccessfulUpdateCheckKey
                 )
                 switch result {
@@ -3631,6 +3665,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableReleaseNotesURL = nil
                     downloadedUpdateDMGURL = nil
                     updateInstallError = nil
+                    updateDownloadStage = .idle
                     if announcesUpToDate {
                         updateMessage = UpdateLocalization.text(ru: "Установлена актуальная версия \(AppBrand.name) \(version).", en: "The current version \(AppBrand.name) \(version) is installed.")
                     }
@@ -3643,6 +3678,7 @@ final class AppModel: NSObject, ObservableObject {
                         downloadedUpdateDMGURL = nil
                         updateInstallError = nil
                         updateDownloadProgress = 0
+                        updateDownloadStage = .idle
                     }
                     if announcesUpToDate {
                         updateMessage = UpdateLocalization.text(ru: "Доступна новая версия \(AppBrand.name) \(manifest.version).", en: "A new version \(AppBrand.name) \(manifest.version) is available.")
@@ -3655,6 +3691,9 @@ final class AppModel: NSObject, ObservableObject {
                     availableUpdateManifest = nil
                     availableUpdateURL = nil
                     availableReleaseNotesURL = manifest.releaseNotesURL
+                    downloadedUpdateDMGURL = nil
+                    updateDownloadProgress = 0
+                    updateDownloadStage = .idle
                     let minimum = manifest.minimumMacOS
                         ?? UpdateLocalization.text(ru: "более новая версия macOS", en: "a newer version of macOS")
                     if announcesUpToDate {
@@ -3681,17 +3720,24 @@ final class AppModel: NSObject, ObservableObject {
               !isDownloadingUpdate else { return }
         isDownloadingUpdate = true
         updateDownloadProgress = 0
+        updateDownloadStage = .downloading
         updateInstallError = nil
         Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.isDownloadingUpdate = false }
             do {
                 self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
-                    from: manifest.downloadURL
-                ) { [weak self] value in
-                    self?.updateDownloadProgress = value
-                }
+                    from: manifest.downloadURL,
+                    progress: { [weak self] value in
+                        self?.updateDownloadProgress = value
+                    },
+                    stage: { [weak self] stage in
+                        self?.updateDownloadStage = stage
+                    }
+                )
+                self.updateDownloadStage = .ready
             } catch {
+                self.updateDownloadStage = .idle
                 self.updateInstallError = error.localizedDescription
             }
         }
@@ -3700,10 +3746,12 @@ final class AppModel: NSObject, ObservableObject {
     func installDownloadedUpdateAndRestart() {
         guard let downloadedUpdateDMGURL else { return }
         updateInstallError = nil
+        updateDownloadStage = .installing
         do {
             let mounted = try UpdateInstaller.mountValidatedDMG(downloadedUpdateDMGURL)
             try UpdateInstaller.installAndRestart(mounted)
         } catch {
+            updateDownloadStage = .ready
             updateInstallError = error.localizedDescription
         }
     }
@@ -3714,10 +3762,57 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func openAvailableReleaseNotes() {
-        guard let manifest = availableUpdateManifest else { return }
+        guard let manifest = availableUpdateManifest else {
+            openInstalledReleaseNotes()
+            return
+        }
         UpdateReleaseNotesWindowController.shared.show(
             manifest: manifest,
             currentVersion: AppBuildInfo.version
+        )
+    }
+
+    func openInstalledReleaseNotes() {
+        UpdateReleaseNotesWindowController.shared.showInstalledHistory(
+            currentVersion: AppBuildInfo.version
+        )
+    }
+
+    func presentWhatsNewAfterUpgradeIfNeeded() {
+        let currentVersion = AppBuildInfo.version
+        let versionParts = currentVersion.split(separator: ".", omittingEmptySubsequences: false)
+        guard versionParts.count >= 2,
+              versionParts.allSatisfy({ Int($0) != nil })
+        else { return }
+
+        let defaults = UserDefaults.standard
+        let previousVersion = defaults.string(forKey: lastLaunchedVersionKey)
+        defaults.set(currentVersion, forKey: lastLaunchedVersionKey)
+
+        guard defaults.string(forKey: lastShownPostUpdateVersionKey) != currentVersion else {
+            return
+        }
+
+        guard let previousVersion else {
+            // 0.21.9 is the first build that stores lastLaunchedVersion. On this
+            // bootstrap launch, show the installed history once. Later upgrades
+            // have an exact previousVersion and show only the skipped releases.
+            defaults.set(currentVersion, forKey: lastShownPostUpdateVersionKey)
+            UpdateReleaseNotesWindowController.shared.showInstalledHistory(
+                currentVersion: currentVersion
+            )
+            return
+        }
+
+        guard UpdateReleaseNotesParser.compareVersions(
+            previousVersion,
+            currentVersion
+        ) == .orderedAscending else { return }
+
+        defaults.set(currentVersion, forKey: lastShownPostUpdateVersionKey)
+        UpdateReleaseNotesWindowController.shared.showPostUpdate(
+            previousVersion: previousVersion,
+            currentVersion: currentVersion
         )
     }
 

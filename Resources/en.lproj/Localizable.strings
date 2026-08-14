@@ -520,3 +520,33 @@
 "безопасный текст" = "safe text";
 "Активных:" = "Active:";
 "Экспорт диагностики" = "Export Diagnostic";
+
+
+// 0.21.9 UX & Reliability
+"Что нового…" = "What's New…";
+"Проверка системы" = "System Check";
+"Проверить всё" = "Run All Checks";
+"Проверяем…" = "Checking…";
+"Проверка ещё не запускалась" = "The system check has not run yet";
+"Открыть настройки" = "Open Settings";
+"Расположение приложения" = "Application Location";
+"Автоустановка обновлений" = "Automatic Update Installation";
+"Обновления" = "Updates";
+"Локальные preflight-проверки без запуска RDP/SSH и без чтения секретов" = "Local preflight checks without starting RDP/SSH or reading secrets";
+"Проверяем компоненты Selective Remote…" = "Checking Selective Remote components…";
+"Нажмите «Проверить всё», чтобы проверить локальные компоненты, разрешения и канал обновлений." = "Run all checks to verify local components, permissions, and the update feed.";
+"Поиск в Связке ключей" = "Search Keychain";
+"По имени" = "By Name";
+"По типу" = "By Type";
+"По использованию" = "By Usage";
+"По fingerprint" = "By Fingerprint";
+"Все состояния" = "All States";
+"Активные SSH" = "Active SSH";
+"Активные RDP" = "Active RDP";
+"Подключается" = "Connecting";
+"Переподключение" = "Reconnecting";
+"Столбцы" = "Columns";
+"Копировать адрес" = "Copy Address";
+"Копировать user@host" = "Copy user@host";
+"Нажмите, чтобы отфильтровать подключения" = "Click to filter connections";
+"Проверить сейчас" = "Check Now";

@@ -43,21 +43,37 @@ struct UpdateReleaseNotesSection: Identifiable, Equatable, Sendable {
 struct UpdateReleaseNotesHistory: Equatable, Sendable {
     let sections: [UpdateReleaseNotesSection]
     let language: UpdateReleaseNotesLanguage
+    let usedBundledFallback: Bool
 }
 
 enum UpdateReleaseNotesError: LocalizedError {
     case invalidResponse
     case invalidText
     case targetVersionMissing(String)
+    case bundledHistoryMissing
 
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            "The release-notes server returned an invalid response."
+            UpdateLocalization.text(
+                ru: "Сервер истории изменений вернул некорректный ответ.",
+                en: "The release-notes server returned an invalid response."
+            )
         case .invalidText:
-            "The release-notes document is not valid UTF-8 text."
+            UpdateLocalization.text(
+                ru: "История изменений не является корректным UTF-8 текстом.",
+                en: "The release-notes document is not valid UTF-8 text."
+            )
         case let .targetVersionMissing(version):
-            "No release notes were found for version \(version)."
+            UpdateLocalization.text(
+                ru: "В истории не найдено описание версии \(version).",
+                en: "No release notes were found for version \(version)."
+            )
+        case .bundledHistoryMissing:
+            UpdateLocalization.text(
+                ru: "Локальная история изменений не найдена в приложении.",
+                en: "The bundled release history is missing from the application."
+            )
         }
     }
 }
@@ -68,6 +84,62 @@ enum UpdateReleaseNotesParser {
         currentVersion: String,
         targetVersion: String
     ) throws -> [UpdateReleaseNotesSection] {
+        let filtered = allSections(markdown)
+            .filter {
+                compareVersions($0.version, currentVersion) == .orderedDescending
+                    && compareVersions($0.version, targetVersion) != .orderedDescending
+            }
+            .sorted {
+                compareVersions($0.version, $1.version) == .orderedDescending
+            }
+
+        guard filtered.contains(where: {
+            compareVersions($0.version, targetVersion) == .orderedSame
+        }) else {
+            throw UpdateReleaseNotesError.targetVersionMissing(targetVersion)
+        }
+        return filtered
+    }
+
+    static func parseInstalledHistory(
+        _ markdown: String,
+        currentVersion: String,
+        limit: Int = 12
+    ) throws -> [UpdateReleaseNotesSection] {
+        let filtered = allSections(markdown)
+            .filter {
+                compareVersions($0.version, currentVersion) != .orderedDescending
+            }
+            .sorted {
+                compareVersions($0.version, $1.version) == .orderedDescending
+            }
+
+        guard filtered.contains(where: {
+            compareVersions($0.version, currentVersion) == .orderedSame
+        }) else {
+            throw UpdateReleaseNotesError.targetVersionMissing(currentVersion)
+        }
+        return Array(filtered.prefix(max(1, limit)))
+    }
+
+    static func compareVersions(
+        _ lhsVersion: String,
+        _ rhsVersion: String
+    ) -> ComparisonResult {
+        let lhs = numericComponents(lhsVersion)
+        let rhs = numericComponents(rhsVersion)
+        let count = max(lhs.count, rhs.count)
+
+        for index in 0..<count {
+            let left = index < lhs.count ? lhs[index] : 0
+            let right = index < rhs.count ? rhs[index] : 0
+            if left < right { return .orderedAscending }
+            if left > right { return .orderedDescending }
+        }
+        return .orderedSame
+    }
+
+    private static func allSections(_ markdown: String) -> [UpdateReleaseNotesSection] {
         var sections: [UpdateReleaseNotesSection] = []
         var activeVersion: String?
         var activeChanges: [String] = []
@@ -99,39 +171,7 @@ enum UpdateReleaseNotesParser {
             }
         }
         flushActiveSection()
-
-        let filtered = sections
-            .filter {
-                compareVersions($0.version, currentVersion) == .orderedDescending
-                    && compareVersions($0.version, targetVersion) != .orderedDescending
-            }
-            .sorted {
-                compareVersions($0.version, $1.version) == .orderedDescending
-            }
-
-        guard filtered.contains(where: {
-            compareVersions($0.version, targetVersion) == .orderedSame
-        }) else {
-            throw UpdateReleaseNotesError.targetVersionMissing(targetVersion)
-        }
-        return filtered
-    }
-
-    static func compareVersions(
-        _ lhsVersion: String,
-        _ rhsVersion: String
-    ) -> ComparisonResult {
-        let lhs = numericComponents(lhsVersion)
-        let rhs = numericComponents(rhsVersion)
-        let count = max(lhs.count, rhs.count)
-
-        for index in 0..<count {
-            let left = index < lhs.count ? lhs[index] : 0
-            let right = index < rhs.count ? rhs[index] : 0
-            if left < right { return .orderedAscending }
-            if left > right { return .orderedDescending }
-        }
-        return .orderedSame
+        return sections
     }
 
     private static func normalizedVersionHeading(_ heading: String) -> String? {
@@ -159,8 +199,13 @@ enum UpdateReleaseNotesParser {
 }
 
 enum UpdateReleaseNotesService {
+    private enum Source {
+        case remote(URL)
+        case bundled(name: String)
+    }
+
     private struct Candidate {
-        let url: URL
+        let source: Source
         let language: UpdateReleaseNotesLanguage
     }
 
@@ -175,21 +220,86 @@ enum UpdateReleaseNotesService {
         manifest: SelectiveRemoteUpdateManifest,
         currentVersion: String,
         language: UpdateReleaseNotesLanguage,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        bundle: Bundle = .main
+    ) async throws -> UpdateReleaseNotesHistory {
+        try await fetchFromCandidates(
+            updateCandidates(for: manifest, language: language),
+            session: session,
+            bundle: bundle
+        ) { markdown in
+            try UpdateReleaseNotesParser.parse(
+                markdown,
+                currentVersion: currentVersion,
+                targetVersion: manifest.version
+            )
+        }
+    }
+
+    static func fetchInstalled(
+        currentVersion: String,
+        language: UpdateReleaseNotesLanguage,
+        limit: Int = 12,
+        session: URLSession = .shared,
+        bundle: Bundle = .main
+    ) async throws -> UpdateReleaseNotesHistory {
+        try await fetchFromCandidates(
+            generalCandidates(language: language),
+            session: session,
+            bundle: bundle
+        ) { markdown in
+            try UpdateReleaseNotesParser.parseInstalledHistory(
+                markdown,
+                currentVersion: currentVersion,
+                limit: limit
+            )
+        }
+    }
+
+    static func fetchPostUpdate(
+        previousVersion: String,
+        currentVersion: String,
+        language: UpdateReleaseNotesLanguage,
+        session: URLSession = .shared,
+        bundle: Bundle = .main
+    ) async throws -> UpdateReleaseNotesHistory {
+        try await fetchFromCandidates(
+            generalCandidates(language: language),
+            session: session,
+            bundle: bundle
+        ) { markdown in
+            try UpdateReleaseNotesParser.parse(
+                markdown,
+                currentVersion: previousVersion,
+                targetVersion: currentVersion
+            )
+        }
+    }
+
+    private static func fetchFromCandidates(
+        _ candidates: [Candidate],
+        session: URLSession,
+        bundle: Bundle,
+        parser: (String) throws -> [UpdateReleaseNotesSection]
     ) async throws -> UpdateReleaseNotesHistory {
         var lastError: Error?
 
-        for candidate in candidates(for: manifest, language: language) {
+        for candidate in candidates {
             do {
-                let markdown = try await fetchMarkdown(candidate.url, session: session)
-                let sections = try UpdateReleaseNotesParser.parse(
-                    markdown,
-                    currentVersion: currentVersion,
-                    targetVersion: manifest.version
-                )
+                let markdown: String
+                let bundled: Bool
+                switch candidate.source {
+                case let .remote(url):
+                    markdown = try await fetchMarkdown(url, session: session)
+                    bundled = false
+                case let .bundled(name):
+                    markdown = try bundledMarkdown(name: name, bundle: bundle)
+                    bundled = true
+                }
                 return UpdateReleaseNotesHistory(
-                    sections: sections,
-                    language: candidate.language
+                    sections: try parser(markdown),
+                    language: candidate.language,
+                    usedBundledFallback: bundled
                 )
             } catch is CancellationError {
                 throw CancellationError()
@@ -198,36 +308,75 @@ enum UpdateReleaseNotesService {
             }
         }
 
-        throw lastError ?? UpdateReleaseNotesError.targetVersionMissing(manifest.version)
+        throw lastError ?? UpdateReleaseNotesError.bundledHistoryMissing
     }
 
-    private static func candidates(
+    private static func updateCandidates(
         for manifest: SelectiveRemoteUpdateManifest,
         language: UpdateReleaseNotesLanguage
     ) -> [Candidate] {
         var result: [Candidate] = []
 
-        func append(_ url: URL?, language: UpdateReleaseNotesLanguage) {
+        func appendRemote(_ url: URL?, language: UpdateReleaseNotesLanguage) {
             guard let url else { return }
-            guard !result.contains(where: { $0.url.absoluteString == url.absoluteString }) else {
-                return
-            }
-            result.append(Candidate(url: url, language: language))
+            guard !result.contains(where: { candidate in
+                if case let .remote(existing) = candidate.source {
+                    return existing.absoluteString == url.absoluteString
+                }
+                return false
+            }) else { return }
+            result.append(Candidate(source: .remote(url), language: language))
         }
 
         switch language {
         case .russian:
-            append(manifest.releaseNotesHistoryURL, language: .russian)
-            append(russianFallbackURL, language: .russian)
-            append(manifest.releaseNotesHistoryENURL, language: .english)
-            append(englishFallbackURL, language: .english)
+            appendRemote(manifest.releaseNotesHistoryURL, language: .russian)
+            appendRemote(russianFallbackURL, language: .russian)
+            appendRemote(manifest.releaseNotesHistoryENURL, language: .english)
+            appendRemote(englishFallbackURL, language: .english)
         case .english:
-            append(manifest.releaseNotesHistoryENURL, language: .english)
-            append(englishFallbackURL, language: .english)
-            append(manifest.releaseNotesHistoryURL, language: .russian)
-            append(russianFallbackURL, language: .russian)
+            appendRemote(manifest.releaseNotesHistoryENURL, language: .english)
+            appendRemote(englishFallbackURL, language: .english)
+            appendRemote(manifest.releaseNotesHistoryURL, language: .russian)
+            appendRemote(russianFallbackURL, language: .russian)
         }
+        appendBundledFallbacks(to: &result, language: language)
         return result
+    }
+
+    private static func generalCandidates(
+        language: UpdateReleaseNotesLanguage
+    ) -> [Candidate] {
+        switch language {
+        case .russian:
+            return [
+                Candidate(source: .bundled(name: "CHANGELOG"), language: .russian),
+                Candidate(source: .remote(russianFallbackURL), language: .russian),
+                Candidate(source: .bundled(name: "CHANGELOG_EN"), language: .english),
+                Candidate(source: .remote(englishFallbackURL), language: .english)
+            ]
+        case .english:
+            return [
+                Candidate(source: .bundled(name: "CHANGELOG_EN"), language: .english),
+                Candidate(source: .remote(englishFallbackURL), language: .english),
+                Candidate(source: .bundled(name: "CHANGELOG"), language: .russian),
+                Candidate(source: .remote(russianFallbackURL), language: .russian)
+            ]
+        }
+    }
+
+    private static func appendBundledFallbacks(
+        to result: inout [Candidate],
+        language: UpdateReleaseNotesLanguage
+    ) {
+        switch language {
+        case .russian:
+            result.append(Candidate(source: .bundled(name: "CHANGELOG"), language: .russian))
+            result.append(Candidate(source: .bundled(name: "CHANGELOG_EN"), language: .english))
+        case .english:
+            result.append(Candidate(source: .bundled(name: "CHANGELOG_EN"), language: .english))
+            result.append(Candidate(source: .bundled(name: "CHANGELOG"), language: .russian))
+        }
     }
 
     private static func fetchMarkdown(
@@ -236,7 +385,7 @@ enum UpdateReleaseNotesService {
     ) async throws -> String {
         var request = URLRequest(url: url)
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 15
+        request.timeoutInterval = 12
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse,
@@ -248,6 +397,44 @@ enum UpdateReleaseNotesService {
             throw UpdateReleaseNotesError.invalidText
         }
         return markdown
+    }
+
+    private static func bundledMarkdown(
+        name: String,
+        bundle: Bundle
+    ) throws -> String {
+        guard let url = bundle.url(forResource: name, withExtension: "md") else {
+            throw UpdateReleaseNotesError.bundledHistoryMissing
+        }
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            throw UpdateReleaseNotesError.invalidText
+        }
+        return text
+    }
+}
+
+private enum UpdateReleaseNotesPresentation {
+    case update(manifest: SelectiveRemoteUpdateManifest, installedVersion: String)
+    case installed(version: String)
+    case postUpdate(previousVersion: String, currentVersion: String)
+
+    var targetVersion: String {
+        switch self {
+        case let .update(manifest, _): manifest.version
+        case let .installed(version): version
+        case let .postUpdate(_, currentVersion): currentVersion
+        }
+    }
+
+    var identity: String {
+        switch self {
+        case let .update(manifest, installedVersion):
+            "update-\(installedVersion)-\(manifest.version)"
+        case let .installed(version):
+            "installed-\(version)"
+        case let .postUpdate(previousVersion, currentVersion):
+            "post-\(previousVersion)-\(currentVersion)"
+        }
     }
 }
 
@@ -262,17 +449,28 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
         manifest: SelectiveRemoteUpdateManifest,
         currentVersion: String
     ) {
+        show(.update(manifest: manifest, installedVersion: currentVersion))
+    }
+
+    func showInstalledHistory(currentVersion: String) {
+        show(.installed(version: currentVersion))
+    }
+
+    func showPostUpdate(previousVersion: String, currentVersion: String) {
+        show(.postUpdate(previousVersion: previousVersion, currentVersion: currentVersion))
+    }
+
+    private func show(_ presentation: UpdateReleaseNotesPresentation) {
         let language = UpdateReleaseNotesLanguage.preferred()
         let content = AnyView(
             UpdateReleaseNotesView(
-                manifest: manifest,
-                currentVersion: currentVersion,
+                presentation: presentation,
                 language: language,
                 onClose: { [weak self] in
                     self?.window?.performClose(nil)
                 }
             )
-            .id("\(currentVersion)-\(manifest.version)-\(language.rawValue)")
+            .id("\(presentation.identity)-\(language.rawValue)")
             .environment(\.locale, language.locale)
         )
 
@@ -283,8 +481,8 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
         } else {
             let hosting = NSHostingController(rootView: content)
             let created = NSWindow(contentViewController: hosting)
-            created.setContentSize(NSSize(width: 760, height: 680))
-            created.minSize = NSSize(width: 620, height: 500)
+            created.setContentSize(NSSize(width: 780, height: 700))
+            created.minSize = NSSize(width: 640, height: 520)
             created.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             created.isReleasedWhenClosed = false
             created.delegate = self
@@ -305,13 +503,13 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
 }
 
 private struct UpdateReleaseNotesView: View {
-    let manifest: SelectiveRemoteUpdateManifest
-    let currentVersion: String
+    let presentation: UpdateReleaseNotesPresentation
     let language: UpdateReleaseNotesLanguage
     let onClose: () -> Void
 
     @State private var sections: [UpdateReleaseNotesSection] = []
     @State private var displayedLanguage: UpdateReleaseNotesLanguage?
+    @State private var usedBundledFallback = false
     @State private var isLoading = true
     @State private var errorMessage: String?
 
@@ -338,15 +536,10 @@ private struct UpdateReleaseNotesView: View {
             Divider()
 
             HStack {
-                Text(language.text(
-                    ru: "Показаны изменения после установленной версии.",
-                    en: "Showing changes after the installed version."
-                ))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-
+                Text(footerText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Spacer()
-
                 Button(language.text(ru: "Готово", en: "Done")) {
                     onClose()
                 }
@@ -355,7 +548,7 @@ private struct UpdateReleaseNotesView: View {
             .padding(.horizontal, 24)
             .padding(.vertical, 14)
         }
-        .frame(minWidth: 620, minHeight: 500)
+        .frame(minWidth: 640, minHeight: 520)
         .task {
             await load()
         }
@@ -363,35 +556,97 @@ private struct UpdateReleaseNotesView: View {
 
     private var header: some View {
         HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "sparkles")
+            Image(systemName: headerIcon)
                 .font(.system(size: 28, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
                 .frame(width: 36, height: 36)
 
             VStack(alignment: .leading, spacing: 8) {
-                Text(language.text(
-                    ru: "Что нового в \(AppBrand.name)",
-                    en: "What's New in \(AppBrand.name)"
-                ))
-                .font(.title2.bold())
+                Text(headerTitle)
+                    .font(.title2.bold())
 
-                HStack(spacing: 10) {
+                switch presentation {
+                case let .update(manifest, installedVersion):
+                    versionTransition(
+                        leftTitle: language.text(ru: "Установлено", en: "Installed"),
+                        leftVersion: installedVersion,
+                        rightTitle: language.text(ru: "Доступно", en: "Available"),
+                        rightVersion: manifest.version
+                    )
+                case let .installed(version):
                     versionPill(
                         title: language.text(ru: "Установлено", en: "Installed"),
-                        version: currentVersion,
-                        emphasized: false
-                    )
-                    Image(systemName: "arrow.right")
-                        .foregroundStyle(.secondary)
-                    versionPill(
-                        title: language.text(ru: "Доступно", en: "Available"),
-                        version: manifest.version,
+                        version: version,
                         emphasized: true
+                    )
+                case let .postUpdate(previousVersion, currentVersion):
+                    versionTransition(
+                        leftTitle: language.text(ru: "Было", en: "Previous"),
+                        leftVersion: previousVersion,
+                        rightTitle: language.text(ru: "Теперь", en: "Now"),
+                        rightVersion: currentVersion
                     )
                 }
             }
-
             Spacer()
+        }
+    }
+
+    private var headerIcon: String {
+        switch presentation {
+        case .postUpdate: "checkmark.seal.fill"
+        case .update: "sparkles"
+        case .installed: "clock.arrow.circlepath"
+        }
+    }
+
+    private var headerTitle: String {
+        switch presentation {
+        case .update, .installed:
+            language.text(
+                ru: "Что нового в \(AppBrand.name)",
+                en: "What's New in \(AppBrand.name)"
+            )
+        case let .postUpdate(_, currentVersion):
+            language.text(
+                ru: "\(AppBrand.name) обновлён до \(currentVersion)",
+                en: "\(AppBrand.name) was updated to \(currentVersion)"
+            )
+        }
+    }
+
+    private var footerText: String {
+        switch presentation {
+        case .update:
+            language.text(
+                ru: "Показаны изменения после установленной версии.",
+                en: "Showing changes after the installed version."
+            )
+        case .installed:
+            language.text(
+                ru: "История установленной и предыдущих версий.",
+                en: "History for the installed and previous versions."
+            )
+        case .postUpdate:
+            language.text(
+                ru: "Показаны изменения, полученные при этом обновлении.",
+                en: "Showing changes included in this update."
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func versionTransition(
+        leftTitle: String,
+        leftVersion: String,
+        rightTitle: String,
+        rightVersion: String
+    ) -> some View {
+        HStack(spacing: 10) {
+            versionPill(title: leftTitle, version: leftVersion, emphasized: false)
+            Image(systemName: "arrow.right")
+                .foregroundStyle(.secondary)
+            versionPill(title: rightTitle, version: rightVersion, emphasized: true)
         }
     }
 
@@ -457,6 +712,25 @@ private struct UpdateReleaseNotesView: View {
     private var historyView: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
+                if usedBundledFallback {
+                    Label(
+                        language.text(
+                            ru: "Показана история, встроенная в приложение — доступ к сети не требуется.",
+                            en: "Showing the release history bundled with the app — no network access is required."
+                        ),
+                        systemImage: "wifi.slash"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        Color.secondary.opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    )
+                    .padding(.bottom, 12)
+                }
+
                 if let displayedLanguage, displayedLanguage != language {
                     Label(
                         language.text(
@@ -502,7 +776,7 @@ private struct UpdateReleaseNotesView: View {
 
                 if UpdateReleaseNotesParser.compareVersions(
                     section.version,
-                    manifest.version
+                    presentation.targetVersion
                 ) == .orderedSame {
                     Text(language.text(ru: "Последняя", en: "Latest"))
                         .font(.caption.bold())
@@ -511,7 +785,6 @@ private struct UpdateReleaseNotesView: View {
                         .padding(.vertical, 3)
                         .background(Color.accentColor.opacity(0.12), in: Capsule())
                 }
-
                 Spacer()
             }
 
@@ -547,14 +820,30 @@ private struct UpdateReleaseNotesView: View {
         isLoading = true
         errorMessage = nil
         do {
-            let history = try await UpdateReleaseNotesService.fetch(
-                manifest: manifest,
-                currentVersion: currentVersion,
-                language: language
-            )
+            let history: UpdateReleaseNotesHistory
+            switch presentation {
+            case let .update(manifest, installedVersion):
+                history = try await UpdateReleaseNotesService.fetch(
+                    manifest: manifest,
+                    currentVersion: installedVersion,
+                    language: language
+                )
+            case let .installed(version):
+                history = try await UpdateReleaseNotesService.fetchInstalled(
+                    currentVersion: version,
+                    language: language
+                )
+            case let .postUpdate(previousVersion, currentVersion):
+                history = try await UpdateReleaseNotesService.fetchPostUpdate(
+                    previousVersion: previousVersion,
+                    currentVersion: currentVersion,
+                    language: language
+                )
+            }
             guard !Task.isCancelled else { return }
             sections = history.sections
             displayedLanguage = history.language
+            usedBundledFallback = history.usedBundledFallback
             isLoading = false
         } catch is CancellationError {
             return
@@ -562,6 +851,7 @@ private struct UpdateReleaseNotesView: View {
             guard !Task.isCancelled else { return }
             sections = []
             displayedLanguage = nil
+            usedBundledFallback = false
             errorMessage = error.localizedDescription
             isLoading = false
         }

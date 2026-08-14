@@ -14,6 +14,20 @@
 <body>
     <main id="terminal-shell">
         <div id="terminal" aria-label="SSH-терминал"></div>
+        <div id="terminal-search" role="search" aria-label="Поиск в терминале" hidden>
+            <span class="terminal-search-icon" aria-hidden="true">⌕</span>
+            <input
+                id="terminal-search-query"
+                type="search"
+                placeholder="Поиск в терминале"
+                autocomplete="off"
+                spellcheck="false"
+            >
+            <span id="terminal-search-count">0 из 0</span>
+            <button id="terminal-search-previous" type="button" title="Предыдущее совпадение">↑</button>
+            <button id="terminal-search-next" type="button" title="Следующее совпадение">↓</button>
+            <button id="terminal-search-close" type="button" title="Закрыть">×</button>
+        </div>
         <div
             id="terminal-suggestions"
             class="terminal-popover"

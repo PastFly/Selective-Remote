@@ -438,6 +438,7 @@ struct DiagnosticsCenterView: View {
 
     private enum Pane: String, CaseIterable, Identifiable {
         case overview
+        case systemCheck
         case connections
         case rdp
         case ssh
@@ -451,6 +452,7 @@ struct DiagnosticsCenterView: View {
         var title: String {
             switch self {
             case .overview: "Общее"
+            case .systemCheck: "Проверка системы"
             case .connections: "Подключения"
             case .rdp: "RDP"
             case .ssh: "SSH / Terminal"
@@ -597,7 +599,7 @@ struct DiagnosticsCenterView: View {
                     Text(LocalizedStringKey(pane.title)).tag(pane)
                 }
             }
-            .frame(width: 180)
+            .frame(width: 210)
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -644,6 +646,8 @@ struct DiagnosticsCenterView: View {
                     )
                 }
             }
+        case .systemCheck:
+            DiagnosticsSystemCheckView()
         case .connections, .rdp, .ssh, .sftp, .forwarding:
             runtimeList
         case .errors:
@@ -905,6 +909,7 @@ struct DiagnosticsCenterView: View {
     private func paneMatches(_ item: ConnectionCenterItem) -> Bool {
         switch selectedPane {
         case .overview, .connections: true
+        case .systemCheck: false
         case .rdp: item.kind == .rdp
         case .ssh: item.kind == .terminal
         case .sftp: item.kind == .sftp

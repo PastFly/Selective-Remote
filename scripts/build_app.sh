@@ -656,6 +656,8 @@ ICON_SIZES
 iconutil -c icns "$ICONSET" -o "$RES_DIR/AppIcon.icns"
 cp "$RES_DIR/AppIcon.icns" "$SESSION_RES_DIR/AppIcon.icns"
 cp "$ROOT/Resources/updates.example.json" "$RES_DIR/updates.example.json"
+cp "$ROOT/CHANGELOG.md" "$RES_DIR/CHANGELOG.md"
+cp "$ROOT/CHANGELOG_EN.md" "$RES_DIR/CHANGELOG_EN.md"
 cp "$ROOT/Resources/THIRD-PARTY-NOTICES.txt" "$LICENSES_DIR/SelectiveRemote-Notices.txt"
 cp -R "$ROOT/Sources/SelectiveRemote/TerminalResources" "$RES_DIR/TerminalResources"
 cp -R "$ROOT/Resources/en.lproj" "$RES_DIR/en.lproj"

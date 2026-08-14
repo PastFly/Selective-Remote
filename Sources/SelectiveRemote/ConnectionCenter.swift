@@ -200,7 +200,7 @@ struct ConnectionCenterSnapshot: Equatable {
     var problemCount: Int { items.filter { $0.state.isProblem }.count }
 }
 
-private enum ConnectionCenterTypeFilter: String, CaseIterable, Identifiable {
+private enum ConnectionCenterTypeFilter: String, CaseIterable, Identifiable, Hashable {
     case all = "Все типы"
     case rdp = "RDP"
     case terminal = "Terminal"
@@ -220,6 +220,113 @@ private enum ConnectionCenterTypeFilter: String, CaseIterable, Identifiable {
     }
 }
 
+private enum ConnectionCenterStateFilter: String, CaseIterable, Identifiable, Hashable {
+    case all = "Все состояния"
+    case connected = "Подключено"
+    case connecting = "Подключается"
+    case reconnecting = "Переподключение"
+    case problems = "Проблемы"
+
+    var id: String { rawValue }
+
+    func matches(_ item: ConnectionCenterItem) -> Bool {
+        switch self {
+        case .all: true
+        case .connected: item.state == .connected
+        case .connecting: item.state == .connecting
+        case .reconnecting: item.state == .reconnecting
+        case .problems: item.state.isProblem
+        }
+    }
+}
+
+private enum ConnectionCenterSortField: String {
+    case kind
+    case profile
+    case target
+    case port
+    case route
+    case auth
+    case state
+    case uptime
+}
+
+private enum ConnectionCenterPreferences {
+    static let typeFilterKey = "SelectiveRemote.connectionCenter.typeFilter.v1"
+    static let stateFilterKey = "SelectiveRemote.connectionCenter.stateFilter.v1"
+    static let sortFieldKey = "SelectiveRemote.connectionCenter.sortField.v1"
+    static let sortOrderKey = "SelectiveRemote.connectionCenter.sortOrder.v1"
+
+    static func restoredTypeFilter(defaults: UserDefaults = .standard) -> ConnectionCenterTypeFilter {
+        defaults.string(forKey: typeFilterKey)
+            .flatMap(ConnectionCenterTypeFilter.init(rawValue:)) ?? .all
+    }
+
+    static func restoredStateFilter(defaults: UserDefaults = .standard) -> ConnectionCenterStateFilter {
+        defaults.string(forKey: stateFilterKey)
+            .flatMap(ConnectionCenterStateFilter.init(rawValue:)) ?? .all
+    }
+
+    static func restoredSortOrder(defaults: UserDefaults = .standard) -> [KeyPathComparator<ConnectionCenterItem>] {
+        guard let rawField = defaults.string(forKey: sortFieldKey),
+              let field = ConnectionCenterSortField(rawValue: rawField)
+        else { return [] }
+        let order: SortOrder = defaults.string(forKey: sortOrderKey) == "reverse"
+            ? .reverse
+            : .forward
+        switch field {
+        case .kind:
+            return [KeyPathComparator(\ConnectionCenterItem.sortKind, order: order)]
+        case .profile:
+            return [KeyPathComparator(\ConnectionCenterItem.profileName, order: order)]
+        case .target:
+            return [KeyPathComparator(\ConnectionCenterItem.userHost, order: order)]
+        case .port:
+            return [KeyPathComparator(\ConnectionCenterItem.sortPort, order: order)]
+        case .route:
+            return [KeyPathComparator(\ConnectionCenterItem.sortRoute, order: order)]
+        case .auth:
+            return [KeyPathComparator(\ConnectionCenterItem.authentication, order: order)]
+        case .state:
+            return [KeyPathComparator(\ConnectionCenterItem.sortState, order: order)]
+        case .uptime:
+            return [KeyPathComparator(\ConnectionCenterItem.sortUptime, order: order)]
+        }
+    }
+
+    static func sortField(
+        for comparator: KeyPathComparator<ConnectionCenterItem>
+    ) -> ConnectionCenterSortField? {
+        if comparator.keyPath == \ConnectionCenterItem.sortKind { return .kind }
+        if comparator.keyPath == \ConnectionCenterItem.profileName { return .profile }
+        if comparator.keyPath == \ConnectionCenterItem.userHost { return .target }
+        if comparator.keyPath == \ConnectionCenterItem.sortPort { return .port }
+        if comparator.keyPath == \ConnectionCenterItem.sortRoute { return .route }
+        if comparator.keyPath == \ConnectionCenterItem.authentication { return .auth }
+        if comparator.keyPath == \ConnectionCenterItem.sortState { return .state }
+        if comparator.keyPath == \ConnectionCenterItem.sortUptime { return .uptime }
+        return nil
+    }
+
+    static func persistSortOrder(
+        _ sortOrder: [KeyPathComparator<ConnectionCenterItem>],
+        defaults: UserDefaults = .standard
+    ) {
+        guard let comparator = sortOrder.first,
+              let field = sortField(for: comparator)
+        else {
+            defaults.removeObject(forKey: sortFieldKey)
+            defaults.removeObject(forKey: sortOrderKey)
+            return
+        }
+        defaults.set(field.rawValue, forKey: sortFieldKey)
+        defaults.set(
+            comparator.order == .reverse ? "reverse" : "forward",
+            forKey: sortOrderKey
+        )
+    }
+}
+
 struct ConnectionCenterView: View {
     @ObservedObject var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -229,9 +336,12 @@ struct ConnectionCenterView: View {
     let onRefresh: () -> Void
 
     @State private var selectedItemID: String?
-    @State private var filter = ConnectionCenterTypeFilter.all
+    @State private var filter = ConnectionCenterPreferences.restoredTypeFilter()
+    @State private var stateFilter = ConnectionCenterPreferences.restoredStateFilter()
     @State private var searchText = ""
-    @State private var sortOrder: [KeyPathComparator<ConnectionCenterItem>] = []
+    @State private var sortOrder = ConnectionCenterPreferences.restoredSortOrder()
+    @SceneStorage("SelectiveRemote.connectionCenter.columns.v1")
+    private var columnCustomization: TableColumnCustomization<ConnectionCenterItem>
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 30)) { timeline in
@@ -266,6 +376,21 @@ struct ConnectionCenterView: View {
             .onChange(of: items.map(\.id)) { _, _ in
                 normalizeSelection(items: items)
             }
+            .onChange(of: filter) { _, value in
+                UserDefaults.standard.set(
+                    value.rawValue,
+                    forKey: ConnectionCenterPreferences.typeFilterKey
+                )
+            }
+            .onChange(of: stateFilter) { _, value in
+                UserDefaults.standard.set(
+                    value.rawValue,
+                    forKey: ConnectionCenterPreferences.stateFilterKey
+                )
+            }
+            .onChange(of: sortOrderSignature) { _, _ in
+                ConnectionCenterPreferences.persistSortOrder(sortOrder)
+            }
         }
     }
 
@@ -295,32 +420,52 @@ struct ConnectionCenterView: View {
                 title: "Активные SSH",
                 value: snapshot.terminalCount,
                 systemImage: "terminal.fill",
-                color: .green
-            )
+                color: .green,
+                isActive: filter == .terminal && stateFilter == .all
+            ) {
+                filter = .terminal
+                stateFilter = .all
+            }
             statCard(
                 title: "Активные RDP",
                 value: snapshot.rdpCount,
                 systemImage: "desktopcomputer",
-                color: .blue
-            )
+                color: .blue,
+                isActive: filter == .rdp && stateFilter == .all
+            ) {
+                filter = .rdp
+                stateFilter = .all
+            }
             statCard(
                 title: "Туннели",
                 value: snapshot.tunnelCount,
                 systemImage: "arrow.left.arrow.right",
-                color: .indigo
-            )
+                color: .indigo,
+                isActive: filter == .forwarding && stateFilter == .all
+            ) {
+                filter = .forwarding
+                stateFilter = .all
+            }
             statCard(
                 title: "SFTP",
                 value: snapshot.sftpCount,
                 systemImage: "folder.fill",
-                color: .purple
-            )
+                color: .purple,
+                isActive: filter == .sftp && stateFilter == .all
+            ) {
+                filter = .sftp
+                stateFilter = .all
+            }
             statCard(
                 title: "Проблемы",
                 value: snapshot.problemCount,
                 systemImage: "exclamationmark.triangle.fill",
-                color: snapshot.problemCount == 0 ? .secondary : .red
-            )
+                color: snapshot.problemCount == 0 ? .secondary : .red,
+                isActive: stateFilter == .problems
+            ) {
+                filter = .all
+                stateFilter = .problems
+            }
         }
     }
 
@@ -328,36 +473,45 @@ struct ConnectionCenterView: View {
         title: String,
         value: Int,
         systemImage: String,
-        color: Color
+        color: Color,
+        isActive: Bool,
+        action: @escaping () -> Void
     ) -> some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(color.opacity(0.13))
-                Image(systemName: systemImage)
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(color)
-            }
-            .frame(width: 40, height: 40)
+        Button(action: action) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(color.opacity(0.13))
+                    Image(systemName: systemImage)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(color)
+                }
+                .frame(width: 40, height: 40)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.82)
-                    .layoutPriority(1)
-                Text("\(value)")
-                    .font(.title2.bold().monospacedDigit())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(LocalizedStringKey(title))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.82)
+                        .layoutPriority(1)
+                    Text("\(value)")
+                        .font(.title2.bold().monospacedDigit())
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            .padding(13)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(
+                        isActive ? Color.accentColor.opacity(0.85) : Color.primary.opacity(0.07),
+                        lineWidth: isActive ? 1.5 : 1
+                    )
+            }
         }
-        .padding(13)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07))
-        }
+        .buttonStyle(.plain)
+        .help("Нажмите, чтобы отфильтровать подключения")
     }
 
     private var toolbar: some View {
@@ -387,6 +541,14 @@ struct ConnectionCenterView: View {
 
             Spacer()
 
+            Picker("Состояние", selection: $stateFilter) {
+                ForEach(ConnectionCenterStateFilter.allCases) { option in
+                    Text(LocalizedStringKey(option.rawValue)).tag(option)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 150)
+
             Picker("Тип", selection: $filter) {
                 ForEach(ConnectionCenterTypeFilter.allCases) { option in
                     Text(LocalizedStringKey(option.rawValue)).tag(option)
@@ -394,11 +556,55 @@ struct ConnectionCenterView: View {
             }
             .labelsHidden()
             .frame(width: 145)
+
+            Menu("Столбцы", systemImage: "tablecells") {
+                Button {
+                    toggleColumnVisibility("port")
+                } label: {
+                    Label(
+                        "Port",
+                        systemImage: columnIsVisible("port") ? "checkmark" : "circle"
+                    )
+                }
+                Button {
+                    toggleColumnVisibility("route")
+                } label: {
+                    Label(
+                        "Jump Host / Gateway",
+                        systemImage: columnIsVisible("route") ? "checkmark" : "circle"
+                    )
+                }
+                Button {
+                    toggleColumnVisibility("auth")
+                } label: {
+                    Label(
+                        "Auth",
+                        systemImage: columnIsVisible("auth") ? "checkmark" : "circle"
+                    )
+                }
+                Button {
+                    toggleColumnVisibility("uptime")
+                } label: {
+                    Label(
+                        "Uptime",
+                        systemImage: columnIsVisible("uptime") ? "checkmark" : "circle"
+                    )
+                }
+                Divider()
+                Button("Сбросить столбцы", systemImage: "arrow.counterclockwise") {
+                    columnCustomization = TableColumnCustomization<ConnectionCenterItem>()
+                }
+            }
         }
     }
 
     private func connectionTable(items: [ConnectionCenterItem], now: Date) -> some View {
-        Table(items, selection: $selectedItemID, sortOrder: $sortOrder) {
+        Table(
+            items,
+            selection: $selectedItemID,
+            sortOrder: $sortOrder,
+            columnCustomization: $columnCustomization
+        ) {
             TableColumn("Тип", value: \.sortKind) { item in
                 connectionCell(item) {
                     HStack(spacing: 7) {
@@ -438,6 +644,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .width(min: 48, ideal: 58, max: 70)
+            .customizationID("port")
 
             TableColumn("Jump Host / Gateway", value: \.sortRoute) { item in
                 connectionCell(item) {
@@ -448,6 +655,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .width(min: 140, ideal: 190)
+            .customizationID("route")
 
             TableColumn("Auth", value: \.authentication) { item in
                 connectionCell(item) {
@@ -457,6 +665,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .width(min: 90, ideal: 125)
+            .customizationID("auth")
 
             TableColumn("State", value: \.sortState) { item in
                 connectionCell(item) {
@@ -478,6 +687,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .width(min: 68, ideal: 82, max: 100)
+            .customizationID("uptime")
         }
         .frame(minHeight: 280)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -514,9 +724,26 @@ struct ConnectionCenterView: View {
             onOpen(item.source)
         }
 
+        Button("Копировать адрес", systemImage: "doc.on.doc") {
+            selectedItemID = item.id
+            copyText(hostOnly(item.userHost))
+        }
+
+        Button("Копировать user@host", systemImage: "person.crop.circle.badge.checkmark") {
+            selectedItemID = item.id
+            copyText(item.userHost)
+        }
+
         Button("Copy Diagnostic", systemImage: "doc.on.doc") {
             selectedItemID = item.id
             copyDiagnostic(item)
+        }
+
+        if model.hasConnectionCenterLog(item.source) {
+            Button("Показать журнал", systemImage: "doc.text.magnifyingglass") {
+                selectedItemID = item.id
+                model.revealConnectionCenterLog(item.source)
+            }
         }
 
         Divider()
@@ -690,7 +917,7 @@ struct ConnectionCenterView: View {
     private func filteredItems(_ items: [ConnectionCenterItem]) -> [ConnectionCenterItem] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return items.filter { item in
-            guard filter.matches(item) else { return false }
+            guard filter.matches(item), stateFilter.matches(item) else { return false }
             guard !query.isEmpty else { return true }
             return item.kind.title.localizedCaseInsensitiveContains(query)
                 || item.profileName.localizedCaseInsensitiveContains(query)
@@ -751,9 +978,34 @@ struct ConnectionCenterView: View {
         }
     }
 
-    private func copyDiagnostic(_ item: ConnectionCenterItem) {
+    private func columnIsVisible(_ id: String) -> Bool {
+        columnCustomization[visibility: id] != .hidden
+    }
+
+    private func toggleColumnVisibility(_ id: String) {
+        columnCustomization[visibility: id] =
+            columnIsVisible(id) ? .hidden : .visible
+    }
+
+    private var sortOrderSignature: String {
+        guard let comparator = sortOrder.first,
+              let field = ConnectionCenterPreferences.sortField(for: comparator)
+        else { return "none" }
+        return "\(field.rawValue):\(comparator.order == .reverse ? "reverse" : "forward")"
+    }
+
+    private func hostOnly(_ userHost: String) -> String {
+        guard let marker = userHost.lastIndex(of: "@") else { return userHost }
+        return String(userHost[userHost.index(after: marker)...])
+    }
+
+    private func copyText(_ value: String) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(item.diagnosticText, forType: .string)
+        pasteboard.setString(value, forType: .string)
+    }
+
+    private func copyDiagnostic(_ item: ConnectionCenterItem) {
+        copyText(item.diagnosticText)
     }
 }
