@@ -1,3 +1,15 @@
+## 0.21.10
+
+- Fixed Camera and Microphone permission diagnostics: System Check now distinguishes the main-app state from the last known privacy markers produced by real RDP Session runs, without reading TCC.db or triggering hidden permission prompts.
+- System Check gained a Selective Remote readiness summary, SSH / RDP / Camera / Microphone / Updates health states, a Problems Only filter, and safe actions without automatic remediation.
+- A one-time quiet post-upgrade check now verifies critical packaged components and the update feed after a real upgrade; it does not start SSH/RDP, Touch ID, or Camera/Microphone permission requests and only alerts for meaningful problems.
+- The Diagnostics version card now opens the built-in release history, and What's New also shows the installed internal build number.
+- Connection Center gained a single Reset action for search, filters, sorting, and column customization.
+- Removed the deprecated NSRunningApplication activation option used on macOS 14.
+- Fixed Swift 6 compatibility for the new Diagnostics System Check in GitHub Actions.
+- README.md and README_EN.md now use current Connection Center and Forwarding Manager screenshots.
+- RDP fullscreen/Retina/topology, SFTP runtime, and Forwarding runtime were not changed in this release.
+
 ## 0.21.9
 
 - Added a permanent `Help → What's New…` command: release history can now be opened at any time, and a newly installed version is shown once automatically after an upgrade.
