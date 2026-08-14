@@ -1,3 +1,14 @@
+## 0.21.11
+
+- Completely refreshed the RDP profile editor in Connections with a modern profile header, vertical section navigation, quick facts, and a responsive connection summary.
+- Existing working RDP settings continue to use the established logic: displays, RD Gateway, devices, folders, security, and the bottom connection bar were not rewritten.
+- Added a persistent Description field to RDP profiles for purpose or connection notes.
+- Preserved backward compatibility: existing profiles without Description decode with an empty value and require no migration.
+- Selective Remote profile export and import preserve the new Description field.
+- SSH profiles continue to use the existing interface.
+- Added regression tests for legacy-profile compatibility and Codable/export-import round trips of Description.
+- RDP fullscreen/Retina/multi-monitor/topology runtime, SFTP, and Forwarding were not changed in this release.
+
 ## 0.21.10
 
 - Fixed Camera and Microphone permission diagnostics: System Check now distinguishes the main-app state from the last known privacy markers produced by real RDP Session runs, without reading TCC.db or triggering hidden permission prompts.
