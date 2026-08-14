@@ -117,6 +117,54 @@ func exposesFourPaneTerminalGrid() throws {
     #expect(restored.tabs.first?.id == originalOrder[2])
 }
 
+@Test("Пустой независимый терминал сохраняет выбранную сетку")
+@MainActor
+func emptyTerminalWorkspaceKeepsGridLayout() throws {
+    let suiteName = "EmptyTerminalGridTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let profileID = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .custom(host: "", username: ""),
+        defaults: defaults
+    )
+
+    #expect(workspace.isEmptyState)
+    workspace.setLayout(.grid)
+    #expect(workspace.layout == .grid)
+    #expect(workspace.isEmptyState)
+
+    let restored = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .custom(host: "", username: ""),
+        defaults: defaults
+    )
+    #expect(restored.layout == .grid)
+    #expect(restored.isEmptyState)
+}
+
+@Test("Focus mode показывает отдельную кнопку возврата интерфейса")
+func focusModeExposesVisibleRestoreInterfaceButton() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/EmbeddedTerminalView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("if isFocusMode {\n                Button(\"Вернуть интерфейс\""))
+    #expect(source.contains("if !isFocusMode {\n                    Button(\"Развернуть терминал\""))
+    #expect(!source.contains("Button(isFocusMode ? \"Вернуть интерфейс\""))
+    #expect(source.contains("private var gridEmptyPane: some View"))
+}
+
 @Test("Первую вкладку независимого терминала можно закрыть")
 @MainActor
 func closesAndPromotesPrimaryTerminalTab() throws {

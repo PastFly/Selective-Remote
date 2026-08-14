@@ -526,7 +526,8 @@ final class TerminalWorkspaceModel: ObservableObject {
 
     func setLayout(_ newLayout: TerminalWorkspaceLayout) {
         guard !isEmptyState else {
-            layout = .single
+            layout = newLayout
+            secondaryTabID = nil
             return
         }
         if newLayout != .single, tabs.count == 1 {

@@ -378,6 +378,36 @@ func exposesGlobalSSHWorkspaces() throws {
     #expect(forwarding.contains("model.startIndependentPortForward"))
 }
 
+@Test("SSH-профиль использует современную настройку и полноразмерные рабочие области")
+func sshProfileUsesModernSettingsAndFullSizeWorkspaces() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let content = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/ContentView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(content.contains("case authentication = \"Аутентификация\""))
+    #expect(content.contains("case route = \"Маршрут\""))
+    #expect(content.contains("private var sshProfileWorkspace: some View"))
+    #expect(content.contains("private var sshSectionRail: some View"))
+    #expect(content.contains("private var sshProfileInspector: some View"))
+    #expect(content.contains("private var sshRuntimeWorkspace: some View"))
+    #expect(content.contains("private var sshCompactWorkspaceHeader: some View"))
+    #expect(content.contains("private var sshWorkspaceSwitcher: some View"))
+    #expect(content.contains("terminalPanel\n                .id(profile.id)"))
+    #expect(content.contains("SFTPBrowserView(profile: profile, session: sftpSession)"))
+    #expect(content.contains("PortForwardingView(profile: profile)"))
+    #expect(content.contains("terminalFocusMode && selectedTab != .terminal"))
+    #expect(!content.contains("legacyProfileDetail"))
+    #expect(!content.contains("sshGeneralSettings"))
+    #expect(!content.contains("private var profileTabPicker"))
+}
+
 @Test("Двойной клик запускает профильный и независимый SSH-туннель")
 func forwardingRowsKeepDoubleClickStartGesture() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)

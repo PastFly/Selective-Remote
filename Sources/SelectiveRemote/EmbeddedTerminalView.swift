@@ -808,6 +808,14 @@ struct SSHTerminalView: View {
             .buttonStyle(.bordered)
             .help("История и подсказки")
 
+            if isFocusMode {
+                Button("Вернуть интерфейс", systemImage: "arrow.down.right.and.arrow.up.left") {
+                    toggleFocusMode()
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Показать боковую панель и обычный интерфейс приложения")
+            }
+
             Menu {
                 Button("Изменить подключение…", systemImage: "slider.horizontal.3") {
                     connectionEditorRequest = TerminalConnectionEditorRequest(
@@ -839,8 +847,10 @@ struct SSHTerminalView: View {
                 Divider()
                 Button("Палитра действий", systemImage: "command") { showsCommandPalette = true }
                 Button("Оформление", systemImage: "paintpalette") { showsAppearance.toggle() }
-                Button(isFocusMode ? "Вернуть интерфейс" : "Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
-                    toggleFocusMode()
+                if !isFocusMode {
+                    Button("Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
+                        toggleFocusMode()
+                    }
                 }
                 if hasInstallableKey && tab.isPrimary && !tab.session.isRunning {
                     Divider()
@@ -1145,7 +1155,6 @@ struct SSHTerminalView: View {
                     workspace.setLayout(layout)
                     showsCommandPalette = false
                 }
-                .disabled(workspace.isEmptyState)
             }
         }
         .buttonStyle(.bordered)
@@ -1155,7 +1164,52 @@ struct SSHTerminalView: View {
 
     @ViewBuilder
     private var terminalWorkspace: some View {
-        if workspace.isEmptyState {
+        if workspace.layout == .grid {
+            GeometryReader { proxy in
+                let tabs = workspace.visibleTabs()
+                let canAddPane = tabs.count < 4 && workspace.displayedTabs.count < 8
+                let reservedAddPaneCount = canAddPane ? 1 : 0
+                let emptyPaneCount = max(0, 4 - tabs.count - reservedAddPaneCount)
+                let gap: CGFloat = 8
+                let columnCount = 2
+                let rowCount = 2
+                let paneWidth = max(
+                    1,
+                    (proxy.size.width - gap * CGFloat(columnCount - 1))
+                        / CGFloat(columnCount)
+                )
+                let paneHeight = max(
+                    1,
+                    (proxy.size.height - gap * CGFloat(rowCount - 1))
+                        / CGFloat(rowCount)
+                )
+                LazyVGrid(
+                    columns: Array(
+                        repeating: GridItem(.fixed(paneWidth), spacing: gap),
+                        count: columnCount
+                    ),
+                    spacing: gap
+                ) {
+                    ForEach(tabs) { tab in
+                        terminalPane(tab)
+                            .frame(width: paneWidth, height: paneHeight)
+                    }
+                    if canAddPane {
+                        gridAddPane
+                            .frame(width: paneWidth, height: paneHeight)
+                    }
+                    ForEach(0..<emptyPaneCount, id: \.self) { _ in
+                        gridEmptyPane
+                            .frame(width: paneWidth, height: paneHeight)
+                    }
+                }
+                .frame(
+                    width: proxy.size.width,
+                    height: proxy.size.height,
+                    alignment: .topLeading
+                )
+            }
+        } else if workspace.isEmptyState {
             VStack(spacing: 14) {
                 Image(systemName: "terminal.fill")
                     .font(.system(size: 38, weight: .semibold))
@@ -1184,46 +1238,6 @@ struct SSHTerminalView: View {
                 ForEach(workspace.orderedSplitTabs()) { tab in
                     terminalPane(tab)
                 }
-            }
-        } else if workspace.layout == .grid {
-            GeometryReader { proxy in
-                let tabs = workspace.visibleTabs()
-                let canAddPane = tabs.count < 4 && workspace.displayedTabs.count < 8
-                let gridItemCount = tabs.count + (canAddPane ? 1 : 0)
-                let gap: CGFloat = 8
-                let columnCount = gridItemCount == 1 ? 1 : 2
-                let rowCount = max(1, Int(ceil(Double(gridItemCount) / Double(columnCount))))
-                let paneWidth = max(
-                    1,
-                    (proxy.size.width - gap * CGFloat(columnCount - 1))
-                        / CGFloat(columnCount)
-                )
-                let paneHeight = max(
-                    1,
-                    (proxy.size.height - gap * CGFloat(rowCount - 1))
-                        / CGFloat(rowCount)
-                )
-                LazyVGrid(
-                    columns: Array(
-                        repeating: GridItem(.fixed(paneWidth), spacing: gap),
-                        count: columnCount
-                    ),
-                    spacing: gap
-                ) {
-                    ForEach(tabs) { tab in
-                        terminalPane(tab)
-                            .frame(width: paneWidth, height: paneHeight)
-                    }
-                    if canAddPane {
-                        gridAddPane
-                            .frame(width: paneWidth, height: paneHeight)
-                    }
-                }
-                .frame(
-                    width: proxy.size.width,
-                    height: proxy.size.height,
-                    alignment: .topLeading
-                )
             }
         } else {
             terminalPane(workspace.selectedTab)
@@ -1264,6 +1278,25 @@ struct SSHTerminalView: View {
                 )
         }
         .help("Добавить SSH-панель")
+    }
+
+    private var gridEmptyPane: some View {
+        VStack(spacing: 9) {
+            Image(systemName: "rectangle.dashed")
+                .font(.system(size: 22, weight: .medium))
+            Text("Свободная SSH-панель")
+                .font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(.white.opacity(0.34))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white.opacity(0.018))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    Color.white.opacity(0.13),
+                    style: StrokeStyle(lineWidth: 1, dash: [6, 6])
+                )
+        }
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {

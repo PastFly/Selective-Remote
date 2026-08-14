@@ -116,4 +116,17 @@ struct UXReliability02110Tests {
         #expect(notes.contains("versionWithBuild("))
         #expect(notes.contains("static func parseInstalledHistory("))
     }
+
+    @Test("Sidebar update and runtime status cannot squeeze the application name")
+    func sidebarUpdateStatusUsesASeparateNonWrappingRow() throws {
+        let content = try source("Sources/SelectiveRemote/ContentView.swift")
+
+        #expect(content.contains("Text(AppBrand.name)"))
+        #expect(content.contains("Text(\"Обновление \\(manifest.version)\")"))
+        #expect(content.contains(".minimumScaleFactor(0.85)"))
+        #expect(content.contains(".fixedSize(horizontal: true, vertical: false)"))
+        #expect(content.contains("if model.availableUpdateManifest != nil ||\n"
+            + "                    model.runningSessionCount > 0 ||\n"
+            + "                    model.runningSSHTunnelCount > 0"))
+    }
 }
