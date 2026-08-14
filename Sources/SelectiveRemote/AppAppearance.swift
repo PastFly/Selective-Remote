@@ -39,7 +39,7 @@ enum AppTextSize: String, CaseIterable, Identifiable, Sendable {
     var title: String {
         switch self {
         case .small: "Маленький"
-        case .standard: "По умолчанию"
+        case .standard: "Обычный"
         case .large: "Большой"
         case .extraLarge: "Очень большой"
         }
@@ -51,6 +51,33 @@ enum AppTextSize: String, CaseIterable, Identifiable, Sendable {
         case .large: .large
         case .extraLarge: .xxLarge
         }
+    }
+
+    // On macOS dynamicTypeSize alone is barely visible for many controls.
+    // Use a native point-size baseline; never scale the whole window.
+    var bodyPointSize: CGFloat {
+        switch self {
+        case .small: 11.5
+        case .standard: 13.0
+        case .large: 15.5
+        case .extraLarge: 18.0
+        }
+    }
+}
+
+private struct AppTextSizeModifier: ViewModifier {
+    let size: AppTextSize
+
+    func body(content: Content) -> some View {
+        content
+            .font(.system(size: size.bodyPointSize))
+            .dynamicTypeSize(size.dynamicTypeSize)
+    }
+}
+
+extension View {
+    func appTextSize(_ size: AppTextSize) -> some View {
+        modifier(AppTextSizeModifier(size: size))
     }
 }
 
@@ -211,7 +238,7 @@ struct AppAppearanceSettingsSection: View {
                         Text(LocalizedStringKey(item.title)).tag(item)
                     }
                 }
-                Text("Масштаб меняет native-размер текста и элементов управления. Retina/DPI macOS остаётся системным.")
+                Text("Размер текста меняется нативно, без масштабирования всего окна. Retina/DPI macOS остаётся системным.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -27,12 +27,12 @@ private enum VaultFilter: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .all: "Все"
-        case .keys: "SSH Keys"
-        case .certificates: "Certificates"
+        case .keys: "SSH ID"
+        case .certificates: "Сертификаты"
         case .touchID: "Touch ID"
-        case .passwords: "Passwords"
+        case .passwords: "Пароли"
         case .authorities: "SSH CA"
-        case .knownHosts: "Known Hosts"
+        case .knownHosts: "Известные хосты"
         }
     }
 
@@ -282,9 +282,9 @@ struct CredentialVaultView: View {
             .frame(width: 48, height: 48)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Keychain")
+                Text("Связка ключей")
                     .font(.system(size: presentation == .embedded ? 30 : 24, weight: .bold, design: .rounded))
-                Text("SSH ID, Touch ID, OpenSSH certificates и сохранённые реквизиты")
+                Text("SSH ID, Touch ID, OpenSSH-сертификаты и сохранённые реквизиты")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -376,7 +376,7 @@ struct CredentialVaultView: View {
                 }
 
                 if !visibleCredentials.isEmpty {
-                    Section("Passwords") {
+                    Section("Пароли") {
                         ForEach(visibleCredentials) { profile in
                             credentialRow(profile)
                                 .tag(VaultSelection.credential(profile.id))
@@ -385,7 +385,7 @@ struct CredentialVaultView: View {
                 }
 
                 if !visibleAuthorities.isEmpty {
-                    Section("Certificate Authorities") {
+                    Section("Центры сертификации") {
                         ForEach(visibleAuthorities) { authority in
                             authorityRow(authority)
                                 .tag(VaultSelection.authority(authority.id))
@@ -394,7 +394,7 @@ struct CredentialVaultView: View {
                 }
 
                 if !visibleKnownHosts.isEmpty {
-                    Section("Known Hosts") {
+                    Section("Известные хосты") {
                         ForEach(visibleKnownHosts) { entry in
                             knownHostRow(entry)
                                 .tag(VaultSelection.knownHost(entry.id))
@@ -442,12 +442,13 @@ struct CredentialVaultView: View {
     private func keyRow(_ key: SSHKeyRecord) -> some View {
         let certificate = SSHKeyService.certificateURL(for: key) != nil
         let touchIDCompatible = SSHKeyService.isTouchIDCompatible(key)
+        let isSelected = selection == .key(key.id)
         return HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(vaultRowIconBackground(isSelected))
                 Image(systemName: touchIDCompatible ? "touchid" : "key.horizontal")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(vaultRowIconForeground(isSelected))
             }
             .frame(width: 38, height: 38)
 
@@ -512,14 +513,27 @@ struct CredentialVaultView: View {
         }
     }
 
+    private func vaultRowIconBackground(_ isSelected: Bool) -> Color {
+        isSelected
+            ? Color(nsColor: .alternateSelectedControlTextColor).opacity(0.18)
+            : Color.accentColor.opacity(0.12)
+    }
+
+    private func vaultRowIconForeground(_ isSelected: Bool) -> Color {
+        isSelected
+            ? Color(nsColor: .alternateSelectedControlTextColor)
+            : Color.accentColor
+    }
+
     private func credentialRow(_ profile: ConnectionProfile) -> some View {
         let protected = model.sshPasswordRequiresUserPresence(profileID: profile.id)
+        let isSelected = selection == .credential(profile.id)
         return HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(vaultRowIconBackground(isSelected))
                 Image(systemName: protected ? "touchid" : "ellipsis.rectangle.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(vaultRowIconForeground(isSelected))
             }
             .frame(width: 38, height: 38)
 
@@ -550,12 +564,13 @@ struct CredentialVaultView: View {
     }
 
     private func knownHostRow(_ entry: SSHKnownHostEntry) -> some View {
-        HStack(spacing: 11) {
+        let isSelected = selection == .knownHost(entry.id)
+        return HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(vaultRowIconBackground(isSelected))
                 Image(systemName: entry.isHashed ? "lock.fill" : "server.rack")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(vaultRowIconForeground(isSelected))
             }
             .frame(width: 38, height: 38)
 
@@ -600,12 +615,13 @@ struct CredentialVaultView: View {
     }
 
     private func authorityRow(_ authority: SSHCertificateAuthorityRecord) -> some View {
-        HStack(spacing: 11) {
+        let isSelected = selection == .authority(authority.id)
+        return HStack(spacing: 11) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.12))
+                    .fill(vaultRowIconBackground(isSelected))
                 Image(systemName: "seal.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(vaultRowIconForeground(isSelected))
             }
             .frame(width: 38, height: 38)
             VStack(alignment: .leading, spacing: 3) {
@@ -760,9 +776,9 @@ struct CredentialVaultView: View {
             knownHostInspector(entry)
         } else {
             ContentUnavailableView(
-                "Выберите credential",
+                "Выберите реквизиты",
                 systemImage: "key.viewfinder",
-                description: Text("Выберите SSH ID, certificate или сохранённый пароль в списке слева.")
+                description: Text("Выберите SSH ID, сертификат или сохранённый пароль в списке слева.")
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

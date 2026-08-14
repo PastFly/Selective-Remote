@@ -455,10 +455,10 @@ struct DiagnosticsCenterView: View {
             case .rdp: "RDP"
             case .ssh: "SSH / Terminal"
             case .sftp: "SFTP"
-            case .forwarding: "Forwarding"
+            case .forwarding: "Туннели"
             case .errors: "Ошибки"
-            case .environment: "Environment"
-            case .raw: "Raw Report"
+            case .environment: "Окружение"
+            case .raw: "Сырой отчёт"
             }
         }
     }
@@ -503,8 +503,9 @@ struct DiagnosticsCenterView: View {
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedPane)
             }
         }
+        .frame(maxWidth: 1180, alignment: .topLeading)
         .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .alert("Не удалось экспортировать диагностику", isPresented: Binding(
             get: { exportError != nil },
             set: { if !$0 { exportError = nil } }
@@ -520,7 +521,7 @@ struct DiagnosticsCenterView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Центр диагностики")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
-                Text("Структурированное представление безопасного runtime-отчёта")
+                Text("Безопасное представление состояния подключений и окружения")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -528,11 +529,11 @@ struct DiagnosticsCenterView: View {
                 model.refreshConnectionCenterRuntimeState()
                 generatedAt = Date()
             }
-            Button("Copy Diagnostic", systemImage: "doc.on.doc") {
+            Button("Копировать диагностику", systemImage: "doc.on.doc") {
                 copyDiagnostic()
             }
             .buttonStyle(.borderedProminent)
-            Button("Export Diagnostic", systemImage: "square.and.arrow.up") {
+            Button("Экспортировать диагностику", systemImage: "square.and.arrow.up") {
                 exportDiagnostic()
             }
         }
@@ -544,11 +545,11 @@ struct DiagnosticsCenterView: View {
             alignment: .leading,
             spacing: 12
         ) {
-            summaryCard("Version", AppBuildInfo.displayText, "app.badge", .blue)
+            summaryCard("Версия", AppBuildInfo.displayText, "app.badge", .blue)
             summaryCard("macOS", shortMacOSVersion, "macbook", .secondary)
-            summaryCard("Runtime", "\(report.runtimeCount)", "point.3.connected.trianglepath.dotted", .green)
+            summaryCard("Активные сессии", "\(report.runtimeCount)", "point.3.connected.trianglepath.dotted", .green)
             summaryCard(
-                "Problems",
+                "Проблемы",
                 "\(report.problemCount)",
                 "exclamationmark.triangle.fill",
                 report.problemCount == 0 ? .secondary : .red
@@ -616,9 +617,13 @@ struct DiagnosticsCenterView: View {
             .frame(minWidth: 220, maxWidth: 420, minHeight: 34)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
             Spacer()
-            Text("\(visibleRuntimeItems.count) runtime")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text("Активных:")
+                Text("\(visibleRuntimeItems.count)")
+                    .monospacedDigit()
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
         }
     }
 
@@ -635,7 +640,7 @@ struct DiagnosticsCenterView: View {
                     ContentUnavailableView(
                         "Проблем не обнаружено",
                         systemImage: "checkmark.circle",
-                        description: Text("Runtime не сообщает ошибок или reconnect-состояний.")
+                        description: Text("Активные подключения не сообщают ошибок или состояний переподключения.")
                     )
                 }
             }
@@ -658,7 +663,7 @@ struct DiagnosticsCenterView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Безопасный диагностический отчёт")
                     .font(.headline)
-                Text("Пароли, passphrase, значения Keychain, proxy secrets и содержимое private keys не читаются. SSH key / CertificateFile показываются только по basename.")
+                Text("Пароли, кодовые фразы, значения Связки ключей, секреты прокси и содержимое приватных ключей не читаются. Для SSH ID и CertificateFile показывается только имя файла.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -696,7 +701,7 @@ struct DiagnosticsCenterView: View {
         LazyVStack(alignment: .leading, spacing: 12) {
             if visibleRuntimeItems.isEmpty {
                 ContentUnavailableView(
-                    "Нет подходящих runtime-подключений",
+                    "Нет подходящих активных подключений",
                     systemImage: "line.3.horizontal.decrease.circle"
                 )
             } else {
@@ -737,10 +742,10 @@ struct DiagnosticsCenterView: View {
             }
 
             HStack(spacing: 14) {
-                diagnosticFact("Type", item.kind.title)
-                diagnosticFact("Auth", safeValue(label: "Auth", value: item.authentication))
+                diagnosticFact("Тип", item.kind.title)
+                diagnosticFact("Аутентификация", safeValue(label: "Auth", value: item.authentication))
                 if let route = item.route, !route.isEmpty {
-                    diagnosticFact("Route", safeValue(label: "Route", value: route))
+                    diagnosticFact("Маршрут", safeValue(label: "Route", value: route))
                 }
             }
 
@@ -751,7 +756,7 @@ struct DiagnosticsCenterView: View {
                     .textSelection(.enabled)
             }
 
-            DisclosureGroup("Details") {
+            DisclosureGroup("Подробности") {
                 VStack(alignment: .leading, spacing: 9) {
                     ForEach(item.detailSections) { section in
                         let rows = safeRows(section.rows)
@@ -778,7 +783,7 @@ struct DiagnosticsCenterView: View {
 
             HStack {
                 Spacer()
-                Button("Copy section", systemImage: "doc.on.doc") {
+                Button("Копировать секцию", systemImage: "doc.on.doc") {
                     copyRuntimeItem(item)
                 }
                 .controlSize(.small)
@@ -809,11 +814,11 @@ struct DiagnosticsCenterView: View {
             Text("Ошибки и предупреждения")
                 .font(.headline)
             if let error = model.errorMessage, !error.isEmpty, matchesSearch(error) {
-                problemRow("Application", DiagnosticRedactor.sanitize(error))
+                problemRow("Приложение", DiagnosticRedactor.sanitize(error))
             }
             ForEach(model.sshTunnelLastErrors.keys.sorted(by: { $0.uuidString < $1.uuidString }), id: \.self) { id in
                 if let value = model.sshTunnelLastErrors[id], matchesSearch(value) {
-                    problemRow("Forwarding", DiagnosticRedactor.sanitize(value))
+                    problemRow("Туннели", DiagnosticRedactor.sanitize(value))
                 }
             }
             ForEach(snapshot.items.filter { $0.state.isProblem && matchesRuntimeSearch($0) }) { item in
@@ -844,13 +849,13 @@ struct DiagnosticsCenterView: View {
 
     private var environmentView: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Environment")
+            Text("Окружение")
                 .font(.headline)
-            diagnosticEnvironmentRow("Version", AppBuildInfo.displayText)
+            diagnosticEnvironmentRow("Версия", AppBuildInfo.displayText)
             diagnosticEnvironmentRow("macOS", DiagnosticsSystemInfo.macOSVersion)
-            diagnosticEnvironmentRow("Architecture", DiagnosticsSystemInfo.architecture)
-            diagnosticEnvironmentRow("Profiles", "\(report.profileCount)")
-            diagnosticEnvironmentRow("Runtime", "\(report.runtimeCount)")
+            diagnosticEnvironmentRow("Архитектура", DiagnosticsSystemInfo.architecture)
+            diagnosticEnvironmentRow("Профили", "\(report.profileCount)")
+            diagnosticEnvironmentRow("Активные сессии", "\(report.runtimeCount)")
             Text("Переменные окружения и секреты здесь намеренно не отображаются.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -871,10 +876,10 @@ struct DiagnosticsCenterView: View {
     private var rawReport: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("Raw Report")
+                Text("Сырой отчёт")
                     .font(.headline)
                 Spacer()
-                Text("safe text")
+                Text("безопасный текст")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -995,7 +1000,7 @@ struct DiagnosticsCenterView: View {
     private func exportDiagnostic() {
         let report = report
         let panel = NSSavePanel()
-        panel.title = "Export Diagnostic"
+        panel.title = String(localized: "Экспорт диагностики")
         panel.nameFieldStringValue = exportFilename(report.generatedAt)
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true

@@ -43,7 +43,7 @@
 "Details" = "Подробности";
 "Copy section" = "Копировать секцию";
 "Version" = "Версия";
-"Runtime" = "Runtime";
+"Runtime" = "Активные сессии";
 "Problems" = "Проблемы";
 "Environment" = "Окружение";
 "Raw Report" = "Сырой отчёт";
@@ -52,7 +52,7 @@
 "Architecture" = "Архитектура";
 "SSH / Terminal" = "SSH / Терминал";
 "SFTP" = "SFTP";
-"Proxy" = "Proxy";
+"Proxy" = "Прокси";
 "Jump Host" = "Jump Host";
 "Hops" = "Переходы";
 "Keepalive" = "Keepalive";
@@ -86,3 +86,10 @@
 "Block" = "Блок";
 "Underline" = "Подчёркивание";
 "Bar" = "Вертикальная черта";
+
+// 0.21.7 UI polish
+"SSH Keys" = "SSH ID";
+"Certificates" = "Сертификаты";
+"Passwords" = "Пароли";
+"Known Hosts" = "Известные хосты";
+"Certificate Authorities" = "Центры сертификации";

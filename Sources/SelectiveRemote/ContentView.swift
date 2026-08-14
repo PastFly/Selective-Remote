@@ -118,7 +118,7 @@ struct ContentView: View {
                 .ignoresSafeArea()
         }
         .preferredColorScheme(appAppearance.theme.colorScheme)
-        .dynamicTypeSize(appAppearance.textSize.dynamicTypeSize)
+        .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
         .alert("Ошибка", isPresented: Binding(

@@ -134,7 +134,15 @@ func diagnosticsCenterIntegrationContract() throws {
 
     #expect(content.contains("case diagnostics = \"Диагностика\""))
     #expect(content.contains("DiagnosticsCenterView(model: model)"))
-    #expect(diagnostics.contains("Copy Diagnostic"))
-    #expect(diagnostics.contains("Export Diagnostic"))
+    #expect(diagnostics.contains("Копировать диагностику"))
+    #expect(diagnostics.contains("Экспортировать диагностику"))
     #expect(!diagnostics.contains("KeychainService."))
+
+    let uiSource = diagnostics.components(separatedBy: "struct DiagnosticsCenterView").last ?? ""
+    #expect(uiSource.contains(".frame(maxWidth: 1180"))
+    #expect(!uiSource.contains("Text(\"Environment\")"))
+    #expect(!uiSource.contains("Text(\"Raw Report\")"))
+    #expect(!uiSource.contains("proxy secrets"))
+    #expect(!uiSource.contains("private keys"))
+    #expect(!uiSource.contains("basename"))
 }

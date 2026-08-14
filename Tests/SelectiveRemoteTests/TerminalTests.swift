@@ -425,8 +425,8 @@ func includesEnglishLocalizationAndDocumentation() throws {
     #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
     #expect(localization.contains("\"Язык приложения\" = \"Application Language\""))
     #expect(localization.contains("\"SFTP не подключён\" = \"SFTP is not connected\""))
-    #expect(readme.contains("## SSH terminal workspace"))
-    #expect(readme.contains("## Independent forwarding"))
+    #expect(readme.contains("### Terminal Workspace"))
+    #expect(readme.contains("### Forwarding Manager"))
 }
 
 @Test("Защищённый SSH-запрос поддерживает вставку пароля")

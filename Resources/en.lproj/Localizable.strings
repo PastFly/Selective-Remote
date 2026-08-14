@@ -5,7 +5,7 @@
 "Дисплеи" = "Displays";
 "Устройства и звук" = "Devices & Sound";
 "Папки" = "Folders";
-"Туннели" = "Tunnels";
+"Туннели" = "Forwarding";
 "Безопасность" = "Security";
 "Поиск" = "Search";
 "Новое подключение" = "New connection";
@@ -490,3 +490,33 @@
 "Stopping" = "Stopping";
 "Error" = "Error";
 "Bundle identifier приложения в DMG не совпадает с установленным Selective Remote." = "The application bundle identifier in the DMG does not match the installed Selective Remote app.";
+
+// 0.21.7 UI polish
+"Обычный" = "Normal";
+"Размер текста меняется нативно, без масштабирования всего окна. Retina/DPI macOS остаётся системным." = "Text size changes natively without scaling the entire window. macOS Retina/DPI remains system-managed.";
+"Связка ключей" = "Keychain";
+"SSH ID, Touch ID, OpenSSH-сертификаты и сохранённые реквизиты" = "SSH IDs, Touch ID, OpenSSH certificates, and saved credentials";
+"Сертификаты" = "Certificates";
+"Пароли" = "Passwords";
+"Известные хосты" = "Known Hosts";
+"Центры сертификации" = "Certificate Authorities";
+"Выберите реквизиты" = "Select a credential";
+"Выберите SSH ID, сертификат или сохранённый пароль в списке слева." = "Select an SSH ID, certificate, or saved password from the list on the left.";
+"Окружение" = "Environment";
+"Сырой отчёт" = "Raw Report";
+"Безопасное представление состояния подключений и окружения" = "A safe view of connection state and environment";
+"Копировать диагностику" = "Copy Diagnostic";
+"Экспортировать диагностику" = "Export Diagnostic";
+"Версия" = "Version";
+"Активные сессии" = "Active sessions";
+"Пароли, кодовые фразы, значения Связки ключей, секреты прокси и содержимое приватных ключей не читаются. Для SSH ID и CertificateFile показывается только имя файла." = "Passwords, passphrases, Keychain values, proxy secrets, and private-key contents are not read. Only the filename is shown for SSH IDs and CertificateFile.";
+"Активные подключения не сообщают ошибок или состояний переподключения." = "Active connections report no errors or reconnect states.";
+"Нет подходящих активных подключений" = "No matching active connections";
+"Подробности" = "Details";
+"Копировать секцию" = "Copy section";
+"Приложение" = "Application";
+"Профили" = "Profiles";
+"Архитектура" = "Architecture";
+"безопасный текст" = "safe text";
+"Активных:" = "Active:";
+"Экспорт диагностики" = "Export Diagnostic";
