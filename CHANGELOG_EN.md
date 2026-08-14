@@ -1,3 +1,13 @@
+## 0.21.13
+
+- Completely refreshed the SSH profile editor in Connections with a modern header, vertical navigation, quick facts, and a responsive Mac → Jump Host → SSH server route summary.
+- Split SSH settings into General, Authentication, Route, and Security while keeping Terminal, SFTP, and Tunnels as full-size workspaces without a cramped side inspector.
+- Terminal Focus mode now exposes a permanently visible Restore Interface button instead of hiding the action in the ellipsis menu.
+- Terminal Grid can now be selected and persisted with no open terminals; an empty grid immediately presents four SSH cells with a clear add-pane action.
+- Fixed the top of the sidebar when an update and active sessions or tunnels are shown together: the Selective Remote title and update notice no longer collapse into narrow vertical columns.
+- Added regression coverage for the modern SSH UI, independent workspaces, empty Grid, Focus mode, and stable update-notice layout.
+- RDP fullscreen/Retina/multi-monitor/topology, system SSH/PTY, SFTP service, and Forwarding launch logic were not changed in this release.
+
 ## 0.21.12
 
 - Performed a safe repository cleanup without changing user-facing application behavior.
