@@ -16,9 +16,7 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 
 **Connection Center** presents the real state of active RDP, Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
 
-![Connection Center](docs/images/connection-center-0.21.1.png)
-
-> This screenshot was captured on version 0.21.1. The current interface has evolved since then; the image is kept until an up-to-date screenshot is prepared.
+![Connection Center](docs/images/connection-center.png)
 
 ### RDP
 
@@ -77,9 +75,7 @@ The global SSH forwarding workspace combines profile tunnels and independent tun
 - an Inspector with parameters and a visual route diagram;
 - quick start/stop/restart and context actions.
 
-![Forwarding Manager](docs/images/forwarding-manager-0.21.1.png)
-
-> This screenshot was captured on version 0.21.1 and remains as a reference until the documentation gets a current screenshot.
+![Forwarding Manager](docs/images/forwarding-manager.png)
 
 ### Keychain
 

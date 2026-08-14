@@ -907,7 +907,9 @@ struct DiagnosticsSystemCheckView: View {
     }
 
     private var problemResults: [SystemDiagnosticCheckResult] {
-        results.filter(isProblem)
+        results.filter { item in
+            item.status == .warning || item.status == .failed
+        }
     }
 
     private var visibleResults: [SystemDiagnosticCheckResult] {

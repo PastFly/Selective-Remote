@@ -16,9 +16,7 @@
 
 **Центр подключений** собирает фактическое состояние активных RDP, Terminal, SFTP и Forwarding-сессий в одном месте: сервер, профиль, способ аутентификации, состояние, uptime и доступные действия.
 
-![Connection Center](docs/images/connection-center-0.21.1.png)
-
-> Скриншот сделан на версии 0.21.1. Текущий интерфейс развивался дальше; изображение сохранено до подготовки актуального снимка.
+![Connection Center](docs/images/connection-center.png)
 
 ### RDP
 
@@ -77,9 +75,7 @@
 - Inspector с параметрами и визуальной схемой маршрута;
 - быстрые start/stop/restart и контекстные действия.
 
-![Forwarding Manager](docs/images/forwarding-manager-0.21.1.png)
-
-> Скриншот сделан на версии 0.21.1 и оставлен как ориентир до обновления документации актуальным снимком.
+![Forwarding Manager](docs/images/forwarding-manager.png)
 
 ### Связка ключей
 
