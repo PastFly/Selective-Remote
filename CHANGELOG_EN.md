@@ -1,3 +1,11 @@
+## 0.21.12
+
+- Performed a safe repository cleanup without changing user-facing application behavior.
+- Removed the unused legacy Independent SSH tunnel view; the global Forwarding section continues to use the current Forwarding Manager.
+- Redirected tunnel regression tests to the active Forwarding Manager while preserving Profile/Independent and double-click start coverage.
+- Removed obsolete temporary materials: the emergency Retina patcher, its README, and two unused legacy screenshot versions.
+- RDP fullscreen/Retina/multi-monitor/topology, SFTP runtime, and the active Forwarding runtime were not changed in this release.
+
 ## 0.21.11
 
 - Completely refreshed the RDP profile editor in Connections with a modern profile header, vertical section navigation, quick facts, and a responsive connection summary.
