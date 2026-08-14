@@ -1,3 +1,8 @@
+## 0.21.14
+
+- Minor improvements to the built-in help and the application's system menu.
+- RDP, SSH, Terminal, SFTP, and Forwarding runtime behavior was not changed in this release.
+
 ## 0.21.13
 
 - Completely refreshed the SSH profile editor in Connections with a modern header, vertical navigation, quick facts, and a responsive Mac → Jump Host → SSH server route summary.

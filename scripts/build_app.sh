@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="0.21.13"
+VERSION="0.21.14"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="121"
+BUILD_NUMBER="122"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
