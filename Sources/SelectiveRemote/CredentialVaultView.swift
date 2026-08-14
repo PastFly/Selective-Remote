@@ -159,7 +159,9 @@ struct CredentialVaultView: View {
         case .passwords, .authorities, .knownHosts:
             base = []
         }
-        return base.filter(keyMatchesSearch).sorted(by: keySort)
+        return base
+            .filter { key in keyMatchesSearch(key) }
+            .sorted { lhs, rhs in keySort(lhs, rhs) }
     }
 
     private var visibleCredentials: [ConnectionProfile] {
@@ -170,7 +172,9 @@ struct CredentialVaultView: View {
         case .keys, .certificates, .touchID, .authorities, .knownHosts:
             base = []
         }
-        return base.filter(profileMatchesSearch).sorted(by: profileSort)
+        return base
+            .filter { profile in profileMatchesSearch(profile) }
+            .sorted { lhs, rhs in profileSort(lhs, rhs) }
     }
 
     private var visibleKnownHosts: [SSHKnownHostEntry] {
@@ -181,7 +185,9 @@ struct CredentialVaultView: View {
         case .keys, .certificates, .touchID, .passwords, .authorities:
             base = []
         }
-        return base.filter(knownHostMatchesSearch).sorted(by: knownHostSort)
+        return base
+            .filter { entry in knownHostMatchesSearch(entry) }
+            .sorted { lhs, rhs in knownHostSort(lhs, rhs) }
     }
 
     private var visibleAuthorities: [SSHCertificateAuthorityRecord] {
@@ -192,7 +198,9 @@ struct CredentialVaultView: View {
         case .keys, .certificates, .touchID, .passwords, .knownHosts:
             base = []
         }
-        return base.filter(authorityMatchesSearch).sorted(by: authoritySort)
+        return base
+            .filter { authority in authorityMatchesSearch(authority) }
+            .sorted { lhs, rhs in authoritySort(lhs, rhs) }
     }
 
     private var selectedAuthority: SSHCertificateAuthorityRecord? {
