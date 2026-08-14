@@ -5,6 +5,8 @@ struct SelectiveRemoteUpdateManifest: Codable, Equatable, Sendable {
     let build: Int
     let downloadURL: URL
     let releaseNotesURL: URL?
+    let releaseNotesHistoryURL: URL?
+    let releaseNotesHistoryENURL: URL?
     let minimumMacOS: String?
 }
 

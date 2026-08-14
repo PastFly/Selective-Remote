@@ -3714,8 +3714,11 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func openAvailableReleaseNotes() {
-        guard let availableReleaseNotesURL else { return }
-        NSWorkspace.shared.open(availableReleaseNotesURL)
+        guard let manifest = availableUpdateManifest else { return }
+        UpdateReleaseNotesWindowController.shared.show(
+            manifest: manifest,
+            currentVersion: AppBuildInfo.version
+        )
     }
 
     func markAvailableUpdateSeen() {
