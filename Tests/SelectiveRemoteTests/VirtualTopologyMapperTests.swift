@@ -861,12 +861,6 @@ func keepsRDPInTrueFullscreenWithNativeTopEdge() throws {
             .appendingPathComponent("Native/MonitorTopologyInterposer.cpp"),
         encoding: .utf8
     )
-    let toolbar = try String(
-        contentsOf: projectRoot
-            .appendingPathComponent("Sources/SelectiveRemote/RDPSessionControlPanel.swift"),
-        encoding: .utf8
-    )
-
     #expect(service.contains("SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS"))
     #expect(service.contains("SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"))
     #expect(interposer.contains("SDL_GetDisplayUsableBounds"))

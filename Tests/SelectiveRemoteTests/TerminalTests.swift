@@ -363,7 +363,7 @@ func exposesGlobalSSHWorkspaces() throws {
     )
     let forwarding = try String(
         contentsOf: projectRoot.appendingPathComponent(
-            "Sources/SelectiveRemote/IndependentForwardingView.swift"
+            "Sources/SelectiveRemote/ForwardingManager.swift"
         ),
         encoding: .utf8
     )
@@ -374,6 +374,7 @@ func exposesGlobalSSHWorkspaces() throws {
     #expect(content.contains("model.globalSFTPSession"))
     #expect(content.contains("showsGlobalSFTPConnectionEditor"))
     #expect(content.contains("ForwardingManagerView("))
+    #expect(forwarding.contains("model.independentPortForwards"))
     #expect(forwarding.contains("model.startIndependentPortForward"))
 }
 
@@ -384,9 +385,9 @@ func forwardingRowsKeepDoubleClickStartGesture() throws {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
 
-    let independent = try String(
+    let manager = try String(
         contentsOf: projectRoot.appendingPathComponent(
-            "Sources/SelectiveRemote/IndependentForwardingView.swift"
+            "Sources/SelectiveRemote/ForwardingManager.swift"
         ),
         encoding: .utf8
     )
@@ -397,9 +398,11 @@ func forwardingRowsKeepDoubleClickStartGesture() throws {
         encoding: .utf8
     )
 
-    #expect(independent.contains(".simultaneousGesture("))
-    #expect(independent.contains("TapGesture(count: 2).onEnded"))
-    #expect(independent.contains("model.startIndependentPortForward(item.id)"))
+    #expect(manager.contains(".simultaneousGesture("))
+    #expect(manager.contains("TapGesture(count: 2).onEnded"))
+    #expect(manager.contains("start(item)"))
+    #expect(manager.contains("model.startProfileSSHTunnel"))
+    #expect(manager.contains("model.startIndependentPortForward"))
     #expect(profile.contains(".simultaneousGesture("))
     #expect(profile.contains("TapGesture(count: 2).onEnded"))
     #expect(profile.contains("model.startSSHTunnel(rule.id)"))
