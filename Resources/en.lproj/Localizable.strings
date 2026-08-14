@@ -550,3 +550,6 @@
 "Копировать user@host" = "Copy user@host";
 "Нажмите, чтобы отфильтровать подключения" = "Click to filter connections";
 "Проверить сейчас" = "Check Now";
+// RDP profile description
+"Описание" = "Description";
+"Например: назначение или заметка" = "For example: purpose or note";

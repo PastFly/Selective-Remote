@@ -647,6 +647,16 @@ struct ContentView: View {
     }
 
     private var profileDetail: some View {
+        Group {
+            if profile.connectionType == .rdp {
+                rdpProfileWorkspace
+            } else {
+                legacyProfileDetail
+            }
+        }
+    }
+
+    private var legacyProfileDetail: some View {
         VStack(spacing: 0) {
                 if selectedTab == .terminal {
                     if !terminalFocusMode {
@@ -718,6 +728,551 @@ struct ContentView: View {
             .groupBoxStyle(ModernGroupBoxStyle())
             .controlSize(.large)
     }
+
+
+    private var rdpProfileWorkspace: some View {
+        VStack(spacing: 0) {
+            GeometryReader { proxy in
+                VStack(alignment: .leading, spacing: 18) {
+                    rdpWorkspaceHeader
+
+                    HStack(alignment: .top, spacing: 16) {
+                        rdpSectionRail
+                            .frame(width: 205)
+
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 18) {
+                                rdpSectionHeading
+                                rdpQuickFacts
+                                selectedSettingsContent
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.bottom, 20)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                        if proxy.size.width >= 1120 {
+                            rdpProfileInspector
+                                .frame(width: 270)
+                        }
+                    }
+                    .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+
+            connectionBar
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
+    }
+
+    private var rdpWorkspaceHeader: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.blue, Color.indigo],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 25, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 56, height: 56)
+            .shadow(color: Color.blue.opacity(0.20), radius: 9, y: 4)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(
+                        profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Новое RDP-подключение",
+                                en: "New RDP connection"
+                            )
+                            : profile.friendlyName
+                    )
+                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+
+                    Text("RDP")
+                        .font(.caption2.bold())
+                        .foregroundStyle(Color.blue)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.blue.opacity(0.10), in: Capsule())
+                }
+
+                HStack(spacing: 9) {
+                    Label(
+                        profile.host.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Компьютер не указан",
+                                en: "Computer not set"
+                            )
+                            : profile.host,
+                        systemImage: "network"
+                    )
+
+                    if model.selectedProfileHasSavedPassword {
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Пароль в Keychain",
+                                en: "Password in Keychain"
+                            ),
+                            systemImage: "key.fill"
+                        )
+                        .foregroundStyle(.green)
+                    }
+
+                    if !profile.gatewayHost.isEmpty {
+                        Label("RD Gateway", systemImage: "building.2")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button { model.toggleFavorite() } label: {
+                Image(systemName: profile.isFavorite ? "star.fill" : "star")
+            }
+            .buttonStyle(.bordered)
+            .help(UpdateLocalization.text(ru: "Избранное", en: "Favorite"))
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.075))
+        }
+    }
+
+    private var rdpSectionRail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(UpdateLocalization.text(ru: "НАСТРОЙКА", en: "SETTINGS"))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 2)
+
+            ForEach(availableTabs) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: tab.systemImage)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rdpTabTitle(tab))
+                                .font(.subheadline.weight(.semibold))
+                            Text(rdpTabSubtitle(tab))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if selectedTab == tab {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                        }
+                    }
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+                    .padding(.horizontal, 11)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    selectedTab == tab ? Color.accentColor.opacity(0.11) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label(
+                    UpdateLocalization.text(ru: "Автосохранение", en: "Auto Save"),
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+
+                Text(
+                    UpdateLocalization.text(
+                        ru: "Изменения профиля сохраняются сразу.",
+                        en: "Profile changes are saved immediately."
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+        }
+        .padding(10)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private var rdpSectionHeading: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.10))
+                Image(systemName: selectedTab.systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rdpTabTitle(selectedTab))
+                    .font(.title2.bold())
+                Text(rdpTabDescription(selectedTab))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var rdpQuickFacts: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 155), spacing: 10)],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Компьютер", en: "Computer"),
+                value: profile.host.isEmpty ? "—" : profile.host,
+                systemImage: "desktopcomputer"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Пользователь", en: "User"),
+                value: profile.username.isEmpty ? "—" : profile.username,
+                systemImage: "person"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Мониторы", en: "Displays"),
+                value: "\(model.effectiveSelectedDisplayIDs.count)",
+                systemImage: "display.2"
+            )
+            rdpFactCard(
+                "Gateway",
+                value: profile.gatewayHost.isEmpty
+                    ? UpdateLocalization.text(ru: "Прямое", en: "Direct")
+                    : profile.gatewayHost,
+                systemImage: "point.3.connected.trianglepath.dotted"
+            )
+        }
+    }
+
+    private func rdpFactCard(
+        _ title: String,
+        value: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(11)
+        .background(
+            Color.primary.opacity(0.035),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.primary.opacity(0.055))
+        }
+    }
+
+    private var rdpProfileInspector: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(UpdateLocalization.text(ru: "Сводка", en: "Summary"))
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(
+                        model.canConnect || model.isSelectedSessionRunning
+                            ? Color.green
+                            : Color.orange
+                    )
+                    .frame(width: 8, height: 8)
+            }
+
+            VStack(spacing: 8) {
+                rdpRouteNode(
+                    title: UpdateLocalization.text(ru: "Ваш Mac", en: "Your Mac"),
+                    subtitle: "Selective Remote",
+                    systemImage: "macbook"
+                )
+                Image(systemName: "arrow.down")
+                    .foregroundStyle(.secondary)
+
+                if !profile.gatewayHost.isEmpty {
+                    rdpRouteNode(
+                        title: "RD Gateway",
+                        subtitle: profile.gatewayHost,
+                        systemImage: "building.2"
+                    )
+                    Image(systemName: "arrow.down")
+                        .foregroundStyle(.secondary)
+                }
+
+                rdpRouteNode(
+                    title: "Windows",
+                    subtitle: profile.host.isEmpty ? "—" : profile.host,
+                    systemImage: "desktopcomputer"
+                )
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(
+                Color.primary.opacity(0.03),
+                in: RoundedRectangle(cornerRadius: 13)
+            )
+
+            Divider()
+
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Режим окна", en: "Window mode"),
+                value: profile.rdpWindowMode.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Масштаб", en: "Scale"),
+                value: profile.windowsScale.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Качество", en: "Quality"),
+                value: profile.rdpQuality.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Мониторы", en: "Displays"),
+                value: "\(model.effectiveSelectedDisplayIDs.count)"
+            )
+
+            Divider()
+
+            Text(UpdateLocalization.text(ru: "Перенаправления", en: "Redirection"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Микрофон", en: "Microphone"),
+                enabled: profile.redirectMicrophone,
+                systemImage: "mic"
+            )
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Камера", en: "Camera"),
+                enabled: profile.redirectCamera,
+                systemImage: "video"
+            )
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Принтеры", en: "Printers"),
+                enabled: profile.redirectPrinters,
+                systemImage: "printer"
+            )
+
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private func rdpRouteNode(
+        title: String,
+        subtitle: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color.accentColor.opacity(0.10))
+                Image(systemName: systemImage)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func rdpSummaryLine(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+    }
+
+    private func rdpFeatureRow(
+        _ title: String,
+        enabled: Bool,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .frame(width: 18)
+                .foregroundStyle(enabled ? Color.green : Color.secondary)
+            Text(title)
+                .font(.caption)
+            Spacer()
+            Text(
+                enabled
+                    ? UpdateLocalization.text(ru: "Вкл.", en: "On")
+                    : UpdateLocalization.text(ru: "Выкл.", en: "Off")
+            )
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(enabled ? Color.green : Color.secondary)
+        }
+    }
+
+    private func rdpTabTitle(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            UpdateLocalization.text(ru: "Основное", en: "General")
+        case .display:
+            UpdateLocalization.text(ru: "Экран", en: "Display")
+        case .devices:
+            UpdateLocalization.text(ru: "Устройства", en: "Devices")
+        case .folders:
+            UpdateLocalization.text(ru: "Папки", en: "Folders")
+        case .security:
+            UpdateLocalization.text(ru: "Безопасность", en: "Security")
+        case .terminal:
+            UpdateLocalization.text(ru: "Терминал", en: "Terminal")
+        case .sftp:
+            "SFTP"
+        case .forwarding:
+            UpdateLocalization.text(ru: "Туннели", en: "Forwarding")
+        }
+    }
+
+    private func rdpTabSubtitle(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            UpdateLocalization.text(
+                ru: "Адрес и учётная запись",
+                en: "Address and account"
+            )
+        case .display:
+            UpdateLocalization.text(
+                ru: "Мониторы и качество",
+                en: "Displays and quality"
+            )
+        case .devices:
+            UpdateLocalization.text(
+                ru: "Звук, камера, клавиатура",
+                en: "Audio, camera, keyboard"
+            )
+        case .folders:
+            UpdateLocalization.text(
+                ru: "Локальные ресурсы",
+                en: "Local resources"
+            )
+        case .security:
+            UpdateLocalization.text(
+                ru: "Доверие и хранение",
+                en: "Trust and storage"
+            )
+        case .terminal, .sftp, .forwarding:
+            ""
+        }
+    }
+
+    private func rdpTabDescription(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            UpdateLocalization.text(
+                ru: "Компьютер, пользователь, Keychain и RD Gateway.",
+                en: "Computer, user, Keychain, and RD Gateway."
+            )
+        case .display:
+            UpdateLocalization.text(
+                ru: "Мониторы Mac, виртуальная схема Windows, масштаб и качество изображения.",
+                en: "Mac displays, Windows virtual layout, scale, and image quality."
+            )
+        case .devices:
+            UpdateLocalization.text(
+                ru: "Звук, буфер обмена, клавиатура, микрофон, камера и принтеры.",
+                en: "Audio, clipboard, keyboard, microphone, camera, and printers."
+            )
+        case .folders:
+            UpdateLocalization.text(
+                ru: "Папки Mac, которые будут доступны внутри Windows.",
+                en: "Mac folders that will be available inside Windows."
+            )
+        case .security:
+            UpdateLocalization.text(
+                ru: "Доверие, Keychain, импорт и экспорт профиля.",
+                en: "Trust, Keychain, profile import, and export."
+            )
+        case .terminal, .sftp, .forwarding:
+            ""
+        }
+    }
+
 
     private var globalTerminalDetail: some View {
         VStack(spacing: 0) {
@@ -1210,6 +1765,14 @@ struct ContentView: View {
                     GridRow {
                         Text("Группа")
                         TextField("Например: Работа", text: profileBinding.group)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        Text("Описание")
+                        TextField(
+                            "Например: назначение или заметка",
+                            text: profileBinding.profileDescription
+                        )
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {

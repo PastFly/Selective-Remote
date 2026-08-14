@@ -685,6 +685,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var connectionType: ConnectionType
     var friendlyName: String
     var group: String
+    var profileDescription: String
     var host: String
     var username: String
     var sshPort: Int
@@ -740,6 +741,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         self.connectionType = connectionType
         friendlyName = connectionType == .rdp ? "Новое подключение" : "Новое SSH-подключение"
         group = ""
+        profileDescription = ""
         host = ""
         username = ""
         sshPort = 22
@@ -792,7 +794,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, connectionType, friendlyName, group, host, username
+        case id, connectionType, friendlyName, group, profileDescription, host, username
         case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, portForwards
         case gatewayHost, gatewayUsername
@@ -818,6 +820,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         friendlyName = try container.decodeIfPresent(String.self, forKey: .friendlyName)
             ?? defaults.friendlyName
         group = try container.decodeIfPresent(String.self, forKey: .group) ?? defaults.group
+        profileDescription = try container.decodeIfPresent(
+            String.self,
+            forKey: .profileDescription
+        ) ?? defaults.profileDescription
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
@@ -938,6 +944,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(connectionType, forKey: .connectionType)
         try container.encode(friendlyName, forKey: .friendlyName)
         try container.encode(group, forKey: .group)
+        try container.encode(profileDescription, forKey: .profileDescription)
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
