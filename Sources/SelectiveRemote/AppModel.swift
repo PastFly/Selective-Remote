@@ -315,6 +315,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var downloadedUpdateDMGURL: URL?
     @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
     @Published var updateInstallError: String?
+    @Published var postUpgradeHealthWarning: String?
     @Published var automaticallyDownloadUpdates = UserDefaults.standard.bool(
         forKey: "SelectiveRemote.update.autoDownload.v1"
     ) {
@@ -373,6 +374,7 @@ final class AppModel: NSObject, ObservableObject {
     private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
     private let lastLaunchedVersionKey = "SelectiveRemote.update.lastLaunchedVersion.v1"
     private let lastShownPostUpdateVersionKey = "SelectiveRemote.update.lastShownPostUpdateVersion.v1"
+    private let lastPostUpgradeHealthCheckVersionKey = "SelectiveRemote.diagnostics.lastPostUpgradeCheckVersion.v1"
     private let lastNotifiedUpdateVersionKey = "SelectiveRemote.update.lastNotifiedVersion.v1"
     private let lastNotifiedUpdateDateKey = "SelectiveRemote.update.lastNotifiedDate.v1"
     private let lastSeenUpdateVersionKey = "SelectiveRemote.update.lastSeenVersion.v1"
@@ -1229,7 +1231,7 @@ final class AppModel: NSObject, ObservableObject {
         guard let pid = managedSessions[profileID]?.connection.process.processIdentifier,
               let application = NSRunningApplication(processIdentifier: pid)
         else { return }
-        application.activate(options: [.activateIgnoringOtherApps])
+        _ = application.activate()
     }
 
     private struct ConnectionCenterTerminalFields {
@@ -3611,6 +3613,67 @@ final class AppModel: NSObject, ObservableObject {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    func rdpCapturePermissionEvidence() -> RDPCapturePermissionEvidence {
+        let fileManager = FileManager.default
+        var candidates = sessions.values.map(\.logURL)
+            + Array(lastSessionLogURLs.values)
+
+        if let base = try? fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: false
+        ) {
+            let logsDirectory = base.appendingPathComponent(
+                "SelectiveRemote/Logs",
+                isDirectory: true
+            )
+            if let persisted = try? fileManager.contentsOfDirectory(
+                at: logsDirectory,
+                includingPropertiesForKeys: [
+                    .contentModificationDateKey,
+                    .isRegularFileKey
+                ],
+                options: [.skipsHiddenFiles]
+            ) {
+                candidates += persisted.filter { url in
+                    url.lastPathComponent.hasPrefix("session-")
+                        && url.pathExtension.lowercased() == "log"
+                }
+            }
+        }
+
+        var seen = Set<URL>()
+        let ordered = candidates
+            .filter { seen.insert($0.standardizedFileURL).inserted }
+            .sorted { lhs, rhs in
+                let left = (try? lhs.resourceValues(
+                    forKeys: [.contentModificationDateKey]
+                ).contentModificationDate) ?? .distantPast
+                let right = (try? rhs.resourceValues(
+                    forKeys: [.contentModificationDateKey]
+                ).contentModificationDate) ?? .distantPast
+                return left > right
+            }
+            .prefix(20)
+
+        let logs = ordered.compactMap { url -> String? in
+            guard let handle = try? FileHandle(forReadingFrom: url) else {
+                return nil
+            }
+            defer { try? handle.close() }
+            do {
+                guard let data = try handle.read(upToCount: 262_144) else {
+                    return nil
+                }
+                return String(decoding: data, as: UTF8.self)
+            } catch {
+                return nil
+            }
+        }
+        return RDPCapturePermissionEvidence.parse(logs: Array(logs))
+    }
+
     private func connectionCenterLogURL(for source: ConnectionCenterSource) -> URL? {
         switch source {
         case let .rdp(profileID):
@@ -3810,10 +3873,38 @@ final class AppModel: NSObject, ObservableObject {
         ) == .orderedAscending else { return }
 
         defaults.set(currentVersion, forKey: lastShownPostUpdateVersionKey)
+        runPostUpgradeHealthCheckIfNeeded(currentVersion: currentVersion)
         UpdateReleaseNotesWindowController.shared.showPostUpdate(
             previousVersion: previousVersion,
             currentVersion: currentVersion
         )
+    }
+
+    private func runPostUpgradeHealthCheckIfNeeded(currentVersion: String) {
+        let defaults = UserDefaults.standard
+        guard defaults.string(
+            forKey: lastPostUpgradeHealthCheckVersionKey
+        ) != currentVersion else { return }
+        defaults.set(currentVersion, forKey: lastPostUpgradeHealthCheckVersionKey)
+
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, !Task.isCancelled else { return }
+
+            let results = await SystemDiagnosticsCheckService
+                .runPostUpgradeCriticalChecks()
+            let attention = results.filter { item in
+                item.status == .failed
+                    || (item.id == "app-location" && item.status == .warning)
+            }
+            guard !attention.isEmpty else { return }
+
+            let names = attention.map(\.title).joined(separator: ", ")
+            self.postUpgradeHealthWarning = UpdateLocalization.text(
+                ru: "После обновления требуется проверить: \(names). Откройте Центр диагностики — автоматические исправления не выполнялись.",
+                en: "After the update, check: \(names). Open Diagnostics Center; no automatic fixes were performed."
+            )
+        }
     }
 
     func markAvailableUpdateSeen() {

@@ -95,7 +95,7 @@ struct UXReliability0219Tests {
         let center = try source("Sources/SelectiveRemote/DiagnosticsCenter.swift")
         let checks = try source("Sources/SelectiveRemote/SystemDiagnosticsCheck.swift")
         #expect(center.contains("case systemCheck"))
-        #expect(center.contains("DiagnosticsSystemCheckView()"))
+        #expect(center.contains("DiagnosticsSystemCheckView(model: model)"))
         #expect(checks.contains("SecItemCopyMatching"))
         #expect(checks.contains("AVCaptureDevice.authorizationStatus"))
         #expect(!checks.contains("connectSSHTerminal("))

@@ -30,9 +30,75 @@ enum SystemDiagnosticCheckStatus: String {
     }
 }
 
+enum RDPCapturePermissionEvidenceState: String, Equatable, Sendable {
+    case granted
+    case denied
+    case restricted
+    case timedOut
+    case requesting
+    case unknown
+}
+
+struct RDPCapturePermissionEvidence: Equatable, Sendable {
+    var camera: RDPCapturePermissionEvidenceState? = nil
+    var microphone: RDPCapturePermissionEvidenceState? = nil
+
+    static func parse(logs: [String]) -> Self {
+        RDPCapturePermissionEvidence(
+            camera: state(for: "camera", in: logs),
+            microphone: state(for: "microphone", in: logs)
+        )
+    }
+
+    private static func state(
+        for permission: String,
+        in logs: [String]
+    ) -> RDPCapturePermissionEvidenceState? {
+        for log in logs {
+            if let state = state(for: permission, in: log) {
+                return state
+            }
+        }
+        return nil
+    }
+
+    private static func state(
+        for permission: String,
+        in log: String
+    ) -> RDPCapturePermissionEvidenceState? {
+        let markers: [(String, RDPCapturePermissionEvidenceState)] = [
+            ("[SelectiveRemote Privacy] authorized \(permission)", .granted),
+            ("[SelectiveRemote Privacy] granted \(permission)", .granted),
+            ("[SelectiveRemote Privacy] disabled \(permission)", .denied),
+            ("[SelectiveRemote Privacy] denied \(permission)", .denied),
+            ("[SelectiveRemote Privacy] restricted \(permission)", .restricted),
+            ("[SelectiveRemote Privacy] timeout \(permission)", .timedOut),
+            ("[SelectiveRemote Privacy] unknown \(permission)", .unknown),
+            ("[SelectiveRemote Privacy] requesting \(permission)", .requesting)
+        ]
+
+        var latest: (String.Index, RDPCapturePermissionEvidenceState)?
+        for (marker, state) in markers {
+            guard let range = log.range(of: marker, options: .backwards) else {
+                continue
+            }
+            if let current = latest {
+                if range.lowerBound > current.0 {
+                    latest = (range.lowerBound, state)
+                }
+            } else {
+                latest = (range.lowerBound, state)
+            }
+        }
+        return latest?.1
+    }
+}
+
 enum SystemDiagnosticCheckAction: String {
     case cameraSettings
     case microphoneSettings
+    case retryCheck
+    case showApplication
 }
 
 struct SystemDiagnosticCheckResult: Identifiable {
@@ -55,14 +121,132 @@ enum SystemDiagnosticsCheckService {
 
     static func run(
         bundle: Bundle = .main,
-        session: URLSession = .shared
+        session: URLSession = .shared,
+        captureEvidence: RDPCapturePermissionEvidence = .init()
     ) async -> [SystemDiagnosticCheckResult] {
-        var results = localChecks(bundle: bundle)
+        var results = localChecks(
+            bundle: bundle,
+            captureEvidence: captureEvidence
+        )
         results += await updateChecks(bundle: bundle, session: session)
         return results
     }
 
-    private static func localChecks(bundle: Bundle) -> [SystemDiagnosticCheckResult] {
+    static func runPostUpgradeCriticalChecks(
+        bundle: Bundle = .main,
+        session: URLSession = .shared
+    ) async -> [SystemDiagnosticCheckResult] {
+        var results: [SystemDiagnosticCheckResult] = []
+        let fileManager = FileManager.default
+        let bundleURL = bundle.bundleURL.standardizedFileURL
+        let isApplicationBundle = bundleURL.pathExtension.lowercased() == "app"
+        let isTranslocated = bundleURL.path.contains("/AppTranslocation/")
+
+        results.append(result(
+            "app-location",
+            category: "Приложение",
+            title: "Расположение приложения",
+            detail: isTranslocated
+                ? localized(
+                    "Приложение запущено через App Translocation",
+                    "The app is running through App Translocation"
+                )
+                : bundleURL.path,
+            status: isTranslocated ? .warning : (isApplicationBundle ? .passed : .info),
+            action: isTranslocated ? .showApplication : nil
+        ))
+
+        if isApplicationBundle {
+            let helpers = bundleURL.appendingPathComponent("Contents/Helpers", isDirectory: true)
+            let sessionApp = helpers.appendingPathComponent(
+                "Selective Remote Session.app",
+                isDirectory: true
+            )
+            let sessionBinary = sessionApp
+                .appendingPathComponent("Contents/MacOS/SelectiveRemoteSession")
+            let frameworks = sessionApp
+                .appendingPathComponent("Contents/Frameworks", isDirectory: true)
+
+            results.append(fileCheck(
+                id: "freerdp-helper",
+                category: "RDP",
+                title: "RDP Session",
+                url: sessionBinary,
+                executable: true,
+                action: .showApplication
+            ))
+            results.append(fileCheck(
+                id: "monitor-interposer",
+                category: "RDP",
+                title: localized("Раскладка мониторов", "Monitor layout"),
+                url: frameworks.appendingPathComponent("SelectiveRemoteMonitorInterposer.dylib"),
+                action: .showApplication
+            ))
+            results.append(fileCheck(
+                id: "privacy-preflight",
+                category: "RDP",
+                title: localized("Проверка разрешений RDP", "RDP permission preflight"),
+                url: frameworks.appendingPathComponent("SelectiveRemotePrivacyPreflight.dylib"),
+                action: .showApplication
+            ))
+
+            let cameraAddin = firstCameraAddin(in: frameworks, fileManager: fileManager)
+            results.append(result(
+                "camera-addin",
+                category: "RDP",
+                title: localized("Передача камеры RDP", "RDP camera redirection"),
+                detail: cameraAddin?.lastPathComponent
+                    ?? localized("Компонент камеры не найден", "Camera component was not found"),
+                status: cameraAddin == nil ? .failed : .passed,
+                action: cameraAddin == nil ? .showApplication : nil
+            ))
+        }
+
+        guard let feedURL = try? UpdateService.configuredFeedURL(bundle: bundle) else {
+            results.append(result(
+                "update-feed",
+                category: "Обновления",
+                title: localized("Канал обновлений", "Update Feed"),
+                detail: localized(
+                    "URL канала обновлений не настроен в текущей сборке",
+                    "The update-feed URL is not configured in this build"
+                ),
+                status: .warning,
+                action: .retryCheck
+            ))
+            return results
+        }
+
+        do {
+            let data = try await fetchData(feedURL, session: session)
+            let manifest = try JSONDecoder().decode(
+                SelectiveRemoteUpdateManifest.self,
+                from: data
+            )
+            results.append(result(
+                "update-feed",
+                category: "Обновления",
+                title: localized("Канал обновлений", "Update Feed"),
+                detail: "\(manifest.version) · build \(manifest.build)",
+                status: .passed
+            ))
+        } catch {
+            results.append(result(
+                "update-feed",
+                category: "Обновления",
+                title: localized("Канал обновлений", "Update Feed"),
+                detail: error.localizedDescription,
+                status: .warning,
+                action: .retryCheck
+            ))
+        }
+        return results
+    }
+
+    private static func localChecks(
+        bundle: Bundle,
+        captureEvidence: RDPCapturePermissionEvidence
+    ) -> [SystemDiagnosticCheckResult] {
         var results: [SystemDiagnosticCheckResult] = []
         let fileManager = FileManager.default
 
@@ -216,13 +400,15 @@ enum SystemDiagnosticsCheckService {
             mediaType: .video,
             id: "camera-permission",
             title: "Камера",
-            action: .cameraSettings
+            action: .cameraSettings,
+            evidenceState: captureEvidence.camera
         ))
         results.append(capturePermissionResult(
             mediaType: .audio,
             id: "microphone-permission",
             title: "Микрофон",
-            action: .microphoneSettings
+            action: .microphoneSettings,
+            evidenceState: captureEvidence.microphone
         ))
 
         if isApplicationBundle {
@@ -245,44 +431,50 @@ enum SystemDiagnosticsCheckService {
             results.append(fileCheck(
                 id: "freerdp-helper",
                 category: "RDP",
-                title: "FreeRDP helper",
+                title: "RDP Session",
                 url: sessionBinary,
-                executable: true
+                executable: true,
+                action: .showApplication
             ))
             results.append(fileCheck(
                 id: "monitor-interposer",
                 category: "RDP",
-                title: "Monitor topology helper",
-                url: interposer
+                title: localized("Раскладка мониторов", "Monitor layout"),
+                url: interposer,
+                action: .showApplication
             ))
             results.append(fileCheck(
                 id: "fn-shortcut",
                 category: "RDP",
-                title: "Fn keyboard helper",
-                url: fnShortcut
+                title: localized("Fn-переключатель языка", "Fn language shortcut"),
+                url: fnShortcut,
+                action: .showApplication
             ))
             results.append(fileCheck(
                 id: "privacy-preflight",
                 category: "RDP",
-                title: "Privacy preflight helper",
-                url: privacyPreflight
+                title: localized("Проверка разрешений RDP", "RDP permission preflight"),
+                url: privacyPreflight,
+                action: .showApplication
             ))
 
             let cameraAddin = firstCameraAddin(in: frameworks, fileManager: fileManager)
             results.append(result(
                 "camera-addin",
                 category: "RDP",
-                title: "Camera helper",
-                detail: cameraAddin?.lastPathComponent ?? localized("librdpecam-client не найден", "librdpecam-client was not found"),
-                status: cameraAddin == nil ? .failed : .passed
+                title: localized("Передача камеры RDP", "RDP camera redirection"),
+                detail: cameraAddin?.lastPathComponent
+                    ?? localized("Компонент камеры не найден", "Camera component was not found"),
+                status: cameraAddin == nil ? .failed : .passed,
+                action: cameraAddin == nil ? .showApplication : nil
             ))
         } else {
             for item in [
-                ("freerdp-helper", "FreeRDP helper"),
-                ("monitor-interposer", "Monitor topology helper"),
-                ("fn-shortcut", "Fn keyboard helper"),
-                ("privacy-preflight", "Privacy preflight helper"),
-                ("camera-addin", "Camera helper")
+                ("freerdp-helper", "RDP Session"),
+                ("monitor-interposer", localized("Раскладка мониторов", "Monitor layout")),
+                ("fn-shortcut", localized("Fn-переключатель языка", "Fn language shortcut")),
+                ("privacy-preflight", localized("Проверка разрешений RDP", "RDP permission preflight")),
+                ("camera-addin", localized("Передача камеры RDP", "RDP camera redirection"))
             ] {
                 results.append(result(
                     item.0,
@@ -305,9 +497,10 @@ enum SystemDiagnosticsCheckService {
             return [result(
                 "update-feed",
                 category: "Обновления",
-                title: "Update feed",
+                title: localized("Канал обновлений", "Update Feed"),
                 detail: localized("URL канала обновлений не настроен в текущей сборке", "The update-feed URL is not configured in this build"),
-                status: .warning
+                status: .warning,
+                action: .retryCheck
             )]
         }
 
@@ -320,7 +513,7 @@ enum SystemDiagnosticsCheckService {
             var results = [result(
                 "update-feed",
                 category: "Обновления",
-                title: "Update feed",
+                title: localized("Канал обновлений", "Update Feed"),
                 detail: "\(manifest.version) · build \(manifest.build)",
                 status: .passed
             )]
@@ -329,13 +522,13 @@ enum SystemDiagnosticsCheckService {
             let enURL = manifest.releaseNotesHistoryENURL ?? rawHistoryEN
             results.append(await remoteDocumentCheck(
                 id: "changelog-ru",
-                title: "CHANGELOG RU",
+                title: localized("История изменений — RU", "Release History — RU"),
                 url: ruURL,
                 session: session
             ))
             results.append(await remoteDocumentCheck(
                 id: "changelog-en",
-                title: "CHANGELOG EN",
+                title: localized("История изменений — EN", "Release History — EN"),
                 url: enURL,
                 session: session
             ))
@@ -344,9 +537,10 @@ enum SystemDiagnosticsCheckService {
             return [result(
                 "update-feed",
                 category: "Обновления",
-                title: "Update feed",
+                title: localized("Канал обновлений", "Update Feed"),
                 detail: error.localizedDescription,
-                status: .failed
+                status: .failed,
+                action: .retryCheck
             )]
         }
     }
@@ -355,8 +549,84 @@ enum SystemDiagnosticsCheckService {
         mediaType: AVMediaType,
         id: String,
         title: String,
-        action: SystemDiagnosticCheckAction
+        action: SystemDiagnosticCheckAction,
+        evidenceState: RDPCapturePermissionEvidenceState?
     ) -> SystemDiagnosticCheckResult {
+        if let evidenceState {
+            switch evidenceState {
+            case .granted:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "Последний известный запуск RDP Session подтвердил доступ",
+                        "The last known RDP Session run confirmed access"
+                    ),
+                    status: .passed
+                )
+            case .denied:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "Последний известный запуск RDP Session: доступ был запрещён macOS",
+                        "Last known RDP Session run: access was denied by macOS"
+                    ),
+                    status: .warning,
+                    action: action
+                )
+            case .restricted:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "Последний известный запуск RDP Session: доступ был ограничен политикой macOS",
+                        "Last known RDP Session run: access was restricted by macOS policy"
+                    ),
+                    status: .warning,
+                    action: action
+                )
+            case .timedOut:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "RDP Session: ожидание ответа macOS завершилось по тайм-ауту",
+                        "RDP Session: the macOS permission request timed out"
+                    ),
+                    status: .warning,
+                    action: action
+                )
+            case .requesting:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "RDP Session: ожидается ответ на запрос разрешения",
+                        "RDP Session: waiting for the permission request to finish"
+                    ),
+                    status: .info
+                )
+            case .unknown:
+                return result(
+                    id,
+                    category: "Безопасность",
+                    title: title,
+                    detail: localized(
+                        "RDP Session вернул неизвестное состояние разрешения",
+                        "RDP Session returned an unknown permission state"
+                    ),
+                    status: .warning,
+                    action: action
+                )
+            }
+        }
+
         let status = AVCaptureDevice.authorizationStatus(for: mediaType)
         switch status {
         case .authorized:
@@ -364,7 +634,10 @@ enum SystemDiagnosticsCheckService {
                 id,
                 category: "Безопасность",
                 title: title,
-                detail: localized("Разрешение предоставлено", "Permission granted"),
+                detail: localized(
+                    "Основное приложение: разрешено. RDP Session проверяет доступ отдельно при запуске.",
+                    "Main app: allowed. RDP Session checks access separately when it starts."
+                ),
                 status: .passed
             )
         case .notDetermined:
@@ -372,7 +645,10 @@ enum SystemDiagnosticsCheckService {
                 id,
                 category: "Безопасность",
                 title: title,
-                detail: localized("Разрешение ещё не запрашивалось", "Permission has not been requested yet"),
+                detail: localized(
+                    "Основное приложение не сообщает итоговый статус; RDP Session использует отдельный контекст разрешений и проверит доступ при запуске RDP.",
+                    "The main app does not report a final status; RDP Session uses a separate permission context and checks access when RDP starts."
+                ),
                 status: .info,
                 action: action
             )
@@ -381,7 +657,10 @@ enum SystemDiagnosticsCheckService {
                 id,
                 category: "Безопасность",
                 title: title,
-                detail: localized("Доступ запрещён в настройках macOS", "Access is denied in macOS Settings"),
+                detail: localized(
+                    "Основное приложение: доступ запрещён. RDP Session имеет отдельный контекст разрешений.",
+                    "Main app: access denied. RDP Session has a separate permission context."
+                ),
                 status: .warning,
                 action: action
             )
@@ -390,7 +669,10 @@ enum SystemDiagnosticsCheckService {
                 id,
                 category: "Безопасность",
                 title: title,
-                detail: localized("Доступ ограничен политикой macOS", "Access is restricted by macOS policy"),
+                detail: localized(
+                    "Основное приложение: доступ ограничен политикой macOS. RDP Session проверяется отдельно.",
+                    "Main app: access is restricted by macOS policy. RDP Session is checked separately."
+                ),
                 status: .warning,
                 action: action
             )
@@ -399,7 +681,10 @@ enum SystemDiagnosticsCheckService {
                 id,
                 category: "Безопасность",
                 title: title,
-                detail: localized("Неизвестное состояние разрешения", "Unknown permission state"),
+                detail: localized(
+                    "Основное приложение вернуло неизвестное состояние; RDP Session проверяется отдельно.",
+                    "The main app returned an unknown state; RDP Session is checked separately."
+                ),
                 status: .warning,
                 action: action
             )
@@ -411,7 +696,8 @@ enum SystemDiagnosticsCheckService {
         category: String,
         title: String,
         url: URL,
-        executable: Bool = false
+        executable: Bool = false,
+        action: SystemDiagnosticCheckAction? = nil
     ) -> SystemDiagnosticCheckResult {
         let exists = executable
             ? FileManager.default.isExecutableFile(atPath: url.path)
@@ -421,7 +707,8 @@ enum SystemDiagnosticsCheckService {
             category: category,
             title: title,
             detail: exists ? url.lastPathComponent : localized("Компонент не найден", "Component not found"),
-            status: exists ? .passed : .failed
+            status: exists ? .passed : .failed,
+            action: exists ? nil : action
         )
     }
 
@@ -467,7 +754,8 @@ enum SystemDiagnosticsCheckService {
                 category: "Обновления",
                 title: title,
                 detail: error.localizedDescription,
-                status: .warning
+                status: .warning,
+                action: .retryCheck
             )
         }
     }
@@ -510,9 +798,12 @@ enum SystemDiagnosticsCheckService {
 }
 
 struct DiagnosticsSystemCheckView: View {
+    @ObservedObject var model: AppModel
+
     @State private var results: [SystemDiagnosticCheckResult] = []
     @State private var isRunning = false
     @State private var lastRunAt: Date?
+    @State private var showProblemsOnly = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -521,8 +812,8 @@ struct DiagnosticsSystemCheckView: View {
                     Text("Проверка системы")
                         .font(.title3.bold())
                     Text(UpdateLocalization.text(
-                        ru: "Локальные preflight-проверки без запуска RDP/SSH и без чтения секретов",
-                        en: "Local preflight checks without starting RDP/SSH or reading secrets"
+                        ru: "Безопасные preflight-проверки без запуска RDP/SSH, запросов разрешений и чтения секретов",
+                        en: "Safe preflight checks without starting RDP/SSH, requesting permissions, or reading secrets"
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -535,6 +826,16 @@ struct DiagnosticsSystemCheckView: View {
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if !results.isEmpty {
+                    Toggle(isOn: $showProblemsOnly) {
+                        Text(UpdateLocalization.text(
+                            ru: "Только проблемы",
+                            en: "Problems Only"
+                        ))
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
                 }
                 Button {
                     Task { await runChecks() }
@@ -571,13 +872,31 @@ struct DiagnosticsSystemCheckView: View {
                 .frame(minHeight: 260)
             } else {
                 LazyVStack(alignment: .leading, spacing: 16) {
+                    readinessBanner
+                    healthOverview
                     summary
-                    ForEach(categories, id: \.self) { category in
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text(LocalizedStringKey(category))
-                                .font(.headline)
-                            ForEach(results.filter { $0.category == category }) { item in
-                                resultRow(item)
+
+                    if showProblemsOnly && visibleResults.isEmpty {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(
+                                ru: "Проблем не обнаружено",
+                                en: "No problems detected"
+                            ),
+                            systemImage: "checkmark.circle",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Предупреждений и ошибок в текущей проверке нет.",
+                                en: "The current check has no warnings or errors."
+                            ))
+                        )
+                        .frame(minHeight: 180)
+                    } else {
+                        ForEach(categories, id: \.self) { category in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(LocalizedStringKey(category))
+                                    .font(.headline)
+                                ForEach(visibleResults.filter { $0.category == category }) { item in
+                                    resultRow(item)
+                                }
                             }
                         }
                     }
@@ -587,11 +906,117 @@ struct DiagnosticsSystemCheckView: View {
         .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
+    private var problemResults: [SystemDiagnosticCheckResult] {
+        results.filter(isProblem)
+    }
+
+    private var visibleResults: [SystemDiagnosticCheckResult] {
+        showProblemsOnly ? problemResults : results
+    }
+
     private var categories: [String] {
         let preferred = ["Приложение", "RDP", "SSH", "Безопасность", "Обновления"]
         return preferred.filter { category in
-            results.contains(where: { $0.category == category })
+            visibleResults.contains(where: { $0.category == category })
         }
+    }
+
+    private var readinessBanner: some View {
+        let failed = results.filter { $0.status == .failed }.count
+        let warnings = results.filter { $0.status == .warning }.count
+        let attention = failed + warnings
+        let color: Color = failed > 0 ? .red : (warnings > 0 ? .orange : .green)
+        let icon = attention == 0 ? "checkmark.seal.fill" : "exclamationmark.triangle.fill"
+        let title = attention == 0
+            ? UpdateLocalization.text(
+                ru: "Selective Remote готов к работе",
+                en: "Selective Remote is ready"
+            )
+            : UpdateLocalization.text(
+                ru: "Требуется внимание: \(attention)",
+                en: "Attention required: \(attention)"
+            )
+        let detail = attention == 0
+            ? UpdateLocalization.text(
+                ru: "Критических проблем не обнаружено. Серые статусы уточняются только при использовании соответствующей функции.",
+                en: "No critical problems were detected. Gray statuses are resolved only when the related feature is used."
+            )
+            : UpdateLocalization.text(
+                ru: "Откройте проблемные пункты ниже; автоматические исправления не выполняются.",
+                en: "Review the problem items below; no automatic fixes are performed."
+            )
+
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: icon)
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(color)
+                .frame(width: 28, height: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.headline)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(14)
+        .background(color.opacity(0.08), in: RoundedRectangle(cornerRadius: 13))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13)
+                .strokeBorder(color.opacity(0.18))
+        }
+    }
+
+    private var healthOverview: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 126), spacing: 8)],
+            alignment: .leading,
+            spacing: 8
+        ) {
+            healthChip("SSH", ids: ["ssh-binary", "ssh-agent", "ssh-directory", "known-hosts"])
+            healthChip("RDP", ids: [
+                "freerdp-helper",
+                "monitor-interposer",
+                "privacy-preflight",
+                "camera-addin"
+            ])
+            healthChip(
+                UpdateLocalization.text(ru: "Камера", en: "Camera"),
+                ids: ["camera-permission"]
+            )
+            healthChip(
+                UpdateLocalization.text(ru: "Микрофон", en: "Microphone"),
+                ids: ["microphone-permission"]
+            )
+            healthChip(
+                UpdateLocalization.text(ru: "Обновления", en: "Updates"),
+                ids: ["update-feed", "changelog-ru", "changelog-en"]
+            )
+        }
+    }
+
+    private func healthChip(_ title: String, ids: Set<String>) -> some View {
+        let status = aggregateStatus(ids: ids)
+        return HStack(spacing: 7) {
+            Image(systemName: status.systemImage)
+                .foregroundStyle(status.color)
+            Text(title)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(status.color.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func aggregateStatus(ids: Set<String>) -> SystemDiagnosticCheckStatus {
+        let matching = results.filter { ids.contains($0.id) }
+        if matching.contains(where: { $0.status == .failed }) { return .failed }
+        if matching.contains(where: { $0.status == .warning }) { return .warning }
+        if matching.contains(where: { $0.status == .info }) { return .info }
+        return matching.isEmpty ? .info : .passed
     }
 
     private var summary: some View {
@@ -634,8 +1059,8 @@ struct DiagnosticsSystemCheckView: View {
             }
             Spacer(minLength: 12)
             if let action = item.action {
-                Button(UpdateLocalization.text(ru: "Открыть настройки", en: "Open Settings")) {
-                    openSettings(action)
+                Button(actionTitle(action)) {
+                    perform(action)
                 }
                 .buttonStyle(.bordered)
             }
@@ -652,21 +1077,48 @@ struct DiagnosticsSystemCheckView: View {
     private func runChecks() async {
         guard !isRunning else { return }
         isRunning = true
-        let newResults = await SystemDiagnosticsCheckService.run()
-        guard !Task.isCancelled else { return }
+        let evidence = model.rdpCapturePermissionEvidence()
+        let newResults = await SystemDiagnosticsCheckService.run(
+            captureEvidence: evidence
+        )
+        guard !Task.isCancelled else {
+            isRunning = false
+            return
+        }
         results = newResults
         lastRunAt = Date()
         isRunning = false
     }
 
-    private func openSettings(_ action: SystemDiagnosticCheckAction) {
-        let anchor: String
+    private func isProblem(_ item: SystemDiagnosticCheckResult) -> Bool {
+        item.status == .warning || item.status == .failed
+    }
+
+    private func actionTitle(_ action: SystemDiagnosticCheckAction) -> String {
+        switch action {
+        case .cameraSettings, .microphoneSettings:
+            UpdateLocalization.text(ru: "Открыть настройки", en: "Open Settings")
+        case .retryCheck:
+            UpdateLocalization.text(ru: "Повторить проверку", en: "Retry Check")
+        case .showApplication:
+            UpdateLocalization.text(ru: "Показать приложение", en: "Show Application")
+        }
+    }
+
+    private func perform(_ action: SystemDiagnosticCheckAction) {
         switch action {
         case .cameraSettings:
-            anchor = "Privacy_Camera"
+            openPrivacySettings(anchor: "Privacy_Camera")
         case .microphoneSettings:
-            anchor = "Privacy_Microphone"
+            openPrivacySettings(anchor: "Privacy_Microphone")
+        case .retryCheck:
+            Task { await runChecks() }
+        case .showApplication:
+            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
         }
+    }
+
+    private func openPrivacySettings(anchor: String) {
         guard let url = URL(
             string: "x-apple.systempreferences:com.apple.preference.security?\(anchor)"
         ) else { return }

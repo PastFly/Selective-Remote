@@ -541,6 +541,20 @@ struct ConnectionCenterView: View {
 
             Spacer()
 
+            if hasNonDefaultViewState {
+                Button(
+                    UpdateLocalization.text(ru: "Сбросить", en: "Reset"),
+                    systemImage: "arrow.counterclockwise"
+                ) {
+                    resetView()
+                }
+                .controlSize(.small)
+                .help(UpdateLocalization.text(
+                    ru: "Сбросить поиск, фильтры, сортировку и столбцы",
+                    en: "Reset search, filters, sorting, and columns"
+                ))
+            }
+
             Picker("Состояние", selection: $stateFilter) {
                 ForEach(ConnectionCenterStateFilter.allCases) { option in
                     Text(LocalizedStringKey(option.rawValue)).tag(option)
@@ -976,6 +990,31 @@ struct ConnectionCenterView: View {
         case .sftp: "folder"
         case .forwarding: "arrow.left.arrow.right"
         }
+    }
+
+    private var hasNonDefaultViewState: Bool {
+        let columns = ["port", "route", "auth", "uptime"]
+        let columnsCustomized = columns.contains { id in
+            columnCustomization[visibility: id] != .automatic
+        }
+        return !searchText.isEmpty
+            || filter != .all
+            || stateFilter != .all
+            || !sortOrder.isEmpty
+            || columnsCustomized
+    }
+
+    private func resetView() {
+        searchText = ""
+        filter = .all
+        stateFilter = .all
+        sortOrder = []
+        columnCustomization = TableColumnCustomization<ConnectionCenterItem>()
+
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: ConnectionCenterPreferences.typeFilterKey)
+        defaults.removeObject(forKey: ConnectionCenterPreferences.stateFilterKey)
+        ConnectionCenterPreferences.persistSortOrder([], defaults: defaults)
     }
 
     private func columnIsVisible(_ id: String) -> Bool {

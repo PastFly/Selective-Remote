@@ -146,6 +146,33 @@ struct ContentView: View {
         } message: {
             Text(model.updateMessage ?? "")
         }
+        .alert(
+            UpdateLocalization.text(
+                ru: "Проверка после обновления",
+                en: "Post-Update Check"
+            ),
+            isPresented: Binding(
+                get: { model.postUpgradeHealthWarning != nil },
+                set: {
+                    if !$0 {
+                        model.postUpgradeHealthWarning = nil
+                    }
+                }
+            )
+        ) {
+            Button(UpdateLocalization.text(
+                ru: "Открыть диагностику",
+                en: "Open Diagnostics"
+            )) {
+                model.postUpgradeHealthWarning = nil
+                setMainArea(.diagnostics)
+            }
+            Button("OK", role: .cancel) {
+                model.postUpgradeHealthWarning = nil
+            }
+        } message: {
+            Text(model.postUpgradeHealthWarning ?? "")
+        }
         .sheet(isPresented: $model.quickConnectPresented) {
             QuickConnectView(
                 onOpenProfile: { profileID, action in

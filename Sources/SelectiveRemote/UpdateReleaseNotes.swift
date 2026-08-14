@@ -569,14 +569,17 @@ private struct UpdateReleaseNotesView: View {
                 case let .update(manifest, installedVersion):
                     versionTransition(
                         leftTitle: language.text(ru: "Установлено", en: "Installed"),
-                        leftVersion: installedVersion,
+                        leftVersion: versionWithCurrentBuild(installedVersion),
                         rightTitle: language.text(ru: "Доступно", en: "Available"),
-                        rightVersion: manifest.version
+                        rightVersion: versionWithBuild(
+                            manifest.version,
+                            build: String(manifest.build)
+                        )
                     )
                 case let .installed(version):
                     versionPill(
                         title: language.text(ru: "Установлено", en: "Installed"),
-                        version: version,
+                        version: versionWithCurrentBuild(version),
                         emphasized: true
                     )
                 case let .postUpdate(previousVersion, currentVersion):
@@ -584,7 +587,7 @@ private struct UpdateReleaseNotesView: View {
                         leftTitle: language.text(ru: "Было", en: "Previous"),
                         leftVersion: previousVersion,
                         rightTitle: language.text(ru: "Теперь", en: "Now"),
-                        rightVersion: currentVersion
+                        rightVersion: versionWithCurrentBuild(currentVersion)
                     )
                 }
             }
@@ -633,6 +636,19 @@ private struct UpdateReleaseNotesView: View {
                 en: "Showing changes included in this update."
             )
         }
+    }
+
+    private func versionWithCurrentBuild(_ version: String) -> String {
+        guard let build = Bundle.main.object(
+            forInfoDictionaryKey: "CFBundleVersion"
+        ) as? String,
+              !build.isEmpty
+        else { return version }
+        return versionWithBuild(version, build: build)
+    }
+
+    private func versionWithBuild(_ version: String, build: String) -> String {
+        "\(version) · \(language.text(ru: "сборка", en: "build")) \(build)"
     }
 
     @ViewBuilder

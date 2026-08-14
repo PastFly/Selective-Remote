@@ -547,7 +547,16 @@ struct DiagnosticsCenterView: View {
             alignment: .leading,
             spacing: 12
         ) {
-            summaryCard("Версия", AppBuildInfo.displayText, "app.badge", .blue)
+            Button {
+                model.openInstalledReleaseNotes()
+            } label: {
+                summaryCard("Версия", AppBuildInfo.displayText, "app.badge", .blue)
+            }
+            .buttonStyle(.plain)
+            .help(UpdateLocalization.text(
+                ru: "Открыть историю изменений",
+                en: "Open release history"
+            ))
             summaryCard("macOS", shortMacOSVersion, "macbook", .secondary)
             summaryCard("Активные сессии", "\(report.runtimeCount)", "point.3.connected.trianglepath.dotted", .green)
             summaryCard(
@@ -647,7 +656,7 @@ struct DiagnosticsCenterView: View {
                 }
             }
         case .systemCheck:
-            DiagnosticsSystemCheckView()
+            DiagnosticsSystemCheckView(model: model)
         case .connections, .rdp, .ssh, .sftp, .forwarding:
             runtimeList
         case .errors:
