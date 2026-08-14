@@ -152,6 +152,7 @@ final class FreeRDPService {
 
         let monitorLayout: [SDLMonitorPlacement]
         let monitorIDs: [Int]?
+        var builtInSDLMonitorIDs: [Int] = []
 
         // With one physical display there is no mapping ambiguity, so avoid a
         // separate /list:monitor helper process. `monitorIDs == nil` means the
@@ -169,6 +170,11 @@ final class FreeRDPService {
         } else {
             let sdlMonitors = try listMonitors()
             let mappings = try matchDisplays(selected, to: sdlMonitors, allDisplays: displays)
+            builtInSDLMonitorIDs = mappings.compactMap { mapping in
+                guard selected.first(where: { $0.id == mapping.displayID })?.isBuiltIn == true
+                else { return nil }
+                return mapping.monitor.id
+            }
             monitorLayout = SDLTopologyMapper.arrange(
                 mappings: mappings,
                 primaryDisplayID: profile.primaryDisplayID,
@@ -179,21 +185,13 @@ final class FreeRDPService {
         }
         let executable = try sessionExecutableURL()
 
-        let singleDisplayFullscreen = displays.count == 1
-            && selected.count == 1
+        let singleDisplayFullscreen = selected.count == 1
             && profile.rdpWindowMode == .fullScreen
             && profile.startFullScreen
-        let smartSizing = singleDisplayFullscreen
-            ? RDPDesktopSize(
-                width: selected[0].rdpWidthHint,
-                height: selected[0].rdpHeightHint
-            )
-            : nil
 
         let arguments = try connectionArguments(
             profile: profile,
             monitorIDs: monitorIDs,
-            smartSizing: smartSizing,
             gatewayPassword: gatewayPassword
         )
         let stdinPayload = try argumentsFromStdinPayload(arguments, password: password)
@@ -209,12 +207,32 @@ final class FreeRDPService {
             useMonitorProbeFallback: false
         )
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_MONITOR_LAYOUT")
-        if monitorLayout.count > 1 {
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN")
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_USE_USABLE_BOUNDS")
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS")
+
+        // SDL-FreeRDP probes monitor geometry in logical macOS coordinates, but
+        // real Retina windows normally use a 2x HIGH_PIXEL_DENSITY backing.
+        // In fullscreen/multimon that makes FreeRDP draw a logical-size monitor
+        // into a 2x render target, producing the exact upper-left quarter bug.
+        let fullscreenLogicalBacking =
+            profile.rdpWindowMode == .fullScreen && profile.startFullScreen
+
+        if fullscreenLogicalBacking || monitorLayout.count > 1 {
             let interposer = try monitorInterposerURL()
             processEnvironment["DYLD_INSERT_LIBRARIES"] = prependPath(
                 interposer.path,
                 to: processEnvironment["DYLD_INSERT_LIBRARIES"]
             )
+        }
+        if fullscreenLogicalBacking {
+            processEnvironment["SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN"] = "1"
+            if !builtInSDLMonitorIDs.isEmpty {
+                processEnvironment["SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS"] =
+                    builtInSDLMonitorIDs.map(String.init).joined(separator: ",")
+            }
+        }
+        if monitorLayout.count > 1 {
             processEnvironment["SELECTIVE_RDP_MONITOR_LAYOUT"] =
                 SDLTopologyMapper.environmentValue(monitorLayout)
         }
@@ -255,15 +273,15 @@ final class FreeRDPService {
         fileManager.createFile(atPath: logURL.path, contents: nil)
         let logHandle = try FileHandle(forWritingTo: logURL)
         var launchMarkers = ""
-        if let smartSizing {
+        if singleDisplayFullscreen {
+            let selectedMonitor = monitorIDs?.map(String.init).joined(separator: ",") ?? "automatic"
             launchMarkers += "[SelectiveRemote Host] Single-monitor fullscreen: "
-                + "native Retina drawable, smart-sizing "
-                + "\(smartSizing.width)x\(smartSizing.height), "
-                + "wlroots fallback disabled\n"
+                + "native monitor sizing, smart-sizing disabled, "
+                + "monitor=\(selectedMonitor), multimon disabled\n"
         }
         if monitorLayout.count > 1 {
             launchMarkers += "[SelectiveRemote Host] Multi-monitor fullscreen: "
-                + "native per-window pixel density, probe-only logical bounds, "
+                + "logical 1x SDL backing, probe logical bounds, "
                 + "wlroots fallback disabled\n"
         }
         launchMarkers += rdpQualityLaunchMarker(profile: profile)
@@ -340,16 +358,11 @@ final class FreeRDPService {
         }
 
         if profile.rdpWindowMode == .fullScreen && profile.startFullScreen {
+            // Let SDL-FreeRDP derive DesktopWidth/DesktopHeight from the
+            // selected monitor's native geometry. Explicit /smart-sizing:WxH
+            // changes the negotiated remote desktop size and is wrong for
+            // Retina AppKit point dimensions.
             arguments.append("/f")
-            if monitorIDs == nil, let smartSizing {
-                // Keep the native Retina backing and let SDL-FreeRDP scale the
-                // complete Windows framebuffer to the actual fullscreen drawable
-                // area. This preserves both the Windows taskbar and the macOS menu
-                // bar instead of clipping one edge of the remote desktop.
-                arguments.append(
-                    "/smart-sizing:\(smartSizing.width)x\(smartSizing.height)"
-                )
-            }
         } else {
             arguments.append("/size:\(max(640, profile.windowWidth))x\(max(480, profile.windowHeight))")
             if profile.rdpWindowMode == .dynamicWindow {
@@ -357,7 +370,9 @@ final class FreeRDPService {
             }
         }
         if let monitorIDs {
-            arguments.append("/multimon")
+            if monitorIDs.count > 1 {
+                arguments.append("/multimon")
+            }
             arguments.append("/monitors:\(monitorIDs.map(String.init).joined(separator: ","))")
         }
         arguments.append("/scale:\(profile.windowsScale.rawValue)")
@@ -509,9 +524,10 @@ final class FreeRDPService {
             environment.removeValue(forKey: "FREERDP_WLROOTS_HACK")
         }
 
-        // Keep the normal macOS fullscreen menu available. Smart sizing now
-        // adapts the complete Windows desktop to the real drawable area, so the
-        // menu no longer pushes the remote taskbar below the screen.
+        // Fullscreen RDP owns its macOS Space. Keeping the menu available
+        // reserves vertical space on notched MacBook displays while FreeRDP
+        // still creates a full-height monitor window, clipping the Windows
+        // taskbar below the visible area.
         environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "1"
         environment["SDL_WINDOW_FRAME_USABLE_WHILE_CURSOR_HIDDEN"] = "1"
 

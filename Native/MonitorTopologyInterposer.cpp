@@ -133,6 +133,22 @@ bool parseLayout(const char* raw, std::unordered_map<UINT32, TargetPlacement>& r
     return !result.empty();
 }
 
+bool displayIDListed(const char* raw, UINT32 displayID)
+{
+    if (!raw || (*raw == '\0'))
+        return false;
+
+    std::stringstream stream(raw);
+    std::string value;
+    while (std::getline(stream, value, ','))
+    {
+        UINT32 parsed = 0;
+        if (parseUnsigned(value, parsed) && (parsed == displayID))
+            return true;
+    }
+    return false;
+}
+
 bool monitorComesBefore(const rdpMonitor& lhs, const rdpMonitor& rhs)
 {
     if (lhs.is_primary != rhs.is_primary)
@@ -336,6 +352,44 @@ extern "C" SDL_Window* SDLCALL selective_SDL_CreateWindowWithProperties(
     );
     const bool isProbe = selective_rdp_is_probe_window_title(title);
 
+    const char* forceLogicalFullscreen =
+        std::getenv("SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN");
+
+    const bool requestedFullscreen = SDL_GetBooleanProperty(
+        properties,
+        SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
+        false
+    );
+    const bool requestedBorderless = SDL_GetBooleanProperty(
+        properties,
+        SDL_PROP_WINDOW_CREATE_BORDERLESS_BOOLEAN,
+        false
+    );
+    const bool shouldForceLogicalFullscreen =
+        !isProbe &&
+        forceLogicalFullscreen &&
+        (std::strcmp(forceLogicalFullscreen, "1") == 0) &&
+        (requestedFullscreen || requestedBorderless);
+
+    if (shouldForceLogicalFullscreen)
+    {
+        // FreeRDP multimon windows are BORDERLESS rather than SDL fullscreen.
+        // Keep real fullscreen RDP windows at 1x so the renderer target uses
+        // the same coordinate system as the logical monitor definitions.
+        SDL_SetBooleanProperty(
+            properties,
+            SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN,
+            false
+        );
+        std::fprintf(
+            stderr,
+            "[SelectiveRemote] Logical RDP backing requested: "
+            "fullscreen=%d borderless=%d high-pixel-density=off\n",
+            requestedFullscreen ? 1 : 0,
+            requestedBorderless ? 1 : 0
+        );
+    }
+
     if (isProbe)
     {
         // FreeRDP explicitly creates these as visible, then takes every screen
@@ -349,6 +403,37 @@ extern "C" SDL_Window* SDLCALL selective_SDL_CreateWindowWithProperties(
     }
 
     SDL_Window* window = SDL_CreateWindowWithProperties(properties);
+
+    if (window && shouldForceLogicalFullscreen)
+    {
+        int logicalWidth = 0;
+        int logicalHeight = 0;
+        int pixelWidth = 0;
+        int pixelHeight = 0;
+        const bool logicalOK = SDL_GetWindowSize(
+            window,
+            &logicalWidth,
+            &logicalHeight
+        );
+        const bool pixelOK = SDL_GetWindowSizeInPixels(
+            window,
+            &pixelWidth,
+            &pixelHeight
+        );
+        if (logicalOK && pixelOK)
+        {
+            std::fprintf(
+                stderr,
+                "[SelectiveRemote] Logical RDP backing active: "
+                "window=%dx%d pixels=%dx%d\n",
+                logicalWidth,
+                logicalHeight,
+                pixelWidth,
+                pixelHeight
+            );
+        }
+    }
+
     return window;
 }
 
@@ -384,18 +469,32 @@ bool selective_probe_window_size(
         return false;
 
     SDL_Rect bounds = {};
-    if (!SDL_GetDisplayBounds(
-            static_cast<SDL_DisplayID>(rawDisplayID),
-            &bounds
-        ))
+    const SDL_DisplayID displayID = static_cast<SDL_DisplayID>(rawDisplayID);
+    if (!SDL_GetDisplayBounds(displayID, &bounds))
     {
         std::fprintf(
             stderr,
-            "[SelectiveRemote] Could not read bounds for SDL display %u: %s\n",
+            "[SelectiveRemote] Could not read display bounds for SDL display %u: %s\n",
             rawDisplayID,
             SDL_GetError()
         );
         return false;
+    }
+
+    const char* safeIDs = std::getenv("SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS");
+    const bool reserveSafeTop = displayIDListed(safeIDs, rawDisplayID);
+    if (reserveSafeTop)
+    {
+        SDL_Rect usable = {};
+        if (SDL_GetDisplayUsableBounds(displayID, &usable))
+        {
+            const int topInset = std::max(0, usable.y - bounds.y);
+            if ((topInset > 0) && (topInset < bounds.h))
+            {
+                bounds.y += topInset;
+                bounds.h -= topInset;
+            }
+        }
     }
 
     if (width)
@@ -405,10 +504,13 @@ bool selective_probe_window_size(
 
     std::fprintf(
         stderr,
-        "[SelectiveRemote] Probe display %u uses logical bounds %dx%d\n",
+        "[SelectiveRemote] Probe display %u uses %s bounds %dx%d at %d,%d\n",
         rawDisplayID,
+        reserveSafeTop ? "fullscreen-safe" : "logical",
         bounds.w,
-        bounds.h
+        bounds.h,
+        bounds.x,
+        bounds.y
     );
     return true;
 }

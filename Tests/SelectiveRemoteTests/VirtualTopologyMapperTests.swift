@@ -174,8 +174,8 @@ func buildsSecureStdinArguments() throws {
     )
 }
 
-@Test("Один Retina-монитор использует fullscreen smart sizing без multimon")
-func buildsRetinaSingleMonitorFullscreenArguments() throws {
+@Test("Один fullscreen монитор использует нативный размер без smart-sizing")
+func buildsNativeSingleMonitorFullscreenArguments() throws {
     var profile = ConnectionProfile()
     profile.host = "pc.example.local"
 
@@ -186,9 +186,41 @@ func buildsRetinaSingleMonitorFullscreenArguments() throws {
     )
 
     #expect(arguments.contains("/f"))
-    #expect(arguments.contains("/smart-sizing:2056x1329"))
+    #expect(!arguments.contains(where: { $0.hasPrefix("/smart-sizing") }))
     #expect(!arguments.contains("/multimon"))
     #expect(!arguments.contains(where: { $0.hasPrefix("/monitors:") }))
+}
+
+@Test("Один выбранный монитор среди нескольких не включает multimon")
+func buildsSelectedSingleMonitorFullscreenArguments() throws {
+    var profile = ConnectionProfile()
+    profile.host = "pc.example.local"
+
+    let arguments = try FreeRDPService().connectionArguments(
+        profile: profile,
+        monitorIDs: [7],
+        smartSizing: RDPDesktopSize(width: 2560, height: 1440)
+    )
+
+    #expect(arguments.contains("/f"))
+    #expect(arguments.contains("/monitors:7"))
+    #expect(!arguments.contains("/multimon"))
+    #expect(!arguments.contains(where: { $0.hasPrefix("/smart-sizing") }))
+}
+
+@Test("Несколько выбранных fullscreen мониторов включают multimon")
+func buildsTrueMultiMonitorFullscreenArguments() throws {
+    var profile = ConnectionProfile()
+    profile.host = "pc.example.local"
+
+    let arguments = try FreeRDPService().connectionArguments(
+        profile: profile,
+        monitorIDs: [2, 4]
+    )
+
+    #expect(arguments.contains("/f"))
+    #expect(arguments.contains("/multimon"))
+    #expect(arguments.contains("/monitors:2,4"))
 }
 
 @Test("Оконный режим одного монитора не включает multimon")
@@ -735,8 +767,8 @@ func detectsOverlappingVirtualDisplays() {
     #expect(VirtualTopologyMapper.hasOverlaps(result))
 }
 
-@Test("Ручная схема передаётся в SDL-FreeRDP без изменения координат")
-func mapsCustomTopologyToSDLMonitors() {
+@Test("Ручная SDL-схема нормализует перекрывающиеся координаты к смежным")
+func normalizesCustomTopologyBeforeSDLFreeRDP() {
     let mappings = [
         SDLDisplayMapping(displayID: "primary", monitor: sdlMonitor(id: 7, x: 0, width: 2056)),
         SDLDisplayMapping(displayID: "upper", monitor: sdlMonitor(id: 9, x: 2056, width: 1920))
@@ -753,8 +785,93 @@ func mapsCustomTopologyToSDLMonitors() {
 
     #expect(result == [
         SDLMonitorPlacement(monitorID: 7, x: 0, y: 0, isPrimary: true),
-        SDLMonitorPlacement(monitorID: 9, x: 0, y: -1080, isPrimary: false)
+        SDLMonitorPlacement(monitorID: 9, x: 0, y: -1440, isPrimary: false)
     ])
+}
+
+@Test("Ручная SDL-схема автоматически закрывает микрозазор между мониторами")
+func repairsCustomSDLMonitorGap() {
+    let mappings = [
+        SDLDisplayMapping(
+            displayID: "primary",
+            monitor: SDLMonitor(
+                id: 2,
+                name: "External",
+                width: 1920,
+                height: 1080,
+                x: 0,
+                y: 0,
+                isSystemPrimary: true
+            )
+        ),
+        SDLDisplayMapping(
+            displayID: "retina",
+            monitor: SDLMonitor(
+                id: 1,
+                name: "Built-in Retina",
+                width: 2056,
+                height: 1329,
+                x: -2056,
+                y: -20,
+                isSystemPrimary: false
+            )
+        )
+    ]
+
+    let result = SDLTopologyMapper.arrange(
+        mappings: mappings,
+        primaryDisplayID: "primary",
+        mode: .custom,
+        customOrigins: [
+            "primary": VirtualDisplayPosition(x: 0, y: 0),
+            "retina": VirtualDisplayPosition(x: -2060, y: -20)
+        ]
+    )
+
+    #expect(result == [
+        SDLMonitorPlacement(
+            monitorID: 2,
+            x: 0,
+            y: 0,
+            isPrimary: true
+        ),
+        SDLMonitorPlacement(
+            monitorID: 1,
+            x: -2056,
+            y: -20,
+            isPrimary: false
+        )
+    ])
+}
+
+@Test("RDP true fullscreen сохраняет safe-area и нативную верхнюю панель macOS")
+func keepsRDPInTrueFullscreenWithNativeTopEdge() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+
+    let service = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/FreeRDPService.swift"),
+        encoding: .utf8
+    )
+    let interposer = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Native/MonitorTopologyInterposer.cpp"),
+        encoding: .utf8
+    )
+    let toolbar = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/RDPSessionControlPanel.swift"),
+        encoding: .utf8
+    )
+
+    #expect(service.contains("SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS"))
+    #expect(service.contains("SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"))
+    #expect(interposer.contains("SDL_GetDisplayUsableBounds"))
+    #expect(interposer.contains("fullscreen-safe"))
+    #expect(!interposer.contains("exclusive fullscreen suppressed"))
 }
 
 @Test("Профиль 0.4.x мигрирует старый флаг буфера обмена")
@@ -1019,6 +1136,33 @@ func confirmsStableDisplayRemoval() {
     )
 
     #expect(removed == ["right"])
+}
+
+@Test("Multimon Retina использует единый logical SDL backing")
+func usesLogicalBackingForFullscreenAndMultimonWindows() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+
+    let service = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/FreeRDPService.swift"),
+        encoding: .utf8
+    )
+    let interposer = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Native/MonitorTopologyInterposer.cpp"),
+        encoding: .utf8
+    )
+
+    #expect(service.contains("fullscreenLogicalBacking"))
+    #expect(service.contains("SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN"))
+    #expect(service.contains("logical 1x SDL backing"))
+
+    #expect(interposer.contains("requestedFullscreen || requestedBorderless"))
+    #expect(interposer.contains("SDL_PROP_WINDOW_CREATE_HIGH_PIXEL_DENSITY_BOOLEAN"))
+    #expect(interposer.contains("Logical RDP backing active:"))
 }
 
 private let realSDLMonitorOutput = """

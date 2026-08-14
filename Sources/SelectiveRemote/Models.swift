@@ -1129,6 +1129,18 @@ enum SDLTopologyMapper {
                     VirtualDisplayPosition(x: $0.x - primary.x, y: $0.y - primary.y)
                 }
             }
+
+            // FreeRDP rejects a multimon topology when selected monitors have
+            // even a tiny gap. The editor historically snapped coordinates to
+            // a 20-point grid, so a 2056-wide Retina display could be stored at
+            // x=-2060 and leave a four-pixel hole before the primary at x=0.
+            // Preserve the user's perpendicular offset, but snap the nearest
+            // monitor edge so every custom layout is connected at runtime.
+            origins = connectedCustomOrigins(
+                origins,
+                mappings: sorted,
+                primaryDisplayID: effectivePrimary
+            )
         }
 
         let physicalOrder = sorted.map { mapping in
@@ -1146,6 +1158,119 @@ enum SDLTopologyMapper {
             return $0.y < $1.y
         }
         return [primary] + remaining
+    }
+
+    private static func connectedCustomOrigins(
+        _ origins: [String: VirtualDisplayPosition],
+        mappings: [SDLDisplayMapping],
+        primaryDisplayID: String
+    ) -> [String: VirtualDisplayPosition] {
+        guard mappings.count > 1 else { return origins }
+
+        let mappingByID = Dictionary(
+            uniqueKeysWithValues: mappings.map { ($0.displayID, $0) }
+        )
+        guard mappingByID[primaryDisplayID] != nil else { return origins }
+
+        var result = origins
+        var connected: Set<String> = [primaryDisplayID]
+        var pending = mappings
+            .map(\.displayID)
+            .filter { $0 != primaryDisplayID }
+
+        while !pending.isEmpty {
+            var bestIndex: Int?
+            var bestPosition: VirtualDisplayPosition?
+            var bestDistance = Int.max
+
+            for (pendingIndex, displayID) in pending.enumerated() {
+                guard
+                    let mapping = mappingByID[displayID],
+                    let position = result[displayID]
+                else { continue }
+
+                let width = mapping.monitor.width
+                let height = mapping.monitor.height
+
+                for anchorID in connected {
+                    guard
+                        let anchorMapping = mappingByID[anchorID],
+                        let anchor = result[anchorID]
+                    else { continue }
+
+                    let anchorWidth = anchorMapping.monitor.width
+                    let anchorHeight = anchorMapping.monitor.height
+
+                    let verticalOverlap =
+                        min(position.y + height, anchor.y + anchorHeight)
+                        - max(position.y, anchor.y)
+                    if verticalOverlap > 0 {
+                        for candidateX in [
+                            anchor.x - width,
+                            anchor.x + anchorWidth
+                        ] {
+                            let distance = abs(position.x - candidateX)
+                            if distance < bestDistance {
+                                bestDistance = distance
+                                bestIndex = pendingIndex
+                                bestPosition = VirtualDisplayPosition(
+                                    x: candidateX,
+                                    y: position.y
+                                )
+                            }
+                        }
+                    }
+
+                    let horizontalOverlap =
+                        min(position.x + width, anchor.x + anchorWidth)
+                        - max(position.x, anchor.x)
+                    if horizontalOverlap > 0 {
+                        for candidateY in [
+                            anchor.y - height,
+                            anchor.y + anchorHeight
+                        ] {
+                            let distance = abs(position.y - candidateY)
+                            if distance < bestDistance {
+                                bestDistance = distance
+                                bestIndex = pendingIndex
+                                bestPosition = VirtualDisplayPosition(
+                                    x: position.x,
+                                    y: candidateY
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let bestIndex, let bestPosition {
+                let displayID = pending.remove(at: bestIndex)
+                result[displayID] = bestPosition
+                connected.insert(displayID)
+                continue
+            }
+
+            let displayID = pending.removeFirst()
+            guard
+                let mapping = mappingByID[displayID],
+                let requested = result[displayID],
+                let primaryMapping = mappingByID[primaryDisplayID],
+                let primary = result[primaryDisplayID]
+            else { continue }
+
+            let height = mapping.monitor.height
+            let attachLeft = requested.x < primary.x
+            let x = attachLeft
+                ? primary.x - mapping.monitor.width
+                : primary.x + primaryMapping.monitor.width
+            let minimumY = primary.y - height + 1
+            let maximumY = primary.y + primaryMapping.monitor.height - 1
+            let y = min(max(requested.y, minimumY), maximumY)
+            result[displayID] = VirtualDisplayPosition(x: x, y: y)
+            connected.insert(displayID)
+        }
+
+        return result
     }
 
     static func environmentValue(_ placements: [SDLMonitorPlacement]) -> String {

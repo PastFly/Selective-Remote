@@ -100,16 +100,76 @@ struct VirtualMonitorLayoutEditor: View {
             .onEnded { value in
                 guard editable else { return }
                 dragOffsets[placement.id] = nil
-                let step = 20
-                let rawX = Int((placement.virtualFrame.minX + value.translation.width / scale).rounded())
-                let rawY = Int((placement.virtualFrame.minY + value.translation.height / scale).rounded())
-                let snappedX = Int((Double(rawX) / Double(step)).rounded()) * step
-                let snappedY = Int((Double(rawY) / Double(step)).rounded()) * step
+                let rawX = Int(
+                    (placement.virtualFrame.minX + value.translation.width / scale)
+                        .rounded()
+                )
+                let rawY = Int(
+                    (placement.virtualFrame.minY + value.translation.height / scale)
+                        .rounded()
+                )
                 onMove(
                     placement.id,
-                    VirtualDisplayPosition(x: snappedX, y: snappedY)
+                    snappedPosition(
+                        for: placement,
+                        rawX: rawX,
+                        rawY: rawY
+                    )
                 )
             }
+    }
+
+    private func snappedPosition(
+        for placement: DisplayPlacement,
+        rawX: Int,
+        rawY: Int
+    ) -> VirtualDisplayPosition {
+        let gridStep = 20
+        let edgeSnapDistance = 40
+        let width = Int(placement.virtualFrame.width.rounded())
+        let height = Int(placement.virtualFrame.height.rounded())
+
+        var snappedX = Int(
+            (Double(rawX) / Double(gridStep)).rounded()
+        ) * gridStep
+        var snappedY = Int(
+            (Double(rawY) / Double(gridStep)).rounded()
+        ) * gridStep
+        var bestXDistance = edgeSnapDistance + 1
+        var bestYDistance = edgeSnapDistance + 1
+
+        for other in placements where other.id != placement.id {
+            let otherMinX = Int(other.virtualFrame.minX.rounded())
+            let otherMaxX = Int(other.virtualFrame.maxX.rounded())
+            let otherMinY = Int(other.virtualFrame.minY.rounded())
+            let otherMaxY = Int(other.virtualFrame.maxY.rounded())
+
+            let verticalOverlap =
+                min(rawY + height, otherMaxY) - max(rawY, otherMinY)
+            if verticalOverlap > 0 {
+                for exactX in [otherMinX - width, otherMaxX] {
+                    let distance = abs(rawX - exactX)
+                    if distance < bestXDistance {
+                        bestXDistance = distance
+                        snappedX = exactX
+                    }
+                }
+            }
+
+            let horizontalOverlap =
+                min(rawX + width, otherMaxX) - max(rawX, otherMinX)
+            if horizontalOverlap > 0 {
+                for exactY in [otherMinY - height, otherMaxY] {
+                    let distance = abs(rawY - exactY)
+                    if distance < bestYDistance {
+                        bestYDistance = distance
+                        snappedY = exactY
+                    }
+                }
+            }
+        }
+
+        return VirtualDisplayPosition(x: snappedX, y: snappedY)
     }
 
     private func drawingLayout(in size: CGSize) -> (
