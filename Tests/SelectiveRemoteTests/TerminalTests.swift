@@ -52,7 +52,7 @@ func persistsTerminalAppearance() throws {
 
 @Test("Терминал предлагает расширенный набор встроенных тем")
 func exposesExpandedTerminalThemes() {
-    #expect(TerminalThemePreset.allCases.count == 14)
+    #expect(TerminalThemePreset.allCases.count == 26)
     #expect(TerminalThemePreset.allCases.contains(.tokyoNight))
     #expect(TerminalThemePreset.allCases.contains(.catppuccinMocha))
     #expect(TerminalThemePreset.allCases.contains(.rosePine))

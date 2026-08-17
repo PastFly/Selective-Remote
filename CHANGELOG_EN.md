@@ -1,3 +1,11 @@
+## 0.21.15
+
+- Expanded Terminal appearance to 26 themes with compact SwiftUI previews, search, All / Dark / Light / Favorites filters, and persistent favorites.
+- Custom terminal colors are now stored separately and survive switching to built-in themes while all existing theme identifiers and saved settings remain compatible.
+- Added Known Host → SSH Profile creation for concrete known_hosts entries, including multi-address selection, port extraction, authentication selection, and duplicate detection. Hashed, marker, and wildcard entries are intentionally not converted, and ~/.ssh/known_hosts is never modified by profile creation.
+- Fixed an application crash after granting camera or microphone permission in local diagnostics by safely bridging TCC callbacks back to MainActor before updating UI state.
+- RDP fullscreen/Retina/multi-monitor/topology, native privacy preflight, SFTP runtime, and Forwarding runtime were not changed in this release.
+
 ## 0.21.14
 
 - Minor improvements to the built-in help and the application's system menu.

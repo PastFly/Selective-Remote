@@ -110,6 +110,7 @@ struct CredentialVaultView: View {
     @State private var verifyingKnownHostID: String?
     @State private var knownHostVerification: [String: SSHKnownHostVerification] = [:]
     @State private var knownHostPendingDeletion: SSHKnownHostEntry?
+    @State private var knownHostProfileCreationEntry: SSHKnownHostEntry?
 
     init(
         presentation: CredentialVaultPresentation = .sheet,
@@ -224,7 +225,7 @@ struct CredentialVaultView: View {
     }
 
     var body: some View {
-        bodyWithSigningSheet
+        bodyWithKnownHostProfileSheet
     }
 
     private var baseLayout: some View {
@@ -289,6 +290,16 @@ struct CredentialVaultView: View {
                 SSHCertificateSigningView(key: request.key, authority: request.authority) {
                     refreshCertificateInfo()
                 }
+            }
+    }
+
+    private var bodyWithKnownHostProfileSheet: some View {
+        bodyWithSigningSheet
+            .sheet(item: $knownHostProfileCreationEntry) { entry in
+                KnownHostSSHProfileCreationView(entry: entry) { profileID in
+                    onOpenProfile?(profileID)
+                }
+                .environmentObject(model)
             }
     }
 
@@ -827,6 +838,11 @@ struct CredentialVaultView: View {
                 }
             }
             Divider()
+            Button("Создать SSH-профиль…", systemImage: "plus.rectangle") {
+                knownHostProfileCreationEntry = entry
+            }
+            .disabled(SSHKnownHostsService.profileConversionUnavailableReason(for: entry) != nil)
+            Divider()
             Button("Удалить из known_hosts", systemImage: "trash", role: .destructive) {
                 knownHostPendingDeletion = entry
             }
@@ -1321,6 +1337,22 @@ struct CredentialVaultView: View {
                         Button("Удалить запись", systemImage: "trash", role: .destructive) {
                             knownHostPendingDeletion = entry
                         }
+                    }
+                }
+
+                inspectorCard("SSH-профиль", systemImage: "terminal") {
+                    if let reason = SSHKnownHostsService.profileConversionUnavailableReason(for: entry) {
+                        Label(reason, systemImage: "lock.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Создаёт обычный SSH-профиль из host и port этой записи. Файл known_hosts не изменяется.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Создать SSH-профиль…", systemImage: "plus.rectangle") {
+                            knownHostProfileCreationEntry = entry
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                 }
 

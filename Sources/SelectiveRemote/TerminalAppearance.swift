@@ -41,6 +41,18 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
     case monokai
     case rosePine
     case solarizedLight
+    case kanagawaWave
+    case kanagawaDragon
+    case nightOwl
+    case lightOwl
+    case ayuDark
+    case ayuLight
+    case gruvboxLight
+    case catppuccinLatte
+    case tokyoDay
+    case nordLight
+    case cyberpunk
+    case ocean
     case custom
 
     var id: String { rawValue }
@@ -60,6 +72,18 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
         case .monokai: "Monokai"
         case .rosePine: "Rosé Pine"
         case .solarizedLight: "Solarized Light"
+        case .kanagawaWave: "Kanagawa Wave"
+        case .kanagawaDragon: "Kanagawa Dragon"
+        case .nightOwl: "Night Owl"
+        case .lightOwl: "Light Owl"
+        case .ayuDark: "Ayu Dark"
+        case .ayuLight: "Ayu Light"
+        case .gruvboxLight: "Gruvbox Light"
+        case .catppuccinLatte: "Catppuccin Latte"
+        case .tokyoDay: "Tokyo Day"
+        case .nordLight: "Nord Light"
+        case .cyberpunk: "Cyberpunk"
+        case .ocean: "Ocean"
         case .custom: "Своя тема"
         }
     }
@@ -354,6 +378,30 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
                 brightCyan: "#EBBCBA",
                 brightWhite: "#F0ECFE"
             )
+        case .kanagawaWave:
+            TerminalThemeBuiltins.kanagawaWave
+        case .kanagawaDragon:
+            TerminalThemeBuiltins.kanagawaDragon
+        case .nightOwl:
+            TerminalThemeBuiltins.nightOwl
+        case .lightOwl:
+            TerminalThemeBuiltins.lightOwl
+        case .ayuDark:
+            TerminalThemeBuiltins.ayuDark
+        case .ayuLight:
+            TerminalThemeBuiltins.ayuLight
+        case .gruvboxLight:
+            TerminalThemeBuiltins.gruvboxLight
+        case .catppuccinLatte:
+            TerminalThemeBuiltins.catppuccinLatte
+        case .tokyoDay:
+            TerminalThemeBuiltins.tokyoDay
+        case .nordLight:
+            TerminalThemeBuiltins.nordLight
+        case .cyberpunk:
+            TerminalThemeBuiltins.cyberpunk
+        case .ocean:
+            TerminalThemeBuiltins.ocean
         case .solarizedLight:
             TerminalPalette(
                 background: "#FDF6E3",
@@ -446,10 +494,13 @@ final class TerminalAppearanceStore: ObservableObject {
         static let cursorStyle = "SelectiveRemote.terminal.cursorStyle.v1"
         static let cursorBlink = "SelectiveRemote.terminal.cursorBlink.v1"
         static let padding = "SelectiveRemote.terminal.padding.v1"
+        static let customPalette = "SelectiveRemote.terminal.customPalette.v1"
+        static let themeFavorites = "SelectiveRemote.terminal.themeFavorites.v1"
     }
 
     @Published private(set) var selectedPreset: TerminalThemePreset
     @Published private(set) var palette: TerminalPalette
+    @Published private(set) var favoritePresetIDs: Set<String>
     @Published var font: TerminalFontChoice {
         didSet { saveScalar(font.rawValue, key: Key.font) }
     }
@@ -470,18 +521,33 @@ final class TerminalAppearanceStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    private var customPalette: TerminalPalette
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let preset = defaults.string(forKey: Key.preset)
             .flatMap(TerminalThemePreset.init(rawValue:)) ?? .midnight
+        let legacyPalette = defaults.data(forKey: Key.palette)
+            .flatMap { try? JSONDecoder().decode(TerminalPalette.self, from: $0) }
+        let storedCustomPalette = defaults.data(forKey: Key.customPalette)
+            .flatMap { try? JSONDecoder().decode(TerminalPalette.self, from: $0) }
+        let migratedCustomPalette = storedCustomPalette
+            ?? (preset == .custom ? legacyPalette : nil)
+            ?? TerminalThemePreset.midnight.palette
+
         selectedPreset = preset
-        if let data = defaults.data(forKey: Key.palette),
-           let decoded = try? JSONDecoder().decode(TerminalPalette.self, from: data) {
-            palette = decoded
-        } else {
-            palette = preset.palette
+        customPalette = migratedCustomPalette
+        palette = preset == .custom
+            ? migratedCustomPalette
+            : (legacyPalette ?? preset.palette)
+        favoritePresetIDs = Set(defaults.stringArray(forKey: Key.themeFavorites) ?? [])
+
+        if storedCustomPalette == nil,
+           preset == .custom,
+           let data = try? JSONEncoder().encode(migratedCustomPalette) {
+            defaults.set(data, forKey: Key.customPalette)
         }
+
         font = defaults.string(forKey: Key.font)
             .flatMap(TerminalFontChoice.init(rawValue:)) ?? .sfMono
         let storedFontSize = defaults.double(forKey: Key.fontSize)
@@ -509,15 +575,31 @@ final class TerminalAppearanceStore: ObservableObject {
         )
     }
 
+    var customThemePalette: TerminalPalette { customPalette }
+
     func applyPreset(_ preset: TerminalThemePreset) {
-        guard preset != .custom else {
+        if preset == .custom {
             selectedPreset = .custom
+            palette = customPalette
             savePresetAndPalette()
             return
         }
         selectedPreset = preset
         palette = preset.palette
         savePresetAndPalette()
+    }
+
+    func isFavorite(_ preset: TerminalThemePreset) -> Bool {
+        favoritePresetIDs.contains(preset.rawValue)
+    }
+
+    func toggleFavorite(_ preset: TerminalThemePreset) {
+        if favoritePresetIDs.contains(preset.rawValue) {
+            favoritePresetIDs.remove(preset.rawValue)
+        } else {
+            favoritePresetIDs.insert(preset.rawValue)
+        }
+        defaults.set(favoritePresetIDs.sorted(), forKey: Key.themeFavorites)
     }
 
     func updateBackground(_ value: String) {
@@ -545,6 +627,8 @@ final class TerminalAppearanceStore: ObservableObject {
         cursorStyle = .block
         cursorBlink = true
         padding = 10
+        customPalette = TerminalThemePreset.midnight.palette
+        saveCustomPalette()
         applyPreset(.midnight)
     }
 
@@ -556,8 +640,16 @@ final class TerminalAppearanceStore: ObservableObject {
         var changed = palette
         update(&changed)
         palette = changed
+        customPalette = changed
         selectedPreset = .custom
+        saveCustomPalette()
         savePresetAndPalette()
+    }
+
+    private func saveCustomPalette() {
+        if let data = try? JSONEncoder().encode(customPalette) {
+            defaults.set(data, forKey: Key.customPalette)
+        }
     }
 
     private func savePresetAndPalette() {
@@ -593,19 +685,10 @@ struct TerminalAppearanceView: View {
             AppAppearanceSettingsSection(store: appAppearance)
 
             Section("Терминал") {
-                Picker(
-                    "Тема",
-                    selection: Binding(
-                        get: { store.selectedPreset },
-                        set: { store.applyPreset($0) }
-                    )
-                ) {
-                    ForEach(TerminalThemePreset.allCases) { preset in
-                        Text(LocalizedStringKey(preset.title)).tag(preset)
-                    }
-                }
+                TerminalThemeSelector(store: store)
 
-                Picker("Шрифт", selection: $store.font) {
+                DisclosureGroup("Шрифт и курсор") {
+                    Picker("Шрифт", selection: $store.font) {
                     ForEach(TerminalFontChoice.allCases) { font in
                         Text(font.title).tag(font)
                     }
@@ -647,10 +730,10 @@ struct TerminalAppearanceView: View {
                             .frame(width: 42, alignment: .trailing)
                     }
                 }
-            }
+                }
 
-            Section("Свои цвета") {
-                TerminalColorControl(
+                DisclosureGroup("Своя тема") {
+                    TerminalColorControl(
                     title: "Фон",
                     value: Binding(
                         get: { store.palette.background },
@@ -671,6 +754,7 @@ struct TerminalAppearanceView: View {
                         set: { store.updateCursor($0) }
                     )
                 )
+                }
             }
 
             HStack {
@@ -683,7 +767,7 @@ struct TerminalAppearanceView: View {
         }
         .formStyle(.grouped)
         .padding(12)
-        .frame(width: 460, height: 720)
+        .frame(width: 430, height: 640)
     }
 }
 
@@ -738,7 +822,7 @@ private struct TerminalColorWell: NSViewRepresentable {
     }
 }
 
-private enum TerminalColorCodec {
+enum TerminalColorCodec {
     static func normalizedHex(_ hex: String) -> String? {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         guard cleaned.count == 6,

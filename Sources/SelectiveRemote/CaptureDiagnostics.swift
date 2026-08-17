@@ -124,6 +124,17 @@ extension CameraQualityPreset {
     }
 }
 
+private enum CapturePermissionBridge {
+    static func request(
+        for mediaType: AVMediaType,
+        completion: @escaping @Sendable (Bool) -> Void
+    ) {
+        AVCaptureDevice.requestAccess(for: mediaType) { granted in
+            completion(granted)
+        }
+    }
+}
+
 private final class CameraPreviewService: @unchecked Sendable {
     let session = AVCaptureSession()
     private let queue = DispatchQueue(
@@ -263,7 +274,7 @@ final class CaptureDiagnosticsModel: ObservableObject {
             )
         case .notDetermined:
             previewState = .requestingPermission
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            CapturePermissionBridge.request(for: .video) { [weak self] granted in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.refresh()
@@ -306,7 +317,7 @@ final class CaptureDiagnosticsModel: ObservableObject {
             return
         case .notDetermined:
             microphoneRequestInFlight = true
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
+            CapturePermissionBridge.request(for: .audio) { [weak self] granted in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
                     self.microphoneRequestInFlight = false
