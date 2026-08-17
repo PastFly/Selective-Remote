@@ -700,6 +700,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var sshInitialDirectory: String
     var sshCompression: Bool
     var sshKeepAliveSeconds: Int
+    var sshAgentForwarding: Bool
     var portForwards: [PortForwardRule]
     var gatewayHost: String
     var gatewayUsername: String
@@ -756,6 +757,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         sshInitialDirectory = "."
         sshCompression = false
         sshKeepAliveSeconds = 30
+        sshAgentForwarding = false
         portForwards = []
         gatewayHost = ""
         gatewayUsername = ""
@@ -796,7 +798,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     private enum CodingKeys: String, CodingKey {
         case id, connectionType, friendlyName, group, profileDescription, host, username
         case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
-        case sshCompression, sshKeepAliveSeconds, portForwards
+        case sshCompression, sshKeepAliveSeconds, sshAgentForwarding, portForwards
         case gatewayHost, gatewayUsername
         case isFavorite, selectedDisplayIDs, primaryDisplayID
         case displayLayoutMode, virtualDisplayOrigins, windowsScale, rdpQuality
@@ -848,6 +850,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
             Int.self,
             forKey: .sshKeepAliveSeconds
         ) ?? defaults.sshKeepAliveSeconds
+        sshAgentForwarding = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .sshAgentForwarding
+        ) ?? defaults.sshAgentForwarding
         portForwards = try container.decodeIfPresent(
             [PortForwardRule].self,
             forKey: .portForwards
@@ -959,6 +965,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(sshInitialDirectory, forKey: .sshInitialDirectory)
         try container.encode(sshCompression, forKey: .sshCompression)
         try container.encode(sshKeepAliveSeconds, forKey: .sshKeepAliveSeconds)
+        try container.encode(sshAgentForwarding, forKey: .sshAgentForwarding)
         try container.encode(portForwards, forKey: .portForwards)
         try container.encode(gatewayHost, forKey: .gatewayHost)
         try container.encode(gatewayUsername, forKey: .gatewayUsername)

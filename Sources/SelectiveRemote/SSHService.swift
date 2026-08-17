@@ -64,6 +64,7 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let initialDirectory: String
     let compression: Bool
     let keepAliveSeconds: Int
+    let agentForwarding: Bool
 
     init(
         profile: ConnectionProfile,
@@ -140,6 +141,7 @@ struct SSHConnectionSettings: Equatable, Sendable {
         self.initialDirectory = initialDirectory.isEmpty ? "." : initialDirectory
         compression = profile.sshCompression
         keepAliveSeconds = min(max(profile.sshKeepAliveSeconds, 0), 3_600)
+        agentForwarding = profile.sshAgentForwarding
     }
 }
 
@@ -525,8 +527,18 @@ enum SSHService {
         // An explicit authentication mode must not silently reuse a ControlMaster
         // that was authenticated using another credential. This also guarantees
         // that Touch ID gates the connection selected in the profile.
-        commonSSHArguments(settings: settings, batchMode: false, multiplexing: false)
-            + ["-tt", settings.host]
+        var arguments = commonSSHArguments(
+            settings: settings,
+            batchMode: false,
+            multiplexing: false
+        )
+        // Agent forwarding is deliberately limited to the interactive Terminal
+        // session. SFTP masters and background forwarding processes never request
+        // a forwarded agent socket merely because the profile enables this option.
+        if settings.agentForwarding {
+            arguments.append("-A")
+        }
+        return arguments + ["-tt", settings.host]
     }
 
     /// Installs a public key without ever replacing authorized_keys. The remote

@@ -73,6 +73,115 @@
     terminal.loadAddon(fitAddon);
     terminal.open(terminalHost);
 
+
+    const postSmartLink = (kind, value) => {
+        window.webkit?.messageHandlers?.terminalSmartLink?.postMessage({
+            kind,
+            value
+        });
+    };
+
+    const trimmedSmartLink = (raw) => {
+        let value = raw;
+        while (value.length > 0 && /[.,;!?)\]}]$/.test(value)) {
+            value = value.slice(0, -1);
+        }
+        return value;
+    };
+
+    const terminalSmartLinksForLine = (text) => {
+        const candidates = [];
+
+        const appendMatches = (kind, regex, captureIndex = 0) => {
+            regex.lastIndex = 0;
+            let match;
+            while ((match = regex.exec(text)) !== null) {
+                const raw = match[captureIndex];
+                if (!raw) {
+                    if (match[0].length === 0) {
+                        regex.lastIndex += 1;
+                    }
+                    continue;
+                }
+                const offset = captureIndex === 0
+                    ? 0
+                    : match[0].lastIndexOf(raw);
+                const value = trimmedSmartLink(raw);
+                if (!value) {
+                    continue;
+                }
+                const start = match.index + Math.max(0, offset);
+                candidates.push({
+                    kind,
+                    value,
+                    start,
+                    end: start + value.length
+                });
+            }
+        };
+
+        appendMatches("url", /https?:\/\/[^\s<>"'`]+/gi);
+        appendMatches(
+            "path",
+            /(?:^|\s)((?:~\/|\/|\.\/|\.\.\/)[^\s<>"'`]+)/g,
+            1
+        );
+        appendMatches(
+            "host",
+            /\b(?:(?:\d{1,3}\.){3}\d{1,3}|(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}|[A-Za-z0-9-]+\.local)(?::\d{1,5})?\b/g
+        );
+
+        const priority = { url: 0, path: 1, host: 2 };
+        candidates.sort((left, right) => {
+            if (priority[left.kind] !== priority[right.kind]) {
+                return priority[left.kind] - priority[right.kind];
+            }
+            return left.start - right.start;
+        });
+
+        const accepted = [];
+        candidates.forEach((candidate) => {
+            const overlaps = accepted.some((existing) => (
+                candidate.start < existing.end
+                && candidate.end > existing.start
+            ));
+            if (!overlaps) {
+                accepted.push(candidate);
+            }
+        });
+        return accepted.sort((left, right) => left.start - right.start);
+    };
+
+    if (typeof terminal.registerLinkProvider === "function") {
+        terminal.registerLinkProvider({
+            provideLinks(lineNumber, callback) {
+                if (terminal.buffer.active.type === "alternate") {
+                    callback([]);
+                    return;
+                }
+                const line = terminal.buffer.active.getLine(lineNumber - 1);
+                if (!line) {
+                    callback([]);
+                    return;
+                }
+                const text = line.translateToString(true);
+                const links = terminalSmartLinksForLine(text).map((link) => ({
+                    text: link.value,
+                    range: {
+                        start: { x: link.start + 1, y: lineNumber },
+                        end: { x: link.end, y: lineNumber }
+                    },
+                    activate: () => postSmartLink(link.kind, link.value),
+                    decorations: {
+                        pointerCursor: true,
+                        underline: true
+                    }
+                }));
+                callback(links);
+            }
+        });
+    }
+
     const builtInCommandCatalog = (window.selectiveTerminalCommandCatalog || [])
         .map((entry, index) => ({
         ...entry,

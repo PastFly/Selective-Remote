@@ -1,3 +1,15 @@
+## 0.22.0
+
+- Added a new global SFTP Workspace with two independent panes; each pane can show this Mac or a separate SSH/SFTP server.
+- SFTP inside an SSH profile now uses the same multi-server Workspace: the current host opens automatically and the opposite pane can switch from the Mac to any saved or temporary SFTP server.
+- Added independent SFTP tabs and quick server switching per pane.
+- Added Server → Server copies through a safe temporary staging copy on the Mac without passing credentials directly between servers.
+- Restored selection and multi-select, context actions, navigation, sorting, filtering, properties, and permissions inside SFTP Workspace.
+- Added drag and drop between server panes and between local and remote panes.
+- Transfer Queue now shows real transfer stages, bytes, percentage, speed, and ETA, with pause, resume, cancel, and retry controls.
+- Server → Server transfers show two-stage A → Mac → B progress.
+- Added Terminal Smart Links and SSH Agent Forwarding support; Agent Forwarding is disabled by default.
+
 ## 0.21.16
 
 - Added a live Terminal theme preview: hovering a theme updates only the enlarged preview, while the real terminal theme is applied only on click.

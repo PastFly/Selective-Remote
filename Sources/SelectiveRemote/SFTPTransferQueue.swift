@@ -5,9 +5,23 @@ import Foundation
 enum SFTPTransferDirection: String, Sendable {
     case upload
     case download
+    case serverToServer
 
-    var title: String { self == .upload ? "На сервер" : "На этот Mac" }
-    var systemImage: String { self == .upload ? "arrow.up.circle" : "arrow.down.circle" }
+    var title: String {
+        switch self {
+        case .upload: "На сервер"
+        case .download: "На этот Mac"
+        case .serverToServer: "Между серверами"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .upload: "arrow.up.circle"
+        case .download: "arrow.down.circle"
+        case .serverToServer: "arrow.left.arrow.right.circle"
+        }
+    }
 }
 
 enum SFTPTransferPhase: String, Sendable {
@@ -74,6 +88,10 @@ struct SFTPTransferItem: Identifiable, Sendable {
             let total = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
             return "\(done) из \(total)"
         }
+        if transferredBytes > 0 {
+            let done = ByteCountFormatter.string(fromByteCount: transferredBytes, countStyle: .file)
+            return "\(done) передано"
+        }
         return phase.title
     }
 
@@ -83,6 +101,21 @@ struct SFTPTransferItem: Identifiable, Sendable {
             fromByteCount: Int64(bytesPerSecond.rounded()),
             countStyle: .file
         ) + "/с"
+    }
+
+    var etaText: String? {
+        guard let totalBytes,
+              totalBytes > transferredBytes,
+              bytesPerSecond > 0
+        else { return nil }
+        let remaining = Double(totalBytes - transferredBytes) / bytesPerSecond
+        guard remaining.isFinite, remaining > 0 else { return nil }
+        let seconds = Int(remaining.rounded(.up))
+        if seconds < 60 { return "\(seconds) с" }
+        if seconds < 3_600 {
+            return "\(seconds / 60) мин \(seconds % 60) с"
+        }
+        return "\(seconds / 3_600) ч \((seconds % 3_600) / 60) мин"
     }
 }
 

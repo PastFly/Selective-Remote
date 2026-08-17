@@ -1,6 +1,18 @@
+import AppKit
 import Foundation
 import SwiftUI
 @preconcurrency import WebKit
+
+enum TerminalSmartLinkKind: String, Sendable {
+    case url
+    case path
+    case host
+}
+
+struct TerminalSmartLink: Sendable {
+    let kind: TerminalSmartLinkKind
+    let value: String
+}
 
 private enum TerminalResourceLocator {
     static var directoryURL: URL? {
@@ -24,6 +36,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let onFocus: () -> Void
     let onInput: (Data) -> Void
     let onTabNavigation: (Int) -> Void
+    let onSmartLink: (TerminalSmartLink) -> Void
     @Binding var historyVisible: Bool
 
     init(
@@ -35,6 +48,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         onFocus: @escaping () -> Void = {},
         onInput: ((Data) -> Void)? = nil,
         onTabNavigation: @escaping (Int) -> Void = { _ in },
+        onSmartLink: @escaping (TerminalSmartLink) -> Void = { _ in },
         historyVisible: Binding<Bool> = .constant(false)
     ) {
         self.session = session
@@ -45,6 +59,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         self.onFocus = onFocus
         self.onInput = onInput ?? { _ in }
         self.onTabNavigation = onTabNavigation
+        self.onSmartLink = onSmartLink
         _historyVisible = historyVisible
     }
 
@@ -58,6 +73,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onFocus: onFocus,
             onInput: onInput,
             onTabNavigation: onTabNavigation,
+            onSmartLink: onSmartLink,
             historyVisible: _historyVisible
         )
     }
@@ -85,6 +101,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         configuration.userContentController.add(
             context.coordinator,
             name: Coordinator.navigationMessageName
+        )
+        configuration.userContentController.add(
+            context.coordinator,
+            name: Coordinator.smartLinkMessageName
         )
 
         let webView = TerminalWKWebView(frame: .zero, configuration: configuration)
@@ -123,6 +143,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         context.coordinator.updateFocusHandler(onFocus)
         context.coordinator.updateInputHandler(onInput)
         context.coordinator.updateTabNavigationHandler(onTabNavigation)
+        context.coordinator.updateSmartLinkHandler(onSmartLink)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
         context.coordinator.updateHistoryVisibility(historyVisible)
@@ -147,6 +168,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         webView.configuration.userContentController.removeScriptMessageHandler(
             forName: Coordinator.navigationMessageName
         )
+        webView.configuration.userContentController.removeScriptMessageHandler(
+            forName: Coordinator.smartLinkMessageName
+        )
         webView.navigationDelegate = nil
     }
 
@@ -157,6 +181,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         static let historyMessageName = "terminalHistory"
         static let focusMessageName = "terminalFocus"
         static let navigationMessageName = "terminalNavigation"
+        static let smartLinkMessageName = "terminalSmartLink"
 
         private weak var session: TerminalSessionModel?
         private weak var webView: WKWebView?
@@ -168,6 +193,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var onFocus: () -> Void
         private var onInput: (Data) -> Void
         private var onTabNavigation: (Int) -> Void
+        private var onSmartLink: (TerminalSmartLink) -> Void
         private var historyVisible: Binding<Bool>
         private var appliedHistoryVisibility: Bool?
         private var pageReady = false
@@ -184,6 +210,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onFocus: @escaping () -> Void,
             onInput: @escaping (Data) -> Void,
             onTabNavigation: @escaping (Int) -> Void,
+            onSmartLink: @escaping (TerminalSmartLink) -> Void,
             historyVisible: Binding<Bool>
         ) {
             self.session = session
@@ -194,6 +221,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             self.onFocus = onFocus
             self.onInput = onInput
             self.onTabNavigation = onTabNavigation
+            self.onSmartLink = onSmartLink
             self.historyVisible = historyVisible
         }
 
@@ -245,6 +273,12 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
 
         func updateTabNavigationHandler(_ updated: @escaping (Int) -> Void) {
             onTabNavigation = updated
+        }
+
+        func updateSmartLinkHandler(
+            _ updated: @escaping (TerminalSmartLink) -> Void
+        ) {
+            onSmartLink = updated
         }
 
         func updateHistoryVisibility(_ visible: Bool) {
@@ -312,6 +346,14 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             case Self.navigationMessageName:
                 guard let value = message.body as? NSNumber else { return }
                 onTabNavigation(value.intValue)
+            case Self.smartLinkMessageName:
+                guard let payload = message.body as? [String: Any],
+                      let rawKind = payload["kind"] as? String,
+                      let kind = TerminalSmartLinkKind(rawValue: rawKind),
+                      let value = payload["value"] as? String,
+                      !value.isEmpty
+                else { return }
+                onSmartLink(TerminalSmartLink(kind: kind, value: value))
             default:
                 break
             }
@@ -527,6 +569,7 @@ struct SSHTerminalView: View {
     let installKey: () -> Void
     let toggleFocusMode: () -> Void
     let openSFTP: (TerminalWorkspaceTab) -> Void
+    let openSFTPPath: (TerminalWorkspaceTab, String) -> Void
     let discoverContext: (TerminalWorkspaceTab) async throws -> TerminalRemoteContextSnapshot
 
     @State private var showsAppearance = false
@@ -1443,6 +1486,23 @@ struct SSHTerminalView: View {
                 },
                 onTabNavigation: { token in
                     navigateTabs(token)
+                },
+                onSmartLink: { link in
+                    selectTabIfNeeded(tab.id)
+                    switch link.kind {
+                    case .url:
+                        guard let url = URL(string: link.value),
+                              let scheme = url.scheme?.lowercased(),
+                              scheme == "http" || scheme == "https"
+                        else { return }
+                        NSWorkspace.shared.open(url)
+                    case .path:
+                        openSFTPPath(tab, link.value)
+                    case .host:
+                        // Host/IP links never start a connection silently.
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(link.value, forType: .string)
+                    }
                 },
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },

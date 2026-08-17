@@ -585,6 +585,30 @@ final class SFTPLocalBrowserModel: ObservableObject {
     }
 }
 
+private final class SFTPServerBridgeProgressState: @unchecked Sendable {
+    enum Stage: Sendable {
+        case download
+        case upload
+    }
+
+    private let lock = NSLock()
+    private var stage: Stage = .download
+    private var downloadedBytes: Int64 = 0
+
+    func beginUpload(downloadedBytes: Int64) {
+        lock.lock()
+        self.downloadedBytes = max(0, downloadedBytes)
+        stage = .upload
+        lock.unlock()
+    }
+
+    func snapshot() -> (stage: Stage, downloadedBytes: Int64) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (stage, downloadedBytes)
+    }
+}
+
 @MainActor
 final class SFTPBrowserModel: ObservableObject {
     @Published private(set) var entries: [SFTPRemoteEntry] = []
@@ -984,6 +1008,202 @@ final class SFTPBrowserModel: ObservableObject {
             ))
         }
         statusMessage = "Добавлено в очередь: \(requests.count)"
+    }
+
+    func copyRemote(
+        _ sourceEntries: [SFTPRemoteEntry],
+        from sourceDirectory: String,
+        sourceSettings: SSHConnectionSettings,
+        destinationSettings: SSHConnectionSettings,
+        to destinationDirectory: String? = nil
+    ) {
+        guard !sourceEntries.isEmpty else { return }
+        let targetDirectory = destinationDirectory ?? currentPath
+        var reservedNames = transfers.conflictPolicy == .rename && targetDirectory == currentPath
+            ? Set(entries.map(\.name))
+            : []
+
+        var added = 0
+        for entry in sourceEntries {
+            let destinationExists = targetDirectory == currentPath
+                && entries.contains { $0.name == entry.name }
+            if destinationExists && transfers.conflictPolicy == .skip {
+                continue
+            }
+
+            let destinationName = transfers.conflictPolicy == .rename
+                ? Self.availableRemoteName(
+                    preferredName: entry.name,
+                    isDirectory: entry.isDirectory,
+                    reservedNames: &reservedNames
+                )
+                : entry.name
+            enqueueRemoteBridge(
+                name: entry.name,
+                destinationName: destinationName,
+                isDirectory: entry.isDirectory,
+                sourcePath: SFTPService.joinedRemotePath(sourceDirectory, entry.name),
+                sourceTotalBytes: entry.size,
+                targetDirectory: targetDirectory,
+                sourceSettings: sourceSettings,
+                destinationSettings: destinationSettings
+            )
+            added += 1
+        }
+
+        if added == 0 {
+            statusMessage = "Выбранные объекты пропущены по политике конфликтов"
+        } else {
+            statusMessage = "Server → Server: добавлено в очередь \(added)"
+        }
+    }
+
+    func copyRemote(
+        payload: SFTPRemoteDragPayload,
+        sourceSettings: SSHConnectionSettings,
+        destinationSettings: SSHConnectionSettings,
+        to destinationDirectory: String? = nil
+    ) {
+        guard payload.profileID == sourceSettings.profileID else {
+            errorMessage = "Перетаскиваемый объект относится к другой SSH-сессии"
+            return
+        }
+        let targetDirectory = destinationDirectory ?? currentPath
+        if targetDirectory == currentPath,
+           entries.contains(where: { $0.name == payload.name }),
+           transfers.conflictPolicy == .skip {
+            statusMessage = "«\(payload.name)» пропущен: объект уже существует"
+            return
+        }
+
+        var reservedNames = transfers.conflictPolicy == .rename && targetDirectory == currentPath
+            ? Set(entries.map(\.name))
+            : []
+        let destinationName = transfers.conflictPolicy == .rename
+            ? Self.availableRemoteName(
+                preferredName: payload.name,
+                isDirectory: payload.isDirectory,
+                reservedNames: &reservedNames
+            )
+            : payload.name
+        enqueueRemoteBridge(
+            name: payload.name,
+            destinationName: destinationName,
+            isDirectory: payload.isDirectory,
+            sourcePath: payload.remotePath,
+            sourceTotalBytes: nil,
+            targetDirectory: targetDirectory,
+            sourceSettings: sourceSettings,
+            destinationSettings: destinationSettings
+        )
+        statusMessage = "Server → Server: «\(payload.name)» добавлен в очередь"
+    }
+
+    private func enqueueRemoteBridge(
+        name: String,
+        destinationName: String,
+        isDirectory: Bool,
+        sourcePath: String,
+        sourceTotalBytes: Int64?,
+        targetDirectory: String,
+        sourceSettings: SSHConnectionSettings,
+        destinationSettings: SSHConnectionSettings
+    ) {
+        let destinationPath = SFTPService.joinedRemotePath(
+            targetDirectory,
+            destinationName
+        )
+        let transferID = UUID()
+        let stagingDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "SelectiveRemote-SFTP-Bridge-\(transferID.uuidString)",
+                isDirectory: true
+            )
+        let staged = stagingDirectory.appendingPathComponent(
+            name,
+            isDirectory: isDirectory
+        )
+        let bridgeProgress = SFTPServerBridgeProgressState()
+        let combinedTotal = sourceTotalBytes.flatMap { size -> Int64? in
+            guard size > 0, size <= Int64.max / 2 else { return nil }
+            return size * 2
+        }
+        let item = SFTPTransferItem(
+            id: transferID,
+            direction: .serverToServer,
+            name: name,
+            source: "\(sourceSettings.host):\(sourcePath)",
+            destination: "\(destinationSettings.host):\(destinationPath)",
+            totalBytes: combinedTotal,
+            createdAt: Date(),
+            phase: .queued,
+            transferredBytes: 0,
+            bytesPerSecond: 0,
+            errorMessage: nil
+        )
+
+        transfers.enqueue(
+            SFTPTransferRequest(
+                item: item,
+                operation: { _, control in
+                    defer {
+                        try? FileManager.default.removeItem(at: stagingDirectory)
+                    }
+
+                    try FileManager.default.createDirectory(
+                        at: stagingDirectory,
+                        withIntermediateDirectories: false,
+                        attributes: [.posixPermissions: 0o700]
+                    )
+                    try SFTPService.download(
+                        settings: sourceSettings,
+                        remotePath: sourcePath,
+                        localURL: staged,
+                        isDirectory: isDirectory,
+                        resume: false,
+                        control: control
+                    )
+                    bridgeProgress.beginUpload(
+                        downloadedBytes: Self.localItemSize(staged)
+                            ?? sourceTotalBytes
+                            ?? 0
+                    )
+                    try SFTPService.upload(
+                        settings: destinationSettings,
+                        localURL: staged,
+                        remotePath: destinationPath,
+                        isDirectory: isDirectory,
+                        resume: false,
+                        control: control
+                    )
+                },
+                progressProbe: {
+                    let snapshot = bridgeProgress.snapshot()
+                    switch snapshot.stage {
+                    case .download:
+                        return Self.localItemSize(staged)
+                    case .upload:
+                        let uploaded = SFTPService.transferItemSize(
+                            settings: destinationSettings,
+                            remotePath: destinationPath,
+                            isDirectory: isDirectory
+                        ) ?? 0
+                        return snapshot.downloadedBytes + uploaded
+                    }
+                },
+                completion: { [weak self] in
+                    guard let self else { return }
+                    self.statusMessage = "«\(name)» скопирован между серверами"
+                    if self.currentPath == targetDirectory {
+                        self.load(
+                            settings: destinationSettings,
+                            directory: self.currentPath,
+                            recordHistory: false
+                        )
+                    }
+                }
+            )
+        )
     }
 
     func createDirectory(

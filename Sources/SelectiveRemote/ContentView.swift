@@ -63,6 +63,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
+    @StateObject private var globalSFTPWorkspace = SFTPWorkspaceModel()
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -77,7 +78,6 @@ struct ContentView: View {
     @State private var globalSFTPConnection: TerminalTabConnection?
 
     private var profile: ConnectionProfile { model.selectedProfile }
-    private var sftpSession: SFTPBrowserSession { model.sftpSession }
     private var profileBinding: Binding<ConnectionProfile> {
         Binding(
             get: { model.selectedProfile },
@@ -253,7 +253,6 @@ struct ContentView: View {
         .onChange(of: profile.id) { oldProfileID, newProfileID in
             setTerminalFocusMode(false)
             profileTabs[oldProfileID] = selectedTab
-            sftpSession.prepare(for: newProfileID)
             selectedTab = restoredProfileTab(for: newProfileID)
         }
         .onChange(of: profile.connectionType) { _, _ in
@@ -761,7 +760,17 @@ struct ContentView: View {
             terminalPanel
                 .id(profile.id)
         case .sftp:
-            SFTPBrowserView(profile: profile, session: sftpSession)
+            SFTPWorkspaceView(workspace: globalSFTPWorkspace)
+                .task(id: profile.id) {
+                    // Manual requests from Terminal Smart Links or "Open SFTP"
+                    // must win over the default profile request.
+                    if globalSFTPWorkspace.pendingOpenRequest == nil {
+                        globalSFTPWorkspace.requestOpen(
+                            connection: .savedProfile(profile.id),
+                            path: nil
+                        )
+                    }
+                }
                 .layoutPriority(1)
         case .forwarding:
             PortForwardingView(profile: profile)
@@ -1150,7 +1159,7 @@ struct ContentView: View {
             )
             sshWorkspaceSummaryRow(
                 .sftp,
-                status: sftpSession.connectionState == .connected
+                status: selectedProfileSFTPWorkspaceConnected
                     ? UpdateLocalization.text(ru: "Подключён", en: "Connected")
                     : UpdateLocalization.text(ru: "Готов", en: "Ready")
             )
@@ -1198,6 +1207,16 @@ struct ContentView: View {
 
     private var sshEndpointLabel: String {
         sshEndpointLabel(for: profile)
+    }
+
+    private var selectedProfileSFTPWorkspaceConnected: Bool {
+        globalSFTPWorkspace.tabs.contains { tab in
+            [tab.left, tab.right].contains { pane in
+                pane.kind == .remote
+                    && pane.connection?.profileID == profile.id
+                    && pane.isReady
+            }
+        }
     }
 
     private func sshEndpointLabel(for profile: ConnectionProfile) -> String {
@@ -1732,7 +1751,7 @@ struct ContentView: View {
         case .terminal:
             UpdateLocalization.text(ru: "Командная строка", en: "Command line")
         case .sftp:
-            UpdateLocalization.text(ru: "Файлы сервера", en: "Server files")
+            UpdateLocalization.text(ru: "Файлы и серверы", en: "Files & servers")
         case .forwarding:
             UpdateLocalization.text(ru: "Проброс портов", en: "Port forwarding")
         }
@@ -1787,8 +1806,8 @@ struct ContentView: View {
             )
         case .sftp:
             UpdateLocalization.text(
-                ru: "Полноразмерный файловый менеджер SFTP.",
-                en: "Full-size SFTP file manager."
+                ru: "SFTP Workspace этого SSH-профиля: соседняя панель может быть этим Mac или другим сервером.",
+                en: "SFTP Workspace for this SSH profile; the opposite pane can be this Mac or another server."
             )
         case .forwarding:
             UpdateLocalization.text(
@@ -1831,7 +1850,7 @@ struct ContentView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("SFTP")
                         .font(.system(size: 30, weight: .bold, design: .rounded))
-                    Text("Независимый файловый менеджер для сохранённых и временных серверов")
+                    Text("Несколько SFTP-вкладок · Local ↔ Server · Server ↔ Server")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -1840,25 +1859,10 @@ struct ContentView: View {
             .padding(.top, 28)
             .padding(.bottom, 16)
 
-            SFTPBrowserView(
-                profile: globalSFTPProfile,
-                session: model.globalSFTPSession,
-                requestConnection: {
-                    showsGlobalSFTPConnectionEditor = true
-                },
-                activeSSHSession: {
-                    if let profileID = globalSFTPConnection?.profileID {
-                        return model.isSSHTerminalRunning(profileID: profileID)
-                    }
-                    guard let connection = globalSFTPConnection else { return false }
-                    return model.globalTerminalWorkspace().tabs.contains {
-                        $0.session.isRunning && $0.connection == connection
-                    }
-                }
-            )
-            .padding(.horizontal, 28)
-            .padding(.bottom, 20)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            SFTPWorkspaceView(workspace: globalSFTPWorkspace)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .groupBoxStyle(ModernGroupBoxStyle())
         .controlSize(.large)
@@ -1968,12 +1972,17 @@ struct ContentView: View {
                 setTerminalFocusMode(!terminalFocusMode)
             },
             openSFTP: { tab in
-                guard let settings = model.prepareSSHConnection(
+                globalSFTPWorkspace.requestOpen(
                     connection: tab.connection,
-                    clientID: tab.id
-                ) else { return }
-                sftpSession.prepare(for: profile.id)
-                sftpSession.connect(settings)
+                    path: nil
+                )
+                selectedTab = .sftp
+            },
+            openSFTPPath: { tab, path in
+                globalSFTPWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: path
+                )
                 selectedTab = .sftp
             },
             discoverContext: { tab in
@@ -2015,9 +2024,18 @@ struct ContentView: View {
                 setTerminalFocusMode(!terminalFocusMode)
             },
             openSFTP: { tab in
-                globalSFTPConnection = tab.connection
-                connectGlobalSFTP(tab.connection, clientID: tab.id)
-                mainArea = .sftp
+                globalSFTPWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: nil
+                )
+                setMainArea(.sftp)
+            },
+            openSFTPPath: { tab, path in
+                globalSFTPWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: path
+                )
+                setMainArea(.sftp)
             },
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
@@ -2662,6 +2680,28 @@ struct ContentView: View {
                         Text("Сжатие")
                         Toggle("Включить SSH compression", isOn: profileBinding.sshCompression)
                     }
+                }
+                .padding(8)
+            }
+
+            GroupBox("SSH Agent Forwarding") {
+                VStack(alignment: .leading, spacing: 9) {
+                    Toggle(
+                        "Разрешить Terminal перенаправлять локальный ssh-agent",
+                        isOn: profileBinding.sshAgentForwarding
+                    )
+                    Text(
+                        "Позволяет подключаться с этого сервера дальше по SSH или к Git, "
+                            + "используя ключи из ssh-agent на Mac без копирования приватного ключа на сервер."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Label(
+                        "Включайте только для доверенных серверов. Опция применяется только к интерактивному Terminal; SFTP и Forwarding её не используют.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 }
                 .padding(8)
             }
