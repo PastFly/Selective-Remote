@@ -150,6 +150,17 @@ private struct TerminalThemeCatalogView: View {
     @ObservedObject var store: TerminalAppearanceStore
     @State private var query = ""
     @State private var filter: TerminalThemeCatalogFilter = .all
+    @State private var previewPreset: TerminalThemePreset?
+
+    private var activePreviewPreset: TerminalThemePreset {
+        previewPreset ?? store.selectedPreset
+    }
+
+    private var activePreviewPalette: TerminalPalette {
+        activePreviewPreset == .custom
+            ? store.customThemePalette
+            : activePreviewPreset.palette
+    }
 
     private var visibleThemes: [TerminalThemePreset] {
         let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -182,6 +193,13 @@ private struct TerminalThemeCatalogView: View {
                 ForEach(TerminalThemeCatalogFilter.allCases) { Text($0.title).tag($0) }
             }
             .labelsHidden().pickerStyle(.segmented)
+
+            TerminalThemeLivePreview(
+                preset: activePreviewPreset,
+                palette: activePreviewPalette,
+                syntaxHighlighting: store.syntaxHighlighting
+            )
+
             Divider()
 
             if visibleThemes.isEmpty {
@@ -198,7 +216,11 @@ private struct TerminalThemeCatalogView: View {
                 }
             }
         }
-        .padding(12).frame(width: 390, height: 430)
+        .padding(12)
+        .frame(width: 430, height: 560)
+        .onAppear {
+            previewPreset = store.selectedPreset
+        }
     }
 
     private func themeRow(_ preset: TerminalThemePreset) -> some View {
@@ -232,6 +254,95 @@ private struct TerminalThemeCatalogView: View {
         .padding(.horizontal, 8).padding(.vertical, 6)
         .background(selected ? Color.accentColor.opacity(0.10) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onHover { hovering in
+            if hovering {
+                previewPreset = preset
+            }
+        }
+    }
+}
+
+private struct TerminalThemeLivePreview: View {
+    let preset: TerminalThemePreset
+    let palette: TerminalPalette
+    let syntaxHighlighting: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Label("Предпросмотр", systemImage: "terminal")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(preset.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(color(palette.foreground))
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 0) {
+                    segment("pastfly@server:~$ ", palette.foreground)
+                    syntax("sudo", palette.brightBlue)
+                    segment(" ", palette.foreground)
+                    syntax("systemctl", palette.brightBlue)
+                    segment(" ", palette.foreground)
+                    syntax("status", palette.cyan)
+                    segment(" nginx", palette.foreground)
+                }
+
+                HStack(spacing: 0) {
+                    segment("● nginx.service - ", palette.foreground)
+                    segment("active (running)", palette.green)
+                }
+
+                HStack(spacing: 0) {
+                    segment("pastfly@server:~$ ", palette.foreground)
+                    syntax("grep", palette.brightBlue)
+                    segment(" ", palette.foreground)
+                    syntax("-R", palette.cyan)
+                    segment(" ", palette.foreground)
+                    syntax("\"error\"", palette.green)
+                    segment(" ", palette.foreground)
+                    syntax("/var/log/nginx/*.log", palette.blue)
+                    segment(" ", palette.foreground)
+                    syntax("|", palette.brightMagenta)
+                    segment(" ", palette.foreground)
+                    syntax("tail", palette.brightBlue)
+                    segment(" ", palette.foreground)
+                    syntax("-n", palette.cyan)
+                    segment(" ", palette.foreground)
+                    syntax("50", palette.yellow)
+                }
+
+                HStack(spacing: 0) {
+                    syntax("# наведение показывает тему без применения", palette.brightBlack)
+                }
+            }
+            .font(.system(size: 11, design: .monospaced))
+            .lineLimit(1)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            color(palette.background),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(color(palette.foreground).opacity(0.16))
+        }
+    }
+
+    private func syntax(_ text: String, _ highlighted: String) -> some View {
+        segment(text, syntaxHighlighting ? highlighted : palette.foreground)
+    }
+
+    private func segment(_ text: String, _ hex: String) -> some View {
+        Text(text).foregroundStyle(color(hex))
+    }
+
+    private func color(_ value: String) -> Color {
+        Color(nsColor: TerminalColorCodec.nsColor(value))
     }
 }
 

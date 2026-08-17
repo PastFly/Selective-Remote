@@ -3,6 +3,7 @@
 
     const terminalHost = document.getElementById("terminal");
     const terminalShell = document.getElementById("terminal-shell");
+    const inputHighlightElement = document.getElementById("terminal-input-highlight");
     const terminalSearchPanel = document.getElementById("terminal-search");
     const terminalSearchQuery = document.getElementById("terminal-search-query");
     const terminalSearchCount = document.getElementById("terminal-search-count");
@@ -99,6 +100,12 @@
     let pendingHistoryCandidates = [];
     let shellPromptReady = false;
     let lineStartedAtShellPrompt = false;
+    let syntaxHighlightingEnabled = true;
+    let syntaxHighlightScope = "visibleCommands";
+    let syntaxHistoryOpacity = 0.82;
+    let syntaxBoldCommands = true;
+    let inputHighlightOrigin = null;
+    let knownPromptPrefixes = [];
     let recentVisibleOutput = "";
     let activePanelSection = "history";
     let alternateScreenWasActive = false;
@@ -114,6 +121,409 @@
     };
 
     const isAlternateScreen = () => terminal.buffer.active.type === "alternate";
+
+    const clearInputHighlight = () => {
+        inputHighlightOrigin = null;
+        inputHighlightElement.replaceChildren();
+        inputHighlightElement.hidden = true;
+    };
+
+    const captureInputHighlightOrigin = () => {
+        const buffer = terminal.buffer.active;
+        const row = buffer.baseY + buffer.cursorY;
+        const line = buffer.getLine(row);
+        inputHighlightOrigin = {
+            x: buffer.cursorX,
+            y: buffer.cursorY,
+            baseY: buffer.baseY,
+            bufferType: buffer.type,
+            promptPrefix: line?.translateToString(false, 0, buffer.cursorX) || ""
+        };
+    };
+
+    /*
+     * readline/zsh can redraw or expand the command without sending the same
+     * editing bytes back to our local tracker (Tab completion, Delete,
+     * Option/Meta editing, asynchronous shell redraws). In that case the xterm
+     * buffer is the source of truth. Recover only when the visible prompt
+     * prefix is exactly the one captured when input started.
+     */
+    const recoverTrackedLineFromTerminal = () => {
+        if (!inputHighlightOrigin || isAlternateScreen()) {
+            return false;
+        }
+
+        const buffer = terminal.buffer.active;
+        if (buffer.type !== inputHighlightOrigin.bufferType
+            || buffer.cursorX < inputHighlightOrigin.x) {
+            return false;
+        }
+
+        const row = buffer.baseY + buffer.cursorY;
+        const line = buffer.getLine(row);
+        if (!line || line.isWrapped === true) {
+            return false;
+        }
+
+        const promptPrefix = line.translateToString(
+            false,
+            0,
+            inputHighlightOrigin.x
+        );
+        if (promptPrefix !== inputHighlightOrigin.promptPrefix) {
+            return false;
+        }
+
+        const visibleCommand = line.translateToString(
+            true,
+            inputHighlightOrigin.x
+        );
+        const recoveredLine = Array.from(visibleCommand);
+        const recoveredCursor = Math.max(
+            0,
+            Math.min(
+                recoveredLine.length,
+                buffer.cursorX - inputHighlightOrigin.x
+            )
+        );
+
+        currentLine = recoveredLine;
+        inputCursor = recoveredCursor;
+        lineTrackingReliable = true;
+        lineInputStarted = recoveredLine.length > 0;
+        lineStartedAtShellPrompt = true;
+        inputHighlightOrigin = {
+            ...inputHighlightOrigin,
+            y: buffer.cursorY,
+            baseY: buffer.baseY
+        };
+        return true;
+    };
+
+    const shellControlOperators = new Set(["|", "||", "&&", ";", "("]);
+    const shellCommandWrappers = new Set([
+        "sudo", "command", "env", "exec", "nohup", "time", "builtin"
+    ]);
+
+    const classifyShellWord = (word, commandExpected) => {
+        if (/^-{1,2}\S+/.test(word) && !/^-\d/.test(word)) {
+            return { type: "option", commandExpected };
+        }
+        if (commandExpected) {
+            return {
+                type: "command",
+                commandExpected: shellCommandWrappers.has(word)
+            };
+        }
+        if (/^[+-]?\d+(?:\.\d+)?$/.test(word)) {
+            return { type: "number", commandExpected: false };
+        }
+        if (/^(?:\/|~\/|\.{1,2}\/)/.test(word) || word.includes("/")) {
+            return { type: "path", commandExpected: false };
+        }
+        return { type: "plain", commandExpected: false };
+    };
+
+    const tokenizeShellSyntax = (text) => {
+        const tokens = [];
+        let index = 0;
+        let commandExpected = true;
+
+        const push = (value, type = "plain") => {
+            if (value) {
+                tokens.push({ text: value, type });
+            }
+        };
+
+        while (index < text.length) {
+            const character = text[index];
+
+            if (/\s/.test(character)) {
+                let end = index + 1;
+                while (end < text.length && /\s/.test(text[end])) {
+                    end += 1;
+                }
+                push(text.slice(index, end));
+                index = end;
+                continue;
+            }
+
+            if (character === "#"
+                && (index === 0 || /\s/.test(text[index - 1]))) {
+                push(text.slice(index), "comment");
+                break;
+            }
+
+            if (character === "'" || character === "\"") {
+                const quote = character;
+                let end = index + 1;
+                while (end < text.length) {
+                    if (quote === "\"" && text[end] === "\\" && end + 1 < text.length) {
+                        end += 2;
+                        continue;
+                    }
+                    if (text[end] === quote) {
+                        end += 1;
+                        break;
+                    }
+                    end += 1;
+                }
+                push(text.slice(index, end), "string");
+                commandExpected = false;
+                index = end;
+                continue;
+            }
+
+            if (character === "$") {
+                if (text.startsWith("$(", index)) {
+                    push("$(", "operator");
+                    commandExpected = true;
+                    index += 2;
+                    continue;
+                }
+                if (text.startsWith("${", index)) {
+                    const close = text.indexOf("}", index + 2);
+                    const end = close >= 0 ? close + 1 : text.length;
+                    push(text.slice(index, end), "variable");
+                    commandExpected = false;
+                    index = end;
+                    continue;
+                }
+                const match = text.slice(index).match(
+                    /^\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[?@#*$!_-])/
+                );
+                if (match) {
+                    push(match[0], "variable");
+                    commandExpected = false;
+                    index += match[0].length;
+                    continue;
+                }
+            }
+
+            const doubleOperator = text.slice(index, index + 2);
+            if (["&&", "||", ">>", "<<"].includes(doubleOperator)) {
+                push(doubleOperator, "operator");
+                if (shellControlOperators.has(doubleOperator)) {
+                    commandExpected = true;
+                }
+                index += 2;
+                continue;
+            }
+
+            if ("|;<>()".includes(character)) {
+                push(character, "operator");
+                if (shellControlOperators.has(character)) {
+                    commandExpected = true;
+                }
+                index += 1;
+                continue;
+            }
+
+            let end = index + 1;
+            while (end < text.length
+                && !/\s/.test(text[end])
+                && !"|&;<>()'\"".includes(text[end])) {
+                if (text[end] === "#"
+                    && (end === 0 || /\s/.test(text[end - 1]))) {
+                    break;
+                }
+                end += 1;
+            }
+
+            const word = text.slice(index, end);
+            const assignment = word.match(/^([A-Za-z_][A-Za-z0-9_]*)(=)(.*)$/);
+            if (assignment) {
+                push(assignment[1], "variable");
+                push(assignment[2], "operator");
+                if (assignment[3]) {
+                    const classified = classifyShellWord(assignment[3], false);
+                    push(assignment[3], classified.type);
+                }
+                index = end;
+                continue;
+            }
+
+            const classified = classifyShellWord(word, commandExpected);
+            push(word, classified.type);
+            commandExpected = classified.commandExpected;
+            index = end;
+        }
+
+        return tokens;
+    };
+
+    /*
+     * Syntax highlighting is rendered as a visual overlay over xterm.
+     * Only lines that confidently look like shell command lines are touched.
+     * Remote output and its ANSI colors remain xterm-owned.
+     */
+    const rememberPromptPrefix = (prefix) => {
+        if (typeof prefix !== "string") {
+            return;
+        }
+        const normalized = prefix.slice(0, 160);
+        if (!normalized || knownPromptPrefixes.includes(normalized)) {
+            return;
+        }
+        knownPromptPrefixes = [normalized, ...knownPromptPrefixes].slice(0, 24);
+    };
+
+    const detectedPromptLength = (visibleLine, isActive) => {
+        const capturedPrefix = inputHighlightOrigin?.promptPrefix;
+        if (isActive
+            && typeof capturedPrefix === "string"
+            && capturedPrefix.length > 0
+            && visibleLine.startsWith(capturedPrefix)) {
+            rememberPromptPrefix(capturedPrefix);
+            return capturedPrefix.length;
+        }
+
+        const remembered = knownPromptPrefixes
+            .filter((prefix) => visibleLine.startsWith(prefix))
+            .sort((left, right) => right.length - left.length)[0];
+        if (remembered) {
+            return remembered.length;
+        }
+
+        const patterns = [
+            /^PS\s+[^\r\n]{1,120}>\s*/,
+            /^[A-Za-z]:\\[^>\r\n]{0,120}>\s*/,
+            /^(?:\([^)\r\n]{1,40}\)\s*)?[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+(?::[^\s#$%\r\n]{0,100})?[#$%]\s*/,
+            /^(?:\([^)\r\n]{1,40}\)\s*)?[❯➜]\s*/
+        ];
+        for (const pattern of patterns) {
+            const match = visibleLine.match(pattern);
+            if (match) {
+                rememberPromptPrefix(match[0]);
+                return match[0].length;
+            }
+        }
+        return -1;
+    };
+
+    const shellCommandRegionsFromBuffer = () => {
+        if (isAlternateScreen()) {
+            return [];
+        }
+
+        const buffer = terminal.buffer.active;
+        const viewportY = buffer.viewportY;
+        const activeBufferRow = buffer.baseY + buffer.cursorY;
+        const regions = [];
+
+        for (let viewportRow = 0; viewportRow < terminal.rows; viewportRow += 1) {
+            const bufferRow = viewportY + viewportRow;
+            const isActive = bufferRow === activeBufferRow;
+            if (syntaxHighlightScope === "currentLine" && !isActive) {
+                continue;
+            }
+
+            const line = buffer.getLine(bufferRow);
+            if (!line || line.isWrapped === true) {
+                continue;
+            }
+
+            const visibleLine = line.translateToString(true);
+            if (!visibleLine) {
+                continue;
+            }
+
+            const commandStartX = detectedPromptLength(visibleLine, isActive);
+            if (commandStartX < 0 || commandStartX >= visibleLine.length) {
+                continue;
+            }
+
+            const command = visibleLine.slice(commandStartX).replace(/\s+$/, "");
+            if (!command) {
+                continue;
+            }
+
+            regions.push({
+                text: command,
+                startX: commandStartX,
+                viewportRow,
+                isActive
+            });
+        }
+
+        return regions;
+    };
+
+    const renderInputHighlight = () => {
+        if (!syntaxHighlightingEnabled || isAlternateScreen()) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+            return;
+        }
+
+        const screen = terminal.element?.querySelector(".xterm-screen");
+        if (!screen || terminal.cols <= 0 || terminal.rows <= 0) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+            return;
+        }
+
+        const regions = shellCommandRegionsFromBuffer();
+        if (regions.length === 0) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+            return;
+        }
+
+        const screenRect = screen.getBoundingClientRect();
+        const shellRect = terminalShell.getBoundingClientRect();
+        const cellWidth = screenRect.width / terminal.cols;
+        const cellHeight = screenRect.height / terminal.rows;
+        if (!Number.isFinite(cellWidth)
+            || !Number.isFinite(cellHeight)
+            || cellWidth <= 0
+            || cellHeight <= 0) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        regions.forEach((region) => {
+            const row = document.createElement("div");
+            row.className = region.isActive
+                ? "terminal-syntax-row is-active"
+                : "terminal-syntax-row is-history";
+            row.style.left = `${
+                screenRect.left - shellRect.left + region.startX * cellWidth
+            }px`;
+            row.style.top = `${
+                screenRect.top - shellRect.top + region.viewportRow * cellHeight
+            }px`;
+            row.style.width = `${
+                Math.max(0, screenRect.width - region.startX * cellWidth)
+            }px`;
+            row.style.height = `${cellHeight}px`;
+            row.style.lineHeight = `${cellHeight}px`;
+
+            tokenizeShellSyntax(region.text).forEach((token) => {
+                const span = document.createElement("span");
+                span.className = `syntax-${token.type}`;
+                span.textContent = token.text;
+                row.append(span);
+            });
+            fragment.append(row);
+        });
+
+        inputHighlightElement.replaceChildren(fragment);
+        inputHighlightElement.hidden = false;
+    };
+
+    let syntaxRenderFrame = 0;
+    const scheduleInputHighlightRender = () => {
+        if (syntaxRenderFrame !== 0) {
+            return;
+        }
+        syntaxRenderFrame = window.requestAnimationFrame(() => {
+            syntaxRenderFrame = 0;
+            renderInputHighlight();
+        });
+    };
 
     const visibleOutputText = (value) => value
         .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
@@ -157,13 +567,21 @@
         if (!text) {
             return;
         }
+        const visibleText = visibleOutputText(text);
+        if (lineInputStarted
+            && lineStartedAtShellPrompt
+            && /[\r\n]/.test(visibleText)) {
+            lineTrackingReliable = false;
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+        }
         if (lineInputStarted) {
             echoCapture = (echoCapture + text).slice(-16_384);
         }
         pendingHistoryCandidates.forEach((candidate) => {
             candidate.output = (candidate.output + text).slice(-16_384);
         });
-        recentVisibleOutput = (recentVisibleOutput + visibleOutputText(text)).slice(-16_384);
+        recentVisibleOutput = (recentVisibleOutput + visibleText).slice(-16_384);
         shellPromptReady = outputEndsInShellPrompt(recentVisibleOutput);
         inspectPendingHistoryCandidates();
     };
@@ -438,6 +856,9 @@
     };
 
     const renderSuggestions = () => {
+        if (!lineTrackingReliable) {
+            recoverTrackedLineFromTerminal();
+        }
         const prefix = inputPrefix();
         if (!lineTrackingReliable
             || isAlternateScreen()
@@ -755,6 +1176,7 @@
         echoCapture = "";
         lineInputStarted = false;
         lineStartedAtShellPrompt = false;
+        clearInputHighlight();
         hideSuggestions();
     };
 
@@ -800,20 +1222,25 @@
         if (Object.hasOwn(navigation, data)) {
             inputCursor = Math.max(0, Math.min(currentLine.length, inputCursor + navigation[data]));
             renderSuggestions();
+            renderInputHighlight();
             return;
         }
         if (["\u001b[H", "\u001bOH", "\u0001"].includes(data)) {
             inputCursor = 0;
             renderSuggestions();
+            renderInputHighlight();
             return;
         }
         if (["\u001b[F", "\u001bOF", "\u0005"].includes(data)) {
             inputCursor = currentLine.length;
             renderSuggestions();
+            renderInputHighlight();
             return;
         }
         if (data.startsWith("\u001b")) {
             lineTrackingReliable = false;
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
             hideSuggestions();
             return;
         }
@@ -859,6 +1286,9 @@
                         echoCapture = "";
                         lineInputStarted = true;
                         lineStartedAtShellPrompt = shellPromptReady;
+                        if (lineStartedAtShellPrompt) {
+                            captureInputHighlightOrigin();
+                        }
                     }
                     currentLine.splice(inputCursor, 0, character);
                     inputCursor += 1;
@@ -869,6 +1299,7 @@
             }
         }
         renderSuggestions();
+        renderInputHighlight();
     };
 
     terminal.attachCustomKeyEventHandler((event) => {
@@ -914,18 +1345,28 @@
             return false;
         }
         if (event.key === "ArrowDown") {
-            selectedSuggestionIndex = Math.min(
-                currentSuggestions.length - 1,
-                selectedSuggestionIndex + 1
-            );
+            selectedSuggestionIndex = currentSuggestions.length === 0
+                ? -1
+                : (selectedSuggestionIndex + 1 + currentSuggestions.length)
+                    % currentSuggestions.length;
             updateSelectedSuggestion();
             return false;
         }
         if (event.key === "ArrowUp") {
-            selectedSuggestionIndex = selectedSuggestionIndex < 0
-                ? currentSuggestions.length - 1
-                : Math.max(0, selectedSuggestionIndex - 1);
+            selectedSuggestionIndex = currentSuggestions.length === 0
+                ? -1
+                : (selectedSuggestionIndex < 0
+                    ? currentSuggestions.length - 1
+                    : (selectedSuggestionIndex - 1 + currentSuggestions.length)
+                        % currentSuggestions.length);
             updateSelectedSuggestion();
+            return false;
+        }
+        if (event.key === "Tab" && currentSuggestions.length > 0) {
+            const index = selectedSuggestionIndex >= 0
+                ? selectedSuggestionIndex
+                : 0;
+            useCommandEntry(currentSuggestions[index]);
             return false;
         }
         if (event.key === "Enter" && selectedSuggestionIndex >= 0) {
@@ -964,6 +1405,7 @@
                     if (!suggestionsElement.hidden) {
                         positionSuggestions();
                     }
+                    renderInputHighlight();
                 });
             });
         }, 60);
@@ -973,7 +1415,16 @@
         trackTerminalInput(data);
         window.webkit.messageHandlers.terminalInput.postMessage(data);
     });
-    terminal.onResize(reportSize);
+    terminal.onResize(() => {
+        reportSize();
+        scheduleInputHighlightRender();
+    });
+    terminal.onWriteParsed(() => {
+        scheduleInputHighlightRender();
+    });
+    terminal.onScroll(() => {
+        scheduleInputHighlightRender();
+    });
     terminalHost.addEventListener("pointerdown", notifyHostFocus, true);
     terminalHost.addEventListener("focusin", notifyHostFocus, true);
 
@@ -991,6 +1442,8 @@
             const alternateScreenActive = isAlternateScreen();
             if (alternateScreenActive) {
                 alternateScreenWasActive = true;
+                inputHighlightElement.replaceChildren();
+                inputHighlightElement.hidden = true;
                 hideSuggestions();
             } else {
                 if (alternateScreenWasActive) {
@@ -1005,6 +1458,17 @@
             if (!terminalSearchPanel.hidden && terminalSearchQuery.value.trim()) {
                 refreshTerminalSearch(true);
             }
+
+            const recoveredTrackedLine = (
+                lineInputStarted
+                && lineStartedAtShellPrompt
+                && inputHighlightOrigin
+            ) ? recoverTrackedLineFromTerminal() : false;
+
+            if (recoveredTrackedLine) {
+                renderSuggestions();
+            }
+            scheduleInputHighlightRender();
             drainOutputQueue();
         });
     };
@@ -1025,9 +1489,17 @@
         }
         if (typeof settings.fontFamily === "string" && settings.fontFamily.length > 0) {
             terminal.options.fontFamily = settings.fontFamily;
+            document.documentElement.style.setProperty(
+                "--terminal-font-family",
+                settings.fontFamily
+            );
         }
         if (Number.isFinite(settings.fontSize)) {
             terminal.options.fontSize = Math.min(28, Math.max(10, settings.fontSize));
+            document.documentElement.style.setProperty(
+                "--terminal-font-size",
+                `${terminal.options.fontSize}px`
+            );
         }
         if (Number.isFinite(settings.lineHeight)) {
             terminal.options.lineHeight = Math.min(1.6, Math.max(1.0, settings.lineHeight));
@@ -1036,8 +1508,41 @@
             terminal.options.cursorStyle = settings.cursorStyle;
         }
         terminal.options.cursorBlink = settings.cursorBlink !== false;
+        syntaxHighlightingEnabled = settings.syntaxHighlighting !== false;
+        syntaxHighlightScope = ["currentLine", "visibleCommands"].includes(settings.syntaxScope)
+            ? settings.syntaxScope
+            : "visibleCommands";
+        syntaxHistoryOpacity = Number.isFinite(settings.syntaxHistoryOpacity)
+            ? Math.min(1.0, Math.max(0.45, settings.syntaxHistoryOpacity))
+            : 0.82;
+        syntaxBoldCommands = settings.syntaxBoldCommands !== false;
+        document.documentElement.style.setProperty(
+            "--syntax-history-opacity",
+            String(syntaxHistoryOpacity)
+        );
+        document.documentElement.style.setProperty(
+            "--syntax-command-weight",
+            syntaxBoldCommands ? "600" : "400"
+        );
+        if (!syntaxHighlightingEnabled) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+        }
         if (settings.theme && typeof settings.theme === "object") {
             terminal.options.theme = settings.theme;
+            const theme = settings.theme;
+            const rootStyle = document.documentElement.style;
+            if (typeof theme.foreground === "string") {
+                rootStyle.setProperty("--terminal-foreground", theme.foreground);
+            }
+            rootStyle.setProperty("--syntax-command", theme.brightBlue || theme.blue || theme.foreground);
+            rootStyle.setProperty("--syntax-option", theme.cyan || theme.foreground);
+            rootStyle.setProperty("--syntax-string", theme.green || theme.foreground);
+            rootStyle.setProperty("--syntax-path", theme.blue || theme.foreground);
+            rootStyle.setProperty("--syntax-variable", theme.magenta || theme.foreground);
+            rootStyle.setProperty("--syntax-number", theme.yellow || theme.foreground);
+            rootStyle.setProperty("--syntax-operator", theme.brightMagenta || theme.magenta || theme.foreground);
+            rootStyle.setProperty("--syntax-comment", theme.brightBlack || theme.foreground);
             if (typeof settings.theme.background === "string") {
                 const hex = settings.theme.background.replace("#", "");
                 if (/^[0-9a-fA-F]{6}$/.test(hex)) {
@@ -1058,6 +1563,25 @@
                 );
             }
         }
+        if (settings.syntaxPalette && typeof settings.syntaxPalette === "object") {
+            const syntax = settings.syntaxPalette;
+            const rootStyle = document.documentElement.style;
+            const syntaxVariables = {
+                command: "--syntax-command",
+                option: "--syntax-option",
+                string: "--syntax-string",
+                path: "--syntax-path",
+                variable: "--syntax-variable",
+                number: "--syntax-number",
+                operation: "--syntax-operator",
+                comment: "--syntax-comment"
+            };
+            Object.entries(syntaxVariables).forEach(([key, variable]) => {
+                if (typeof syntax[key] === "string" && syntax[key].length > 0) {
+                    rootStyle.setProperty(variable, syntax[key]);
+                }
+            });
+        }
         if (Number.isFinite(settings.padding)) {
             const padding = Math.min(28, Math.max(0, settings.padding));
             document.documentElement.style.setProperty(
@@ -1065,6 +1589,7 @@
                 `${padding}px`
             );
         }
+        renderInputHighlight();
         fitAndReport();
     };
 

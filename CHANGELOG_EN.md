@@ -1,3 +1,14 @@
+## 0.21.16
+
+- Added a live Terminal theme preview: hovering a theme updates only the enlarged preview, while the real terminal theme is applied only on click.
+- Command suggestions are now fully keyboard accessible: Arrow keys select a suggestion, Enter applies the selected item, and Tab accepts the selected or first suggestion.
+- Improved suggestion recovery after shell Tab completion, Backspace/Delete, and readline redraws so fixing a typo no longer requires retyping the whole command.
+- Added configurable shell syntax highlighting for commands, options, strings, paths, variables, numbers, operators, and comments.
+- Syntax highlighting can target only the current command or all shell command lines in the visible terminal viewport; previous commands can be dimmed and command names can be bold.
+- Syntax colors follow the active terminal theme by default, with an optional persistent custom syntax palette.
+- Full-viewport highlighting scans only visible xterm rows and does not modify PTY/SSH input, remote output, or server-provided ANSI colors.
+- RDP, SFTP, Forwarding, privacy preflight, and other network runtime behavior were not changed in this release.
+
 ## 0.21.15
 
 - Expanded Terminal appearance to 26 themes with compact SwiftUI previews, search, All / Dark / Light / Favorites filters, and persistent favorites.

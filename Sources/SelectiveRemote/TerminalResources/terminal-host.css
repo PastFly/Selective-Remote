@@ -1,7 +1,20 @@
 :root {
     color-scheme: dark;
     --terminal-background: #101421;
+    --terminal-foreground: #dce6f5;
+    --terminal-font-family: "SF Mono", SFMono-Regular, Menlo, monospace;
+    --terminal-font-size: 14px;
     --terminal-padding: 10px;
+    --syntax-command: #8ccbff;
+    --syntax-option: #56d4dd;
+    --syntax-string: #36d399;
+    --syntax-path: #61afef;
+    --syntax-variable: #c678dd;
+    --syntax-number: #f9c74f;
+    --syntax-operator: #e0a5f3;
+    --syntax-comment: #6f7a91;
+    --syntax-history-opacity: 0.82;
+    --syntax-command-weight: 600;
     background: var(--terminal-background);
 }
 
@@ -35,6 +48,44 @@ body,
     overflow: hidden;
     background: var(--terminal-background);
 }
+
+#terminal-input-highlight {
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    pointer-events: none;
+    user-select: none;
+    overflow: hidden;
+}
+
+#terminal-input-highlight .terminal-syntax-row {
+    position: absolute;
+    overflow: hidden;
+    white-space: pre;
+    color: var(--terminal-foreground);
+    font-family: var(--terminal-font-family);
+    font-size: var(--terminal-font-size);
+    font-weight: 400;
+    font-variant-ligatures: none;
+    font-kerning: none;
+}
+
+#terminal-input-highlight .terminal-syntax-row.is-history {
+    opacity: var(--syntax-history-opacity);
+}
+
+#terminal-input-highlight .syntax-command {
+    color: var(--syntax-command);
+    font-weight: var(--syntax-command-weight);
+}
+#terminal-input-highlight .syntax-option { color: var(--syntax-option); }
+#terminal-input-highlight .syntax-string { color: var(--syntax-string); }
+#terminal-input-highlight .syntax-path { color: var(--syntax-path); }
+#terminal-input-highlight .syntax-variable { color: var(--syntax-variable); }
+#terminal-input-highlight .syntax-number { color: var(--syntax-number); }
+#terminal-input-highlight .syntax-operator { color: var(--syntax-operator); }
+#terminal-input-highlight .syntax-comment { color: var(--syntax-comment); }
+#terminal-input-highlight .syntax-plain { color: var(--terminal-foreground); }
 
 .xterm {
     height: 100%;

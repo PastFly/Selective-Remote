@@ -473,12 +473,53 @@ enum TerminalCursorStyle: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum TerminalSyntaxScope: String, CaseIterable, Identifiable, Sendable {
+    case currentLine
+    case visibleCommands
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .currentLine: "Текущая строка"
+        case .visibleCommands: "Все команды на экране"
+        }
+    }
+}
+
+struct TerminalSyntaxPalette: Codable, Equatable, Sendable {
+    var command: String
+    var option: String
+    var string: String
+    var path: String
+    var variable: String
+    var number: String
+    var operation: String
+    var comment: String
+
+    init(theme: TerminalPalette) {
+        command = theme.brightBlue
+        option = theme.cyan
+        string = theme.green
+        path = theme.blue
+        variable = theme.magenta
+        number = theme.yellow
+        operation = theme.brightMagenta
+        comment = theme.brightBlack
+    }
+}
+
 struct TerminalAppearanceSnapshot: Codable, Equatable, Sendable {
     let fontFamily: String
     let fontSize: Double
     let lineHeight: Double
     let cursorStyle: String
     let cursorBlink: Bool
+    let syntaxHighlighting: Bool
+    let syntaxScope: String
+    let syntaxHistoryOpacity: Double
+    let syntaxBoldCommands: Bool
+    let syntaxPalette: TerminalSyntaxPalette
     let padding: Double
     let theme: TerminalPalette
 }
@@ -493,6 +534,12 @@ final class TerminalAppearanceStore: ObservableObject {
         static let lineHeight = "SelectiveRemote.terminal.lineHeight.v1"
         static let cursorStyle = "SelectiveRemote.terminal.cursorStyle.v1"
         static let cursorBlink = "SelectiveRemote.terminal.cursorBlink.v1"
+        static let syntaxHighlighting = "SelectiveRemote.terminal.syntaxHighlighting.v1"
+        static let syntaxScope = "SelectiveRemote.terminal.syntaxScope.v1"
+        static let syntaxFollowTheme = "SelectiveRemote.terminal.syntaxFollowTheme.v1"
+        static let syntaxHistoryOpacity = "SelectiveRemote.terminal.syntaxHistoryOpacity.v1"
+        static let syntaxBoldCommands = "SelectiveRemote.terminal.syntaxBoldCommands.v1"
+        static let syntaxPalette = "SelectiveRemote.terminal.syntaxPalette.v1"
         static let padding = "SelectiveRemote.terminal.padding.v1"
         static let customPalette = "SelectiveRemote.terminal.customPalette.v1"
         static let themeFavorites = "SelectiveRemote.terminal.themeFavorites.v1"
@@ -516,6 +563,22 @@ final class TerminalAppearanceStore: ObservableObject {
     @Published var cursorBlink: Bool {
         didSet { saveScalar(cursorBlink, key: Key.cursorBlink) }
     }
+    @Published var syntaxHighlighting: Bool {
+        didSet { saveScalar(syntaxHighlighting, key: Key.syntaxHighlighting) }
+    }
+    @Published var syntaxScope: TerminalSyntaxScope {
+        didSet { saveScalar(syntaxScope.rawValue, key: Key.syntaxScope) }
+    }
+    @Published var syntaxFollowTheme: Bool {
+        didSet { saveScalar(syntaxFollowTheme, key: Key.syntaxFollowTheme) }
+    }
+    @Published var syntaxHistoryOpacity: Double {
+        didSet { saveScalar(clampedSyntaxHistoryOpacity, key: Key.syntaxHistoryOpacity) }
+    }
+    @Published var syntaxBoldCommands: Bool {
+        didSet { saveScalar(syntaxBoldCommands, key: Key.syntaxBoldCommands) }
+    }
+    @Published private(set) var syntaxCustomPalette: TerminalSyntaxPalette
     @Published var padding: Double {
         didSet { saveScalar(clampedPadding, key: Key.padding) }
     }
@@ -557,6 +620,22 @@ final class TerminalAppearanceStore: ObservableObject {
         cursorStyle = defaults.string(forKey: Key.cursorStyle)
             .flatMap(TerminalCursorStyle.init(rawValue:)) ?? .block
         cursorBlink = defaults.object(forKey: Key.cursorBlink) as? Bool ?? true
+        syntaxHighlighting = defaults.object(forKey: Key.syntaxHighlighting) as? Bool ?? true
+        syntaxScope = defaults.string(forKey: Key.syntaxScope)
+            .flatMap(TerminalSyntaxScope.init(rawValue:)) ?? .visibleCommands
+        syntaxFollowTheme = defaults.object(forKey: Key.syntaxFollowTheme) as? Bool ?? true
+        let storedSyntaxHistoryOpacity = defaults.double(forKey: Key.syntaxHistoryOpacity)
+        syntaxHistoryOpacity = storedSyntaxHistoryOpacity > 0
+            ? min(max(storedSyntaxHistoryOpacity, 0.45), 1.0)
+            : 0.82
+        syntaxBoldCommands = defaults.object(forKey: Key.syntaxBoldCommands) as? Bool ?? true
+        syntaxCustomPalette = defaults.data(forKey: Key.syntaxPalette)
+            .flatMap { try? JSONDecoder().decode(TerminalSyntaxPalette.self, from: $0) }
+            ?? TerminalSyntaxPalette(
+                theme: preset == .custom
+                    ? migratedCustomPalette
+                    : (legacyPalette ?? preset.palette)
+            )
         let storedPadding = defaults.double(forKey: Key.padding)
         padding = defaults.object(forKey: Key.padding) == nil
             ? 10
@@ -570,12 +649,23 @@ final class TerminalAppearanceStore: ObservableObject {
             lineHeight: clampedLineHeight,
             cursorStyle: cursorStyle.rawValue,
             cursorBlink: cursorBlink,
+            syntaxHighlighting: syntaxHighlighting,
+            syntaxScope: syntaxScope.rawValue,
+            syntaxHistoryOpacity: clampedSyntaxHistoryOpacity,
+            syntaxBoldCommands: syntaxBoldCommands,
+            syntaxPalette: effectiveSyntaxPalette,
             padding: clampedPadding,
             theme: palette
         )
     }
 
     var customThemePalette: TerminalPalette { customPalette }
+
+    var effectiveSyntaxPalette: TerminalSyntaxPalette {
+        syntaxFollowTheme
+            ? TerminalSyntaxPalette(theme: palette)
+            : syntaxCustomPalette
+    }
 
     func applyPreset(_ preset: TerminalThemePreset) {
         if preset == .custom {
@@ -626,14 +716,42 @@ final class TerminalAppearanceStore: ObservableObject {
         lineHeight = 1.15
         cursorStyle = .block
         cursorBlink = true
+        syntaxHighlighting = true
+        syntaxScope = .visibleCommands
+        syntaxFollowTheme = true
+        syntaxHistoryOpacity = 0.82
+        syntaxBoldCommands = true
+        syntaxCustomPalette = TerminalSyntaxPalette(
+            theme: TerminalThemePreset.midnight.palette
+        )
+        saveSyntaxPalette()
         padding = 10
         customPalette = TerminalThemePreset.midnight.palette
         saveCustomPalette()
         applyPreset(.midnight)
     }
 
+    func updateSyntaxColor(
+        _ keyPath: WritableKeyPath<TerminalSyntaxPalette, String>,
+        _ value: String
+    ) {
+        guard let hex = TerminalColorCodec.normalizedHex(value) else { return }
+        var changed = syntaxCustomPalette
+        changed[keyPath: keyPath] = hex
+        syntaxCustomPalette = changed
+        saveSyntaxPalette()
+    }
+
+    func resetSyntaxPaletteToTheme() {
+        syntaxCustomPalette = TerminalSyntaxPalette(theme: palette)
+        saveSyntaxPalette()
+    }
+
     private var clampedFontSize: Double { min(max(fontSize, 10), 28) }
     private var clampedLineHeight: Double { min(max(lineHeight, 1.0), 1.6) }
+    private var clampedSyntaxHistoryOpacity: Double {
+        min(max(syntaxHistoryOpacity, 0.45), 1.0)
+    }
     private var clampedPadding: Double { min(max(padding, 0), 28) }
 
     private func updatePalette(_ update: (inout TerminalPalette) -> Void) {
@@ -649,6 +767,12 @@ final class TerminalAppearanceStore: ObservableObject {
     private func saveCustomPalette() {
         if let data = try? JSONEncoder().encode(customPalette) {
             defaults.set(data, forKey: Key.customPalette)
+        }
+    }
+
+    private func saveSyntaxPalette() {
+        if let data = try? JSONEncoder().encode(syntaxCustomPalette) {
+            defaults.set(data, forKey: Key.syntaxPalette)
         }
     }
 
@@ -730,6 +854,109 @@ struct TerminalAppearanceView: View {
                             .frame(width: 42, alignment: .trailing)
                     }
                 }
+                }
+
+                DisclosureGroup("Подсветка синтаксиса") {
+                    Toggle("Подсветка команд", isOn: $store.syntaxHighlighting)
+
+                    Picker("Область", selection: $store.syntaxScope) {
+                        ForEach(TerminalSyntaxScope.allCases) { scope in
+                            Text(scope.title).tag(scope)
+                        }
+                    }
+
+                    Toggle("Цвета из темы", isOn: $store.syntaxFollowTheme)
+                    Toggle("Выделять команды жирным", isOn: $store.syntaxBoldCommands)
+
+                    LabeledContent("Предыдущие команды") {
+                        HStack {
+                            Slider(
+                                value: $store.syntaxHistoryOpacity,
+                                in: 0.45...1.0,
+                                step: 0.05
+                            )
+                            .frame(width: 150)
+                            Text("\(Int(store.syntaxHistoryOpacity * 100))%")
+                                .monospacedDigit()
+                                .frame(width: 42, alignment: .trailing)
+                        }
+                    }
+
+                    if !store.syntaxFollowTheme {
+                        Divider()
+
+                        TerminalColorControl(
+                            title: "Команда",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.command },
+                                set: { store.updateSyntaxColor(\.command, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Параметр",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.option },
+                                set: { store.updateSyntaxColor(\.option, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Строка",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.string },
+                                set: { store.updateSyntaxColor(\.string, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Путь",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.path },
+                                set: { store.updateSyntaxColor(\.path, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Переменная",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.variable },
+                                set: { store.updateSyntaxColor(\.variable, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Число",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.number },
+                                set: { store.updateSyntaxColor(\.number, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Оператор",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.operation },
+                                set: { store.updateSyntaxColor(\.operation, $0) }
+                            )
+                        )
+                        TerminalColorControl(
+                            title: "Комментарий",
+                            value: Binding(
+                                get: { store.syntaxCustomPalette.comment },
+                                set: { store.updateSyntaxColor(\.comment, $0) }
+                            )
+                        )
+
+                        HStack {
+                            Spacer()
+                            Button("Сбросить цвета к текущей теме") {
+                                store.resetSyntaxPaletteToTheme()
+                            }
+                        }
+                    }
+
+                    Text(
+                        store.syntaxScope == .visibleCommands
+                            ? "Подсвечиваются shell-команды в видимой области. Вывод сервера и его ANSI-цвета не изменяются."
+                            : "Подсвечивается только текущая shell-команда. Вывод сервера и его ANSI-цвета не изменяются."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
 
                 DisclosureGroup("Своя тема") {
