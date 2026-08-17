@@ -6,10 +6,15 @@
 [![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](https://support.apple.com/macos)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
+[![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
 
-**Selective Remote** is a native remote-access client for macOS that brings RDP, an SSH terminal, SFTP, SSH forwarding, diagnostics, and SSH credential management into one application.
+**Selective Remote** is a free, open-source RDP, SSH, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Terminal Workspace, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
 
 The project targets Apple Silicon and macOS 14+. The interface is available in English and Russian.
+
+**Built for:** sysadmins, DevOps, homelabs, and anyone looking for an RDP client for macOS, SSH client for macOS, or SFTP client for macOS without switching between several apps.
+
+[Download the latest release](https://github.com/PastFly/Selective-Remote/releases/latest) · [Project website](https://pastfly.github.io/Selective-Remote/) · [Русский README](README.md)
 
 ## Main workspaces
 
