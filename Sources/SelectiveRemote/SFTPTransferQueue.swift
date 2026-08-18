@@ -124,6 +124,11 @@ final class SFTPProcessControl: @unchecked Sendable {
     private weak var process: Process?
     private var wantsPause = false
     private var wantsCancel = false
+    private let forceKillDelay: TimeInterval
+
+    init(forceKillDelay: TimeInterval = 2.0) {
+        self.forceKillDelay = forceKillDelay
+    }
 
     func attach(_ process: Process) {
         lock.lock()
@@ -132,7 +137,7 @@ final class SFTPProcessControl: @unchecked Sendable {
         let cancel = wantsCancel
         lock.unlock()
         if cancel {
-            process.terminate()
+            terminate(process)
         } else if pause {
             Darwin.kill(process.processIdentifier, SIGSTOP)
         }
@@ -170,7 +175,30 @@ final class SFTPProcessControl: @unchecked Sendable {
         if wasPaused, let running {
             Darwin.kill(running.processIdentifier, SIGCONT)
         }
-        running?.terminate()
+        if let running {
+            terminate(running)
+        }
+    }
+
+    private func terminate(_ running: Process) {
+        let pid = running.processIdentifier
+        running.terminate()
+        DispatchQueue.global(qos: .utility).asyncAfter(
+            deadline: .now() + forceKillDelay
+        ) { [weak self] in
+            self?.forceKillIfNeeded(pid: pid)
+        }
+    }
+
+    private func forceKillIfNeeded(pid: Int32) {
+        lock.lock()
+        let shouldKill = wantsCancel
+            && process?.processIdentifier == pid
+            && process?.isRunning == true
+        lock.unlock()
+        if shouldKill {
+            Darwin.kill(pid, SIGKILL)
+        }
     }
 }
 
