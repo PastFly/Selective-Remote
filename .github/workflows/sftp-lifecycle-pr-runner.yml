@@ -32,6 +32,41 @@ jobs:
           sed -n "/^[[:space:]]*python3 <<'PY'$/,/^[[:space:]]*PY$/p" .github/workflows/sftp-lifecycle-hotfix.yml \
             | sed '1d;$d;s/^          //' > /tmp/sftp-lifecycle-patch.py
           python3 /tmp/sftp-lifecycle-patch.py
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          old = '''        case let .sftp(scope):
+              switch scope {
+              case let .profile(profileID):
+                  model.selectProfile(profileID)
+                  selectedTab = .sftp
+                  setMainArea(.connections)
+              case .global:
+                  setMainArea(.sftp)
+              }
+          '''
+          old = "\n".join(line[10:] if line.startswith("          ") else line for line in old.splitlines()) + "\n"
+          new = '''        case let .sftp(scope):
+              switch scope {
+              case let .pane(paneID):
+                  if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                      model.sftpWorkspace.selectedTabID = tab.id
+                  }
+                  setMainArea(.sftp)
+              case let .profile(profileID):
+                  model.selectProfile(profileID)
+                  selectedTab = .sftp
+                  setMainArea(.connections)
+              case .global:
+                  setMainArea(.sftp)
+              }
+          '''
+          new = "\n".join(line[10:] if line.startswith("          ") else line for line in new.splitlines()) + "\n"
+          if text.count(old) != 1:
+              raise SystemExit(f"ContentView open SFTP scope mismatch: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+          PY
 
       - name: Run Swift tests
         run: swift test
