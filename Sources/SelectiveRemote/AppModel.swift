@@ -289,6 +289,7 @@ private final class ManagedRDPSession {
 final class AppModel: NSObject, ObservableObject {
     let sftpSession = SFTPBrowserSession()
     let globalSFTPSession = SFTPBrowserSession()
+    let sftpWorkspace = SFTPWorkspaceModel()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -511,6 +512,11 @@ final class AppModel: NSObject, ObservableObject {
                 }
             },
             globalSFTPSession.objectWillChange.sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.objectWillChange.send()
+                }
+            },
+            sftpWorkspace.objectWillChange.sink { [weak self] _ in
                 Task { @MainActor [weak self] in
                     self?.objectWillChange.send()
                 }
@@ -993,16 +999,10 @@ final class AppModel: NSObject, ObservableObject {
             )
         }
 
-        appendConnectionCenterSFTP(
-            session: sftpSession,
-            scope: sftpSession.profileID.map(ConnectionCenterSFTPScope.profile),
-            into: &items
-        )
-        appendConnectionCenterSFTP(
-            session: globalSFTPSession,
-            scope: .global,
-            into: &items
-        )
+        for tab in sftpWorkspace.tabs {
+            appendConnectionCenterSFTP(pane: tab.left, into: &items)
+            appendConnectionCenterSFTP(pane: tab.right, into: &items)
+        }
 
         for tunnel in sshTunnels.values.sorted(by: { $0.startedAt < $1.startedAt }) {
             let independent = tunnel.profileID == Self.globalForwardingProfileID
@@ -1191,8 +1191,16 @@ final class AppModel: NSObject, ObservableObject {
             restartProfileSSHTunnel(ruleID: ruleID, profileID: profileID)
         case let .independentTunnel(tunnelID):
             restartIndependentPortForward(tunnelID)
-        case .sftp:
-            break
+        case let .sftp(scope):
+            switch scope {
+            case let .pane(paneID):
+                guard let pane = sftpWorkspace.pane(id: paneID),
+                      let settings = pane.session.settings else { return }
+                pane.session.disconnect()
+                pane.session.connect(settings)
+            case .profile, .global:
+                break
+            }
         }
     }
 
@@ -1213,6 +1221,8 @@ final class AppModel: NSObject, ObservableObject {
             }
         case let .sftp(scope):
             switch scope {
+            case let .pane(paneID):
+                sftpWorkspace.pane(id: paneID)?.clear()
             case let .profile(profileID):
                 if sftpSession.profileID == profileID {
                     sftpSession.disconnect()
@@ -1330,60 +1340,62 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func appendConnectionCenterSFTP(
-        session: SFTPBrowserSession,
-        scope: ConnectionCenterSFTPScope?,
-        into items: inout [ConnectionCenterItem]
-    ) {
-        guard let scope, let settings = session.settings,
-              session.connectionState != .disconnected
-        else { return }
-        let route = connectionCenterRoute(settings: settings)
-        let state: ConnectionCenterState = switch session.connectionState {
-        case .disconnected: .disconnected
-        case .connecting: .connecting
-        case .connected: .connected
-        case .error: .error
-        }
-        items.append(
-            ConnectionCenterItem(
-                source: .sftp(scope: scope),
-                kind: .sftp,
-                profileName: settings.profileName,
-                userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
-                port: settings.port,
-                route: route.summary,
-                authentication: settings.authenticationMode.title,
-                state: state,
-                startedAt: session.connectedAt,
-                errorMessage: session.lastErrorMessage,
-                detailSections: [
-                    ConnectionCenterDetailSection(
-                        title: "Основное",
-                        rows: [
-                            ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
-                            ConnectionCenterDetailRow(label: "Host", value: settings.host),
-                            ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
-                            ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
-                            ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
-                        ]
-                    ),
-                    ConnectionCenterDetailSection(
-                        title: "Аутентификация",
-                        rows: connectionCenterAuthenticationRows(
-                            method: settings.authenticationMode.title,
-                            identityName: settings.identity?.name
-                        )
-                    ),
-                    ConnectionCenterDetailSection(
-                        title: "Маршрут",
-                        rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
-                    )
-                ]
-            )
-        )
+    pane: SFTPWorkspacePane,
+    into items: inout [ConnectionCenterItem]
+) {
+    let session = pane.session
+    guard pane.kind == .remote,
+let settings = session.settings,
+session.connectionState != .disconnected
+    else { return }
+    let route = connectionCenterRoute(settings: settings)
+    let state: ConnectionCenterState = switch session.connectionState {
+    case .disconnected: .disconnected
+    case .connecting: .connecting
+    case .connected: .connected
+    case .error: .error
     }
+    items.append(
+        ConnectionCenterItem(
+  source: .sftp(scope: .pane(pane.id)),
+  kind: .sftp,
+  profileName: settings.profileName,
+  userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
+  port: settings.port,
+  route: route.summary,
+  authentication: settings.authenticationMode.title,
+  state: state,
+  startedAt: session.connectedAt,
+  errorMessage: session.lastErrorMessage,
+  detailSections: [
+      ConnectionCenterDetailSection(
+          title: "Основное",
+          rows: [
+              ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
+              ConnectionCenterDetailRow(label: "Панель", value: pane.title),
+              ConnectionCenterDetailRow(label: "Host", value: settings.host),
+              ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
+              ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
+              ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
+          ]
+      ),
+      ConnectionCenterDetailSection(
+          title: "Аутентификация",
+          rows: connectionCenterAuthenticationRows(
+              method: settings.authenticationMode.title,
+              identityName: settings.identity?.name
+          )
+      ),
+      ConnectionCenterDetailSection(
+          title: "Маршрут",
+          rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+      )
+  ]
+        )
+    )
+}
 
-    private func connectionCenterTerminalState(
+private func connectionCenterTerminalState(
         _ session: TerminalSessionModel
     ) -> ConnectionCenterState {
         if session.reconnectProgress != nil { return .reconnecting }

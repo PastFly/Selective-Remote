@@ -226,9 +226,9 @@ func profileSFTPUsesSharedMultiServerWorkspace() throws {
     )
 
     #expect(source.contains(
-        "case .sftp:\n            SFTPWorkspaceView(workspace: globalSFTPWorkspace)"
+        "case .sftp:\n            SFTPWorkspaceView(workspace: model.sftpWorkspace)"
     ))
-    #expect(source.contains("if globalSFTPWorkspace.pendingOpenRequest == nil"))
+    #expect(source.contains("if model.sftpWorkspace.pendingOpenRequest == nil"))
     #expect(source.contains("connection: .savedProfile(profile.id)"))
     #expect(source.contains("selectedProfileSFTPWorkspaceConnected"))
     #expect(!source.contains("SFTPBrowserView(profile: profile, session: sftpSession)"))
@@ -248,7 +248,7 @@ func profileTerminalSmartLinkUsesProfileSFTPWorkspace() throws {
     )
 
     #expect(source.contains("openSFTPPath: { tab, path in"))
-    #expect(source.contains("globalSFTPWorkspace.requestOpen("))
+    #expect(source.contains("model.sftpWorkspace.requestOpen("))
     #expect(source.contains("connection: tab.connection"))
     #expect(source.contains("path: path"))
     #expect(source.contains("selectedTab = .sftp"))

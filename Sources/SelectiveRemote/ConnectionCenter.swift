@@ -67,6 +67,7 @@ enum ConnectionCenterTerminalScope: Hashable {
 }
 
 enum ConnectionCenterSFTPScope: Hashable {
+    case pane(UUID)
     case profile(UUID)
     case global
 }
@@ -91,6 +92,8 @@ enum ConnectionCenterSource: Hashable {
             }
         case let .sftp(scope):
             switch scope {
+            case let .pane(paneID):
+                "sftp:pane:\(paneID.uuidString)"
             case let .profile(profileID):
                 "sftp:profile:\(profileID.uuidString)"
             case .global:

@@ -63,7 +63,6 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
-    @StateObject private var globalSFTPWorkspace = SFTPWorkspaceModel()
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -760,12 +759,12 @@ struct ContentView: View {
             terminalPanel
                 .id(profile.id)
         case .sftp:
-            SFTPWorkspaceView(workspace: globalSFTPWorkspace)
+            SFTPWorkspaceView(workspace: model.sftpWorkspace)
                 .task(id: profile.id) {
                     // Manual requests from Terminal Smart Links or "Open SFTP"
                     // must win over the default profile request.
-                    if globalSFTPWorkspace.pendingOpenRequest == nil {
-                        globalSFTPWorkspace.requestOpen(
+                    if model.sftpWorkspace.pendingOpenRequest == nil {
+                        model.sftpWorkspace.requestOpen(
                             connection: .savedProfile(profile.id),
                             path: nil
                         )
@@ -1210,7 +1209,7 @@ struct ContentView: View {
     }
 
     private var selectedProfileSFTPWorkspaceConnected: Bool {
-        globalSFTPWorkspace.tabs.contains { tab in
+        model.sftpWorkspace.tabs.contains { tab in
             [tab.left, tab.right].contains { pane in
                 pane.kind == .remote
                     && pane.connection?.profileID == profile.id
@@ -1859,7 +1858,7 @@ struct ContentView: View {
             .padding(.top, 28)
             .padding(.bottom, 16)
 
-            SFTPWorkspaceView(workspace: globalSFTPWorkspace)
+            SFTPWorkspaceView(workspace: model.sftpWorkspace)
                 .padding(.horizontal, 28)
                 .padding(.bottom, 20)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1972,14 +1971,14 @@ struct ContentView: View {
                 setTerminalFocusMode(!terminalFocusMode)
             },
             openSFTP: { tab in
-                globalSFTPWorkspace.requestOpen(
+                model.sftpWorkspace.requestOpen(
                     connection: tab.connection,
                     path: nil
                 )
                 selectedTab = .sftp
             },
             openSFTPPath: { tab, path in
-                globalSFTPWorkspace.requestOpen(
+                model.sftpWorkspace.requestOpen(
                     connection: tab.connection,
                     path: path
                 )
@@ -2024,14 +2023,14 @@ struct ContentView: View {
                 setTerminalFocusMode(!terminalFocusMode)
             },
             openSFTP: { tab in
-                globalSFTPWorkspace.requestOpen(
+                model.sftpWorkspace.requestOpen(
                     connection: tab.connection,
                     path: nil
                 )
                 setMainArea(.sftp)
             },
             openSFTPPath: { tab, path in
-                globalSFTPWorkspace.requestOpen(
+                model.sftpWorkspace.requestOpen(
                     connection: tab.connection,
                     path: path
                 )
@@ -2135,6 +2134,11 @@ struct ContentView: View {
             }
         case let .sftp(scope):
             switch scope {
+  case let .pane(paneID):
+    if let tab = model.sftpWorkspace.tab(containing: paneID) {
+        model.sftpWorkspace.selectedTabID = tab.id
+    }
+    setMainArea(.sftp)
             case let .profile(profileID):
                 model.selectProfile(profileID)
                 selectedTab = .sftp

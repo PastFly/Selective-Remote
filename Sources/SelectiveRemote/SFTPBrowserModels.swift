@@ -1804,6 +1804,7 @@ final class SFTPBrowserSession: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
 
     private(set) var profileID: UUID?
+    private var retainedMasterSettings: SSHConnectionSettings?
 
     init() {
         let transfers = SFTPTransferQueue()
@@ -1821,32 +1822,42 @@ final class SFTPBrowserSession: ObservableObject {
         _ settings: SSHConnectionSettings,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
+        if let retainedMasterSettings {
+  SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+        }
+        retainedMasterSettings = settings
+        SFTPService.retainMasterConnection(settings: settings)
         self.settings = settings
         connectionState = .connecting
         connectedAt = nil
         lastErrorMessage = nil
         remote.load(
-            settings: settings,
-            directory: settings.initialDirectory
+  settings: settings,
+  directory: settings.initialDirectory
         ) { [weak self] success in
-            guard let self else {
-                completion?(success)
-                return
-            }
-            if success {
-                connectionState = .connected
-                connectedAt = Date()
-                lastErrorMessage = nil
-            } else {
-                connectionState = .error
-                connectedAt = nil
-                lastErrorMessage = remote.errorMessage
-            }
-            completion?(success)
+  guard let self else {
+      completion?(success)
+      return
+  }
+  if success {
+      connectionState = .connected
+      connectedAt = Date()
+      lastErrorMessage = nil
+  } else {
+      connectionState = .error
+      connectedAt = nil
+      lastErrorMessage = remote.errorMessage
+  }
+  completion?(success)
         }
     }
 
     func disconnect() {
+        transfers.cancelAll()
+        if let retainedMasterSettings {
+  SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+  self.retainedMasterSettings = nil
+        }
         settings = nil
         connectionState = .disconnected
         connectedAt = nil
