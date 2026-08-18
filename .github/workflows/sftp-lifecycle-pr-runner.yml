@@ -35,6 +35,8 @@ jobs:
           python3 <<'PY'
           from pathlib import Path
           import re
+
+          # Add the new concrete SFTP pane source to the Connection Center open action.
           path = Path("Sources/SelectiveRemote/ContentView.swift")
           text = path.read_text()
           pattern = re.compile(
@@ -55,6 +57,24 @@ jobs:
           '''
           pane_case = "\n".join(line[10:] if line.startswith("          ") else line for line in pane_case.splitlines()) + "\n"
           text = text[:match.start(2)] + pane_case + text[match.start(2):]
+          path.write_text(text)
+
+          # Swift 6 on the CI runner diagnoses Process.run()'s throw in this
+          # lightweight fixture oddly. Keep the regression behavioral, but make
+          # fixture startup non-throwing and assert that it actually launched.
+          path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
+          text = path.read_text()
+          text = text.replace(
+              "func sftpCancelEscalatesToSIGKILL() async throws {",
+              "func sftpCancelEscalatesToSIGKILL() async {",
+              1,
+          )
+          text = text.replace(
+              "    try process.run()",
+              "    try? process.run()\n    #expect(process.isRunning)\n    guard process.isRunning else { return }",
+              1,
+          )
+          text = text.replace("    try await Task.sleep", "    try? await Task.sleep")
           path.write_text(text)
           PY
 
