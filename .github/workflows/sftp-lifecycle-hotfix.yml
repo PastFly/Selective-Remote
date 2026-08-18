@@ -1,0 +1,41 @@
+name: SFTP lifecycle test fix carrier
+on:
+  workflow_dispatch:
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("Tests/SelectiveRemoteTests/TerminalTests.swift")
+          text = path.read_text()
+          old = 'SFTPWorkspaceView(workspace: globalSFTPWorkspace)'
+          new = 'SFTPWorkspaceView(workspace: model.sftpWorkspace)'
+          if text.count(old) != 1:
+              raise SystemExit(f"TerminalTests marker mismatch: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+
+          path = Path("Tests/SelectiveRemoteTests/ConnectionCenterTests.swift")
+          text = path.read_text()
+          old = '    #expect(appModel.contains("session: sftpSession"))\n    #expect(appModel.contains("session: globalSFTPSession"))'
+          new = '    #expect(appModel.contains("for tab in sftpWorkspace.tabs"))\n    #expect(appModel.contains("appendConnectionCenterSFTP(pane: tab.left"))'
+          if text.count(old) != 1:
+              raise SystemExit(f"ConnectionCenterTests marker mismatch: {text.count(old)}")
+          path.write_text(text.replace(old, new, 1))
+
+          # The stored runner always inserts this pane case. Remove the already
+          # committed copy here so its deterministic second patch can re-add it.
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          pane = '''            case let .pane(paneID):
+                if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                    model.sftpWorkspace.selectedTabID = tab.id
+                }
+                setMainArea(.sftp)
+'''
+          if text.count(pane) != 1:
+              raise SystemExit(f"ContentView pane marker mismatch: {text.count(pane)}")
+          path.write_text(text.replace(pane, "", 1))
+          PY
