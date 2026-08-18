@@ -1,0 +1,41 @@
+name: SFTP lifecycle PR runner
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-test-commit:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Extract and apply targeted patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -n "/^[[:space:]]*python3 <<'PY'$/,/^[[:space:]]*PY$/p" .github/workflows/sftp-lifecycle-hotfix.yml \
+            | sed '1d;$d;s/^          //' > /tmp/sftp-lifecycle-patch.py
+          python3 /tmp/sftp-lifecycle-patch.py
+
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Commit validated hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/sftp-lifecycle-hotfix.yml
+          rm .github/workflows/sftp-lifecycle-pr-runner.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Sources Tests .github/workflows/sftp-lifecycle-hotfix.yml .github/workflows/sftp-lifecycle-pr-runner.yml
+          git commit -m "Fix SFTP workspace lifecycle [sftp-lifecycle-applied]"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
