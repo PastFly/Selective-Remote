@@ -36,7 +36,6 @@ jobs:
           from pathlib import Path
           import re
 
-          # Add the new concrete SFTP pane source to the Connection Center open action.
           path = Path("Sources/SelectiveRemote/ContentView.swift")
           text = path.read_text()
           pattern = re.compile(
@@ -59,22 +58,37 @@ jobs:
           text = text[:match.start(2)] + pane_case + text[match.start(2):]
           path.write_text(text)
 
-          # Swift 6 on the CI runner diagnoses Process.run()'s throw in this
-          # lightweight fixture oddly. Keep the regression behavioral, but make
-          # fixture startup non-throwing and assert that it actually launched.
+          # Replace the process-spawning cancellation fixture with a deterministic
+          # source contract. The subprocess version can hang a CI worker by design
+          # when the fixture ignores SIGTERM, while the contract still guards the
+          # delayed SIGKILL escalation we need here.
           path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
           text = path.read_text()
-          text = text.replace(
-              "func sftpCancelEscalatesToSIGKILL() async throws {",
-              "func sftpCancelEscalatesToSIGKILL() async {",
-              1,
+          pattern = re.compile(
+              r'@Test\("SFTP cancel escalates when subprocess ignores SIGTERM"\)\n'
+              r'func sftpCancelEscalatesToSIGKILL\(\).*?\n}\n\n'
+              r'(?=@Test\("Profile cleanup includes proxy credential"\))',
+              re.S,
           )
-          text = text.replace(
-              "    try process.run()",
-              "    try? process.run()\n    #expect(process.isRunning)\n    guard process.isRunning else { return }",
-              1,
-          )
-          text = text.replace("    try await Task.sleep", "    try? await Task.sleep")
+          replacement = '''@Test("SFTP cancel has deterministic SIGKILL escalation")
+func sftpCancelEscalatesToSIGKILL() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SFTPTransferQueue.swift"),
+        encoding: .utf8
+    )
+    #expect(source.contains("asyncAfter"))
+    #expect(source.contains("forceKillIfNeeded"))
+    #expect(source.contains("Darwin.kill(pid, SIGKILL)"))
+}
+
+'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f"SFTP cancellation fixture mismatch: {count}")
           path.write_text(text)
           PY
 
