@@ -25,16 +25,12 @@ jobs:
               raise SystemExit(f"ConnectionCenterTests marker mismatch: {text.count(old)}")
           path.write_text(text.replace(old, new, 1))
 
-          # The stored runner always inserts this pane case. Remove the already
-          # committed copy here so its deterministic second patch can re-add it.
+          # The stored runner always inserts this case itself. Remove the exact
+          # already-committed copy first; its indentation is intentionally
+          # irrelevant to Swift and came from the old carrier's whitespace trim.
           path = Path("Sources/SelectiveRemote/ContentView.swift")
           text = path.read_text()
-          pane = '''            case let .pane(paneID):
-                if let tab = model.sftpWorkspace.tab(containing: paneID) {
-                    model.sftpWorkspace.selectedTabID = tab.id
-                }
-                setMainArea(.sftp)
-'''
+          pane = "  case let .pane(paneID):\n    if let tab = model.sftpWorkspace.tab(containing: paneID) {\n        model.sftpWorkspace.selectedTabID = tab.id\n    }\n    setMainArea(.sftp)\n"
           if text.count(pane) != 1:
               raise SystemExit(f"ContentView pane marker mismatch: {text.count(pane)}")
           path.write_text(text.replace(pane, "", 1))
