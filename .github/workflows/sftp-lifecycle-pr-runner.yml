@@ -11,11 +11,19 @@ permissions:
 jobs:
   patch-test-commit:
     runs-on: macos-14
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
+
+      - name: Environment
+        run: |
+          xcodebuild -version
+          swift --version
+          swift --version | grep -E 'Swift version 6\.'
 
       - name: Extract and apply targeted patch
         shell: bash
