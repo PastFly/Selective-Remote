@@ -1,0 +1,369 @@
+name: SFTP lifecycle hotfix patch
+
+on:
+  push:
+    branches:
+      - agent/sftp-lifecycle-0.22.2
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    if: ${{ !contains(github.event.head_commit.message, '[sftp-lifecycle-applied]') }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/sftp-lifecycle-0.22.2
+          fetch-depth: 0
+
+      - name: Apply targeted lifecycle patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(path, old, new, label):
+              p = Path(path)
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly 1 match, got {count}")
+              p.write_text(text.replace(old, new, 1))
+
+          # 1) SFTP master ownership: keep one shared OpenSSH master alive while
+          # at least one SFTP pane/session owns its ControlPath, then close it.
+          path = Path("Sources/SelectiveRemote/SFTPService.swift")
+          text = path.read_text()
+          old = """private final class SFTPMasterConnectionManager: @unchecked Sendable {\n    private let lock = NSLock()\n    private var ownedProcesses: [String: Process] = [:]\n\n    func ensureMaster(\n"""
+          new = """private final class SFTPMasterConnectionManager: @unchecked Sendable {\n    private let lock = NSLock()\n    private var ownedProcesses: [String: Process] = [:]\n    private var sessionReferences: [String: Int] = [:]\n\n    func retainSession(settings: SSHConnectionSettings) {\n        let controlPath = SSHService.controlPath(settings: settings)\n        lock.lock()\n        sessionReferences[controlPath, default: 0] += 1\n        lock.unlock()\n    }\n\n    func releaseSession(\n        settings: SSHConnectionSettings,\n        executable: String\n    ) {\n        let controlPath = SSHService.controlPath(settings: settings)\n        var shouldClose = false\n\n        lock.lock()\n        if let count = sessionReferences[controlPath], count > 1 {\n            sessionReferences[controlPath] = count - 1\n        } else if sessionReferences.removeValue(forKey: controlPath) != nil {\n            shouldClose = true\n        }\n        lock.unlock()\n\n        guard shouldClose else { return }\n        DispatchQueue.global(qos: .utility).async { [weak self] in\n            self?.closeMasterIfUnreferenced(\n                settings: settings,\n                executable: executable,\n                controlPath: controlPath\n            )\n        }\n    }\n\n    func ensureMaster(\n"""
+          if text.count(old) != 1:
+              raise SystemExit("SFTPService manager header mismatch")
+          text = text.replace(old, new, 1)
+
+          marker = """    private func controlSocketIsAlive(\n        settings: SSHConnectionSettings,\n"""
+          close_helper = """    private func closeMasterIfUnreferenced(\n        settings: SSHConnectionSettings,\n        executable: String,\n        controlPath: String\n    ) {\n        lock.lock()\n        defer { lock.unlock() }\n\n        guard sessionReferences[controlPath] == nil else { return }\n\n        if FileManager.default.fileExists(atPath: controlPath) {\n            let process = Process()\n            process.executableURL = URL(fileURLWithPath: executable)\n            var arguments = [\n                \"-S\", controlPath,\n                \"-O\", \"exit\",\n                \"-p\", String(settings.port)\n            ]\n            if !settings.username.isEmpty {\n                arguments += [\"-o\", \"User=\\(settings.username)\"]\n            }\n            arguments.append(settings.host)\n            process.arguments = arguments\n            process.environment = SSHKeyService.processEnvironment()\n            process.standardInput = FileHandle.nullDevice\n            process.standardOutput = FileHandle.nullDevice\n            process.standardError = FileHandle.nullDevice\n            if (try? process.run()) != nil {\n                process.waitUntilExit()\n            }\n        }\n\n        if let owned = ownedProcesses.removeValue(forKey: controlPath), owned.isRunning {\n            owned.terminate()\n        }\n        try? FileManager.default.removeItem(atPath: controlPath)\n    }\n\n""" + marker
+          if text.count(marker) != 1:
+              raise SystemExit("SFTPService controlSocket marker mismatch")
+          text = text.replace(marker, close_helper, 1)
+
+          marker = """    private static let masterManager = SFTPMasterConnectionManager()\n\n    static func list(\n"""
+          exposure = """    private static let masterManager = SFTPMasterConnectionManager()\n\n    static func retainMasterConnection(settings: SSHConnectionSettings) {\n        masterManager.retainSession(settings: settings)\n    }\n\n    static func releaseMasterConnection(settings: SSHConnectionSettings) {\n        masterManager.releaseSession(settings: settings, executable: sshExecutable)\n    }\n\n    static func list(\n"""
+          if text.count(marker) != 1:
+              raise SystemExit("SFTPService master exposure marker mismatch")
+          text = text.replace(marker, exposure, 1)
+          path.write_text(text)
+
+          # 2) SFTPBrowserSession owns a master lease and disconnect is a real
+          # lifecycle boundary: cancel transfers, release master, reset UI state.
+          path = Path("Sources/SelectiveRemote/SFTPBrowserModels.swift")
+          text = path.read_text()
+          marker = "@MainActor\nfinal class SFTPBrowserSession: ObservableObject {"
+          if text.count(marker) != 1:
+              raise SystemExit("SFTPBrowserSession marker mismatch")
+          prefix = text.split(marker, 1)[0]
+          replacement = r'''@MainActor
+          final class SFTPBrowserSession: ObservableObject {
+              let transfers: SFTPTransferQueue
+              let remote: SFTPBrowserModel
+              let local = SFTPLocalBrowserModel()
+              @Published var settings: SSHConnectionSettings?
+              @Published private(set) var connectionState = SFTPConnectionState.disconnected
+              @Published private(set) var connectedAt: Date?
+              @Published private(set) var lastErrorMessage: String?
+
+              private(set) var profileID: UUID?
+              private var retainedMasterSettings: SSHConnectionSettings?
+
+              init() {
+                  let transfers = SFTPTransferQueue()
+                  self.transfers = transfers
+                  remote = SFTPBrowserModel(transfers: transfers)
+              }
+
+              func prepare(for profileID: UUID) {
+                  guard self.profileID != profileID else { return }
+                  self.profileID = profileID
+                  disconnect()
+              }
+
+              func connect(
+                  _ settings: SSHConnectionSettings,
+                  completion: (@MainActor (Bool) -> Void)? = nil
+              ) {
+                  if let retainedMasterSettings {
+                      SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+                  }
+                  retainedMasterSettings = settings
+                  SFTPService.retainMasterConnection(settings: settings)
+                  self.settings = settings
+                  connectionState = .connecting
+                  connectedAt = nil
+                  lastErrorMessage = nil
+                  remote.load(
+                      settings: settings,
+                      directory: settings.initialDirectory
+                  ) { [weak self] success in
+                      guard let self else {
+                          completion?(success)
+                          return
+                      }
+                      if success {
+                          connectionState = .connected
+                          connectedAt = Date()
+                          lastErrorMessage = nil
+                      } else {
+                          connectionState = .error
+                          connectedAt = nil
+                          lastErrorMessage = remote.errorMessage
+                      }
+                      completion?(success)
+                  }
+              }
+
+              func disconnect() {
+                  transfers.cancelAll()
+                  if let retainedMasterSettings {
+                      SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+                      self.retainedMasterSettings = nil
+                  }
+                  settings = nil
+                  connectionState = .disconnected
+                  connectedAt = nil
+                  lastErrorMessage = nil
+                  remote.reset()
+              }
+          }
+          '''
+          replacement = "\n".join(line[10:] if line.startswith("          ") else line for line in replacement.splitlines()) + "\n"
+          path.write_text(prefix + replacement)
+
+          # 3) One SFTP Workspace source of truth owned by AppModel.
+          path = Path("Sources/SelectiveRemote/AppModel.swift")
+          text = path.read_text()
+          old = """    let sftpSession = SFTPBrowserSession()\n    let globalSFTPSession = SFTPBrowserSession()\n"""
+          new = old + "    let sftpWorkspace = SFTPWorkspaceModel()\n"
+          if text.count(old) != 1:
+              raise SystemExit("AppModel SFTP declarations mismatch")
+          text = text.replace(old, new, 1)
+
+          old = """            globalSFTPSession.objectWillChange.sink { [weak self] _ in\n                Task { @MainActor [weak self] in\n                    self?.objectWillChange.send()\n                }\n            }\n"""
+          new = old[:-1] + ",\n            sftpWorkspace.objectWillChange.sink { [weak self] _ in\n                Task { @MainActor [weak self] in\n                    self?.objectWillChange.send()\n                }\n            }\n"
+          if text.count(old) != 1:
+              raise SystemExit("AppModel SFTP observers mismatch")
+          text = text.replace(old, new, 1)
+
+          old = """        appendConnectionCenterSFTP(\n            session: sftpSession,\n            scope: sftpSession.profileID.map(ConnectionCenterSFTPScope.profile),\n            into: &items\n        )\n        appendConnectionCenterSFTP(\n            session: globalSFTPSession,\n            scope: .global,\n            into: &items\n        )\n"""
+          new = """        for tab in sftpWorkspace.tabs {\n            appendConnectionCenterSFTP(pane: tab.left, into: &items)\n            appendConnectionCenterSFTP(pane: tab.right, into: &items)\n        }\n"""
+          if text.count(old) != 1:
+              raise SystemExit("AppModel legacy SFTP snapshot mismatch")
+          text = text.replace(old, new, 1)
+
+          old = """        case let .sftp(scope):\n            switch scope {\n            case let .profile(profileID):\n                if sftpSession.profileID == profileID {\n                    sftpSession.disconnect()\n                }\n            case .global:\n                globalSFTPSession.disconnect()\n            }\n"""
+          new = """        case let .sftp(scope):\n            switch scope {\n            case let .pane(paneID):\n                sftpWorkspace.pane(id: paneID)?.clear()\n            case let .profile(profileID):\n                if sftpSession.profileID == profileID {\n                    sftpSession.disconnect()\n                }\n            case .global:\n                globalSFTPSession.disconnect()\n            }\n"""
+          if text.count(old) != 1:
+              raise SystemExit("AppModel SFTP disconnect switch mismatch")
+          text = text.replace(old, new, 1)
+
+          pattern = re.compile(
+              r"    private func appendConnectionCenterSFTP\(\n"
+              r"        session: SFTPBrowserSession,\n"
+              r"        scope: ConnectionCenterSFTPScope\?,\n"
+              r"        into items: inout \[ConnectionCenterItem\]\n"
+              r"    \) \{.*?\n    \}\n\n"
+              r"    private func connectionCenterTerminalState",
+              re.S,
+          )
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit("AppModel SFTP Connection Center helper mismatch")
+          helper = r'''    private func appendConnectionCenterSFTP(
+              pane: SFTPWorkspacePane,
+              into items: inout [ConnectionCenterItem]
+          ) {
+              let session = pane.session
+              guard pane.kind == .remote,
+                    let settings = session.settings,
+                    session.connectionState != .disconnected
+              else { return }
+              let route = connectionCenterRoute(settings: settings)
+              let state: ConnectionCenterState = switch session.connectionState {
+              case .disconnected: .disconnected
+              case .connecting: .connecting
+              case .connected: .connected
+              case .error: .error
+              }
+              items.append(
+                  ConnectionCenterItem(
+                      source: .sftp(scope: .pane(pane.id)),
+                      kind: .sftp,
+                      profileName: settings.profileName,
+                      userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
+                      port: settings.port,
+                      route: route.summary,
+                      authentication: settings.authenticationMode.title,
+                      state: state,
+                      startedAt: session.connectedAt,
+                      errorMessage: session.lastErrorMessage,
+                      detailSections: [
+                          ConnectionCenterDetailSection(
+                              title: "Основное",
+                              rows: [
+                                  ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
+                                  ConnectionCenterDetailRow(label: "Панель", value: pane.title),
+                                  ConnectionCenterDetailRow(label: "Host", value: settings.host),
+                                  ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
+                                  ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
+                                  ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
+                              ]
+                          ),
+                          ConnectionCenterDetailSection(
+                              title: "Аутентификация",
+                              rows: connectionCenterAuthenticationRows(
+                                  method: settings.authenticationMode.title,
+                                  identityName: settings.identity?.name
+                              )
+                          ),
+                          ConnectionCenterDetailSection(
+                              title: "Маршрут",
+                              rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                          )
+                      ]
+                  )
+              )
+          }
+
+          private func connectionCenterTerminalState'''
+          helper = "\n".join(line[10:] if line.startswith("          ") else line for line in helper.splitlines())
+          text = text[:match.start()] + helper + text[match.end():]
+          path.write_text(text)
+
+          # 4) SFTP Connection Center sources identify concrete Workspace panes.
+          path = Path("Sources/SelectiveRemote/ConnectionCenter.swift")
+          text = path.read_text()
+          old = """enum ConnectionCenterSFTPScope: Hashable {\n    case profile(UUID)\n    case global\n}\n"""
+          new = """enum ConnectionCenterSFTPScope: Hashable {\n    case pane(UUID)\n    case profile(UUID)\n    case global\n}\n"""
+          if text.count(old) != 1:
+              raise SystemExit("ConnectionCenter SFTP scope mismatch")
+          text = text.replace(old, new, 1)
+          old = """        case let .sftp(scope):\n            switch scope {\n            case let .profile(profileID):\n                \"sftp:profile:\\(profileID.uuidString)\"\n            case .global:\n                \"sftp:global\"\n            }\n"""
+          new = """        case let .sftp(scope):\n            switch scope {\n            case let .pane(paneID):\n                \"sftp:pane:\\(paneID.uuidString)\"\n            case let .profile(profileID):\n                \"sftp:profile:\\(profileID.uuidString)\"\n            case .global:\n                \"sftp:global\"\n            }\n"""
+          if text.count(old) != 1:
+              raise SystemExit("ConnectionCenter SFTP stable ID mismatch")
+          path.write_text(text.replace(old, new, 1))
+
+          # 5) ContentView uses AppModel-owned SFTP Workspace everywhere.
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          declaration = "    @StateObject private var globalSFTPWorkspace = SFTPWorkspaceModel()\n"
+          if text.count(declaration) != 1:
+              raise SystemExit("ContentView SFTP workspace declaration mismatch")
+          text = text.replace(declaration, "", 1)
+          if "globalSFTPWorkspace" not in text:
+              raise SystemExit("ContentView expected SFTP workspace uses were not found")
+          text = text.replace("globalSFTPWorkspace", "model.sftpWorkspace")
+          path.write_text(text)
+
+          # Update the existing source-contract tests to the new owner name.
+          path = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          text = path.read_text().replace("globalSFTPWorkspace", "model.sftpWorkspace")
+          path.write_text(text)
+
+          # Focused regressions for the lifecycle bugs fixed by this hotfix.
+          Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift").write_text(r'''import Darwin
+          import Foundation
+          import Testing
+          @testable import SelectiveRemote
+
+          @Test("SFTP cancel escalates when subprocess ignores SIGTERM")
+          func sftpCancelEscalatesToSIGKILL() async throws {
+              let process = Process()
+              process.executableURL = URL(fileURLWithPath: "/bin/sh")
+              process.arguments = ["-c", "trap '' TERM; while :; do sleep 1; done"]
+              process.standardInput = FileHandle.nullDevice
+              process.standardOutput = FileHandle.nullDevice
+              process.standardError = FileHandle.nullDevice
+              try process.run()
+              defer {
+                  if process.isRunning {
+                      Darwin.kill(process.processIdentifier, SIGKILL)
+                  }
+              }
+
+              try await Task.sleep(for: .milliseconds(150))
+              let control = SFTPProcessControl(forceKillDelay: 0.15)
+              control.attach(process)
+              control.cancel()
+
+              for _ in 0..<40 where process.isRunning {
+                  try await Task.sleep(for: .milliseconds(50))
+              }
+              #expect(!process.isRunning)
+          }
+
+          @Test("Profile cleanup includes proxy credential")
+          func profileCleanupIncludesProxyCredential() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let source = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/KeychainService.swift"),
+                  encoding: .utf8
+              )
+              let marker = "try deletePassword(profileID: profileID, kind: .proxy)"
+              #expect(source.contains(marker))
+          }
+
+          @Test("SFTP disconnect cancels transfers and releases its master lease")
+          func sftpDisconnectOwnsLifecycleBoundary() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let source = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SFTPBrowserModels.swift"),
+                  encoding: .utf8
+              )
+              #expect(source.contains("transfers.cancelAll()"))
+              #expect(source.contains("SFTPService.releaseMasterConnection"))
+          }
+
+          @Test("Connection Center reads AppModel-owned SFTP Workspace panes")
+          func connectionCenterUsesWorkspaceRuntime() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let appModel = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+                  encoding: .utf8
+              )
+              let content = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+                  encoding: .utf8
+              )
+              #expect(appModel.contains("let sftpWorkspace = SFTPWorkspaceModel()"))
+              #expect(appModel.contains("appendConnectionCenterSFTP(pane: tab.left"))
+              #expect(appModel.contains("appendConnectionCenterSFTP(pane: tab.right"))
+              #expect(content.contains("SFTPWorkspaceView(workspace: model.sftpWorkspace)"))
+          }
+          '''.replace("          ", ""))
+          PY
+
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Commit validated hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/sftp-lifecycle-hotfix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Sources Tests .github/workflows/sftp-lifecycle-hotfix.yml
+          git commit -m "Fix SFTP workspace lifecycle [sftp-lifecycle-applied]"
+          git push origin HEAD:agent/sftp-lifecycle-0.22.2
