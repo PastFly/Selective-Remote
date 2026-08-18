@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,122 +21,14 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - name: Checkout PR branch
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
 
       - name: Environment
         run: |
           xcodebuild -version
           swift --version
           swift --version | grep -E 'Swift version 6\.'
-
-      - name: Apply targeted SFTP lifecycle hotfix
-        shell: bash
-        run: |
-          set -euo pipefail
-          sed -n "/^[[:space:]]*python3 <<'PY'$/,/^[[:space:]]*PY$/p" .github/workflows/sftp-lifecycle-hotfix.yml \
-            | sed '1d;$d;s/^          //' > /tmp/sftp-lifecycle-patch.py
-          python3 /tmp/sftp-lifecycle-patch.py
-
-          python3 <<'PY'
-          from pathlib import Path
-          import re
-
-          # Connection Center opens the exact SFTP Workspace pane it reports.
-          path = Path("Sources/SelectiveRemote/ContentView.swift")
-          text = path.read_text()
-          pattern = re.compile(
-              r"(    private func openConnectionCenterSource\(_ source: ConnectionCenterSource\) \{.*?"
-              r"        case let \.sftp\(scope\):\n"
-              r"            switch scope \{\n)"
-              r"(            case let \.profile\(profileID\):)",
-              re.S,
-          )
-          match = pattern.search(text)
-          if not match:
-              raise SystemExit("ContentView open SFTP scope marker not found")
-          pane_case = """            case let .pane(paneID):
-                if let tab = model.sftpWorkspace.tab(containing: paneID) {
-                    model.sftpWorkspace.selectedTabID = tab.id
-                }
-                setMainArea(.sftp)
-"""
-          text = text[:match.start(2)] + pane_case + text[match.start(2):]
-          path.write_text(text)
-
-          # Reconnect now operates on the actual managed SFTP Workspace pane.
-          path = Path("Sources/SelectiveRemote/AppModel.swift")
-          text = path.read_text()
-          old = """        case .sftp:
-            break
-"""
-          new = """        case let .sftp(scope):
-            switch scope {
-            case let .pane(paneID):
-                guard let pane = sftpWorkspace.pane(id: paneID),
-                      let settings = pane.session.settings else { return }
-                let profileID = pane.session.profileID
-                pane.session.disconnect()
-                pane.session.connect(settings: settings, profileID: profileID)
-            case .profile, .global:
-                break
-            }
-"""
-          if text.count(old) != 1:
-              raise SystemExit(f"AppModel SFTP reconnect marker mismatch: {text.count(old)}")
-          text = text.replace(old, new, 1)
-          path.write_text(text)
-
-          # Keep cancellation regression deterministic in CI.
-          path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
-          text = path.read_text()
-          pattern = re.compile(
-              r'@Test\("SFTP cancel escalates when subprocess ignores SIGTERM"\)\n'
-              r'func sftpCancelEscalatesToSIGKILL\(\).*?\n}\n\n'
-              r'(?=@Test\("Profile cleanup includes proxy credential"\))',
-              re.S,
-          )
-          replacement = '''@Test("SFTP cancel has deterministic SIGKILL escalation")
-func sftpCancelEscalatesToSIGKILL() throws {
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let source = try String(
-        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SFTPTransferQueue.swift"),
-        encoding: .utf8
-    )
-    #expect(source.contains("asyncAfter"))
-    #expect(source.contains("forceKillIfNeeded"))
-    #expect(source.contains("Darwin.kill(pid, SIGKILL)"))
-}
-
-'''
-          text, count = pattern.subn(replacement, text, count=1)
-          if count != 1:
-              raise SystemExit(f"SFTP cancellation fixture mismatch: {count}")
-          reconnect_test = '''
-@Test("Connection Center reconnects a managed SFTP Workspace pane")
-func connectionCenterReconnectsManagedSFTPPane() throws {
-    let root = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let source = try String(
-        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
-        encoding: .utf8
-    )
-    #expect(source.contains("case let .sftp(scope):"))
-    #expect(source.contains("pane.session.connect(settings: settings, profileID: profileID)"))
-}
-'''
-          if "connectionCenterReconnectsManagedSFTPPane" not in text:
-              text += reconnect_test
-          path.write_text(text)
-          PY
 
       - name: Validate shell scripts
         run: |
@@ -151,20 +43,3 @@ func connectionCenterReconnectsManagedSFTPPane() throws {
 
       - name: Release build
         run: swift build -c release
-
-      - name: Commit validated hotfix and restore CI
-        shell: bash
-        run: |
-          set -euo pipefail
-          git show origin/main:.github/workflows/ci.yml > .github/workflows/ci.yml
-          rm -f \
-            .github/workflows/sftp-lifecycle-hotfix.yml \
-            .github/workflows/sftp-lifecycle-pr-runner.yml \
-            .github/workflows/sftp-finalize.yml \
-            .github/workflows/sftp-permission-probe.yml \
-            .sftp-finalize-trigger
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git commit -m "Fix SFTP workspace lifecycle [sftp-lifecycle-applied]"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
