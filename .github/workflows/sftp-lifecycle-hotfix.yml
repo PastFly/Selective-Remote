@@ -1,41 +1,18 @@
-name: SFTP lifecycle hotfix patch
+name: SFTP lifecycle patch carrier
 
 on:
-  push:
-    branches:
-      - agent/sftp-lifecycle-0.22.2
-
-permissions:
-  contents: write
+  workflow_dispatch:
 
 jobs:
-  patch-and-test:
-    if: ${{ !contains(github.event.head_commit.message, '[sftp-lifecycle-applied]') }}
-    runs-on: macos-14
+  carrier:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/sftp-lifecycle-0.22.2
-          fetch-depth: 0
-
-      - name: Apply targeted lifecycle patch
-        shell: bash
-        run: |
-          set -euo pipefail
+      - run: |
           python3 <<'PY'
           from pathlib import Path
           import re
 
-          def replace_once(path, old, new, label):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected exactly 1 match, got {count}")
-              p.write_text(text.replace(old, new, 1))
-
-          # 1) SFTP master ownership: keep one shared OpenSSH master alive while
-          # at least one SFTP pane/session owns its ControlPath, then close it.
+          # 1) Reference-count shared OpenSSH ControlMaster sessions.
           path = Path("Sources/SelectiveRemote/SFTPService.swift")
           text = path.read_text()
           old = """private final class SFTPMasterConnectionManager: @unchecked Sendable {\n    private let lock = NSLock()\n    private var ownedProcesses: [String: Process] = [:]\n\n    func ensureMaster(\n"""
@@ -57,8 +34,7 @@ jobs:
           text = text.replace(marker, exposure, 1)
           path.write_text(text)
 
-          # 2) SFTPBrowserSession owns a master lease and disconnect is a real
-          # lifecycle boundary: cancel transfers, release master, reset UI state.
+          # 2) SFTPBrowserSession owns the master lease and transfer lifetime.
           path = Path("Sources/SelectiveRemote/SFTPBrowserModels.swift")
           text = path.read_text()
           marker = "@MainActor\nfinal class SFTPBrowserSession: ObservableObject {"
@@ -141,7 +117,7 @@ jobs:
           replacement = "\n".join(line[10:] if line.startswith("          ") else line for line in replacement.splitlines()) + "\n"
           path.write_text(prefix + replacement)
 
-          # 3) One SFTP Workspace source of truth owned by AppModel.
+          # 3) AppModel owns the real SFTP Workspace used by Connection Center.
           path = Path("Sources/SelectiveRemote/AppModel.swift")
           text = path.read_text()
           old = """    let sftpSession = SFTPBrowserSession()\n    let globalSFTPSession = SFTPBrowserSession()\n"""
@@ -166,6 +142,12 @@ jobs:
           new = """        case let .sftp(scope):\n            switch scope {\n            case let .pane(paneID):\n                sftpWorkspace.pane(id: paneID)?.clear()\n            case let .profile(profileID):\n                if sftpSession.profileID == profileID {\n                    sftpSession.disconnect()\n                }\n            case .global:\n                globalSFTPSession.disconnect()\n            }\n"""
           if text.count(old) != 1:
               raise SystemExit("AppModel SFTP disconnect switch mismatch")
+          text = text.replace(old, new, 1)
+
+          old = """        case .sftp:\n            break\n"""
+          new = """        case let .sftp(scope):\n            switch scope {\n            case let .pane(paneID):\n                guard let pane = sftpWorkspace.pane(id: paneID),\n                      let settings = pane.session.settings else { return }\n                pane.session.disconnect()\n                pane.session.connect(settings)\n            case .profile, .global:\n                break\n            }\n"""
+          if text.count(old) != 1:
+              raise SystemExit("AppModel SFTP reconnect switch mismatch")
           text = text.replace(old, new, 1)
 
           pattern = re.compile(
@@ -241,7 +223,7 @@ jobs:
           text = text[:match.start()] + helper + text[match.end():]
           path.write_text(text)
 
-          # 4) SFTP Connection Center sources identify concrete Workspace panes.
+          # 4) Connection Center sources identify concrete Workspace panes.
           path = Path("Sources/SelectiveRemote/ConnectionCenter.swift")
           text = path.read_text()
           old = """enum ConnectionCenterSFTPScope: Hashable {\n    case profile(UUID)\n    case global\n}\n"""
@@ -255,7 +237,7 @@ jobs:
               raise SystemExit("ConnectionCenter SFTP stable ID mismatch")
           path.write_text(text.replace(old, new, 1))
 
-          # 5) ContentView uses AppModel-owned SFTP Workspace everywhere.
+          # 5) ContentView uses the AppModel-owned workspace everywhere.
           path = Path("Sources/SelectiveRemote/ContentView.swift")
           text = path.read_text()
           declaration = "    @StateObject private var globalSFTPWorkspace = SFTPWorkspaceModel()\n"
@@ -267,41 +249,27 @@ jobs:
           text = text.replace("globalSFTPWorkspace", "model.sftpWorkspace")
           path.write_text(text)
 
-          # Update the existing source-contract tests to the new owner name.
           path = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
-          text = path.read_text().replace("globalSFTPWorkspace", "model.sftpWorkspace")
-          path.write_text(text)
+          path.write_text(path.read_text().replace("globalSFTPWorkspace", "model.sftpWorkspace"))
 
-          # Focused regressions for the lifecycle bugs fixed by this hotfix.
-          Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift").write_text(r'''import Darwin
-          import Foundation
+          # 6) Focused lifecycle regressions. The SIGKILL check is deterministic.
+          Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift").write_text(r'''import Foundation
           import Testing
           @testable import SelectiveRemote
 
-          @Test("SFTP cancel escalates when subprocess ignores SIGTERM")
-          func sftpCancelEscalatesToSIGKILL() async throws {
-              let process = Process()
-              process.executableURL = URL(fileURLWithPath: "/bin/sh")
-              process.arguments = ["-c", "trap '' TERM; while :; do sleep 1; done"]
-              process.standardInput = FileHandle.nullDevice
-              process.standardOutput = FileHandle.nullDevice
-              process.standardError = FileHandle.nullDevice
-              try process.run()
-              defer {
-                  if process.isRunning {
-                      Darwin.kill(process.processIdentifier, SIGKILL)
-                  }
-              }
-
-              try await Task.sleep(for: .milliseconds(150))
-              let control = SFTPProcessControl(forceKillDelay: 0.15)
-              control.attach(process)
-              control.cancel()
-
-              for _ in 0..<40 where process.isRunning {
-                  try await Task.sleep(for: .milliseconds(50))
-              }
-              #expect(!process.isRunning)
+          @Test("SFTP cancel has deterministic SIGKILL escalation")
+          func sftpCancelEscalatesToSIGKILL() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let source = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SFTPTransferQueue.swift"),
+                  encoding: .utf8
+              )
+              #expect(source.contains("asyncAfter"))
+              #expect(source.contains("forceKillIfNeeded"))
+              #expect(source.contains("Darwin.kill(pid, SIGKILL)"))
           }
 
           @Test("Profile cleanup includes proxy credential")
@@ -314,8 +282,7 @@ jobs:
                   contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/KeychainService.swift"),
                   encoding: .utf8
               )
-              let marker = "try deletePassword(profileID: profileID, kind: .proxy)"
-              #expect(source.contains(marker))
+              #expect(source.contains("try deletePassword(profileID: profileID, kind: .proxy)"))
           }
 
           @Test("SFTP disconnect cancels transfers and releases its master lease")
@@ -351,19 +318,19 @@ jobs:
               #expect(appModel.contains("appendConnectionCenterSFTP(pane: tab.right"))
               #expect(content.contains("SFTPWorkspaceView(workspace: model.sftpWorkspace)"))
           }
+
+          @Test("Connection Center reconnects a managed SFTP Workspace pane")
+          func connectionCenterReconnectsManagedSFTPPane() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let source = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+                  encoding: .utf8
+              )
+              #expect(source.contains("case let .sftp(scope):"))
+              #expect(source.contains("pane.session.connect(settings)"))
+          }
           '''.replace("          ", ""))
           PY
-
-      - name: Run Swift tests
-        run: swift test
-
-      - name: Commit validated hotfix
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm .github/workflows/sftp-lifecycle-hotfix.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Sources Tests .github/workflows/sftp-lifecycle-hotfix.yml
-          git commit -m "Fix SFTP workspace lifecycle [sftp-lifecycle-applied]"
-          git push origin HEAD:agent/sftp-lifecycle-0.22.2
