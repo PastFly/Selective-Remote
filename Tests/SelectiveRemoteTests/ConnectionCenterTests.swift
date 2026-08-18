@@ -87,8 +87,8 @@ func connectionCenterUsesExistingRuntimeSources() throws {
 
     #expect(appModel.contains("for session in runningSessions"))
     #expect(appModel.contains("for (workspaceID, workspace) in terminalWorkspaces"))
-    #expect(appModel.contains("session: sftpSession"))
-    #expect(appModel.contains("session: globalSFTPSession"))
+    #expect(appModel.contains("for tab in sftpWorkspace.tabs"))
+    #expect(appModel.contains("appendConnectionCenterSFTP(pane: tab.left"))
     #expect(appModel.contains("for tunnel in sshTunnels.values"))
     #expect(appModel.contains("processIdentifier: connection.process.processIdentifier"))
     #expect(!appModel.contains("ConnectionCenterSessionManager"))

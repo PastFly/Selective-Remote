@@ -1,8 +1,0 @@
-name: SFTP lifecycle runner placeholder
-on:
-  workflow_dispatch:
-jobs:
-  placeholder:
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo placeholder

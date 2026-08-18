@@ -400,7 +400,7 @@ func sshProfileUsesModernSettingsAndFullSizeWorkspaces() throws {
     #expect(content.contains("private var sshCompactWorkspaceHeader: some View"))
     #expect(content.contains("private var sshWorkspaceSwitcher: some View"))
     #expect(content.contains("terminalPanel\n                .id(profile.id)"))
-    #expect(content.contains("SFTPWorkspaceView(workspace: globalSFTPWorkspace)"))
+    #expect(content.contains("SFTPWorkspaceView(workspace: model.sftpWorkspace)"))
     #expect(!content.contains("SFTPBrowserView(profile: profile, session: sftpSession)"))
     #expect(content.contains("PortForwardingView(profile: profile)"))
     #expect(content.contains("terminalFocusMode && selectedTab != .terminal"))
