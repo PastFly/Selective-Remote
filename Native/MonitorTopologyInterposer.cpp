@@ -13,6 +13,7 @@
 #include <vector>
 
 #if !defined(SELECTIVE_RDP_TESTING)
+#include <CoreGraphics/CoreGraphics.h>
 #include <SDL3/SDL.h>
 #include <mutex>
 #endif
@@ -52,6 +53,51 @@ void suppressStartupQuitEvents()
             );
         }
     });
+}
+
+bool staleDisplayEventGuardEnabled()
+{
+    const char* raw = std::getenv("SELECTIVE_RDP_STALE_DISPLAY_EVENT_GUARD");
+    return raw && (std::strcmp(raw, "1") == 0);
+}
+
+bool currentSDLDisplayID(SDL_DisplayID displayID)
+{
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays)
+        return true;
+
+    bool found = false;
+    for (int index = 0; index < count; ++index)
+    {
+        if (displays[index] == displayID)
+        {
+            found = true;
+            break;
+        }
+    }
+    SDL_free(displays);
+    return found;
+}
+
+bool staleDisplayPropertyEvent(const SDL_Event& event)
+{
+    if (!staleDisplayEventGuardEnabled())
+        return false;
+
+    switch (event.type)
+    {
+        case SDL_EVENT_DISPLAY_ORIENTATION:
+        case SDL_EVENT_DISPLAY_MOVED:
+        case SDL_EVENT_DISPLAY_DESKTOP_MODE_CHANGED:
+        case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+        case SDL_EVENT_DISPLAY_CONTENT_SCALE_CHANGED:
+        case SDL_EVENT_DISPLAY_USABLE_BOUNDS_CHANGED:
+            return !currentSDLDisplayID(event.display.displayID);
+        default:
+            return false;
+    }
 }
 #endif
 
@@ -95,6 +141,126 @@ bool parseUnsigned(const std::string& value, UINT32& result)
     result = static_cast<UINT32>(parsed);
     return true;
 }
+
+#if !defined(SELECTIVE_RDP_TESTING)
+struct AppLocalDisplayPlacement
+{
+    CGDirectDisplayID displayID;
+    INT32 x;
+    INT32 y;
+};
+
+bool parseAppLocalDisplayLayout(
+    const char* raw,
+    std::vector<AppLocalDisplayPlacement>& result
+)
+{
+    if (!raw || (*raw == '\0'))
+        return false;
+
+    std::stringstream entries(raw);
+    std::string entry;
+    while (std::getline(entries, entry, ';'))
+    {
+        std::stringstream fields(entry);
+        std::vector<std::string> values;
+        std::string value;
+        while (std::getline(fields, value, ':'))
+            values.emplace_back(value);
+
+        if (values.size() != 3)
+            return false;
+
+        UINT32 displayID = 0;
+        INT32 x = 0;
+        INT32 y = 0;
+        if (!parseUnsigned(values[0], displayID) ||
+            !parseSigned(values[1], x) ||
+            !parseSigned(values[2], y))
+            return false;
+
+        result.push_back(
+            AppLocalDisplayPlacement{
+                static_cast<CGDirectDisplayID>(displayID),
+                x,
+                y
+            }
+        );
+    }
+    return result.size() > 1;
+}
+
+void applyAppScopedLocalDisplayLayoutOnce()
+{
+    static std::once_flag once;
+    std::call_once(once, [] {
+        const char* raw =
+            std::getenv("SELECTIVE_RDP_APP_LOCAL_DISPLAY_LAYOUT");
+        std::vector<AppLocalDisplayPlacement> placements;
+        if (!parseAppLocalDisplayLayout(raw, placements))
+            return;
+
+        CGDisplayConfigRef config = nullptr;
+        const CGError begin = CGBeginDisplayConfiguration(&config);
+        if ((begin != kCGErrorSuccess) || !config)
+        {
+            std::fprintf(
+                stderr,
+                "[SelectiveRemote] Could not begin app-scoped display "
+                "configuration: %d\n",
+                static_cast<int>(begin)
+            );
+            return;
+        }
+
+        for (const auto& placement : placements)
+        {
+            const CGError rc = CGConfigureDisplayOrigin(
+                config,
+                placement.displayID,
+                placement.x,
+                placement.y
+            );
+            if (rc != kCGErrorSuccess)
+            {
+                CGCancelDisplayConfiguration(config);
+                std::fprintf(
+                    stderr,
+                    "[SelectiveRemote] Could not configure local display %u "
+                    "at %d,%d: %d\n",
+                    static_cast<unsigned int>(placement.displayID),
+                    placement.x,
+                    placement.y,
+                    static_cast<int>(rc)
+                );
+                return;
+            }
+        }
+
+        const CGError complete = CGCompleteDisplayConfiguration(
+            config,
+            kCGConfigureForAppOnly
+        );
+        if (complete != kCGErrorSuccess)
+        {
+            std::fprintf(
+                stderr,
+                "[SelectiveRemote] Could not apply app-scoped local display "
+                "order: %d\n",
+                static_cast<int>(complete)
+            );
+            return;
+        }
+
+        std::fprintf(
+            stderr,
+            "[SelectiveRemote] Applied app-scoped local display order to "
+            "%zu displays\n",
+            placements.size()
+        );
+    });
+}
+#endif
 
 bool parseLayout(const char* raw, std::unordered_map<UINT32, TargetPlacement>& result)
 {
@@ -336,6 +502,10 @@ extern "C" BOOL selective_freerdp_set_monitor_def_array_sorted(
         monitor.is_primary = target->second.primary;
     }
 
+#if !defined(SELECTIVE_RDP_TESTING)
+    applyAppScopedLocalDisplayLayoutOnce();
+#endif
+
     std::fprintf(stderr, "[SelectiveRemote] Applied selected topology to %zu monitors\n", count);
     return storeMonitorDefinitions(settings, adjusted.data(), adjusted.size());
 }
@@ -537,6 +707,37 @@ extern "C" bool SDLCALL selective_SDL_GetWindowSizeInPixels(
     return SDL_GetWindowSizeInPixels(window, width, height);
 }
 
+extern "C" int SDLCALL selective_SDL_PeepEvents(
+    SDL_Event* events,
+    int numevents,
+    SDL_EventAction action,
+    Uint32 minType,
+    Uint32 maxType
+)
+{
+    if (!events || (numevents != 1) || (action != SDL_GETEVENT) ||
+        !staleDisplayEventGuardEnabled())
+    {
+        return SDL_PeepEvents(events, numevents, action, minType, maxType);
+    }
+
+    for (;;)
+    {
+        const int rc = SDL_PeepEvents(events, numevents, action, minType, maxType);
+        if (rc <= 0)
+            return rc;
+        if (!staleDisplayPropertyEvent(events[0]))
+            return rc;
+
+        std::fprintf(
+            stderr,
+            "[SelectiveRemote] Dropped stale SDL display event 0x%08x for display %u\n",
+            static_cast<unsigned int>(events[0].type),
+            static_cast<unsigned int>(events[0].display.displayID)
+        );
+    }
+}
+
 #define SELECTIVE_DYLD_INTERPOSE(replacement, replacee)                                      \
     __attribute__((used)) static struct                                                       \
     {                                                                                         \
@@ -565,5 +766,9 @@ SELECTIVE_DYLD_INTERPOSE(
 SELECTIVE_DYLD_INTERPOSE(
     selective_SDL_GetWindowSizeInPixels,
     SDL_GetWindowSizeInPixels
+)
+SELECTIVE_DYLD_INTERPOSE(
+    selective_SDL_PeepEvents,
+    SDL_PeepEvents
 )
 #endif

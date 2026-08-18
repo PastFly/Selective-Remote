@@ -56,6 +56,107 @@ struct RunningRDPSession {
     let commandPipeURL: URL
 }
 
+struct AppScopedLocalDisplayPlacement: Equatable {
+    let displayID: String
+    let systemID: UInt32
+    let x: Int
+    let y: Int
+
+    var environmentEntry: String {
+        "\(systemID):\(x):\(y)"
+    }
+}
+
+/// SDL fullscreen mouse/window movement still follows the local macOS display
+/// coordinate space. When macOS recalls a different two-display arrangement
+/// after a middle monitor is unplugged, keep the helper's local display order
+/// aligned with the already-correct RDP virtual order.
+///
+/// The native interposer applies this with CoreGraphics `.forAppOnly`, so the
+/// user's permanent Displays configuration is never written.
+enum LocalDisplayArrangementMapper {
+    static func placements(
+        mappings: [SDLDisplayMapping],
+        monitorLayout: [SDLMonitorPlacement],
+        displays: [DisplayDescriptor]
+    ) -> [AppScopedLocalDisplayPlacement]? {
+        guard mappings.count > 1,
+              mappings.count == monitorLayout.count
+        else { return nil }
+
+        let displaysByID = Dictionary(
+            uniqueKeysWithValues: displays.map { ($0.id, $0) }
+        )
+        let targetBySDLID = Dictionary(
+            uniqueKeysWithValues: monitorLayout.map { ($0.monitorID, $0) }
+        )
+
+        let resolved = mappings.compactMap { mapping
+            -> (display: DisplayDescriptor,
+                monitor: SDLMonitor,
+                target: SDLMonitorPlacement)? in
+            guard let display = displaysByID[mapping.displayID],
+                  let target = targetBySDLID[mapping.monitor.id]
+            else { return nil }
+            return (display, mapping.monitor, target)
+        }
+        guard resolved.count == mappings.count else { return nil }
+
+        // Never alter clamshell/external-only sessions or make an external
+        // display the macOS main display. This hotfix is intentionally only for
+        // the reported MacBook-primary fullscreen topology.
+        guard resolved.contains(where: {
+            $0.display.isBuiltIn
+                && $0.display.isSystemMain
+                && $0.target.isPrimary
+        }) else { return nil }
+
+        let localOrder = resolved.sorted {
+            if $0.monitor.x != $1.monitor.x {
+                return $0.monitor.x < $1.monitor.x
+            }
+            return $0.monitor.y < $1.monitor.y
+        }.map(\.display.id)
+
+        let rdpOrder = resolved.sorted {
+            if $0.target.x != $1.target.x {
+                return $0.target.x < $1.target.x
+            }
+            return $0.target.y < $1.target.y
+        }.map(\.display.id)
+
+        guard localOrder != rdpOrder else { return nil }
+
+        return resolved.sorted {
+            if $0.target.x != $1.target.x {
+                return $0.target.x < $1.target.x
+            }
+            return $0.target.y < $1.target.y
+        }.map {
+            AppScopedLocalDisplayPlacement(
+                displayID: $0.display.id,
+                systemID: $0.display.systemID,
+                x: $0.target.x,
+                // Preserve the user's vertical alignment. Only the horizontal
+                // order is being repaired.
+                y: $0.monitor.y
+            )
+        }
+    }
+
+    static func environmentValue(
+        mappings: [SDLDisplayMapping],
+        monitorLayout: [SDLMonitorPlacement],
+        displays: [DisplayDescriptor]
+    ) -> String? {
+        placements(
+            mappings: mappings,
+            monitorLayout: monitorLayout,
+            displays: displays
+        )?.map(\.environmentEntry).joined(separator: ";")
+    }
+}
+
 final class FreeRDPService {
     private static let cameraAddinNames = [
         "librdpecam-client.dylib",
@@ -107,6 +208,17 @@ final class FreeRDPService {
         cachedMonitors = nil
     }
 
+    func requiresMonitorInterposer(
+        profile: ConnectionProfile,
+        monitorLayoutCount: Int
+    ) -> Bool {
+        let fullscreenLogicalBacking =
+            profile.rdpWindowMode == .fullScreen && profile.startFullScreen
+        return fullscreenLogicalBacking
+            || monitorLayoutCount > 1
+            || profile.rdpWindowMode == .dynamicWindow
+    }
+
     func listMonitors(forceRefresh: Bool = false) throws -> [SDLMonitor] {
         if !forceRefresh, let cachedMonitors {
             return cachedMonitors
@@ -153,6 +265,7 @@ final class FreeRDPService {
         let monitorLayout: [SDLMonitorPlacement]
         let monitorIDs: [Int]?
         var builtInSDLMonitorIDs: [Int] = []
+        var displayMappings: [SDLDisplayMapping] = []
 
         // With one physical display there is no mapping ambiguity, so avoid a
         // separate /list:monitor helper process. `monitorIDs == nil` means the
@@ -170,6 +283,7 @@ final class FreeRDPService {
         } else {
             let sdlMonitors = try listMonitors()
             let mappings = try matchDisplays(selected, to: sdlMonitors, allDisplays: displays)
+            displayMappings = mappings
             builtInSDLMonitorIDs = mappings.compactMap { mapping in
                 guard selected.first(where: { $0.id == mapping.displayID })?.isBuiltIn == true
                 else { return nil }
@@ -210,6 +324,8 @@ final class FreeRDPService {
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_USE_USABLE_BOUNDS")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS")
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_STALE_DISPLAY_EVENT_GUARD")
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_APP_LOCAL_DISPLAY_LAYOUT")
 
         // SDL-FreeRDP probes monitor geometry in logical macOS coordinates, but
         // real Retina windows normally use a 2x HIGH_PIXEL_DENSITY backing.
@@ -218,7 +334,10 @@ final class FreeRDPService {
         let fullscreenLogicalBacking =
             profile.rdpWindowMode == .fullScreen && profile.startFullScreen
 
-        if fullscreenLogicalBacking || monitorLayout.count > 1 {
+        if requiresMonitorInterposer(
+            profile: profile,
+            monitorLayoutCount: monitorLayout.count
+        ) {
             let interposer = try monitorInterposerURL()
             processEnvironment["DYLD_INSERT_LIBRARIES"] = prependPath(
                 interposer.path,
@@ -235,6 +354,18 @@ final class FreeRDPService {
         if monitorLayout.count > 1 {
             processEnvironment["SELECTIVE_RDP_MONITOR_LAYOUT"] =
                 SDLTopologyMapper.environmentValue(monitorLayout)
+        }
+        if fullscreenLogicalBacking && monitorLayout.count > 1 {
+            processEnvironment["SELECTIVE_RDP_STALE_DISPLAY_EVENT_GUARD"] = "1"
+        }
+        if fullscreenLogicalBacking,
+           let localDisplayLayout = LocalDisplayArrangementMapper.environmentValue(
+               mappings: displayMappings,
+               monitorLayout: monitorLayout,
+               displays: selected
+           ) {
+            processEnvironment["SELECTIVE_RDP_APP_LOCAL_DISPLAY_LAYOUT"] =
+                localDisplayLayout
         }
         let fnShortcutModule = try fnShortcutModuleURL()
         let commandPipeURL = URL(
@@ -283,6 +414,20 @@ final class FreeRDPService {
             launchMarkers += "[SelectiveRemote Host] Multi-monitor fullscreen: "
                 + "logical 1x SDL backing, probe logical bounds, "
                 + "wlroots fallback disabled\n"
+            launchMarkers += "[SelectiveRemote Host] Multi-monitor display changes: "
+                + "controlled reconnect; SDL live Display Control disabled\n"
+            launchMarkers += "[SelectiveRemote Host] RDP monitor topology: "
+                + SDLTopologyMapper.environmentValue(monitorLayout) + "\n"
+            launchMarkers += "[SelectiveRemote Host] SDL stale display-event guard: enabled\n"
+            if let localDisplayLayout =
+                processEnvironment["SELECTIVE_RDP_APP_LOCAL_DISPLAY_LAYOUT"] {
+                launchMarkers += "[SelectiveRemote Host] Local display order override: "
+                    + "app-scoped; \(localDisplayLayout)\n"
+            }
+        }
+        if profile.rdpWindowMode == .dynamicWindow {
+            launchMarkers += "[SelectiveRemote Host] Dynamic window: "
+                + "SDL monitor-probe guard enabled\n"
         }
         launchMarkers += rdpQualityLaunchMarker(profile: profile)
         launchMarkers += keyboardLaunchMarker(profile: profile)
@@ -366,7 +511,7 @@ final class FreeRDPService {
         } else {
             arguments.append("/size:\(max(640, profile.windowWidth))x\(max(480, profile.windowHeight))")
             if profile.rdpWindowMode == .dynamicWindow {
-                arguments.append("+dynamic-resolution")
+                arguments.append("/dynamic-resolution")
             }
         }
         if let monitorIDs {
@@ -407,7 +552,12 @@ final class FreeRDPService {
         if profile.redirectMicrophone { arguments.append("/microphone") }
         if profile.redirectCamera && canRedirectCamera { arguments.append("/dvc:rdpecam") }
         if profile.redirectPrinters { arguments.append("/printer") }
-        if profile.autoReconnect { arguments.append("+auto-reconnect") }
+        let appManagedMultiMonitorReconnect = profile.rdpWindowMode == .fullScreen
+            && profile.startFullScreen
+            && (monitorIDs?.count ?? 0) > 1
+        if profile.autoReconnect && !appManagedMultiMonitorReconnect {
+            arguments.append("+auto-reconnect")
+        }
         if profile.adminSession { arguments.append("/admin") }
 
         switch profile.certificatePolicy {

@@ -95,6 +95,294 @@ func placesRightPrimaryAtOrigin() {
     #expect(result[1].isPrimary)
 }
 
+@Test("Закрытие крышки определяется по исчезновению встроенного дисплея")
+func detectsImmediateBuiltInRemoval() {
+    let builtIn = display("built-in", x: 0, width: 2056, height: 1290)
+    let external = display("external", x: 2056, width: 1920, height: 1080)
+
+    #expect(
+        DisplaySnapshotStability.immediateBuiltInRemoval(
+            previous: [builtIn, external],
+            current: [external]
+        ) == [builtIn.id]
+    )
+    #expect(
+        DisplaySnapshotStability.immediateBuiltInRemoval(
+            previous: [builtIn, external],
+            current: [builtIn]
+        ).isEmpty
+    )
+}
+
+@Test("Отрицательная физическая координата SDL не переворачивает ручную RDP-схему")
+func preservesCustomRDPMonitorSideAcrossPhysicalReorder() {
+    let mappings = [
+        SDLDisplayMapping(
+            displayID: "built-in",
+            monitor: sdlMonitor(id: 1, x: 0, width: 2056)
+        ),
+        SDLDisplayMapping(
+            displayID: "third",
+            monitor: sdlMonitor(id: 3, x: -1920, width: 1920)
+        )
+    ]
+
+    let result = SDLTopologyMapper.arrange(
+        mappings: mappings,
+        primaryDisplayID: "built-in",
+        mode: .custom,
+        customOrigins: [
+            "built-in": VirtualDisplayPosition(x: 0, y: 0),
+            "third": VirtualDisplayPosition(x: 3976, y: 0)
+        ]
+    )
+
+    #expect(result == [
+        SDLMonitorPlacement(monitorID: 1, x: 0, y: 0, isPrimary: true),
+        SDLMonitorPlacement(monitorID: 3, x: 2056, y: 0, isPrimary: false)
+    ])
+}
+
+@Test("Smart Reconnect сохраняет исходный порядок автоматической RDP-схемы")
+func preservesAutomaticTopologyOrderDuringReconnect() {
+    var saved = ConnectionProfile()
+    saved.displayLayoutMode = .automatic
+    saved.selectedDisplayIDs = ["built-in", "hp1", "hp2"]
+    saved.primaryDisplayID = "built-in"
+
+    var runtime = saved
+    runtime.selectedDisplayIDs = ["built-in", "hp2"]
+
+    let resolved = RDPMonitorReconnectTopology.applyingStableAutomaticOrigins(
+        to: runtime,
+        savedProfile: saved,
+        stableOrigins: [
+            "built-in": VirtualDisplayPosition(x: 0, y: 0),
+            "hp1": VirtualDisplayPosition(x: 2056, y: 0),
+            "hp2": VirtualDisplayPosition(x: 3976, y: 0)
+        ]
+    )
+
+    #expect(resolved.displayLayoutMode == .custom)
+    #expect(resolved.virtualDisplayOrigins["built-in"] == VirtualDisplayPosition(x: 0, y: 0))
+    #expect(resolved.virtualDisplayOrigins["hp2"] == VirtualDisplayPosition(x: 3976, y: 0))
+    #expect(resolved.virtualDisplayOrigins["hp1"] == nil)
+    #expect(saved.displayLayoutMode == .automatic)
+}
+
+@Test("Удаление используемого внешнего дисплея получает быстрый debounce")
+func fastTracksActiveExternalRemoval() {
+    let previous: Set<String> = ["built-in", "hp1", "hp2"]
+    let afterRemoval: Set<String> = ["built-in", "hp2"]
+
+    #expect(
+        DisplaySnapshotStability.shouldFastTrackRemovalCandidate(
+            previous: previous,
+            first: afterRemoval,
+            activeSelectedIDs: previous
+        )
+    )
+    #expect(
+        !DisplaySnapshotStability.shouldFastTrackRemovalCandidate(
+            previous: previous,
+            first: afterRemoval,
+            activeSelectedIDs: ["built-in"]
+        )
+    )
+    #expect(
+        !DisplaySnapshotStability.shouldFastTrackRemovalCandidate(
+            previous: previous,
+            first: [],
+            activeSelectedIDs: previous
+        )
+    )
+}
+
+@Test("Локальный порядок Mac–HP2 выравнивается с RDP после удаления среднего монитора")
+func buildsAppScopedLocalDisplayOrderOverride() {
+    let builtIn = DisplayDescriptor(
+        id: "built-in",
+        systemID: 11,
+        name: "Built-in Retina Display",
+        frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+        pixelWidth: 4112,
+        pixelHeight: 2580,
+        refreshRate: 60,
+        isBuiltIn: true,
+        isSystemMain: true
+    )
+    let hp2 = DisplayDescriptor(
+        id: "hp2",
+        systemID: 22,
+        name: "HP2",
+        frame: CGRect(x: -1920, y: -111, width: 1920, height: 1080),
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        refreshRate: 60,
+        isBuiltIn: false,
+        isSystemMain: false
+    )
+
+    let mappings = [
+        SDLDisplayMapping(
+            displayID: builtIn.id,
+            monitor: SDLMonitor(
+                id: 1,
+                name: builtIn.name,
+                width: 2056,
+                height: 1290,
+                x: 0,
+                y: 0,
+                isSystemPrimary: true
+            )
+        ),
+        SDLDisplayMapping(
+            displayID: hp2.id,
+            monitor: SDLMonitor(
+                id: 2,
+                name: hp2.name,
+                width: 1920,
+                height: 1080,
+                x: -1920,
+                y: -111,
+                isSystemPrimary: false
+            )
+        )
+    ]
+    let rdp = [
+        SDLMonitorPlacement(monitorID: 1, x: 0, y: 0, isPrimary: true),
+        SDLMonitorPlacement(monitorID: 2, x: 2056, y: 0, isPrimary: false)
+    ]
+
+    #expect(
+        LocalDisplayArrangementMapper.environmentValue(
+            mappings: mappings,
+            monitorLayout: rdp,
+            displays: [builtIn, hp2]
+        ) == "11:0:0;22:2056:-111"
+    )
+}
+
+@Test("Совпадающий локальный и RDP-порядок не меняет конфигурацию macOS")
+func skipsAppScopedDisplayOrderWhenAlreadyAligned() {
+    let builtIn = DisplayDescriptor(
+        id: "built-in",
+        systemID: 11,
+        name: "Built-in Retina Display",
+        frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+        pixelWidth: 4112,
+        pixelHeight: 2580,
+        refreshRate: 60,
+        isBuiltIn: true,
+        isSystemMain: true
+    )
+    let hp2 = DisplayDescriptor(
+        id: "hp2",
+        systemID: 22,
+        name: "HP2",
+        frame: CGRect(x: 2056, y: -111, width: 1920, height: 1080),
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        refreshRate: 60,
+        isBuiltIn: false,
+        isSystemMain: false
+    )
+
+    let mappings = [
+        SDLDisplayMapping(
+            displayID: builtIn.id,
+            monitor: SDLMonitor(
+                id: 1,
+                name: builtIn.name,
+                width: 2056,
+                height: 1290,
+                x: 0,
+                y: 0,
+                isSystemPrimary: true
+            )
+        ),
+        SDLDisplayMapping(
+            displayID: hp2.id,
+            monitor: SDLMonitor(
+                id: 2,
+                name: hp2.name,
+                width: 1920,
+                height: 1080,
+                x: 2056,
+                y: -111,
+                isSystemPrimary: false
+            )
+        )
+    ]
+    let rdp = [
+        SDLMonitorPlacement(monitorID: 1, x: 0, y: 0, isPrimary: true),
+        SDLMonitorPlacement(monitorID: 2, x: 2056, y: 0, isPrimary: false)
+    ]
+
+    #expect(
+        LocalDisplayArrangementMapper.environmentValue(
+            mappings: mappings,
+            monitorLayout: rdp,
+            displays: [builtIn, hp2]
+        ) == nil
+    )
+}
+
+@Test("Clamshell без встроенного дисплея не меняет локальную Quartz-схему")
+func skipsAppScopedDisplayOrderForExternalOnlySession() {
+    let hp1 = DisplayDescriptor(
+        id: "hp1",
+        systemID: 21,
+        name: "HP1",
+        frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        refreshRate: 60,
+        isBuiltIn: false,
+        isSystemMain: true
+    )
+    let hp2 = DisplayDescriptor(
+        id: "hp2",
+        systemID: 22,
+        name: "HP2",
+        frame: CGRect(x: 1920, y: 0, width: 1920, height: 1080),
+        pixelWidth: 1920,
+        pixelHeight: 1080,
+        refreshRate: 60,
+        isBuiltIn: false,
+        isSystemMain: false
+    )
+
+    let mappings = [
+        SDLDisplayMapping(
+            displayID: hp1.id,
+            monitor: SDLMonitor(
+                id: 1, name: hp1.name, width: 1920, height: 1080,
+                x: 0, y: 0, isSystemPrimary: true
+            )
+        ),
+        SDLDisplayMapping(
+            displayID: hp2.id,
+            monitor: SDLMonitor(
+                id: 2, name: hp2.name, width: 1920, height: 1080,
+                x: 1920, y: 0, isSystemPrimary: false
+            )
+        )
+    ]
+    let rdp = [
+        SDLMonitorPlacement(monitorID: 2, x: 0, y: 0, isPrimary: true),
+        SDLMonitorPlacement(monitorID: 1, x: 1920, y: 0, isPrimary: false)
+    ]
+
+    #expect(
+        LocalDisplayArrangementMapper.environmentValue(
+            mappings: mappings,
+            monitorLayout: rdp,
+            displays: [hp1, hp2]
+        ) == nil
+    )
+}
+
 @Test("Парсер читает реальные координаты SDL-FreeRDP на macOS")
 func parsesSDLMonitorList() {
     let monitors = FreeRDPService().parseMonitorList(realSDLMonitorOutput)
@@ -221,6 +509,8 @@ func buildsTrueMultiMonitorFullscreenArguments() throws {
     #expect(arguments.contains("/f"))
     #expect(arguments.contains("/multimon"))
     #expect(arguments.contains("/monitors:2,4"))
+    #expect(!arguments.contains("/dynamic-resolution"))
+    #expect(!arguments.contains("+auto-reconnect"))
 }
 
 @Test("Оконный режим одного монитора не включает multimon")
@@ -317,10 +607,16 @@ func buildsDynamicWindowArguments() throws {
     profile.windowWidth = 1600
     profile.windowHeight = 1000
 
-    let arguments = try FreeRDPService().connectionArguments(profile: profile, monitorIDs: nil)
+    let service = FreeRDPService()
+    let arguments = try service.connectionArguments(profile: profile, monitorIDs: nil)
     #expect(arguments.contains("/size:1600x1000"))
-    #expect(arguments.contains("+dynamic-resolution"))
+    #expect(arguments.contains("/dynamic-resolution"))
+    #expect(!arguments.contains("+dynamic-resolution"))
     #expect(!arguments.contains("/f"))
+    #expect(service.requiresMonitorInterposer(profile: profile, monitorLayoutCount: 0))
+
+    profile.rdpWindowMode = .fixedWindow
+    #expect(!service.requiresMonitorInterposer(profile: profile, monitorLayoutCount: 0))
 }
 
 @Test("Fn подключает модуль очереди SDL без изменения модулей FreeRDP")

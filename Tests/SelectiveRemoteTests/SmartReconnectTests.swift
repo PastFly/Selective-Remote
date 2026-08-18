@@ -55,6 +55,43 @@ func smartReconnectClassifiesRDPTransportFailures() {
     )
 }
 
+@Test("RDP DNS-ошибка получает понятное сообщение и сохраняет технический код")
+func rdpDNSFailurePresentation() {
+    let failure = RDPFailureClassifier.presentation(
+        status: 1,
+        log: "ERRCONNECT_DNS_NAME_NOT_FOUND [0x00020005]"
+    )
+
+    #expect(failure.kind == .dns)
+    #expect(!failure.retryable)
+    #expect(failure.technicalCode == "ERRCONNECT_DNS_NAME_NOT_FOUND")
+    #expect(failure.message.contains("Проверьте hostname, DNS и подключение к VPN"))
+    #expect(failure.message.contains("ERRCONNECT_DNS_NAME_NOT_FOUND"))
+}
+
+@Test("RDP transport failure остаётся retryable, а authentication failure — нет")
+func rdpFailureClassifierPreservesReconnectPolicy() {
+    #expect(
+        RDPFailureClassifier.presentation(
+            status: 1,
+            log: "ERRCONNECT_CONNECT_TRANSPORT_FAILED"
+        ).retryable
+    )
+    #expect(
+        !RDPFailureClassifier.presentation(
+            status: 1,
+            log: "ERRCONNECT_LOGON_FAILURE Logon failed"
+        ).retryable
+    )
+}
+
+@Test("Только смена monitor topology запускает controlled Smart Reconnect")
+func rdpControlledInterruptionPolicy() {
+    #expect(RDPSessionInterruption.monitorTopologyChanged.shouldAttemptSmartReconnect)
+    #expect(!RDPSessionInterruption.userRequested.shouldAttemptSmartReconnect)
+    #expect(!RDPSessionInterruption.sleep.shouldAttemptSmartReconnect)
+}
+
 @Test("Smart Reconnect progress показывает номер попытки и countdown")
 func smartReconnectProgressFormatsRuntimeState() {
     let now = Date(timeIntervalSince1970: 2_000)
@@ -90,6 +127,10 @@ func smartReconnectIntegrationContract() throws {
         contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ForwardingManager.swift"),
         encoding: .utf8
     )
+    let contentView = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
 
     #expect(appModel.contains("scheduleTerminalSmartReconnect"))
     #expect(appModel.contains("scheduleSSHTunnelSmartReconnect"))
@@ -98,8 +139,18 @@ func smartReconnectIntegrationContract() throws {
     #expect(appModel.contains("workspaceDidWake"))
     #expect(appModel.contains("sshProfileRequiresUserPresenceForReconnect"))
     #expect(appModel.contains("sshTunnelReconnectSummaries"))
+    #expect(appModel.contains("interruption: .monitorTopologyChanged"))
+    #expect(appModel.contains("interruption.shouldAttemptSmartReconnect"))
+    if let removed = appModel.range(of: "managedSessions.removeValue(forKey: profileID)"),
+       let reconnect = appModel.range(of: "if interruption.shouldAttemptSmartReconnect") {
+        #expect(removed.lowerBound < reconnect.lowerBound)
+    } else {
+        Issue.record("Controlled RDP reconnect must start only after the old process is removed")
+    }
     #expect(pty.contains("lastTerminationWasRequested"))
     #expect(terminal.contains("Smart Reconnect"))
     #expect(forwarding.contains("Smart Reconnect"))
+    #expect(!contentView.contains("Button(\"Забыть недоступные\")"))
+    #expect(!contentView.contains("Недоступные мониторы временно пропущены"))
     #expect(!appModel.contains("SmartReconnectSessionManager"))
 }

@@ -2770,21 +2770,6 @@ struct ContentView: View {
                 .padding(8)
             }
 
-            if model.unavailableSelectedDisplayCount > 0 {
-                HStack {
-                    Label(
-                        "Недоступные мониторы временно пропущены: \(model.unavailableSelectedDisplayCount)",
-                        systemImage: "display.trianglebadge.exclamationmark"
-                    )
-                    .foregroundStyle(.orange)
-                    Spacer()
-                    Button("Забыть недоступные") {
-                        model.forgetUnavailableDisplays()
-                    }
-                    .help("Используйте, если мониторы заменены, а не временно отключены")
-                }
-            }
-
             GroupBox("Виртуальная схема для Windows") {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {

@@ -49,6 +49,37 @@ enum DisplaySnapshotStability {
         guard !second.isEmpty, first == second else { return [] }
         return previous.subtracting(second)
     }
+
+    /// Closing a MacBook lid can invalidate the built-in SDL display before
+    /// the normal 2s + 6s AppKit stability sampling finishes. Only this
+    /// clamshell-shaped transition is eligible for an immediate handoff.
+    static func immediateBuiltInRemoval(
+        previous: [DisplayDescriptor],
+        current: [DisplayDescriptor]
+    ) -> Set<String> {
+        guard !current.isEmpty else { return [] }
+        let currentIDs = Set(current.map(\.id))
+        let removed = Set(previous.map(\.id)).subtracting(currentIDs)
+        guard previous.contains(where: {
+            $0.isBuiltIn && removed.contains($0.id)
+        }) else { return [] }
+        return removed
+    }
+
+    /// External display removal can use a short confirmation window once an
+    /// already-connected RDP session actually uses one of the missing IDs.
+    /// Additions, rearrangements and empty snapshots remain on the conservative
+    /// debounce path.
+    static func shouldFastTrackRemovalCandidate(
+        previous: Set<String>,
+        first: Set<String>,
+        activeSelectedIDs: Set<String>
+    ) -> Bool {
+        guard !first.isEmpty else { return false }
+        let removed = previous.subtracting(first)
+        guard !removed.isEmpty else { return false }
+        return !activeSelectedIDs.isDisjoint(with: removed)
+    }
 }
 
 struct VirtualDisplayPosition: Codable, Equatable, Hashable {
@@ -1046,6 +1077,35 @@ enum DisplaySelectionResolver {
             resolved.displayLayoutMode = .automatic
             resolved.virtualDisplayOrigins = [:]
         }
+        return resolved
+    }
+}
+
+/// During an app-managed reconnect, preserve the virtual order that existed
+/// before macOS renumbered/repositioned physical displays. The saved profile
+/// remains automatic; only the temporary runtime profile becomes custom.
+enum RDPMonitorReconnectTopology {
+    static func applyingStableAutomaticOrigins(
+        to runtimeProfile: ConnectionProfile,
+        savedProfile: ConnectionProfile,
+        stableOrigins: [String: VirtualDisplayPosition]?
+    ) -> ConnectionProfile {
+        guard savedProfile.displayLayoutMode == .automatic,
+              runtimeProfile.selectedDisplayIDs.count > 1,
+              let stableOrigins,
+              !stableOrigins.isEmpty
+        else { return runtimeProfile }
+
+        let filtered = stableOrigins.filter {
+            runtimeProfile.selectedDisplayIDs.contains($0.key)
+        }
+        guard filtered.count == runtimeProfile.selectedDisplayIDs.count else {
+            return runtimeProfile
+        }
+
+        var resolved = runtimeProfile
+        resolved.displayLayoutMode = .custom
+        resolved.virtualDisplayOrigins = filtered
         return resolved
     }
 }

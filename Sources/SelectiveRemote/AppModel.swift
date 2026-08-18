@@ -200,6 +200,16 @@ enum RDPSessionPhase: String, Equatable {
     case disconnecting = "Отключается"
 }
 
+enum RDPSessionInterruption: Equatable {
+    case userRequested
+    case monitorTopologyChanged
+    case sleep
+
+    var shouldAttemptSmartReconnect: Bool {
+        self == .monitorTopologyChanged
+    }
+}
+
 struct RDPSessionSummary: Identifiable, Equatable {
     let id: UUID
     let profileName: String
@@ -232,6 +242,7 @@ private final class ManagedRDPSession {
     var phase = RDPSessionPhase.starting
     var disconnectRequested = false
     var interruptionReason: String?
+    var interruption = RDPSessionInterruption.userRequested
     var desktopReadyDetected = false
     var startupWarningShown = false
     var privacyReadyAt: Date?
@@ -399,6 +410,11 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalReconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var sshTunnelReconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var rdpReconnectTasks: [UUID: Task<Void, Never>] = [:]
+    /// Baseline virtual coordinates captured while the complete automatic
+    /// monitor set is available. Kept in memory only; the user's saved profile
+    /// remains in automatic mode.
+    private var rdpStableAutomaticTopologyOrigins:
+        [UUID: [String: VirtualDisplayPosition]] = [:]
     private var sshTunnelReconnectAttempts: [UUID: Int] = [:]
     private var sftpObservers: [AnyCancellable] = []
     private var sessionTimer: Timer?
@@ -1804,6 +1820,7 @@ final class AppModel: NSObject, ObservableObject {
         setPasswordStored(false, profileID: id, kind: .gateway)
         setPasswordStored(false, profileID: id, kind: .ssh)
         reconnectCandidateProfileIDs.remove(id)
+        rdpStableAutomaticTopologyOrigins.removeValue(forKey: id)
         sshTerminalSessions.removeValue(forKey: id)
         sshTerminalObservers.removeValue(forKey: id)
         terminalWorkspaces.removeValue(forKey: id)
@@ -3983,7 +4000,7 @@ final class AppModel: NSObject, ObservableObject {
 
         let availableIDs = Set(displays.map(\.id))
         let missingCount = profile.selectedDisplayIDs.subtracting(availableIDs).count
-        guard let runtimeProfile = DisplaySelectionResolver.runtimeProfile(
+        guard var runtimeProfile = DisplaySelectionResolver.runtimeProfile(
             from: profile,
             displays: displays
         ) else {
@@ -3997,6 +4014,15 @@ final class AppModel: NSObject, ObservableObject {
             }
             return
         }
+
+        if smartReconnectAttempt != nil {
+            runtimeProfile = RDPMonitorReconnectTopology.applyingStableAutomaticOrigins(
+                to: runtimeProfile,
+                savedProfile: profile,
+                stableOrigins: rdpStableAutomaticTopologyOrigins[profileID]
+            )
+        }
+
         let currentPlacements = VirtualTopologyMapper.layout(
             displays: displays,
             selectedIDs: runtimeProfile.selectedDisplayIDs,
@@ -4013,6 +4039,15 @@ final class AppModel: NSObject, ObservableObject {
         else {
             if !automatic { errorMessage = SelectiveRemoteAppError.overlappingDisplays.localizedDescription }
             return
+        }
+
+        // A normal/manual start with the complete automatic display set defines
+        // the baseline order for subsequent monitor hot-plug reconnects.
+        if smartReconnectAttempt == nil,
+           profile.displayLayoutMode == .automatic,
+           runtimeProfile.selectedDisplayIDs == profile.selectedDisplayIDs {
+            rdpStableAutomaticTopologyOrigins[profileID] =
+                VirtualTopologyMapper.origins(from: currentPlacements)
         }
 
         do {
@@ -4108,10 +4143,15 @@ final class AppModel: NSObject, ObservableObject {
         return ""
     }
 
-    private func requestDisconnect(profileID: UUID, interruptionReason: String?) {
+    private func requestDisconnect(
+        profileID: UUID,
+        interruptionReason: String?,
+        interruption: RDPSessionInterruption = .userRequested
+    ) {
         guard let runtime = managedSessions[profileID] else { return }
         runtime.disconnectRequested = true
         runtime.interruptionReason = interruptionReason
+        runtime.interruption = interruption
         runtime.phase = .disconnecting
         sessions[profileID] = runtime.summary
         if let interruptionReason {
@@ -4468,12 +4508,37 @@ final class AppModel: NSObject, ObservableObject {
             disconnectRequested: runtime.disconnectRequested
         )
         let previousReconnectAttempt = runtime.smartReconnectAttempt
+        let interruption = runtime.interruption
         lastSessionLogURLs[profileID] = runtime.connection.logURL
         managedSessions.removeValue(forKey: profileID)
         sessions.removeValue(forKey: profileID)
         if managedSessions.isEmpty {
             sessionTimer?.invalidate()
             sessionTimer = nil
+        }
+
+        if interruption.shouldAttemptSmartReconnect {
+            reconnectCandidateProfileIDs.insert(profileID)
+            if let profile = profiles.first(where: { $0.id == profileID }),
+               profile.autoReconnect,
+               passwordStoredProfileIDs.contains(profileID.uuidString) {
+                scheduleRDPSmartReconnect(
+                    profileID: profileID,
+                    attempt: (previousReconnectAttempt ?? 0) + 1,
+                    reason: "Конфигурация мониторов изменилась",
+                    fastTopologyRecovery: true
+                )
+                if selectedProfileID == profileID {
+                    errorMessage = nil
+                }
+                return
+            }
+            cancelRDPSmartReconnect(profileID)
+            if selectedProfileID == profileID {
+                statusMessage = "Монитор отключён — подключитесь повторно, чтобы использовать доступные дисплеи"
+                errorMessage = nil
+            }
+            return
         }
 
         if !endedNormally,
@@ -4508,7 +4573,8 @@ final class AppModel: NSObject, ObservableObject {
     private func scheduleRDPSmartReconnect(
         profileID: UUID,
         attempt: Int,
-        reason: String
+        reason: String,
+        fastTopologyRecovery: Bool = false
     ) {
         guard attempt <= SmartReconnectPolicy.maximumAttempts else {
             cancelRDPSmartReconnect(profileID)
@@ -4529,18 +4595,25 @@ final class AppModel: NSObject, ObservableObject {
             return
         }
 
+        let reconnectDelay: Duration = fastTopologyRecovery
+            ? .milliseconds(500)
+            : SmartReconnectPolicy.delay(for: attempt)
+        let reconnectDate = fastTopologyRecovery
+            ? Date().addingTimeInterval(0.5)
+            : SmartReconnectPolicy.nextAttemptDate(for: attempt)
+
         rdpReconnectTasks[profileID]?.cancel()
         rdpReconnectProgress[profileID] = SmartReconnectProgress(
             attempt: attempt,
             maximumAttempts: SmartReconnectPolicy.maximumAttempts,
-            nextAttemptAt: SmartReconnectPolicy.nextAttemptDate(for: attempt),
+            nextAttemptAt: reconnectDate,
             reason: reason
         )
         statusMessage = "RDP: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
 
         rdpReconnectTasks[profileID] = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(for: SmartReconnectPolicy.delay(for: attempt))
+                try await Task.sleep(for: reconnectDelay)
             } catch {
                 return
             }
@@ -4584,20 +4657,10 @@ final class AppModel: NSObject, ObservableObject {
                 break
             }
         }
-        if log.contains("ERRCONNECT_LOGON_FAILURE") || log.contains("Logon failed") {
-            return "Сервер отклонил имя пользователя или RDP-пароль. Проверьте домен, логин и пароль."
-        }
-        if log.contains("ERRCONNECT_CONNECT_CANCELLED") {
-            return "FreeRDP отменил подключение. Если вы не закрывали окно RDP, повторите запуск. "
-                + "При повторении проверьте сеть, сертификат и последние строки журнала."
-        }
-        if log.contains("ERRCONNECT_CONNECT_TRANSPORT_FAILED") {
-            return "Не удалось установить сетевое соединение. Проверьте hostname, VPN и порт 3389."
-        }
         if status == SIGTERM || status == SIGKILL {
             return "RDP-процесс был остановлен без штатной команды \(AppBrand.name). Откройте журнал — причина внутреннего отключения помечается совместимой строкой «SelectiveRemote Host»."
         }
-        return "FreeRDP завершился с кодом \(status). Откройте журнал для диагностики."
+        return RDPFailureClassifier.presentation(status: status, log: log).message
     }
 
     private func saveCredential(
@@ -4839,22 +4902,67 @@ final class AppModel: NSObject, ObservableObject {
         let firstIDs = Set(firstSnapshot.map(\.id))
         let currentIDs = Set(secondSnapshot.map(\.id))
         displays = secondSnapshot
+
+        // Fullscreen transitions can generate transient AppKit screen changes.
+        // Do nothing until two separated snapshots agree on the same non-empty
+        // physical topology.
+        guard !currentIDs.isEmpty, firstIDs == currentIDs else {
+            statusMessage = "Конфигурация дисплеев меняется — ожидаем стабилизацию"
+            return
+        }
+
         let removed = DisplaySnapshotStability.confirmedRemoved(
             previous: previousIDs,
             first: firstIDs,
             second: currentIDs
         )
-        guard !removed.isEmpty else {
+        let added = currentIDs.subtracting(previousIDs)
+        guard !removed.isEmpty || !added.isEmpty else {
             statusMessage = "Конфигурация дисплеев обновлена: \(displays.count)"
             return
         }
 
+        var restarting: Set<UUID> = []
+
+        // Removing a display that belongs to a running RDP session is always
+        // handled by the app-level controlled reconnect. This covers cable
+        // unplug and MacBook clamshell mode without letting SDL keep stale
+        // display/window IDs alive.
         for (profileID, runtime) in managedSessions
-        where !runtime.selectedDisplayIDs.isDisjoint(with: removed) {
+        where !runtime.disconnectRequested
+            && !runtime.selectedDisplayIDs.isDisjoint(with: removed) {
+            restarting.insert(profileID)
             requestDisconnect(
                 profileID: profileID,
-                interruptionReason: "Монитор отключён — сессия «\(runtime.profileName)» безопасно завершена"
+                interruptionReason: "Конфигурация мониторов изменилась — перестраиваем RDP на доступных дисплеях",
+                interruption: .monitorTopologyChanged
             )
+        }
+
+        // A returned monitor may have been filtered from the runtime profile
+        // while it was physically absent. Consult the saved profile so opening
+        // the MacBook lid or reconnecting a selected monitor restores it and its
+        // primary/virtual-layout settings.
+        if !added.isEmpty {
+            for (profileID, runtime) in managedSessions
+            where runtime.phase == .connected
+                && !runtime.disconnectRequested
+                && !restarting.contains(profileID) {
+                guard let savedProfile = profiles.first(where: { $0.id == profileID }),
+                      !savedProfile.selectedDisplayIDs.isDisjoint(with: added)
+                else { continue }
+
+                restarting.insert(profileID)
+                requestDisconnect(
+                    profileID: profileID,
+                    interruptionReason: "Выбранный монитор подключён — восстанавливаем RDP-схему",
+                    interruption: .monitorTopologyChanged
+                )
+            }
+        }
+
+        if restarting.isEmpty {
+            statusMessage = "Конфигурация дисплеев обновлена: \(displays.count)"
         }
     }
 
@@ -4905,17 +5013,77 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     @objc private func screenParametersChanged() {
-        let previousIDs = Set(displays.map(\.id))
+        let previousDisplays = displays
+        let previousIDs = Set(previousDisplays.map(\.id))
+
+        let immediateSnapshot = displayManager.currentDisplays()
+        let immediateRemoved = DisplaySnapshotStability.immediateBuiltInRemoval(
+            previous: previousDisplays,
+            current: immediateSnapshot
+        )
+        if !immediateRemoved.isEmpty {
+            freeRDP.invalidateMonitorCache()
+            displays = immediateSnapshot
+
+            for (profileID, runtime) in managedSessions
+            where !runtime.disconnectRequested
+                && !runtime.selectedDisplayIDs.isDisjoint(with: immediateRemoved) {
+                requestDisconnect(
+                    profileID: profileID,
+                    interruptionReason: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи",
+                    interruption: .monitorTopologyChanged
+                )
+            }
+
+            statusMessage = "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи"
+            errorMessage = nil
+            displayRefreshTask?.cancel()
+            return
+        }
+
         displayRefreshTask?.cancel()
         displayRefreshTask = Task { @MainActor [weak self] in
             guard let self else { return }
-            // SDL fullscreen startup produces transient screen notifications on
-            // macOS. Sample once after the transition begins, then confirm the
-            // same topology six seconds later before stopping any RDP session.
-            try? await Task.sleep(for: .seconds(2))
+
+            // A real cable unplug leaves the same smaller display-ID set for
+            // consecutive samples. Confirm that quickly only when a connected
+            // RDP session actually uses the missing monitor.
+            try? await Task.sleep(for: .milliseconds(350))
+            guard !Task.isCancelled else { return }
+            let quickFirst = displayManager.currentDisplays()
+            let quickFirstIDs = Set(quickFirst.map(\.id))
+            let activeSelectedIDs = managedSessions.values.reduce(into: Set<String>()) {
+                result, runtime in
+                guard runtime.phase == .connected, !runtime.disconnectRequested else {
+                    return
+                }
+                result.formUnion(runtime.selectedDisplayIDs)
+            }
+            if DisplaySnapshotStability.shouldFastTrackRemovalCandidate(
+                previous: previousIDs,
+                first: quickFirstIDs,
+                activeSelectedIDs: activeSelectedIDs
+            ) {
+                try? await Task.sleep(for: .milliseconds(900))
+                guard !Task.isCancelled else { return }
+                let quickSecond = displayManager.currentDisplays()
+                if Set(quickSecond.map(\.id)) == quickFirstIDs {
+                    handleConfirmedDisplayChange(
+                        previousIDs: previousIDs,
+                        firstSnapshot: quickFirst,
+                        secondSnapshot: quickSecond
+                    )
+                    return
+                }
+            }
+
+            // Additions/rearrangements and unstable transitions keep a slower
+            // fallback so fullscreen Space changes cannot trigger a false RDP
+            // restart.
+            try? await Task.sleep(for: .seconds(1))
             guard !Task.isCancelled else { return }
             let first = displayManager.currentDisplays()
-            try? await Task.sleep(for: .seconds(6))
+            try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             let second = displayManager.currentDisplays()
             handleConfirmedDisplayChange(
@@ -4961,7 +5129,8 @@ final class AppModel: NSObject, ObservableObject {
             guard let runtime = managedSessions[profileID] else { continue }
             requestDisconnect(
                 profileID: profileID,
-                interruptionReason: "Mac переходит в сон — сессия «\(runtime.profileName)» приостановлена"
+                interruptionReason: "Mac переходит в сон — сессия «\(runtime.profileName)» приостановлена",
+                interruption: .sleep
             )
         }
     }

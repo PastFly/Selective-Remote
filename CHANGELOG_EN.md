@@ -1,3 +1,14 @@
+## 0.22.1
+
+- Fixed fullscreen multi-monitor RDP recovery when physical displays are connected or disconnected: Selective Remote now performs a controlled reconnect with the currently available selected monitors instead of leaving stale, stuck, or jumping windows.
+- Preserved the primary display and virtual monitor order across hot-plug changes: a `Mac – HP1 – HP2` layout now remains `Mac – HP2` after the middle monitor is disconnected even when macOS reassigns local display coordinates.
+- Added a temporary application-scoped CoreGraphics alignment for conflicting local display layouts; the user's persistent macOS Displays configuration is not changed.
+- Fixed the MacBook clamshell scenario so RDP rebuilds on the remaining external displays without the previous `SDL:Invalid display` failure.
+- Reduced the delay before RDP recovery after an external monitor is disconnected, and restored the full saved monitor layout automatically when a selected display returns.
+- Fixed Dynamic Window mode: SDL monitor probes no longer cancel startup and dynamic resolution follows window resizing.
+- Improved handling of expected RDP termination during monitor reconfiguration and connection error reporting; a user-requested disconnect does not trigger Smart Reconnect.
+- Added regression coverage for monitor hot-plug, clamshell, monitor ordering, Dynamic Window, and Smart Reconnect.
+
 ## 0.22.0
 
 - Added a new global SFTP Workspace with two independent panes; each pane can show this Mac or a separate SSH/SFTP server.
