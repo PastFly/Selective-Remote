@@ -34,6 +34,65 @@ func sftpProgressPollingPolicyIsAdaptive() {
     )
 }
 
+@Test("Different SFTP ControlPaths do not block each other")
+func sftpControlPathGateAllowsIndependentConnections() {
+    let gate = SFTPControlPathGate()
+    let firstEntered = DispatchSemaphore(value: 0)
+    let releaseFirst = DispatchSemaphore(value: 0)
+    let firstFinished = DispatchSemaphore(value: 0)
+    let secondEntered = DispatchSemaphore(value: 0)
+
+    DispatchQueue.global(qos: .userInitiated).async {
+        gate.withLock("server-a") {
+            firstEntered.signal()
+            releaseFirst.wait()
+        }
+        firstFinished.signal()
+    }
+
+    #expect(firstEntered.wait(timeout: .now() + 1) == .success)
+
+    DispatchQueue.global(qos: .userInitiated).async {
+        gate.withLock("server-b") {
+            secondEntered.signal()
+        }
+    }
+
+    #expect(secondEntered.wait(timeout: .now() + 0.5) == .success)
+    releaseFirst.signal()
+    #expect(firstFinished.wait(timeout: .now() + 1) == .success)
+}
+
+@Test("The same SFTP ControlPath remains serialized")
+func sftpControlPathGateSerializesOneConnection() {
+    let gate = SFTPControlPathGate()
+    let firstEntered = DispatchSemaphore(value: 0)
+    let releaseFirst = DispatchSemaphore(value: 0)
+    let firstFinished = DispatchSemaphore(value: 0)
+    let secondEntered = DispatchSemaphore(value: 0)
+
+    DispatchQueue.global(qos: .userInitiated).async {
+        gate.withLock("shared-server") {
+            firstEntered.signal()
+            releaseFirst.wait()
+        }
+        firstFinished.signal()
+    }
+
+    #expect(firstEntered.wait(timeout: .now() + 1) == .success)
+
+    DispatchQueue.global(qos: .userInitiated).async {
+        gate.withLock("shared-server") {
+            secondEntered.signal()
+        }
+    }
+
+    #expect(secondEntered.wait(timeout: .now() + 0.15) == .timedOut)
+    releaseFirst.signal()
+    #expect(firstFinished.wait(timeout: .now() + 1) == .success)
+    #expect(secondEntered.wait(timeout: .now() + 1) == .success)
+}
+
 @Test("SFTP process cancellation terminates the attached subprocess")
 func sftpProcessCancellationTerminatesAttachedProcess() async throws {
     let process = Process()
