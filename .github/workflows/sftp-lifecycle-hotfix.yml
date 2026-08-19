@@ -35,7 +35,6 @@ jobs:
               for line in workflow[start:end]
           ) + "\n"
 
-          # Replace the stale MenuBar cleanup section with a marker-based version.
           menu_replacement = r'''# MenuBarExtra: keep controls, now over all real Workspace transfer queues.
           path = Path("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
           text = path.read_text()
@@ -95,8 +94,6 @@ jobs:
           if menu_count != 1:
               raise SystemExit(f"cleanup MenuBar section replacement: expected 1 match, found {menu_count}")
 
-          # A generic `case profile(UUID)` legitimately remains for Terminal scope.
-          # Validate only the legacy SFTP namespace instead of banning that token globally.
           old_test = '#expect(!center.contains("case profile(UUID)"))'
           new_test = '#expect(!center.contains("sftp:profile:"))'
           if body.count(old_test) != 1:
@@ -109,9 +106,6 @@ jobs:
               raise SystemExit("legacy SFTP scope invariant marker not found")
           body = body.replace(old_invariant, new_invariant, 1)
 
-          # Diagnostics derives most SFTP SSH metadata from ConnectionCenterItem detail rows.
-          # A pane-only source no longer encodes a profile UUID, so the old profile-scope
-          # fallback must disappear instead of reintroducing legacy source semantics.
           diagnostics_cleanup = r'''# Diagnostics Center: pane-only SFTP source has no legacy profile scope.
           path = Path("Sources/SelectiveRemote/DiagnosticsCenter.swift")
           text = path.read_text()
@@ -140,8 +134,8 @@ jobs:
               "#!/bin/bash\n"
               "set -euo pipefail\n"
               "python3 /tmp/final_cleanup.py\n"
-              "rm -f .github/workflows/pre-release-cleanup-v2.yml .sftp-cleanup-trigger\n"
-              "git add -A\n"
+              "git restore --source=HEAD --staged --worktree .github/workflows/release.yml .github/workflows/sftp-lifecycle-hotfix.yml .github/workflows/sftp-lifecycle-pr-runner.yml .github/workflows/pre-release-cleanup-v2.yml .sftp-cleanup-trigger\n"
+              "git add -A Sources Tests\n"
               "git diff --cached --check\n"
               "swift test\n"
               "swift build -c release\n"
