@@ -151,8 +151,38 @@ final class SFTPWorkspaceModel: ObservableObject {
     }
 
     var activeRemoteCount: Int {
-        tabs.reduce(0) { $0 + $1.remoteConnectionCount }
+    tabs.reduce(0) { $0 + $1.remoteConnectionCount }
+}
+
+    var transferQueues: [SFTPTransferQueue] {
+    tabs.flatMap { [$0.left.session.transfers, $0.right.session.transfers] }
+}
+
+    var activeTransferCount: Int {
+    transferQueues.reduce(0) { $0 + $1.activeCount }
+}
+
+    var hasTransferItems: Bool {
+    transferQueues.contains { !$0.items.isEmpty }
+}
+
+    var hasPausedTransfers: Bool {
+    transferQueues.contains { queue in
+        queue.items.contains { $0.phase == .paused }
     }
+}
+
+    func pauseAllTransfers() {
+    transferQueues.forEach { $0.pauseAll() }
+}
+
+    func resumeAllTransfers() {
+    transferQueues.forEach { $0.resumeAll() }
+}
+
+    func cancelAllTransfers() {
+    transferQueues.forEach { $0.cancelAll() }
+}
 
     @discardableResult
     func addTab(select: Bool = true) -> SFTPWorkspaceTab? {

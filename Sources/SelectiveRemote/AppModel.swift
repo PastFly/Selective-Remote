@@ -287,8 +287,6 @@ private final class ManagedRDPSession {
 
 @MainActor
 final class AppModel: NSObject, ObservableObject {
-    let sftpSession = SFTPBrowserSession()
-    let globalSFTPSession = SFTPBrowserSession()
     let sftpWorkspace = SFTPWorkspaceModel()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
@@ -417,7 +415,6 @@ final class AppModel: NSObject, ObservableObject {
     private var rdpStableAutomaticTopologyOrigins:
         [UUID: [String: VirtualDisplayPosition]] = [:]
     private var sshTunnelReconnectAttempts: [UUID: Int] = [:]
-    private var sftpObservers: [AnyCancellable] = []
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
@@ -505,18 +502,6 @@ final class AppModel: NSObject, ObservableObject {
         sshKeyPassphraseStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHKeyPassphrasesKey) ?? []
         )
-        sftpObservers = [
-            sftpSession.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            },
-            globalSFTPSession.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            }
-        ]
         refreshDisplays(configureEmptyProfile: true)
         refreshCameras(announce: false)
         installNotifications()
@@ -1186,16 +1171,11 @@ final class AppModel: NSObject, ObservableObject {
             restartProfileSSHTunnel(ruleID: ruleID, profileID: profileID)
         case let .independentTunnel(tunnelID):
             restartIndependentPortForward(tunnelID)
-        case let .sftp(scope):
-            switch scope {
-            case let .pane(paneID):
-                guard let pane = sftpWorkspace.pane(id: paneID),
-                      let settings = pane.session.settings else { return }
-                pane.session.disconnect()
-                pane.session.connect(settings)
-            case .profile, .global:
-                break
-            }
+        case let .sftp(.pane(paneID)):
+            guard let pane = sftpWorkspace.pane(id: paneID),
+                  let settings = pane.session.settings else { return }
+            pane.session.disconnect()
+            pane.session.connect(settings)
         }
     }
 
@@ -1214,17 +1194,8 @@ final class AppModel: NSObject, ObservableObject {
             } else if case let .profile(profileID) = scope {
                 sshTerminalSessions[profileID]?.stop()
             }
-        case let .sftp(scope):
-            switch scope {
-            case let .pane(paneID):
-                sftpWorkspace.pane(id: paneID)?.clear()
-            case let .profile(profileID):
-                if sftpSession.profileID == profileID {
-                    sftpSession.disconnect()
-                }
-            case .global:
-                globalSFTPSession.disconnect()
-            }
+        case let .sftp(.pane(paneID)):
+            sftpWorkspace.pane(id: paneID)?.clear()
         case let .profileTunnel(_, ruleID):
             stopSSHTunnel(ruleID)
         case let .independentTunnel(tunnelID):

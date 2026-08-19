@@ -363,8 +363,8 @@ enum DiagnosticsReportBuilder {
             profileID = id
         case let .terminal(scope, _):
             if case let .profile(id) = scope { profileID = id } else { profileID = nil }
-        case let .sftp(scope):
-            if case let .profile(id) = scope { profileID = id } else { profileID = nil }
+        case .sftp:
+            profileID = nil
         case let .profileTunnel(id, _):
             profileID = id
         case .independentTunnel:

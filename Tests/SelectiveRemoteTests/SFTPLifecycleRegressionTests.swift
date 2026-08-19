@@ -74,6 +74,28 @@ func connectionCenterReconnectsManagedSFTPPane() throws {
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
         encoding: .utf8
     )
-    #expect(source.contains("case let .sftp(scope):"))
+    #expect(source.contains("case let .sftp(.pane(paneID)):"))
     #expect(source.contains("pane.session.connect(settings)"))
+}
+
+
+@Test("Legacy single-session SFTP runtime stays removed")
+func legacySingleSessionSFTPRuntimeStaysRemoved() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let appModel = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"), encoding: .utf8)
+    let content = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"), encoding: .utf8)
+    let app = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SelectiveRemoteApp.swift"), encoding: .utf8)
+    let center = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"), encoding: .utf8)
+    #expect(!appModel.contains("let sftpSession = SFTPBrowserSession()"))
+    #expect(!appModel.contains("globalSFTPSession"))
+    #expect(!appModel.contains("sftpObservers"))
+    #expect(!content.contains("showsGlobalSFTPConnectionEditor"))
+    #expect(!content.contains("connectGlobalSFTP"))
+    #expect(!center.contains("sftp:profile:"))
+    #expect(!center.contains("sftp:global"))
+    #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Sources/SelectiveRemote/SFTPBrowserView.swift").path))
+    #expect(app.contains("SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)"))
 }

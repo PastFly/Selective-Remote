@@ -54,11 +54,19 @@ private enum MainArea: String, CaseIterable, Identifiable {
     }
 }
 
-struct ContentView: View {
-    private static let globalSFTPScopeID = UUID(
-        uuidString: "9C99721B-CFF3-48B7-A0A4-22E627A7D56C"
-    )!
+private struct SFTPWorkspaceSidebarStatus: View {
+    @ObservedObject var workspace: SFTPWorkspaceModel
 
+    var body: some View {
+    if workspace.activeRemoteCount > 0 {
+        Image(systemName: "circle.fill")
+            .font(.system(size: 7))
+            .foregroundStyle(.green)
+    }
+    }
+}
+
+struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
@@ -73,8 +81,6 @@ struct ContentView: View {
     @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
-    @State private var showsGlobalSFTPConnectionEditor = false
-    @State private var globalSFTPConnection: TerminalTabConnection?
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -222,28 +228,6 @@ struct ContentView: View {
             ) { request, session in
                 model.generateSSHKey(request, session: session)
             }
-        }
-        .sheet(isPresented: $showsGlobalSFTPConnectionEditor) {
-            TerminalConnectionEditor(
-                profiles: sortedSSHProfiles,
-                initialConnection: globalSFTPConnection
-                    ?? sortedSSHProfiles.first.map {
-                        .savedProfile($0.id)
-                    }
-                    ?? .custom(host: "", username: ""),
-                allowsInteractivePassword: true,
-                actionTitle: "Подключить SFTP",
-                heading: "Подключение SFTP",
-                message: "Выберите сохранённый сервер или укажите временный SFTP-адрес. "
-                    + "При необходимости пароль будет запрошен отдельным системным окном.",
-                customAuthenticationMessage: "SFTP использует системный ssh-agent и ~/.ssh/config. "
-                    + "Если ключа или активной SSH-сессии нет, пароль будет запрошен "
-                    + "в отдельном защищённом окне и не будет сохранён.",
-                onSave: { connection, _, temporaryPassword in
-                    globalSFTPConnection = connection
-                    connectGlobalSFTP(connection, temporaryPassword: temporaryPassword)
-                }
-            )
         }
         .onAppear {
             selectedTab = restoredProfileTab(for: profile.id)
@@ -432,11 +416,8 @@ struct ContentView: View {
                                     .font(.caption.bold())
                                     .foregroundStyle(.green)
                             }
-                            if area == .sftp,
-                               model.globalSFTPSession.settings != nil {
-                                Image(systemName: "circle.fill")
-                                    .font(.system(size: 7))
-                                    .foregroundStyle(.green)
+                            if area == .sftp {
+                                SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)
                             }
                             if area == .forwarding,
                                model.runningIndependentSSHTunnelCount > 0 {
@@ -1893,46 +1874,6 @@ struct ContentView: View {
             }
     }
 
-    private var globalSFTPProfile: ConnectionProfile {
-        var profile = ConnectionProfile(connectionType: .ssh)
-        profile.id = Self.globalSFTPScopeID
-        profile.friendlyName = "SFTP"
-        return profile
-    }
-
-    private func connectGlobalSFTP(
-        _ connection: TerminalTabConnection,
-        clientID: UUID = Self.globalSFTPScopeID,
-        temporaryPassword: String? = nil
-    ) {
-        guard let settings = model.prepareSSHConnection(
-            connection: connection,
-            clientID: clientID
-        ) else { return }
-
-        let hasTemporaryPassword = connection.kind == .custom
-            && temporaryPassword?.isEmpty == false
-        if hasTemporaryPassword, let temporaryPassword {
-            do {
-                try KeychainService.savePassword(
-                    temporaryPassword,
-                    profileID: clientID,
-                    kind: .ssh
-                )
-            } catch {
-                model.errorMessage = error.localizedDescription
-                return
-            }
-        }
-
-        model.globalSFTPSession.prepare(for: Self.globalSFTPScopeID)
-        model.globalSFTPSession.connect(settings) { _ in
-            if hasTemporaryPassword {
-                try? KeychainService.deletePassword(profileID: clientID, kind: .ssh)
-            }
-        }
-    }
-
     @ViewBuilder
     private var selectedSettingsContent: some View {
         switch selectedTab {
@@ -2139,20 +2080,11 @@ struct ContentView: View {
             case .global:
                 setMainArea(.terminal)
             }
-        case let .sftp(scope):
-            switch scope {
-  case let .pane(paneID):
-    if let tab = model.sftpWorkspace.tab(containing: paneID) {
-        model.sftpWorkspace.selectedTabID = tab.id
-    }
-    setMainArea(.sftp)
-            case let .profile(profileID):
-                model.selectProfile(profileID)
-                selectedTab = .sftp
-                setMainArea(.connections)
-            case .global:
-                setMainArea(.sftp)
+        case let .sftp(.pane(paneID)):
+            if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                model.sftpWorkspace.selectedTabID = tab.id
             }
+            setMainArea(.sftp)
         case let .profileTunnel(profileID, _):
             model.selectProfile(profileID)
             selectedTab = .forwarding
