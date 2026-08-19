@@ -1,0 +1,82 @@
+name: SFTP file URL drop patch carrier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          workspace = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
+          text = workspace.read_text()
+
+          old = '''            provider.loadDataRepresentation(
+                forTypeIdentifier: UTType.fileURL.identifier
+            ) { data, _ in
+                guard let data,
+                      let text = String(data: data, encoding: .utf8),
+                      let url = URL(
+                          string: text.trimmingCharacters(in: .whitespacesAndNewlines)
+                      )
+                else { return }
+'''
+          new = '''            provider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let nsURL = object as? NSURL else { return }
+                let url = nsURL as URL
+'''
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f"expected two fileURL data decoders, found {count}")
+          text = text.replace(old, new)
+          workspace.write_text(text)
+
+          # The reusable historical runner adds this pane case after applying the
+          # carrier patch. Remove the already-present case first so it is restored
+          # exactly once by that runner.
+          content_view = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = content_view.read_text()
+          pattern = re.compile(
+              r"(        case let \.sftp\(scope\):\n"
+              r"            switch scope \{\n)"
+              r"            case let \.pane\(paneID\):\n"
+              r"(?:                .*\n)*?"
+              r"(?=            case let \.profile\(profileID\):)",
+              re.S,
+          )
+          text, pane_count = pattern.subn(r"\1", text, count=1)
+          if pane_count != 1:
+              raise SystemExit(f"expected one existing SFTP pane open case, found {pane_count}")
+          content_view.write_text(text)
+
+          tests = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          text = tests.read_text()
+          marker = '@Test("SFTP file URL drop loads NSURL instead of file contents")'
+          if marker not in text:
+              text += '''
+
+@Test("SFTP file URL drop loads NSURL instead of file contents")
+func sftpFileURLDropLoadsURLObject() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
+    #expect(!source.contains("provider.loadDataRepresentation(\\n                forTypeIdentifier: UTType.fileURL.identifier"))
+}
+'''
+          tests.write_text(text)
+          PY
