@@ -287,8 +287,7 @@ private final class ManagedRDPSession {
 
 @MainActor
 final class AppModel: NSObject, ObservableObject {
-    let sftpSession = SFTPBrowserSession()
-    let globalSFTPSession = SFTPBrowserSession()
+    let sftpWorkspace = SFTPWorkspaceModel()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -416,7 +415,6 @@ final class AppModel: NSObject, ObservableObject {
     private var rdpStableAutomaticTopologyOrigins:
         [UUID: [String: VirtualDisplayPosition]] = [:]
     private var sshTunnelReconnectAttempts: [UUID: Int] = [:]
-    private var sftpObservers: [AnyCancellable] = []
     private var sessionTimer: Timer?
     private var sshTunnelTimer: Timer?
     private var profileSaveTask: Task<Void, Never>?
@@ -504,18 +502,6 @@ final class AppModel: NSObject, ObservableObject {
         sshKeyPassphraseStoredIDs = Set(
             UserDefaults.standard.stringArray(forKey: storedSSHKeyPassphrasesKey) ?? []
         )
-        sftpObservers = [
-            sftpSession.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            },
-            globalSFTPSession.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            }
-        ]
         refreshDisplays(configureEmptyProfile: true)
         refreshCameras(announce: false)
         installNotifications()
@@ -993,16 +979,10 @@ final class AppModel: NSObject, ObservableObject {
             )
         }
 
-        appendConnectionCenterSFTP(
-            session: sftpSession,
-            scope: sftpSession.profileID.map(ConnectionCenterSFTPScope.profile),
-            into: &items
-        )
-        appendConnectionCenterSFTP(
-            session: globalSFTPSession,
-            scope: .global,
-            into: &items
-        )
+        for tab in sftpWorkspace.tabs {
+            appendConnectionCenterSFTP(pane: tab.left, into: &items)
+            appendConnectionCenterSFTP(pane: tab.right, into: &items)
+        }
 
         for tunnel in sshTunnels.values.sorted(by: { $0.startedAt < $1.startedAt }) {
             let independent = tunnel.profileID == Self.globalForwardingProfileID
@@ -1191,8 +1171,11 @@ final class AppModel: NSObject, ObservableObject {
             restartProfileSSHTunnel(ruleID: ruleID, profileID: profileID)
         case let .independentTunnel(tunnelID):
             restartIndependentPortForward(tunnelID)
-        case .sftp:
-            break
+        case let .sftp(.pane(paneID)):
+            guard let pane = sftpWorkspace.pane(id: paneID),
+                  let settings = pane.session.settings else { return }
+            pane.session.disconnect()
+            pane.session.connect(settings)
         }
     }
 
@@ -1211,15 +1194,8 @@ final class AppModel: NSObject, ObservableObject {
             } else if case let .profile(profileID) = scope {
                 sshTerminalSessions[profileID]?.stop()
             }
-        case let .sftp(scope):
-            switch scope {
-            case let .profile(profileID):
-                if sftpSession.profileID == profileID {
-                    sftpSession.disconnect()
-                }
-            case .global:
-                globalSFTPSession.disconnect()
-            }
+        case let .sftp(.pane(paneID)):
+            sftpWorkspace.pane(id: paneID)?.clear()
         case let .profileTunnel(_, ruleID):
             stopSSHTunnel(ruleID)
         case let .independentTunnel(tunnelID):
@@ -1330,11 +1306,12 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func appendConnectionCenterSFTP(
-        session: SFTPBrowserSession,
-        scope: ConnectionCenterSFTPScope?,
+        pane: SFTPWorkspacePane,
         into items: inout [ConnectionCenterItem]
     ) {
-        guard let scope, let settings = session.settings,
+        let session = pane.session
+        guard pane.kind == .remote,
+              let settings = session.settings,
               session.connectionState != .disconnected
         else { return }
         let route = connectionCenterRoute(settings: settings)
@@ -1346,10 +1323,13 @@ final class AppModel: NSObject, ObservableObject {
         }
         items.append(
             ConnectionCenterItem(
-                source: .sftp(scope: scope),
+                source: .sftp(scope: .pane(pane.id)),
                 kind: .sftp,
                 profileName: settings.profileName,
-                userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
+                userHost: connectionCenterUserHost(
+                    username: settings.username,
+                    host: settings.host
+                ),
                 port: settings.port,
                 route: route.summary,
                 authentication: settings.authenticationMode.title,
@@ -1360,11 +1340,24 @@ final class AppModel: NSObject, ObservableObject {
                     ConnectionCenterDetailSection(
                         title: "Основное",
                         rows: [
-                            ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
+                            ConnectionCenterDetailRow(
+                                label: "Профиль",
+                                value: settings.profileName
+                            ),
+                            ConnectionCenterDetailRow(label: "Панель", value: pane.title),
                             ConnectionCenterDetailRow(label: "Host", value: settings.host),
-                            ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
-                            ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
-                            ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
+                            ConnectionCenterDetailRow(
+                                label: "Port",
+                                value: String(settings.port)
+                            ),
+                            ConnectionCenterDetailRow(
+                                label: "Путь",
+                                value: session.remote.currentPath
+                            ),
+                            ConnectionCenterDetailRow(
+                                label: "Transfers",
+                                value: String(session.transfers.activeCount)
+                            )
                         ]
                     ),
                     ConnectionCenterDetailSection(
@@ -1376,7 +1369,10 @@ final class AppModel: NSObject, ObservableObject {
                     ),
                     ConnectionCenterDetailSection(
                         title: "Маршрут",
-                        rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
+                        rows: connectionCenterRouteRows(
+                            jumpHost: route.jumpHost,
+                            proxy: route.proxy
+                        )
                     )
                 ]
             )

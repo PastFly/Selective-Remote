@@ -29,6 +29,30 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
     }
 }
 
+private struct SFTPMenuBarTransferControls: View {
+    @ObservedObject var workspace: SFTPWorkspaceModel
+
+    var body: some View {
+    if workspace.hasTransferItems {
+        Divider()
+        Text("SFTP-передачи: \(workspace.activeTransferCount) активных")
+        if workspace.hasPausedTransfers {
+            Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
+                workspace.resumeAllTransfers()
+            }
+        } else if workspace.activeTransferCount > 0 {
+            Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
+                workspace.pauseAllTransfers()
+            }
+        }
+        Button("Отменить SFTP-передачи", role: .destructive) {
+            workspace.cancelAllTransfers()
+        }
+        .disabled(workspace.activeTransferCount == 0)
+    }
+    }
+}
+
 @main
 struct SelectiveRemoteApp: App {
     @NSApplicationDelegateAdaptor(SelectiveRemoteApplicationDelegate.self)
@@ -182,23 +206,7 @@ struct SelectiveRemoteApp: App {
                     model.stopAllSSHTerminals()
                 }
             }
-            if !model.sftpSession.transfers.items.isEmpty {
-                Divider()
-                Text("SFTP-передачи: \(model.sftpSession.transfers.activeCount) активных")
-                if model.sftpSession.transfers.items.contains(where: { $0.phase == .paused }) {
-                    Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
-                        model.sftpSession.transfers.resumeAll()
-                    }
-                } else if model.sftpSession.transfers.activeCount > 0 {
-                    Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
-                        model.sftpSession.transfers.pauseAll()
-                    }
-                }
-                Button("Отменить SFTP-передачи", role: .destructive) {
-                    model.sftpSession.transfers.cancelAll()
-                }
-                .disabled(model.sftpSession.transfers.activeCount == 0)
-            }
+            SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)
             Divider()
             Text("Правый Shift + Enter — полный экран / окно")
             Text("Правый Shift + D — отключить RDP")

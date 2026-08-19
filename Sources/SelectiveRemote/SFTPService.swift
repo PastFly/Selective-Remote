@@ -215,6 +215,39 @@ enum SFTPRemoteEntrySorter {
 private final class SFTPMasterConnectionManager: @unchecked Sendable {
     private let lock = NSLock()
     private var ownedProcesses: [String: Process] = [:]
+    private var sessionReferences: [String: Int] = [:]
+
+    func retainSession(settings: SSHConnectionSettings) {
+        let controlPath = SSHService.controlPath(settings: settings)
+        lock.lock()
+        sessionReferences[controlPath, default: 0] += 1
+        lock.unlock()
+    }
+
+    func releaseSession(
+        settings: SSHConnectionSettings,
+        executable: String
+    ) {
+        let controlPath = SSHService.controlPath(settings: settings)
+        var shouldClose = false
+
+        lock.lock()
+        if let count = sessionReferences[controlPath], count > 1 {
+            sessionReferences[controlPath] = count - 1
+        } else if sessionReferences.removeValue(forKey: controlPath) != nil {
+            shouldClose = true
+        }
+        lock.unlock()
+
+        guard shouldClose else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            self?.closeMasterIfUnreferenced(
+                settings: settings,
+                executable: executable,
+                controlPath: controlPath
+            )
+        }
+    }
 
     func ensureMaster(
         settings: SSHConnectionSettings,
@@ -310,6 +343,44 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         )
     }
 
+    private func closeMasterIfUnreferenced(
+        settings: SSHConnectionSettings,
+        executable: String,
+        controlPath: String
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard sessionReferences[controlPath] == nil else { return }
+
+        if FileManager.default.fileExists(atPath: controlPath) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            var arguments = [
+                "-S", controlPath,
+                "-O", "exit",
+                "-p", String(settings.port)
+            ]
+            if !settings.username.isEmpty {
+                arguments += ["-o", "User=\(settings.username)"]
+            }
+            arguments.append(settings.host)
+            process.arguments = arguments
+            process.environment = SSHKeyService.processEnvironment()
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            if (try? process.run()) != nil {
+                process.waitUntilExit()
+            }
+        }
+
+        if let owned = ownedProcesses.removeValue(forKey: controlPath), owned.isRunning {
+            owned.terminate()
+        }
+        try? FileManager.default.removeItem(atPath: controlPath)
+    }
+
     private func controlSocketIsAlive(
         settings: SSHConnectionSettings,
         executable: String,
@@ -349,6 +420,14 @@ enum SFTPService {
     private static let executable = "/usr/bin/sftp"
     private static let sshExecutable = "/usr/bin/ssh"
     private static let masterManager = SFTPMasterConnectionManager()
+
+    static func retainMasterConnection(settings: SSHConnectionSettings) {
+        masterManager.retainSession(settings: settings)
+    }
+
+    static func releaseMasterConnection(settings: SSHConnectionSettings) {
+        masterManager.releaseSession(settings: settings, executable: sshExecutable)
+    }
 
     static func list(
         settings: SSHConnectionSettings,

@@ -173,7 +173,7 @@ func sftpWorkspaceTypedDragHasNoLegacyRegistryDependency() throws {
     #expect(!source.contains("SFTPWorkspaceDragRegistry"))
     #expect(!source.contains("acceptRemoteDropsInternal("))
     #expect(source.contains("sftpWorkspaceInternalDragToken("))
-    #expect(source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("sftpWorkspaceDropTypeIdentifiers"))
 }
 
 @Test("SFTP Workspace starts remote drag through an AppKit dragging session")
@@ -192,7 +192,7 @@ func sftpWorkspaceUsesAppKitDraggingSession() throws {
     #expect(source.contains("beginDraggingSession("))
     #expect(source.contains("NSEvent.addLocalMonitorForEvents("))
     #expect(!source.contains(".draggable("))
-    #expect(source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("sftpWorkspaceDropTypeIdentifiers"))
 }
 
 @Test("SFTP AppKit drag monitor does not send NSEvent across actor isolation")
@@ -226,9 +226,9 @@ func profileSFTPUsesSharedMultiServerWorkspace() throws {
     )
 
     #expect(source.contains(
-        "case .sftp:\n            SFTPWorkspaceView(workspace: globalSFTPWorkspace)"
+        "case .sftp:\n            SFTPWorkspaceView(workspace: model.sftpWorkspace)"
     ))
-    #expect(source.contains("if globalSFTPWorkspace.pendingOpenRequest == nil"))
+    #expect(source.contains("if model.sftpWorkspace.pendingOpenRequest == nil"))
     #expect(source.contains("connection: .savedProfile(profile.id)"))
     #expect(source.contains("selectedProfileSFTPWorkspaceConnected"))
     #expect(!source.contains("SFTPBrowserView(profile: profile, session: sftpSession)"))
@@ -248,9 +248,150 @@ func profileTerminalSmartLinkUsesProfileSFTPWorkspace() throws {
     )
 
     #expect(source.contains("openSFTPPath: { tab, path in"))
-    #expect(source.contains("globalSFTPWorkspace.requestOpen("))
+    #expect(source.contains("model.sftpWorkspace.requestOpen("))
     #expect(source.contains("connection: tab.connection"))
     #expect(source.contains("path: path"))
     #expect(source.contains("selectedTab = .sftp"))
 }
 
+
+@Test("SFTP focus mode keeps its exit control outside the workspace toolbar")
+func sftpFocusExitDoesNotOverlayWorkspaceToolbar() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("else if selectedTab != .terminal {\n                focusExitBar"))
+    #expect(source.contains("private var focusExitBar: some View"))
+    #expect(!source.contains(".overlay(alignment: .topTrailing) {\n            if terminalFocusMode && selectedTab != .terminal"))
+}
+
+@Test("SFTP remote drag does not mutate selection on mouse down")
+func sftpRemoteDragDoesNotInvalidateItsMonitorOnMouseDown() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("SFTPWorkspaceAppKitDragMonitor("))
+    #expect(source.contains("beginSFTPDraggingSession(event: event, point: point)"))
+    #expect(!source.contains("let prepareDrag: () -> Void"))
+    #expect(!source.contains("var prepareDrag: (() -> Void)?"))
+    #expect(!source.contains("prepareDrag?()"))
+}
+
+
+@Test("SFTP local drag keeps the workspace stable until drop")
+func sftpLocalDragDoesNotMutateSelectionDuringDragStart() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains(".onDrag {\n                        NSItemProvider(object: entry.url as NSURL)\n                    }"))
+    #expect(!source.contains(".onDrag {\n                        if !model.selectedEntryIDs.contains(entry.id)"))
+}
+
+@Test("SFTP workspace changes do not invalidate the application root during drag")
+func sftpWorkspaceIsObservedDirectlyByConnectionCenter() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let appModel = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+        encoding: .utf8
+    )
+    let center = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(!appModel.contains("sftpWorkspace.objectWillChange.sink"))
+    #expect(center.contains("@ObservedObject var sftpWorkspace: SFTPWorkspaceModel"))
+    #expect(content.contains("sftpWorkspace: model.sftpWorkspace"))
+}
+
+
+@Test("SFTP file URL drop loads NSURL instead of file contents")
+func sftpFileURLDropLoadsURLObject() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
+    #expect(!source.contains("forTypeIdentifier: UTType.fileURL.identifier\n            ) { data, _ in"))
+}
+
+
+@Test("SFTP uses one unified pane drop destination")
+func sftpWorkspaceUsesUnifiedPaneDropDestination() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(!source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("NSPasteboard.PasteboardType.string.rawValue"))
+    #expect(source.components(separatedBy: "of: sftpWorkspaceDropTypeIdentifiers").count - 1 == 2)
+    #expect(source.components(separatedBy: "isTargeted: $dropTargeted").count - 1 == 2)
+}
+
+
+@Test("SFTP transfer drawer keeps the workspace anchored below the title bar")
+func sftpTransferDrawerKeepsTopAnchoredLayout() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let workspace = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(content.contains(
+        "private var detail: some View {\n        ZStack(alignment: .topLeading) {"
+    ))
+    #expect(workspace.contains(
+        ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)\n        .sheet(item: $connectionRequest)"
+    ))
+    #expect(workspace.contains("ScrollView(.vertical)"))
+    #expect(workspace.contains(".frame(maxHeight: 220)"))
+}

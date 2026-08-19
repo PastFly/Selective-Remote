@@ -353,6 +353,7 @@ enum KeychainService {
         try deletePassword(profileID: profileID, kind: .gateway)
         try deletePassword(profileID: profileID, kind: .ssh)
         try deletePassword(profileID: profileID, kind: .sshKeyAuthorization)
+        try deletePassword(profileID: profileID, kind: .proxy)
     }
 }
 

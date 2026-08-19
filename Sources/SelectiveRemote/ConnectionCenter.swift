@@ -67,8 +67,7 @@ enum ConnectionCenterTerminalScope: Hashable {
 }
 
 enum ConnectionCenterSFTPScope: Hashable {
-    case profile(UUID)
-    case global
+    case pane(UUID)
 }
 
 enum ConnectionCenterSource: Hashable {
@@ -89,13 +88,8 @@ enum ConnectionCenterSource: Hashable {
             case .global:
                 "terminal:global:\(tabID.uuidString)"
             }
-        case let .sftp(scope):
-            switch scope {
-            case let .profile(profileID):
-                "sftp:profile:\(profileID.uuidString)"
-            case .global:
-                "sftp:global"
-            }
+        case let .sftp(.pane(paneID)):
+            "sftp:pane:\(paneID.uuidString)"
         case let .profileTunnel(profileID, ruleID):
             "forwarding:profile:\(profileID.uuidString):\(ruleID.uuidString)"
         case let .independentTunnel(tunnelID):
@@ -329,6 +323,7 @@ private enum ConnectionCenterPreferences {
 
 struct ConnectionCenterView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var sftpWorkspace: SFTPWorkspaceModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpen: (ConnectionCenterSource) -> Void
     let onReconnect: (ConnectionCenterSource) -> Void

@@ -1804,6 +1804,7 @@ final class SFTPBrowserSession: ObservableObject {
     @Published private(set) var lastErrorMessage: String?
 
     private(set) var profileID: UUID?
+    private var retainedMasterSettings: SSHConnectionSettings?
 
     init() {
         let transfers = SFTPTransferQueue()
@@ -1821,6 +1822,11 @@ final class SFTPBrowserSession: ObservableObject {
         _ settings: SSHConnectionSettings,
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
+        if let retainedMasterSettings {
+            SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+        }
+        retainedMasterSettings = settings
+        SFTPService.retainMasterConnection(settings: settings)
         self.settings = settings
         connectionState = .connecting
         connectedAt = nil
@@ -1847,6 +1853,11 @@ final class SFTPBrowserSession: ObservableObject {
     }
 
     func disconnect() {
+        transfers.cancelAll()
+        if let retainedMasterSettings {
+            SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+            self.retainedMasterSettings = nil
+        }
         settings = nil
         connectionState = .disconnected
         connectedAt = nil
