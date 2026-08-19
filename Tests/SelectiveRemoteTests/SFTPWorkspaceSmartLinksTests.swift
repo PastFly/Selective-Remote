@@ -367,3 +367,31 @@ func sftpWorkspaceUsesUnifiedPaneDropDestination() throws {
     #expect(source.components(separatedBy: "of: sftpWorkspaceDropTypeIdentifiers").count - 1 == 2)
     #expect(source.components(separatedBy: "isTargeted: $dropTargeted").count - 1 == 2)
 }
+
+
+@Test("SFTP transfer drawer keeps the workspace anchored below the title bar")
+func sftpTransferDrawerKeepsTopAnchoredLayout() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let workspace = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(content.contains(
+        "private var detail: some View {\n        ZStack(alignment: .topLeading) {"
+    ))
+    #expect(workspace.contains(
+        ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)\n        .sheet(item: $connectionRequest)"
+    ))
+    #expect(workspace.contains("ScrollView(.vertical)"))
+    #expect(workspace.contains(".frame(maxHeight: 220)"))
+}

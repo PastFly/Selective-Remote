@@ -622,7 +622,7 @@ struct ContentView: View {
     }
 
     private var detail: some View {
-        ZStack {
+        ZStack(alignment: .topLeading) {
             LinearGradient(
                 colors: [
                     Color(red: 0.10, green: 0.52, blue: 0.72).opacity(0.08),
