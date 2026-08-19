@@ -1,0 +1,116 @@
+name: SFTP transfer layout patch carrier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          content_path = Path("Sources/SelectiveRemote/ContentView.swift")
+          content = content_path.read_text()
+
+          detail_old = '''    private var detail: some View {
+        ZStack {
+'''
+          detail_new = '''    private var detail: some View {
+        ZStack(alignment: .topLeading) {
+'''
+          if detail_old not in content:
+              raise SystemExit("detail ZStack marker not found")
+          content = content.replace(detail_old, detail_new, 1)
+
+          # Historical reusable runner inserts this case itself. Remove the
+          # current oddly-indented copy so the runner can add exactly one case.
+          pane_block = '''  case let .pane(paneID):
+    if let tab = model.sftpWorkspace.tab(containing: paneID) {
+        model.sftpWorkspace.selectedTabID = tab.id
+    }
+    setMainArea(.sftp)
+'''
+          if pane_block not in content:
+              raise SystemExit("existing pane case block not found")
+          content = content.replace(pane_block, "", 1)
+          content_path.write_text(content)
+
+          workspace_path = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
+          source = workspace_path.read_text()
+
+          root_marker = '''        }
+        .sheet(item: $connectionRequest) { request in
+'''
+          root_replacement = '''        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .sheet(item: $connectionRequest) { request in
+'''
+          if root_marker not in source:
+              raise SystemExit("workspace root frame marker not found")
+          source = source.replace(root_marker, root_replacement, 1)
+
+          disclosure_start = '            DisclosureGroup(isExpanded: $showsTransfers) {\n'
+          label_marker = '            } label: {\n'
+          start = source.find(disclosure_start)
+          if start < 0:
+              raise SystemExit("transfer DisclosureGroup start not found")
+          body_start = start + len(disclosure_start)
+          label = source.find(label_marker, body_start)
+          if label < 0:
+              raise SystemExit("transfer DisclosureGroup label not found")
+          old_body = source[body_start:label]
+          if 'ScrollView(.vertical)' in old_body:
+              raise SystemExit("transfer drawer already scrollable")
+          indented_body = ''.join(
+              ('    ' + line) if line.strip() else line
+              for line in old_body.splitlines(keepends=True)
+          )
+          new_body = (
+              '                ScrollView(.vertical) {\n'
+              + indented_body
+              + '                }\n'
+              + '                .frame(maxHeight: 220)\n'
+          )
+          source = source[:body_start] + new_body + source[label:]
+          workspace_path.write_text(source)
+
+          tests = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          test_text = tests.read_text()
+          marker = '@Test("SFTP transfer drawer keeps the workspace anchored below the title bar")'
+          if marker not in test_text:
+              test_text += '''
+
+@Test("SFTP transfer drawer keeps the workspace anchored below the title bar")
+func sftpTransferDrawerKeepsTopAnchoredLayout() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let workspace = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(content.contains(
+        "private var detail: some View {\\n        ZStack(alignment: .topLeading) {"
+    ))
+    #expect(workspace.contains(
+        ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)\\n        .sheet(item: $connectionRequest)"
+    ))
+    #expect(workspace.contains("ScrollView(.vertical)"))
+    #expect(workspace.contains(".frame(maxHeight: 220)"))
+}
+'''
+          tests.write_text(test_text)
+          PY
