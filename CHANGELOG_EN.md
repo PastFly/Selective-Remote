@@ -1,3 +1,10 @@
+## 0.22.5
+
+- Fixed application crashes during Server → Server and Server → Mac drag-and-drop in release builds.
+- Internal SFTP drag-and-drop no longer reads string payloads through the problematic NSItemProvider data callback.
+- String drag payloads are now loaded through an NSString/object representation compatible with the Xcode 16.2 production build.
+- The fix was validated using a DMG built by GitHub Actions with the same toolchain used for production releases.
+
 ## 0.22.4
 
 - Fixed an application crash when dragging files between two SFTP servers.
