@@ -81,16 +81,19 @@ final class SFTPWorkspacePane: ObservableObject, Identifiable {
     }
 
     private func observeChildren() {
+        // Pane-level UI needs session lifecycle changes (settings/state), but file
+        // listings already have their own ObservedObject views. Do not bubble
+        // every local/remote list mutation through Tab -> Workspace.
         session.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observers)
-        session.local.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &observers)
-        session.remote.objectWillChange
-            .sink { [weak self] _ in self?.objectWillChange.send() }
-            .store(in: &observers)
-        session.transfers.objectWillChange
+
+        // The menu bar and workspace only need transfer lifecycle aggregates.
+        // Progress bytes/speed/ETA are rendered by a queue-observing leaf view.
+        session.transfers.$items
+            .map { SFTPTransferActivitySnapshot(items: $0) }
+            .removeDuplicates()
+            .dropFirst()
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &observers)
     }
@@ -354,7 +357,10 @@ struct SFTPWorkspaceView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
 
-            transferSummary(tab)
+            SFTPWorkspaceTransferSummaryView(
+                tab: tab,
+                isExpanded: $showsTransfers
+            )
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .sheet(item: $connectionRequest) { request in
@@ -490,159 +496,6 @@ struct SFTPWorkspaceView: View {
                             )
                     }
                 }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func transferSummary(_ tab: SFTPWorkspaceTab) -> some View {
-        let panes = [tab.left, tab.right]
-        let queuesWithItems = panes.filter { !$0.session.transfers.items.isEmpty }
-        if !queuesWithItems.isEmpty {
-            DisclosureGroup(isExpanded: $showsTransfers) {
-                ScrollView(.vertical) {
-                    VStack(spacing: 8) {
-                        ForEach(queuesWithItems) { pane in
-                            let queue = pane.session.transfers
-                            VStack(alignment: .leading, spacing: 7) {
-                                HStack(spacing: 8) {
-                                    Label(pane.title, systemImage: pane.systemImage)
-                                        .font(.caption.weight(.semibold))
-                                    Spacer()
-                                    Picker("При совпадении имён", selection: Binding(
-                                        get: { queue.conflictPolicy },
-                                        set: { queue.conflictPolicy = $0 }
-                                    )) {
-                                        ForEach(SFTPConflictPolicy.allCases) { policy in
-                                            Text(policy.title).tag(policy)
-                                        }
-                                    }
-                                    .labelsHidden()
-                                    .frame(maxWidth: 180)
-
-                                    if queue.items.contains(where: { $0.phase == .paused }) {
-                                        Button("Продолжить все", systemImage: "play.fill") {
-                                            queue.resumeAll()
-                                        }
-                                        .labelStyle(.iconOnly)
-                                    } else if queue.items.contains(where: { $0.phase == .running }) {
-                                        Button("Пауза", systemImage: "pause.fill") {
-                                            queue.pauseAll()
-                                        }
-                                        .labelStyle(.iconOnly)
-                                    }
-                                    Button("Отменить все", systemImage: "xmark") {
-                                        queue.cancelAll()
-                                    }
-                                    .labelStyle(.iconOnly)
-                                    .disabled(queue.activeCount == 0)
-                                    Button("Очистить завершённые", systemImage: "trash") {
-                                        queue.clearFinished()
-                                    }
-                                    .labelStyle(.iconOnly)
-                                    .disabled(!queue.items.contains(where: { $0.phase.isTerminal }))
-                                }
-
-                                ForEach(queue.items.reversed()) { item in
-                                    transferRow(item, queue: queue)
-                                }
-                            }
-                            .padding(8)
-                            .background(
-                                Color.primary.opacity(0.025),
-                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            )
-                        }
-                    }
-                    .padding(.top, 7)
-                }
-                .frame(maxHeight: 220)
-            } label: {
-                let active = panes.reduce(0) { $0 + $1.session.transfers.activeCount }
-                Label(
-                    "Передачи · активных: \(active)",
-                    systemImage: "arrow.up.arrow.down.circle"
-                )
-                .font(.headline)
-            }
-        }
-    }
-
-    private func transferRow(
-        _ item: SFTPTransferItem,
-        queue: SFTPTransferQueue
-    ) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: item.direction.systemImage)
-                .foregroundStyle(item.phase == .failed ? Color.red : Color.blue)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 7) {
-                    Text(item.name)
-                        .fontWeight(.medium)
-                        .lineLimit(1)
-                    Text("· \(item.direction.title)")
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Text(item.phase.title)
-                        .font(.caption)
-                        .foregroundStyle(item.phase == .failed ? Color.red : Color.secondary)
-                }
-
-                HStack(spacing: 5) {
-                    Text(item.source).lineLimit(1).truncationMode(.middle)
-                    Image(systemName: "arrow.right")
-                    Text(item.destination).lineLimit(1).truncationMode(.middle)
-                }
-                .font(.caption2.monospaced())
-                .foregroundStyle(.secondary)
-                .help("\(item.source) → \(item.destination)")
-
-                if let fraction = item.fractionCompleted {
-                    ProgressView(value: fraction)
-                        .progressViewStyle(.linear)
-                } else if item.phase == .running {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                }
-
-                HStack(spacing: 5) {
-                    Text(item.progressText)
-                    if let fraction = item.fractionCompleted {
-                        Text("· \(Int((fraction * 100).rounded()))%")
-                    }
-                    if let speed = item.speedText {
-                        Text("· \(speed)")
-                    }
-                    if let eta = item.etaText {
-                        Text("· ETA \(eta)")
-                    }
-                    if let error = item.errorMessage {
-                        Text("· \(error)")
-                            .foregroundStyle(.red)
-                            .lineLimit(1)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-
-            switch item.phase {
-            case .running:
-                Button("Пауза", systemImage: "pause.fill") { queue.pause(item.id) }
-                    .labelStyle(.iconOnly)
-            case .paused:
-                Button("Продолжить", systemImage: "play.fill") { queue.resume(item.id) }
-                    .labelStyle(.iconOnly)
-            case .failed, .cancelled:
-                Button("Повторить", systemImage: "arrow.clockwise") { queue.retry(item.id) }
-                    .labelStyle(.iconOnly)
-            default:
-                EmptyView()
-            }
-            if !item.phase.isTerminal {
-                Button("Отменить", systemImage: "xmark") { queue.cancel(item.id) }
-                    .labelStyle(.iconOnly)
             }
         }
     }
@@ -824,6 +677,7 @@ private struct SFTPWorkspacePaneView: View {
             case .remote:
                 SFTPWorkspaceRemotePaneView(
                     session: pane.session,
+                    remote: pane.session.remote,
                     paneID: pane.id,
                     remoteSource: opposite.kind == .remote ? opposite.session : nil,
                     remoteSourcePaneID: opposite.kind == .remote ? opposite.id : nil,
@@ -1416,6 +1270,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
 
 private struct SFTPWorkspaceRemotePaneView: View {
     @ObservedObject var session: SFTPBrowserSession
+    @ObservedObject var remote: SFTPBrowserModel
     let paneID: UUID
     let remoteSource: SFTPBrowserSession?
     let remoteSourcePaneID: UUID?
@@ -1434,8 +1289,6 @@ private struct SFTPWorkspaceRemotePaneView: View {
     @State private var propertiesTarget: SFTPPropertiesTarget?
     @State private var selectionAnchor: String?
     @State private var dropTargeted = false
-
-    private var remote: SFTPBrowserModel { session.remote }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -2426,7 +2279,7 @@ private func sftpWorkspaceFileRow(
             Image(
                 systemName: isDirectory
                     ? "folder.fill"
-                    : isSymbolicLink ? "link" : "doc"
+                    : isSymbolicLink ? "link" : "doc.fill"
             )
             .foregroundStyle(isDirectory ? Color.blue : Color.secondary)
             Text(name)
