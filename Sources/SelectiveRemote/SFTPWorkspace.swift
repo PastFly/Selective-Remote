@@ -1000,17 +1000,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
                     .onDrag {
                         NSItemProvider(object: entry.url as NSURL)
                     }
-                    .dropDestination(for: String.self) { items, _ in
-                        guard entry.isDirectory, !model.isBusy else { return false }
-                        return acceptInternalRemoteDrag(items, destination: entry.url)
-                    }
-                    .onDrop(
-                        of: [UTType.fileURL.identifier],
-                        isTargeted: nil
-                    ) { providers in
-                        guard entry.isDirectory, !model.isBusy else { return false }
-                        return acceptDrops(providers, destination: entry.url)
-                    }
+
                 }
             }
             .listStyle(.inset)
@@ -1042,17 +1032,13 @@ private struct SFTPWorkspaceLocalPaneView: View {
                     .allowsHitTesting(false)
                 }
             }
-            .dropDestination(for: String.self) { items, _ in
-                acceptInternalRemoteDrag(items, destination: model.currentDirectory)
-            } isTargeted: {
-                dropTargeted = $0
-            }
             .onDrop(
-                of: [UTType.fileURL.identifier],
-                isTargeted: nil
-            ) { providers in
-                acceptDrops(providers, destination: model.currentDirectory)
-            }
+      of: sftpWorkspaceDropTypeIdentifiers,
+      isTargeted: $dropTargeted
+  ) { providers in
+      acceptDrops(providers, destination: model.currentDirectory)
+  }
+
             .overlay {
                 sftpWorkspaceDropOverlay(
                     isTargeted: dropTargeted,
@@ -1362,6 +1348,30 @@ private struct SFTPWorkspaceLocalPaneView: View {
             return true
         }
 
+        let stringProviders = providers.filter {
+  $0.hasItemConformingToTypeIdentifier(
+      NSPasteboard.PasteboardType.string.rawValue
+  )
+        }
+        if !stringProviders.isEmpty {
+  for provider in stringProviders {
+      provider.loadDataRepresentation(
+          forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+      ) { data, _ in
+          guard let data,
+                let value = String(data: data, encoding: .utf8)
+          else { return }
+          Task { @MainActor in
+              _ = acceptInternalRemoteDrag(
+                  [value],
+                  destination: destination
+              )
+          }
+      }
+  }
+  return true
+        }
+
         let fileProviders = providers.filter {
             $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
@@ -1499,25 +1509,7 @@ private struct SFTPWorkspaceRemotePaneView: View {
                             )
                             .allowsHitTesting(false)
                         }
-                        .dropDestination(for: String.self) { items, _ in
-                            guard entry.isDirectory, !remote.isBusy else { return false }
-                            return acceptInternalRemoteDrag(
-                                items,
-                                to: SFTPService.joinedRemotePath(remote.currentPath, entry.name),
-                                destinationSettings: settings
-                            )
-                        }
-                        .onDrop(
-                            of: [UTType.fileURL.identifier],
-                            isTargeted: nil
-                        ) { providers in
-                            guard entry.isDirectory, !remote.isBusy else { return false }
-                            return acceptDrops(
-                                providers,
-                                to: SFTPService.joinedRemotePath(remote.currentPath, entry.name),
-                                destinationSettings: settings
-                            )
-                        }
+
                     }
                 }
                 .listStyle(.inset)
@@ -1553,25 +1545,17 @@ private struct SFTPWorkspaceRemotePaneView: View {
                         .allowsHitTesting(false)
                     }
                 }
-                .dropDestination(for: String.self) { items, _ in
-                    acceptInternalRemoteDrag(
-                        items,
-                        to: remote.currentPath,
-                        destinationSettings: settings
-                    )
-                } isTargeted: {
-                    dropTargeted = $0
-                }
                 .onDrop(
-                    of: [UTType.fileURL.identifier],
-                    isTargeted: nil
-                ) { providers in
-                    acceptDrops(
-                        providers,
-                        to: remote.currentPath,
-                        destinationSettings: settings
-                    )
-                }
+          of: sftpWorkspaceDropTypeIdentifiers,
+          isTargeted: $dropTargeted
+      ) { providers in
+          acceptDrops(
+              providers,
+              to: remote.currentPath,
+              destinationSettings: settings
+          )
+      }
+
                 .overlay {
                     sftpWorkspaceDropOverlay(
                         isTargeted: dropTargeted,
@@ -1885,23 +1869,49 @@ private struct SFTPWorkspaceRemotePaneView: View {
         destinationSettings: SSHConnectionSettings
     ) -> Bool {
         let fileProviders = providers.filter {
-            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+  $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
         }
-        guard !fileProviders.isEmpty else { return false }
-        for provider in fileProviders {
-            provider.loadObject(ofClass: NSURL.self) { object, _ in
-                guard let nsURL = object as? NSURL else { return }
-                let url = nsURL as URL
-                Task { @MainActor in
-                    remote.upload(
-                        localURLs: [url],
-                        to: destinationDirectory,
-                        settings: destinationSettings
-                    )
-                }
-            }
+        if !fileProviders.isEmpty {
+  for provider in fileProviders {
+      provider.loadObject(ofClass: NSURL.self) { object, _ in
+          guard let nsURL = object as? NSURL else { return }
+          let url = nsURL as URL
+          Task { @MainActor in
+              remote.upload(
+                  localURLs: [url],
+                  to: destinationDirectory,
+                  settings: destinationSettings
+              )
+          }
+      }
+  }
+  return true
+        }
+
+        let stringProviders = providers.filter {
+  $0.hasItemConformingToTypeIdentifier(
+      NSPasteboard.PasteboardType.string.rawValue
+  )
+        }
+        guard !stringProviders.isEmpty else { return false }
+        for provider in stringProviders {
+  provider.loadDataRepresentation(
+      forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+  ) { data, _ in
+      guard let data,
+            let value = String(data: data, encoding: .utf8)
+      else { return }
+      Task { @MainActor in
+          _ = acceptInternalRemoteDrag(
+              [value],
+              to: destinationDirectory,
+              destinationSettings: destinationSettings
+          )
+      }
+  }
         }
         return true
+
     }
 
 }
@@ -2066,6 +2076,12 @@ private final class SFTPWorkspaceDragMonitorNSView: NSView, NSDraggingSource {
         true
     }
 }
+
+private let sftpWorkspaceDropTypeIdentifiers = [
+    UTType.fileURL.identifier,
+    NSPasteboard.PasteboardType.string.rawValue,
+    SFTPDragType.remoteEntry.identifier
+]
 
 private let sftpWorkspaceInternalDragPrefix = "SelectiveRemoteSFTPRemote|"
 

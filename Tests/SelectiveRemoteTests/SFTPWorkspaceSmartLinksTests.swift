@@ -173,7 +173,7 @@ func sftpWorkspaceTypedDragHasNoLegacyRegistryDependency() throws {
     #expect(!source.contains("SFTPWorkspaceDragRegistry"))
     #expect(!source.contains("acceptRemoteDropsInternal("))
     #expect(source.contains("sftpWorkspaceInternalDragToken("))
-    #expect(source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("sftpWorkspaceDropTypeIdentifiers"))
 }
 
 @Test("SFTP Workspace starts remote drag through an AppKit dragging session")
@@ -192,7 +192,7 @@ func sftpWorkspaceUsesAppKitDraggingSession() throws {
     #expect(source.contains("beginDraggingSession("))
     #expect(source.contains("NSEvent.addLocalMonitorForEvents("))
     #expect(!source.contains(".draggable("))
-    #expect(source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("sftpWorkspaceDropTypeIdentifiers"))
 }
 
 @Test("SFTP AppKit drag monitor does not send NSEvent across actor isolation")
@@ -347,4 +347,23 @@ func sftpFileURLDropLoadsURLObject() throws {
 
     #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
     #expect(!source.contains("forTypeIdentifier: UTType.fileURL.identifier\n            ) { data, _ in"))
+}
+
+
+@Test("SFTP uses one unified pane drop destination")
+func sftpWorkspaceUsesUnifiedPaneDropDestination() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(!source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("NSPasteboard.PasteboardType.string.rawValue"))
+    #expect(source.components(separatedBy: "of: sftpWorkspaceDropTypeIdentifiers").count - 1 == 2)
+    #expect(source.components(separatedBy: "isTargeted: $dropTargeted").count - 1 == 2)
 }
