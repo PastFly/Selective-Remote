@@ -27,7 +27,7 @@ jobs:
               raise SystemExit(f"pre-runner pane normalization: expected 1 match, found {count}")
           path.write_text(text)
 
-          # Reuse the already-reviewed cleanup script from the validator workflow.
+          # Reuse the reviewed cleanup script from the validator workflow.
           workflow = Path(".github/workflows/pre-release-cleanup-v2.yml").read_text().splitlines()
           start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == "PY")
@@ -35,6 +35,28 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in workflow[start:end]
           ) + "\n"
+
+          # The observer wiring changed formatting while the functional SFTP patch evolved.
+          # Replace that one cleanup operation with a structure-based regex before executing it.
+          observer = body.find("sftpObservers = [")
+          if observer < 0:
+              raise SystemExit("cleanup script observer marker not found")
+          block_start = body.rfind("text = replace_once(", 0, observer)
+          label = body.find('"legacy SFTP observer wiring"', observer)
+          block_end = body.find("\n)", label)
+          if block_start < 0 or label < 0 or block_end < 0:
+              raise SystemExit("cleanup script observer block bounds not found")
+          block_end += 2
+          replacement = (
+              "text = regex_once(\n"
+              "    text,\n"
+              "    r\"\\n        sftpObservers = \\[\\n.*?\\n        \\]\\n\",\n"
+              "    \"\\n\",\n"
+              "    \"legacy SFTP observer wiring\",\n"
+              ")"
+          )
+          body = body[:block_start] + replacement + body[block_end:]
+
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
           compile(body, str(cleanup), "exec")
