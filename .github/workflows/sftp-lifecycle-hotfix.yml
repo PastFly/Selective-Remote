@@ -35,14 +35,65 @@ jobs:
               for line in workflow[start:end]
           ) + "\n"
 
-          # The MenuBarExtra text changed after the cleanup script was authored.
-          # Keep the cleanup structural by anchoring the legacy transfer block to
-          # the first shortcut label that actually follows it in the current app.
-          old_anchor = 'Button\\(\\"Открыть приложение\\"\\)'
-          new_anchor = 'Text\\(\\"Правый Shift \\+ Enter — полный экран / окно\\"\\)'
-          if old_anchor not in body:
-              raise SystemExit("legacy cleanup MenuBar anchor not found")
-          body = body.replace(old_anchor, new_anchor, 1)
+          # Replace the stale MenuBar cleanup section with a marker-based version.
+          menu_replacement = r'''# MenuBarExtra: keep controls, now over all real Workspace transfer queues.
+          path = Path("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+          text = path.read_text()
+          start_marker = "            if !model.sftpSession.transfers.items.isEmpty {\n"
+          end_marker = "            Divider()\n            Text(\"Правый Shift + Enter — полный экран / окно\")\n"
+          start_index = text.find(start_marker)
+          end_index = text.find(end_marker, start_index)
+          if start_index < 0 or end_index < 0:
+              raise SystemExit("legacy MenuBarExtra SFTP queue markers not found")
+          text = (
+              text[:start_index]
+              + "            SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)\n"
+              + text[end_index:]
+          )
+          text = replace_once(
+              text,
+              "@main\nstruct SelectiveRemoteApp: App {\n",
+              """private struct SFTPMenuBarTransferControls: View {
+              @ObservedObject var workspace: SFTPWorkspaceModel
+
+              var body: some View {
+              if workspace.hasTransferItems {
+                  Divider()
+                  Text("SFTP-передачи: \\(workspace.activeTransferCount) активных")
+                  if workspace.hasPausedTransfers {
+                      Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
+                          workspace.resumeAllTransfers()
+                      }
+                  } else if workspace.activeTransferCount > 0 {
+                      Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
+                          workspace.pauseAllTransfers()
+                      }
+                  }
+                  Button("Отменить SFTP-передачи", role: .destructive) {
+                      workspace.cancelAllTransfers()
+                  }
+                  .disabled(workspace.activeTransferCount == 0)
+              }
+              }
+          }
+
+          @main
+          struct SelectiveRemoteApp: App {
+          """,
+              "Workspace MenuBarExtra controls",
+          )
+          path.write_text(text)
+
+          '''
+          body, menu_count = re.subn(
+              r'# MenuBarExtra: keep controls, now over all real Workspace transfer queues\.\n.*?(?=# Delete obsolete pre-Workspace SFTP view\.)',
+              lambda _: menu_replacement,
+              body,
+              count=1,
+              flags=re.S,
+          )
+          if menu_count != 1:
+              raise SystemExit(f"cleanup MenuBar section replacement: expected 1 match, found {menu_count}")
 
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
