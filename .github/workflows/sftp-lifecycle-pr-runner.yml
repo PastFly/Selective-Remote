@@ -1,0 +1,13 @@
+name: Temporary SFTP patch runner placeholder
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  placeholder:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Temporary carrier removed by the reusable validation runner"
