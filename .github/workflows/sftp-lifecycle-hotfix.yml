@@ -45,20 +45,19 @@ jobs:
               raise SystemExit(f"expected two fileURL data decoders, found {count}")
           workspace.write_text(text)
 
-          # The reusable historical runner adds this pane case after applying the
-          # carrier patch. Remove the already-present case first so it is restored
-          # exactly once by that runner.
+          # The reusable historical runner adds this exact case after applying
+          # the carrier. Remove the existing copy without relying on indentation.
           content_view = Path("Sources/SelectiveRemote/ContentView.swift")
           text = content_view.read_text()
           pane_pattern = re.compile(
-              r"(        case let \.sftp\(scope\):\n"
-              r"            switch scope \{\n)"
-              r"            case let \.pane\(paneID\):\n"
-              r"(?:                .*\n)*?"
-              r"(?=            case let \.profile\(profileID\):)",
-              re.S,
+              r"^[ \t]*case let \.pane\(paneID\):[ \t]*\n"
+              r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{[ \t]*\n"
+              r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id[ \t]*\n"
+              r"[ \t]*\}[ \t]*\n"
+              r"[ \t]*setMainArea\(\.sftp\)[ \t]*\n",
+              re.M,
           )
-          text, pane_count = pane_pattern.subn(r"\1", text, count=1)
+          text, pane_count = pane_pattern.subn("", text, count=1)
           if pane_count != 1:
               raise SystemExit(f"expected one existing SFTP pane open case, found {pane_count}")
           content_view.write_text(text)
