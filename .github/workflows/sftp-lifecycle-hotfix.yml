@@ -162,6 +162,19 @@ jobs:
               ])
           test_path.write_text(tests)
 
+          terminal_test_path = Path("Tests/SelectiveRemoteTests/TerminalTests.swift")
+          terminal_tests = terminal_test_path.read_text()
+          old_focus_contract = '    #expect(content.contains("terminalFocusMode && selectedTab != .terminal"))'
+          new_focus_contract = "\n".join([
+              '    #expect(content.contains("else if selectedTab != .terminal"))',
+              '    #expect(content.contains("private var focusExitBar: some View"))',
+              '    #expect(!content.contains(".overlay(alignment: .topTrailing)"))',
+          ])
+          if old_focus_contract not in terminal_tests:
+              raise SystemExit("stale Terminal focus-mode assertion not found")
+          terminal_tests = terminal_tests.replace(old_focus_contract, new_focus_contract, 1)
+          terminal_test_path.write_text(terminal_tests)
+
           hook = Path(".git/hooks/pre-commit")
           hook.write_text('''#!/bin/bash
 set -euo pipefail
