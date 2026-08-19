@@ -1,3 +1,15 @@
+## 0.22.2
+
+- Stabilized the SFTP Workspace lifecycle and transfer cancellation when panes are disconnected or closed.
+- Fixed shared OpenSSH ControlMaster lifecycle management across multiple SFTP panes.
+- Deleting an SSH profile now also removes its stored proxy credentials.
+- Connection Center now operates on real SFTP Workspace panes and supports opening, disconnecting, and reconnecting individual panes.
+- Fixed Mac ↔ Server and Server ↔ Server drag and drop.
+- Stabilized SFTP layout after Transfer Queue updates and constrained expanded transfer history to a scrollable area.
+- Removed the legacy single-session SFTP runtime, legacy observers, and obsolete SFTPBrowserView; AppModel.sftpWorkspace is now the single SFTP runtime source of truth.
+- Removed the stale default tag from the Release workflow; the release version must now be supplied explicitly.
+- RDP monitor topology and hot-plug behavior were intentionally left unchanged.
+
 ## 0.22.1
 
 - Fixed fullscreen multi-monitor RDP recovery when physical displays are connected or disconnected: Selective Remote now performs a controlled reconnect with the currently available selected monitors instead of leaving stale, stuck, or jumping windows.
