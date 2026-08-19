@@ -1823,7 +1823,7 @@ final class SFTPBrowserSession: ObservableObject {
         completion: (@MainActor (Bool) -> Void)? = nil
     ) {
         if let retainedMasterSettings {
-  SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+            SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
         }
         retainedMasterSettings = settings
         SFTPService.retainMasterConnection(settings: settings)
@@ -1832,31 +1832,31 @@ final class SFTPBrowserSession: ObservableObject {
         connectedAt = nil
         lastErrorMessage = nil
         remote.load(
-  settings: settings,
-  directory: settings.initialDirectory
+            settings: settings,
+            directory: settings.initialDirectory
         ) { [weak self] success in
-  guard let self else {
-      completion?(success)
-      return
-  }
-  if success {
-      connectionState = .connected
-      connectedAt = Date()
-      lastErrorMessage = nil
-  } else {
-      connectionState = .error
-      connectedAt = nil
-      lastErrorMessage = remote.errorMessage
-  }
-  completion?(success)
+            guard let self else {
+                completion?(success)
+                return
+            }
+            if success {
+                connectionState = .connected
+                connectedAt = Date()
+                lastErrorMessage = nil
+            } else {
+                connectionState = .error
+                connectedAt = nil
+                lastErrorMessage = remote.errorMessage
+            }
+            completion?(success)
         }
     }
 
     func disconnect() {
         transfers.cancelAll()
         if let retainedMasterSettings {
-  SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
-  self.retainedMasterSettings = nil
+            SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+            self.retainedMasterSettings = nil
         }
         settings = nil
         connectionState = .disconnected

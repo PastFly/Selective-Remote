@@ -2134,11 +2134,11 @@ struct ContentView: View {
             }
         case let .sftp(scope):
             switch scope {
-  case let .pane(paneID):
-    if let tab = model.sftpWorkspace.tab(containing: paneID) {
-        model.sftpWorkspace.selectedTabID = tab.id
-    }
-    setMainArea(.sftp)
+            case let .pane(paneID):
+                if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                    model.sftpWorkspace.selectedTabID = tab.id
+                }
+                setMainArea(.sftp)
             case let .profile(profileID):
                 model.selectProfile(profileID)
                 selectedTab = .sftp
