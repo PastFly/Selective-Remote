@@ -333,20 +333,55 @@ func sftpWorkspaceIsObservedDirectlyByConnectionCenter() throws {
 }
 
 
-@Test("SFTP file URL drop loads NSURL instead of file contents")
+@Test("SFTP file URL drop loads NSURL through non-actor bridge")
 func sftpFileURLDropLoadsURLObject() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
-    let source = try String(
+
+    let workspace = try String(
         contentsOf: projectRoot
-  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+            .appendingPathComponent(
+                "Sources/SelectiveRemote/SFTPWorkspace.swift"
+            ),
         encoding: .utf8
     )
 
-    #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
-    #expect(!source.contains("forTypeIdentifier: UTType.fileURL.identifier\n            ) { data, _ in"))
+    let models = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent(
+                "Sources/SelectiveRemote/SFTPBrowserModels.swift"
+            ),
+        encoding: .utf8
+    )
+
+    // SwiftUI/MainActor views must not own NSItemProvider callbacks.
+    #expect(
+        !workspace.contains(
+            "provider.loadObject(ofClass: NSURL.self)"
+        )
+    )
+
+    // Both Mac -> Server and file URL drops use the shared bridge.
+    #expect(
+        workspace.components(
+            separatedBy: "SFTPItemProviderBridge.loadFileURL("
+        ).count - 1 == 2
+    )
+
+    // The shared bridge loads NSURL itself, not the file contents.
+    #expect(
+        models.components(
+            separatedBy: "provider.loadObject(ofClass: NSURL.self)"
+        ).count - 1 == 1
+    )
+
+    #expect(
+        !models.contains(
+            "forTypeIdentifier: UTType.fileURL.identifier"
+        )
+    )
 }
 
 
