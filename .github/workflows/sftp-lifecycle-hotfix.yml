@@ -85,6 +85,18 @@ jobs:
                   ")"
               ),
           )
+          replace_cleanup_operation(
+              "sftp:global",
+              "legacy SFTP stable IDs",
+              (
+                  "text = regex_once(\n"
+                  "    text,\n"
+                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{.*?\\s+case \\.global:\\n\\s+\\\"sftp:global\\\"\\n\\s+\\}\\n(?=        case let \\.profileTunnel)\",\n"
+                  "    \"        case let .sftp(.pane(paneID)):\\n            \\\"sftp:pane:\\\\(paneID.uuidString)\\\"\\n\",\n"
+                  "    \"legacy SFTP stable IDs\",\n"
+                  ")"
+              ),
+          )
 
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
