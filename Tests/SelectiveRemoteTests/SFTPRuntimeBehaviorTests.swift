@@ -1,3 +1,4 @@
+import Dispatch
 import Foundation
 import Testing
 @testable import SelectiveRemote
@@ -94,6 +95,7 @@ func sftpControlPathGateSerializesOneConnection() {
 }
 
 @Test("SFTP process cancellation terminates the attached subprocess")
+@MainActor
 func sftpProcessCancellationTerminatesAttachedProcess() async throws {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/bin/sleep")
