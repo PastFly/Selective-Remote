@@ -1,0 +1,196 @@
+name: SFTP regression patch carrier
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          content_path = Path("Sources/SelectiveRemote/ContentView.swift")
+          content = content_path.read_text()
+
+          # The saved macOS runner re-inserts this case before testing. Remove the
+          # already-committed copy here so its compatibility step remains idempotent.
+          pane_case = '''            case let .pane(paneID):
+                if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                    model.sftpWorkspace.selectedTabID = tab.id
+                }
+                setMainArea(.sftp)
+'''
+          if pane_case not in content:
+              raise SystemExit("expected Connection Center pane case not found")
+          content = content.replace(pane_case, "", 1)
+
+          workspace_pattern = re.compile(
+              r"    private var sshRuntimeWorkspace: some View \{.*?\n    \}\n\n    @ViewBuilder\n    private var sshRuntimeContent: some View \{",
+              re.S,
+          )
+          match = workspace_pattern.search(content)
+          if not match:
+              raise SystemExit("sshRuntimeWorkspace block not found")
+          replacement = '''    private var sshRuntimeWorkspace: some View {
+        VStack(spacing: 0) {
+            if !terminalFocusMode {
+                sshCompactWorkspaceHeader
+            } else if selectedTab != .terminal {
+                focusExitBar
+            }
+
+            sshRuntimeContent
+                .padding(.horizontal, terminalFocusMode ? 10 : 18)
+                .padding(.top, terminalFocusMode ? 4 : 0)
+                .padding(.bottom, terminalFocusMode ? 10 : 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var focusExitBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                setTerminalFocusMode(false)
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Выйти из фокуса", en: "Exit Focus"),
+                    systemImage: "arrow.down.right.and.arrow.up.left"
+                )
+            }
+            .buttonStyle(.borderedProminent)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+    }
+
+    @ViewBuilder
+    private var sshRuntimeContent: some View {'''
+          content = content[:match.start()] + replacement + content[match.end():]
+          content_path.write_text(content)
+
+          sftp_path = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
+          sftp = sftp_path.read_text()
+
+          old_monitor_call = '''                            SFTPWorkspaceAppKitDragMonitor(
+                                token: sftpWorkspaceInternalDragToken(
+                                    paneID: paneID,
+                                    entryID: entry.id
+                                ),
+                                isDirectory: entry.isDirectory
+                            ) {
+                                if !remote.selectedEntryIDs.contains(entry.id) {
+                                    remote.selectedEntryIDs = [entry.id]
+                                    selectionAnchor = entry.id
+                                }
+                            }
+                            .allowsHitTesting(false)'''
+          new_monitor_call = '''                            SFTPWorkspaceAppKitDragMonitor(
+                                token: sftpWorkspaceInternalDragToken(
+                                    paneID: paneID,
+                                    entryID: entry.id
+                                ),
+                                isDirectory: entry.isDirectory
+                            )
+                            .allowsHitTesting(false)'''
+          if old_monitor_call not in sftp:
+              raise SystemExit("remote AppKit drag monitor call not found")
+          sftp = sftp.replace(old_monitor_call, new_monitor_call, 1)
+
+          replacements = [
+              ("    let prepareDrag: () -> Void\n", ""),
+              ("        view.prepareDrag = prepareDrag\n", ""),
+              ("        nsView.prepareDrag = prepareDrag\n", ""),
+              ("    var prepareDrag: (() -> Void)?\n", ""),
+              ("            prepareDrag?()\n", ""),
+          ]
+          for old, new in replacements:
+              if old not in sftp:
+                  raise SystemExit(f"drag monitor marker missing: {old!r}")
+              sftp = sftp.replace(old, new, 1)
+          sftp_path.write_text(sftp)
+
+          test_path = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          tests = test_path.read_text()
+          marker = '@Test("SFTP focus mode keeps its exit control outside the workspace toolbar")'
+          if marker not in tests:
+              tests += '''
+
+@Test("SFTP focus mode keeps its exit control outside the workspace toolbar")
+func sftpFocusExitDoesNotOverlayWorkspaceToolbar() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("else if selectedTab != .terminal {\\n                focusExitBar"))
+    #expect(source.contains("private var focusExitBar: some View"))
+    #expect(!source.contains(".overlay(alignment: .topTrailing) {\\n            if terminalFocusMode && selectedTab != .terminal"))
+}
+
+@Test("SFTP remote drag does not mutate selection on mouse down")
+func sftpRemoteDragDoesNotInvalidateItsMonitorOnMouseDown() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("SFTPWorkspaceAppKitDragMonitor("))
+    #expect(source.contains("beginSFTPDraggingSession(event: event, point: point)"))
+    #expect(!source.contains("let prepareDrag: () -> Void"))
+    #expect(!source.contains("var prepareDrag: (() -> Void)?"))
+    #expect(!source.contains("prepareDrag?()"))
+}
+'''
+          test_path.write_text(tests)
+
+          # The compatibility runner inserts the pane case with legacy indentation.
+          # Fix that in pre-commit, restage, and validate the final exact sources.
+          hook = Path(".git/hooks/pre-commit")
+          hook.write_text('''#!/bin/bash
+set -euo pipefail
+python3 <<'HOOKPY'
+from pathlib import Path
+p = Path("Sources/SelectiveRemote/ContentView.swift")
+s = p.read_text()
+bad = """  case let .pane(paneID):
+    if let tab = model.sftpWorkspace.tab(containing: paneID) {
+        model.sftpWorkspace.selectedTabID = tab.id
+    }
+    setMainArea(.sftp)
+"""
+good = """            case let .pane(paneID):
+                if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                    model.sftpWorkspace.selectedTabID = tab.id
+                }
+                setMainArea(.sftp)
+"""
+if bad in s:
+    s = s.replace(bad, good, 1)
+elif good not in s:
+    raise SystemExit("pane case missing before final validation")
+p.write_text(s)
+HOOKPY
+git add Sources Tests
+git diff --cached --check
+echo "==> Validating SFTP focus/DnD release build"
+swift build -c release
+echo "==> Validating SFTP focus/DnD full test suite"
+swift test
+''')
+          hook.chmod(0o755)
+          PY
