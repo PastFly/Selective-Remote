@@ -109,6 +109,30 @@ jobs:
               raise SystemExit("legacy SFTP scope invariant marker not found")
           body = body.replace(old_invariant, new_invariant, 1)
 
+          # Diagnostics derives most SFTP SSH metadata from ConnectionCenterItem detail rows.
+          # A pane-only source no longer encodes a profile UUID, so the old profile-scope
+          # fallback must disappear instead of reintroducing legacy source semantics.
+          diagnostics_cleanup = r'''# Diagnostics Center: pane-only SFTP source has no legacy profile scope.
+          path = Path("Sources/SelectiveRemote/DiagnosticsCenter.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              """        case let .sftp(scope):
+              if case let .profile(id) = scope { profileID = id } else { profileID = nil }
+          """,
+              """        case .sftp:
+              profileID = nil
+          """,
+              "Diagnostics Center pane-only SFTP source",
+          )
+          path.write_text(text)
+
+          '''
+          marker = "# Hard invariants before touching CI/release state.\n"
+          if body.count(marker) != 1:
+              raise SystemExit("cleanup hard-invariant marker not found")
+          body = body.replace(marker, diagnostics_cleanup + marker, 1)
+
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
           compile(body, str(cleanup), "exec")
