@@ -254,3 +254,39 @@ func profileTerminalSmartLinkUsesProfileSFTPWorkspace() throws {
     #expect(source.contains("selectedTab = .sftp"))
 }
 
+
+@Test("SFTP focus mode keeps its exit control outside the workspace toolbar")
+func sftpFocusExitDoesNotOverlayWorkspaceToolbar() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("else if selectedTab != .terminal {\n                focusExitBar"))
+    #expect(source.contains("private var focusExitBar: some View"))
+    #expect(!source.contains(".overlay(alignment: .topTrailing) {\n            if terminalFocusMode && selectedTab != .terminal"))
+}
+
+@Test("SFTP remote drag does not mutate selection on mouse down")
+func sftpRemoteDragDoesNotInvalidateItsMonitorOnMouseDown() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("SFTPWorkspaceAppKitDragMonitor("))
+    #expect(source.contains("beginSFTPDraggingSession(event: event, point: point)"))
+    #expect(!source.contains("let prepareDrag: () -> Void"))
+    #expect(!source.contains("var prepareDrag: (() -> Void)?"))
+    #expect(!source.contains("prepareDrag?()"))
+}

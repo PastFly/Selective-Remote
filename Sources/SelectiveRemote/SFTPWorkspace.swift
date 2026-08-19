@@ -1506,12 +1506,7 @@ private struct SFTPWorkspaceRemotePaneView: View {
                                     entryID: entry.id
                                 ),
                                 isDirectory: entry.isDirectory
-                            ) {
-                                if !remote.selectedEntryIDs.contains(entry.id) {
-                                    remote.selectedEntryIDs = [entry.id]
-                                    selectionAnchor = entry.id
-                                }
-                            }
+                            )
                             .allowsHitTesting(false)
                         }
                         .dropDestination(for: String.self) { items, _ in
@@ -1931,13 +1926,11 @@ private struct SFTPWorkspaceRemotePaneView: View {
 private struct SFTPWorkspaceAppKitDragMonitor: NSViewRepresentable {
     let token: String
     let isDirectory: Bool
-    let prepareDrag: () -> Void
 
     func makeNSView(context: Context) -> SFTPWorkspaceDragMonitorNSView {
         let view = SFTPWorkspaceDragMonitorNSView()
         view.token = token
         view.isDirectory = isDirectory
-        view.prepareDrag = prepareDrag
         return view
     }
 
@@ -1947,7 +1940,6 @@ private struct SFTPWorkspaceAppKitDragMonitor: NSViewRepresentable {
     ) {
         nsView.token = token
         nsView.isDirectory = isDirectory
-        nsView.prepareDrag = prepareDrag
     }
 
     static func dismantleNSView(
@@ -1962,7 +1954,6 @@ private struct SFTPWorkspaceAppKitDragMonitor: NSViewRepresentable {
 private final class SFTPWorkspaceDragMonitorNSView: NSView, NSDraggingSource {
     var token = ""
     var isDirectory = false
-    var prepareDrag: (() -> Void)?
 
     private var eventMonitor: Any?
     private var isTrackingMouse = false
@@ -2026,7 +2017,6 @@ private final class SFTPWorkspaceDragMonitorNSView: NSView, NSDraggingSource {
             }
             isTrackingMouse = true
             initialPoint = point
-            prepareDrag?()
             return false
 
         case .leftMouseDragged:

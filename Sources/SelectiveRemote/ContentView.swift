@@ -728,28 +728,34 @@ struct ContentView: View {
         VStack(spacing: 0) {
             if !terminalFocusMode {
                 sshCompactWorkspaceHeader
+            } else if selectedTab != .terminal {
+                focusExitBar
             }
 
             sshRuntimeContent
                 .padding(.horizontal, terminalFocusMode ? 10 : 18)
-                .padding(.top, terminalFocusMode ? 10 : 0)
+                .padding(.top, terminalFocusMode ? 4 : 0)
                 .padding(.bottom, terminalFocusMode ? 10 : 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .overlay(alignment: .topTrailing) {
-            if terminalFocusMode && selectedTab != .terminal {
-                Button {
-                    setTerminalFocusMode(false)
-                } label: {
-                    Label(
-                        UpdateLocalization.text(ru: "Выйти из фокуса", en: "Exit Focus"),
-                        systemImage: "arrow.down.right.and.arrow.up.left"
-                    )
-                }
-                .buttonStyle(.borderedProminent)
-                .padding(16)
+    }
+
+    private var focusExitBar: some View {
+        HStack {
+            Spacer()
+            Button {
+                setTerminalFocusMode(false)
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Выйти из фокуса", en: "Exit Focus"),
+                    systemImage: "arrow.down.right.and.arrow.up.left"
+                )
             }
+            .buttonStyle(.borderedProminent)
         }
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     @ViewBuilder
