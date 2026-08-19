@@ -97,6 +97,18 @@ jobs:
                   ")"
               ),
           )
+          replace_cleanup_operation(
+              "var activeRemoteCount: Int",
+              "workspace transfer aggregation",
+              (
+                  "text = regex_once(\n"
+                  "    text,\n"
+                  "    r\"    var activeRemoteCount: Int \\{\\n\\s+tabs\\.reduce\\(0\\) \\{ \\$0 \\+ \\$1\\.remoteConnectionCount \\}\\n\\s+\\}\\n\",\n"
+                  "    \"    var activeRemoteCount: Int {\\n        tabs.reduce(0) { $0 + $1.remoteConnectionCount }\\n    }\\n\\n    var transferQueues: [SFTPTransferQueue] {\\n        tabs.flatMap { [$0.left.session.transfers, $0.right.session.transfers] }\\n    }\\n\\n    var activeTransferCount: Int {\\n        transferQueues.reduce(0) { $0 + $1.activeCount }\\n    }\\n\\n    var hasTransferItems: Bool {\\n        transferQueues.contains { !$0.items.isEmpty }\\n    }\\n\\n    var hasPausedTransfers: Bool {\\n        transferQueues.contains { queue in\\n            queue.items.contains { $0.phase == .paused }\\n        }\\n    }\\n\\n    func pauseAllTransfers() {\\n        transferQueues.forEach { $0.pauseAll() }\\n    }\\n\\n    func resumeAllTransfers() {\\n        transferQueues.forEach { $0.resumeAll() }\\n    }\\n\\n    func cancelAllTransfers() {\\n        transferQueues.forEach { $0.cancelAll() }\\n    }\\n\",\n"
+                  "    \"workspace transfer aggregation\",\n"
+                  ")"
+              ),
+          )
 
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
