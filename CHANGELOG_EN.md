@@ -1,3 +1,9 @@
+## 0.22.3
+
+- Fixed an application crash when dragging files between two SFTP servers.
+- Fixed NSItemProvider callback actor isolation so drag-and-drop safely switches to MainActor before accessing the SFTP Workspace.
+- Added a regression test protecting Server → Server drag-and-drop from this crash.
+
 ## 0.22.2
 
 - Stabilized the SFTP Workspace lifecycle and transfer cancellation when panes are disconnected or closed.
