@@ -18,24 +18,31 @@ jobs:
           workspace = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
           text = workspace.read_text()
 
-          old = '''            provider.loadDataRepresentation(
-                forTypeIdentifier: UTType.fileURL.identifier
-            ) { data, _ in
-                guard let data,
-                      let text = String(data: data, encoding: .utf8),
-                      let url = URL(
-                          string: text.trimmingCharacters(in: .whitespacesAndNewlines)
-                      )
-                else { return }
-'''
-          new = '''            provider.loadObject(ofClass: NSURL.self) { object, _ in
-                guard let nsURL = object as? NSURL else { return }
-                let url = nsURL as URL
-'''
-          count = text.count(old)
+          pattern = re.compile(
+              r"^(?P<indent>[ \t]*)provider\.loadDataRepresentation\(\s*"
+              r"forTypeIdentifier: UTType\.fileURL\.identifier\s*"
+              r"\) \{ data, _ in\s*"
+              r"guard let data,\s*"
+              r"let text = String\(data: data, encoding: \.utf8\),\s*"
+              r"let url = URL\(\s*"
+              r"string: text\.trimmingCharacters\(in: \.whitespacesAndNewlines\)\s*"
+              r"\)\s*"
+              r"else \{ return \}",
+              re.M,
+          )
+
+          def replace_file_url(match):
+              indent = match.group("indent")
+              inner = indent + "    "
+              return (
+                  f"{indent}provider.loadObject(ofClass: NSURL.self) {{ object, _ in\n"
+                  f"{inner}guard let nsURL = object as? NSURL else {{ return }}\n"
+                  f"{inner}let url = nsURL as URL"
+              )
+
+          text, count = pattern.subn(replace_file_url, text)
           if count != 2:
               raise SystemExit(f"expected two fileURL data decoders, found {count}")
-          text = text.replace(old, new)
           workspace.write_text(text)
 
           # The reusable historical runner adds this pane case after applying the
@@ -43,7 +50,7 @@ jobs:
           # exactly once by that runner.
           content_view = Path("Sources/SelectiveRemote/ContentView.swift")
           text = content_view.read_text()
-          pattern = re.compile(
+          pane_pattern = re.compile(
               r"(        case let \.sftp\(scope\):\n"
               r"            switch scope \{\n)"
               r"            case let \.pane\(paneID\):\n"
@@ -51,7 +58,7 @@ jobs:
               r"(?=            case let \.profile\(profileID\):)",
               re.S,
           )
-          text, pane_count = pattern.subn(r"\1", text, count=1)
+          text, pane_count = pane_pattern.subn(r"\1", text, count=1)
           if pane_count != 1:
               raise SystemExit(f"expected one existing SFTP pane open case, found {pane_count}")
           content_view.write_text(text)
@@ -75,7 +82,7 @@ func sftpFileURLDropLoadsURLObject() throws {
     )
 
     #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
-    #expect(!source.contains("provider.loadDataRepresentation(\\n                forTypeIdentifier: UTType.fileURL.identifier"))
+    #expect(!source.contains("forTypeIdentifier: UTType.fileURL.identifier\\n            ) { data, _ in"))
 }
 '''
           tests.write_text(text)
