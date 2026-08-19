@@ -99,3 +99,38 @@ func legacySingleSessionSFTPRuntimeStaysRemoved() throws {
     #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Sources/SelectiveRemote/SFTPBrowserView.swift").path))
     #expect(app.contains("SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)"))
 }
+
+
+@Test("SFTP ItemProvider callbacks do not inherit MainActor")
+func sftpItemProviderCallbacksDoNotInheritMainActor() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+
+    let source = try String(
+        contentsOf: root.appendingPathComponent(
+            "Sources/SelectiveRemote/SFTPWorkspace.swift"
+        ),
+        encoding: .utf8
+    )
+
+    // NSItemProvider completion handlers may execute on Foundation's
+    // callback queue. They must remain Sendable/nonisolated and perform
+    // the actual SFTP/UI work only after an explicit MainActor hop.
+    #expect(
+        source.components(
+            separatedBy: "{ @Sendable data, _ in"
+        ).count >= 4
+    )
+    #expect(
+        source.components(
+            separatedBy: "{ @Sendable object, _ in"
+        ).count >= 3
+    )
+
+    #expect(!source.contains(") { data, _ in"))
+    #expect(!source.contains("NSURL.self) { object, _ in"))
+
+    #expect(source.contains("Task { @MainActor in"))
+}

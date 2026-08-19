@@ -1363,7 +1363,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
             for provider in remoteProviders {
                 provider.loadDataRepresentation(
                     forTypeIdentifier: SFTPDragType.remoteEntry.identifier
-                ) { data, _ in
+                ) { @Sendable data, _ in
                     guard let data,
                           let payload = try? JSONDecoder().decode(
                               SFTPRemoteDragPayload.self,
@@ -1391,7 +1391,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
   for provider in stringProviders {
       provider.loadDataRepresentation(
           forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
-      ) { data, _ in
+      ) { @Sendable data, _ in
           guard let data,
                 let value = String(data: data, encoding: .utf8)
           else { return }
@@ -1411,7 +1411,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
         }
         guard !fileProviders.isEmpty else { return false }
         for provider in fileProviders {
-            provider.loadObject(ofClass: NSURL.self) { object, _ in
+            provider.loadObject(ofClass: NSURL.self) { @Sendable object, _ in
                 guard let nsURL = object as? NSURL else { return }
                 let url = nsURL as URL
                 Task { @MainActor in
@@ -1907,7 +1907,7 @@ private struct SFTPWorkspaceRemotePaneView: View {
         }
         if !fileProviders.isEmpty {
   for provider in fileProviders {
-      provider.loadObject(ofClass: NSURL.self) { object, _ in
+      provider.loadObject(ofClass: NSURL.self) { @Sendable object, _ in
           guard let nsURL = object as? NSURL else { return }
           let url = nsURL as URL
           Task { @MainActor in
@@ -1931,7 +1931,7 @@ private struct SFTPWorkspaceRemotePaneView: View {
         for provider in stringProviders {
   provider.loadDataRepresentation(
       forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
-  ) { data, _ in
+  ) { @Sendable data, _ in
       guard let data,
             let value = String(data: data, encoding: .utf8)
       else { return }
