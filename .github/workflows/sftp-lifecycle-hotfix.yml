@@ -17,15 +17,17 @@ jobs:
 
           # The saved macOS runner re-inserts this case before testing. Remove the
           # already-committed copy here so its compatibility step remains idempotent.
-          pane_case = '''            case let .pane(paneID):
-                if let tab = model.sftpWorkspace.tab(containing: paneID) {
-                    model.sftpWorkspace.selectedTabID = tab.id
-                }
-                setMainArea(.sftp)
-'''
-          if pane_case not in content:
-              raise SystemExit("expected Connection Center pane case not found")
-          content = content.replace(pane_case, "", 1)
+          pane_pattern = re.compile(
+              r"\n[ \t]*case let \.pane\(paneID\):\n"
+              r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n"
+              r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n"
+              r"[ \t]*\}\n"
+              r"[ \t]*setMainArea\(\.sftp\)\n",
+              re.M,
+          )
+          content, removed = pane_pattern.subn("\n", content, count=1)
+          if removed != 1:
+              raise SystemExit(f"expected one Connection Center pane case, removed={removed}")
 
           workspace_pattern = re.compile(
               r"    private var sshRuntimeWorkspace: some View \{.*?\n    \}\n\n    @ViewBuilder\n    private var sshRuntimeContent: some View \{",
@@ -165,24 +167,27 @@ func sftpRemoteDragDoesNotInvalidateItsMonitorOnMouseDown() throws {
 set -euo pipefail
 python3 <<'HOOKPY'
 from pathlib import Path
+import re
 p = Path("Sources/SelectiveRemote/ContentView.swift")
 s = p.read_text()
-bad = """  case let .pane(paneID):
-    if let tab = model.sftpWorkspace.tab(containing: paneID) {
-        model.sftpWorkspace.selectedTabID = tab.id
-    }
-    setMainArea(.sftp)
-"""
-good = """            case let .pane(paneID):
+pattern = re.compile(
+    r"\n[ \t]*case let \.pane\(paneID\):\n"
+    r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n"
+    r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n"
+    r"[ \t]*\}\n"
+    r"[ \t]*setMainArea\(\.sftp\)\n",
+    re.M,
+)
+good = """
+            case let .pane(paneID):
                 if let tab = model.sftpWorkspace.tab(containing: paneID) {
                     model.sftpWorkspace.selectedTabID = tab.id
                 }
                 setMainArea(.sftp)
 """
-if bad in s:
-    s = s.replace(bad, good, 1)
-elif good not in s:
-    raise SystemExit("pane case missing before final validation")
+s, count = pattern.subn(good, s, count=1)
+if count != 1:
+    raise SystemExit(f"pane case normalization failed: count={count}")
 p.write_text(s)
 HOOKPY
 git add Sources Tests
