@@ -27,7 +27,6 @@ jobs:
               raise SystemExit(f"pre-runner pane normalization: expected 1 match, found {count}")
           path.write_text(text)
 
-          # Reuse the reviewed cleanup script from the validator workflow.
           workflow = Path(".github/workflows/pre-release-cleanup-v2.yml").read_text().splitlines()
           start = next(i for i, line in enumerate(workflow) if line.strip() == "python3 <<'PY'") + 1
           end = next(i for i in range(start, len(workflow)) if workflow[i].strip() == "PY")
@@ -35,80 +34,6 @@ jobs:
               line[10:] if line.startswith("          ") else line
               for line in workflow[start:end]
           ) + "\n"
-
-          def replace_cleanup_operation(marker: str, label_text: str, replacement: str) -> None:
-              global body
-              marker_pos = body.find(marker)
-              if marker_pos < 0:
-                  raise SystemExit(f"cleanup marker not found: {label_text}")
-              block_start = body.rfind("text = replace_once(", 0, marker_pos)
-              label_pos = body.find(f'"{label_text}"', marker_pos)
-              block_end = body.find("\n)", label_pos)
-              if block_start < 0 or label_pos < 0 or block_end < 0:
-                  raise SystemExit(f"cleanup block bounds not found: {label_text}")
-              block_end += 2
-              body = body[:block_start] + replacement + body[block_end:]
-
-          replace_cleanup_operation(
-              "sftpObservers = [",
-              "legacy SFTP observer wiring",
-              (
-                  "text = regex_once(\n"
-                  "    text,\n"
-                  "    r\"\\n        sftpObservers = \\[\\n.*?\\n        \\]\\n\",\n"
-                  "    \"\\n\",\n"
-                  "    \"legacy SFTP observer wiring\",\n"
-                  ")"
-              ),
-          )
-          replace_cleanup_operation(
-              "case .profile, .global:",
-              "Connection Center SFTP reconnect scope",
-              (
-                  "text = regex_once(\n"
-                  "    text,\n"
-                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{\\n\\s+case let \\.pane\\(paneID\\):\\n\\s+guard let pane = sftpWorkspace\\.pane\\(id: paneID\\),\\n\\s+let settings = pane\\.session\\.settings else \\{ return \\}\\n\\s+pane\\.session\\.disconnect\\(\\)\\n\\s+pane\\.session\\.connect\\(settings\\)\\n\\s+case \\.profile, \\.global:\\n\\s+break\\n\\s+\\}\\n\",\n"
-                  "    \"        case let .sftp(.pane(paneID)):\\n            guard let pane = sftpWorkspace.pane(id: paneID),\\n                  let settings = pane.session.settings else { return }\\n            pane.session.disconnect()\\n            pane.session.connect(settings)\\n\",\n"
-                  "    \"Connection Center SFTP reconnect scope\",\n"
-                  ")"
-              ),
-          )
-          replace_cleanup_operation(
-              "globalSFTPSession.disconnect()",
-              "Connection Center SFTP disconnect scope",
-              (
-                  "text = regex_once(\n"
-                  "    text,\n"
-                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{\\n\\s+case let \\.pane\\(paneID\\):\\n\\s+sftpWorkspace\\.pane\\(id: paneID\\)\\?\\.clear\\(\\)\\n\\s+case let \\.profile\\(profileID\\):\\n\\s+if sftpSession\\.profileID == profileID \\{\\n\\s+sftpSession\\.disconnect\\(\\)\\n\\s+\\}\\n\\s+case \\.global:\\n\\s+globalSFTPSession\\.disconnect\\(\\)\\n\\s+\\}\\n\",\n"
-                  "    \"        case let .sftp(.pane(paneID)):\\n            sftpWorkspace.pane(id: paneID)?.clear()\\n\",\n"
-                  "    \"Connection Center SFTP disconnect scope\",\n"
-                  ")"
-              ),
-          )
-          replace_cleanup_operation(
-              "sftp:global",
-              "legacy SFTP stable IDs",
-              (
-                  "text = regex_once(\n"
-                  "    text,\n"
-                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{.*?\\s+case \\.global:\\n\\s+\\\"sftp:global\\\"\\n\\s+\\}\\n(?=        case let \\.profileTunnel)\",\n"
-                  "    \"        case let .sftp(.pane(paneID)):\\n            \\\"sftp:pane:\\\\(paneID.uuidString)\\\"\\n\",\n"
-                  "    \"legacy SFTP stable IDs\",\n"
-                  ")"
-              ),
-          )
-          replace_cleanup_operation(
-              "var activeRemoteCount: Int",
-              "workspace transfer aggregation",
-              (
-                  "text = regex_once(\n"
-                  "    text,\n"
-                  "    r\"    var activeRemoteCount: Int \\{\\n\\s+tabs\\.reduce\\(0\\) \\{ \\$0 \\+ \\$1\\.remoteConnectionCount \\}\\n\\s+\\}\\n\",\n"
-                  "    \"    var activeRemoteCount: Int {\\n        tabs.reduce(0) { $0 + $1.remoteConnectionCount }\\n    }\\n\\n    var transferQueues: [SFTPTransferQueue] {\\n        tabs.flatMap { [$0.left.session.transfers, $0.right.session.transfers] }\\n    }\\n\\n    var activeTransferCount: Int {\\n        transferQueues.reduce(0) { $0 + $1.activeCount }\\n    }\\n\\n    var hasTransferItems: Bool {\\n        transferQueues.contains { !$0.items.isEmpty }\\n    }\\n\\n    var hasPausedTransfers: Bool {\\n        transferQueues.contains { queue in\\n            queue.items.contains { $0.phase == .paused }\\n        }\\n    }\\n\\n    func pauseAllTransfers() {\\n        transferQueues.forEach { $0.pauseAll() }\\n    }\\n\\n    func resumeAllTransfers() {\\n        transferQueues.forEach { $0.resumeAll() }\\n    }\\n\\n    func cancelAllTransfers() {\\n        transferQueues.forEach { $0.cancelAll() }\\n    }\\n\",\n"
-                  "    \"workspace transfer aggregation\",\n"
-                  ")"
-              ),
-          )
 
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
