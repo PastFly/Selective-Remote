@@ -115,16 +115,14 @@ jobs:
           diagnostics_cleanup = r'''# Diagnostics Center: pane-only SFTP source has no legacy profile scope.
           path = Path("Sources/SelectiveRemote/DiagnosticsCenter.swift")
           text = path.read_text()
-          text = replace_once(
+          text, diagnostics_count = re.subn(
+              r"(?m)^[ \t]*case let \.sftp\(scope\):\n[ \t]*if case let \.profile\(id\) = scope \{ profileID = id \} else \{ profileID = nil \}\n",
+              "        case .sftp:\n            profileID = nil\n",
               text,
-              """        case let .sftp(scope):
-              if case let .profile(id) = scope { profileID = id } else { profileID = nil }
-          """,
-              """        case .sftp:
-              profileID = nil
-          """,
-              "Diagnostics Center pane-only SFTP source",
+              count=1,
           )
+          if diagnostics_count != 1:
+              raise SystemExit(f"Diagnostics Center pane-only SFTP source: expected 1 match, found {diagnostics_count}")
           path.write_text(text)
 
           '''
