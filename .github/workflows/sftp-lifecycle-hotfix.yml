@@ -36,26 +36,55 @@ jobs:
               for line in workflow[start:end]
           ) + "\n"
 
-          # The observer wiring changed formatting while the functional SFTP patch evolved.
-          # Replace that one cleanup operation with a structure-based regex before executing it.
-          observer = body.find("sftpObservers = [")
-          if observer < 0:
-              raise SystemExit("cleanup script observer marker not found")
-          block_start = body.rfind("text = replace_once(", 0, observer)
-          label = body.find('"legacy SFTP observer wiring"', observer)
-          block_end = body.find("\n)", label)
-          if block_start < 0 or label < 0 or block_end < 0:
-              raise SystemExit("cleanup script observer block bounds not found")
-          block_end += 2
-          replacement = (
-              "text = regex_once(\n"
-              "    text,\n"
-              "    r\"\\n        sftpObservers = \\[\\n.*?\\n        \\]\\n\",\n"
-              "    \"\\n\",\n"
-              "    \"legacy SFTP observer wiring\",\n"
-              ")"
+          def replace_cleanup_operation(marker: str, label_text: str, replacement: str) -> None:
+              global body
+              marker_pos = body.find(marker)
+              if marker_pos < 0:
+                  raise SystemExit(f"cleanup marker not found: {label_text}")
+              block_start = body.rfind("text = replace_once(", 0, marker_pos)
+              label_pos = body.find(f'"{label_text}"', marker_pos)
+              block_end = body.find("\n)", label_pos)
+              if block_start < 0 or label_pos < 0 or block_end < 0:
+                  raise SystemExit(f"cleanup block bounds not found: {label_text}")
+              block_end += 2
+              body = body[:block_start] + replacement + body[block_end:]
+
+          replace_cleanup_operation(
+              "sftpObservers = [",
+              "legacy SFTP observer wiring",
+              (
+                  "text = regex_once(\n"
+                  "    text,\n"
+                  "    r\"\\n        sftpObservers = \\[\\n.*?\\n        \\]\\n\",\n"
+                  "    \"\\n\",\n"
+                  "    \"legacy SFTP observer wiring\",\n"
+                  ")"
+              ),
           )
-          body = body[:block_start] + replacement + body[block_end:]
+          replace_cleanup_operation(
+              "case .profile, .global:",
+              "Connection Center SFTP reconnect scope",
+              (
+                  "text = regex_once(\n"
+                  "    text,\n"
+                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{\\n\\s+case let \\.pane\\(paneID\\):\\n\\s+guard let pane = sftpWorkspace\\.pane\\(id: paneID\\),\\n\\s+let settings = pane\\.session\\.settings else \\{ return \\}\\n\\s+pane\\.session\\.disconnect\\(\\)\\n\\s+pane\\.session\\.connect\\(settings\\)\\n\\s+case \\.profile, \\.global:\\n\\s+break\\n\\s+\\}\\n\",\n"
+                  "    \"        case let .sftp(.pane(paneID)):\\n            guard let pane = sftpWorkspace.pane(id: paneID),\\n                  let settings = pane.session.settings else { return }\\n            pane.session.disconnect()\\n            pane.session.connect(settings)\\n\",\n"
+                  "    \"Connection Center SFTP reconnect scope\",\n"
+                  ")"
+              ),
+          )
+          replace_cleanup_operation(
+              "globalSFTPSession.disconnect()",
+              "Connection Center SFTP disconnect scope",
+              (
+                  "text = regex_once(\n"
+                  "    text,\n"
+                  "    r\"        case let \\.sftp\\(scope\\):\\n\\s+switch scope \\{\\n\\s+case let \\.pane\\(paneID\\):\\n\\s+sftpWorkspace\\.pane\\(id: paneID\\)\\?\\.clear\\(\\)\\n\\s+case let \\.profile\\(profileID\\):\\n\\s+if sftpSession\\.profileID == profileID \\{\\n\\s+sftpSession\\.disconnect\\(\\)\\n\\s+\\}\\n\\s+case \\.global:\\n\\s+globalSFTPSession\\.disconnect\\(\\)\\n\\s+\\}\\n\",\n"
+                  "    \"        case let .sftp(.pane(paneID)):\\n            sftpWorkspace.pane(id: paneID)?.clear()\\n\",\n"
+                  "    \"Connection Center SFTP disconnect scope\",\n"
+                  ")"
+              ),
+          )
 
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
