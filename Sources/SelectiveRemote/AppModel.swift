@@ -1345,8 +1345,8 @@ final class AppModel: NSObject, ObservableObject {
 ) {
     let session = pane.session
     guard pane.kind == .remote,
-let settings = session.settings,
-session.connectionState != .disconnected
+          let settings = session.settings,
+          session.connectionState != .disconnected
     else { return }
     let route = connectionCenterRoute(settings: settings)
     let state: ConnectionCenterState = switch session.connectionState {
@@ -1357,45 +1357,63 @@ session.connectionState != .disconnected
     }
     items.append(
         ConnectionCenterItem(
-  source: .sftp(scope: .pane(pane.id)),
-  kind: .sftp,
-  profileName: settings.profileName,
-  userHost: connectionCenterUserHost(username: settings.username, host: settings.host),
-  port: settings.port,
-  route: route.summary,
-  authentication: settings.authenticationMode.title,
-  state: state,
-  startedAt: session.connectedAt,
-  errorMessage: session.lastErrorMessage,
-  detailSections: [
-      ConnectionCenterDetailSection(
-          title: "Основное",
-          rows: [
-              ConnectionCenterDetailRow(label: "Профиль", value: settings.profileName),
-              ConnectionCenterDetailRow(label: "Панель", value: pane.title),
-              ConnectionCenterDetailRow(label: "Host", value: settings.host),
-              ConnectionCenterDetailRow(label: "Port", value: String(settings.port)),
-              ConnectionCenterDetailRow(label: "Путь", value: session.remote.currentPath),
-              ConnectionCenterDetailRow(label: "Transfers", value: String(session.transfers.activeCount))
-          ]
-      ),
-      ConnectionCenterDetailSection(
-          title: "Аутентификация",
-          rows: connectionCenterAuthenticationRows(
-              method: settings.authenticationMode.title,
-              identityName: settings.identity?.name
-          )
-      ),
-      ConnectionCenterDetailSection(
-          title: "Маршрут",
-          rows: connectionCenterRouteRows(jumpHost: route.jumpHost, proxy: route.proxy)
-      )
-  ]
+            source: .sftp(scope: .pane(pane.id)),
+            kind: .sftp,
+            profileName: settings.profileName,
+            userHost: connectionCenterUserHost(
+                username: settings.username,
+                host: settings.host
+            ),
+            port: settings.port,
+            route: route.summary,
+            authentication: settings.authenticationMode.title,
+            state: state,
+            startedAt: session.connectedAt,
+            errorMessage: session.lastErrorMessage,
+            detailSections: [
+                ConnectionCenterDetailSection(
+                    title: "Основное",
+                    rows: [
+                        ConnectionCenterDetailRow(
+                            label: "Профиль",
+                            value: settings.profileName
+                        ),
+                        ConnectionCenterDetailRow(label: "Панель", value: pane.title),
+                        ConnectionCenterDetailRow(label: "Host", value: settings.host),
+                        ConnectionCenterDetailRow(
+                            label: "Port",
+                            value: String(settings.port)
+                        ),
+                        ConnectionCenterDetailRow(
+                            label: "Путь",
+                            value: session.remote.currentPath
+                        ),
+                        ConnectionCenterDetailRow(
+                            label: "Transfers",
+                            value: String(session.transfers.activeCount)
+                        )
+                    ]
+                ),
+                ConnectionCenterDetailSection(
+                    title: "Аутентификация",
+                    rows: connectionCenterAuthenticationRows(
+                        method: settings.authenticationMode.title,
+                        identityName: settings.identity?.name
+                    )
+                ),
+                ConnectionCenterDetailSection(
+                    title: "Маршрут",
+                    rows: connectionCenterRouteRows(
+                        jumpHost: route.jumpHost,
+                        proxy: route.proxy
+                    )
+                )
+            ]
         )
     )
 }
 
-private func connectionCenterTerminalState(
+    private func connectionCenterTerminalState(
         _ session: TerminalSessionModel
     ) -> ConnectionCenterState {
         if session.reconnectProgress != nil { return .reconnecting }
