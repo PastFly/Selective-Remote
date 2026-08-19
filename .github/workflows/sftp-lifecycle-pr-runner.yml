@@ -1,0 +1,10 @@
+name: SFTP lifecycle temporary placeholder
+
+on:
+  workflow_dispatch:
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "temporary placeholder for cleanup by the saved macOS runner"
