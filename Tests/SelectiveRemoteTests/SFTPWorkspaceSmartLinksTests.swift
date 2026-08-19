@@ -331,3 +331,20 @@ func sftpWorkspaceIsObservedDirectlyByConnectionCenter() throws {
     #expect(center.contains("@ObservedObject var sftpWorkspace: SFTPWorkspaceModel"))
     #expect(content.contains("sftpWorkspace: model.sftpWorkspace"))
 }
+
+
+@Test("SFTP file URL drop loads NSURL instead of file contents")
+func sftpFileURLDropLoadsURLObject() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.components(separatedBy: "provider.loadObject(ofClass: NSURL.self)").count - 1 == 2)
+    #expect(!source.contains("forTypeIdentifier: UTType.fileURL.identifier\n            ) { data, _ in"))
+}

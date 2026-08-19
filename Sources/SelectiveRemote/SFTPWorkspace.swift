@@ -1367,15 +1367,9 @@ private struct SFTPWorkspaceLocalPaneView: View {
         }
         guard !fileProviders.isEmpty else { return false }
         for provider in fileProviders {
-            provider.loadDataRepresentation(
-                forTypeIdentifier: UTType.fileURL.identifier
-            ) { data, _ in
-                guard let data,
-                      let text = String(data: data, encoding: .utf8),
-                      let url = URL(
-                          string: text.trimmingCharacters(in: .whitespacesAndNewlines)
-                      )
-                else { return }
+            provider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let nsURL = object as? NSURL else { return }
+                let url = nsURL as URL
                 Task { @MainActor in
                     model.copyItems([url], to: destination)
                 }
@@ -1895,15 +1889,9 @@ private struct SFTPWorkspaceRemotePaneView: View {
         }
         guard !fileProviders.isEmpty else { return false }
         for provider in fileProviders {
-            provider.loadDataRepresentation(
-                forTypeIdentifier: UTType.fileURL.identifier
-            ) { data, _ in
-                guard let data,
-                      let text = String(data: data, encoding: .utf8),
-                      let url = URL(
-                          string: text.trimmingCharacters(in: .whitespacesAndNewlines)
-                      )
-                else { return }
+            provider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let nsURL = object as? NSURL else { return }
+                let url = nsURL as URL
                 Task { @MainActor in
                     remote.upload(
                         localURLs: [url],
