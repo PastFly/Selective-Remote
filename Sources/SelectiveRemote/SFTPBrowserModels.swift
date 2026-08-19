@@ -16,6 +16,77 @@ struct SFTPRemoteDragPayload: Codable, Sendable {
     let isDirectory: Bool
 }
 
+
+// NSItemProvider may invoke its completion handlers on a Foundation-owned
+// background queue. Keep those callbacks completely outside MainActor-
+// isolated SwiftUI views and pass only Sendable values back to MainActor.
+final class SFTPMainActorValueHandler<Value: Sendable>: @unchecked Sendable {
+    private let callback: @MainActor @Sendable (Value) -> Void
+
+    @MainActor
+    init(_ callback: @escaping @MainActor @Sendable (Value) -> Void) {
+        self.callback = callback
+    }
+
+    @MainActor
+    func call(_ value: Value) {
+        callback(value)
+    }
+}
+
+enum SFTPItemProviderBridge {
+    static func loadRemotePayload(
+        from provider: NSItemProvider,
+        handler: SFTPMainActorValueHandler<SFTPRemoteDragPayload>
+    ) {
+        provider.loadDataRepresentation(
+            forTypeIdentifier: SFTPDragType.remoteEntry.identifier
+        ) { data, _ in
+            guard let data,
+                  let payload = try? JSONDecoder().decode(
+                      SFTPRemoteDragPayload.self,
+                      from: data
+                  )
+            else { return }
+
+            Task { @MainActor in
+                handler.call(payload)
+            }
+        }
+    }
+
+    static func loadString(
+        from provider: NSItemProvider,
+        handler: SFTPMainActorValueHandler<String>
+    ) {
+        provider.loadDataRepresentation(
+            forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+        ) { data, _ in
+            guard let data,
+                  let value = String(data: data, encoding: .utf8)
+            else { return }
+
+            Task { @MainActor in
+                handler.call(value)
+            }
+        }
+    }
+
+    static func loadFileURL(
+        from provider: NSItemProvider,
+        handler: SFTPMainActorValueHandler<URL>
+    ) {
+        provider.loadObject(ofClass: NSURL.self) { object, _ in
+            guard let nsURL = object as? NSURL else { return }
+            let url = nsURL as URL
+
+            Task { @MainActor in
+                handler.call(url)
+            }
+        }
+    }
+}
+
 struct SFTPLocalEntry: Identifiable, Equatable, Sendable {
     let url: URL
     let isDirectory: Bool

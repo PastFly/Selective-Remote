@@ -1,3 +1,11 @@
+## 0.22.4
+
+- Fixed an application crash when dragging files between two SFTP servers.
+- Moved NSItemProvider callbacks completely out of MainActor-isolated SwiftUI views into a dedicated non-actor bridge.
+- Drag-and-drop handling now hops back to MainActor only after Foundation has delivered a Sendable value.
+- The fix also covers Mac ↔ Server and Server → Mac file transfer paths.
+- Added runtime regression tests for asynchronous NSItemProvider delivery and actor isolation.
+
 ## 0.22.3
 
 - Fixed an application crash when dragging files between two SFTP servers.

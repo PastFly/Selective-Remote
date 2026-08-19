@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import SelectiveRemote
@@ -101,36 +102,56 @@ func legacySingleSessionSFTPRuntimeStaysRemoved() throws {
 }
 
 
-@Test("SFTP ItemProvider callbacks do not inherit MainActor")
-func sftpItemProviderCallbacksDoNotInheritMainActor() throws {
+@Test("SFTP Workspace keeps ItemProvider callbacks outside MainActor views")
+func sftpWorkspaceUsesNonActorItemProviderBridge() throws {
     let root = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
         .deletingLastPathComponent()
 
-    let source = try String(
+    let workspace = try String(
         contentsOf: root.appendingPathComponent(
             "Sources/SelectiveRemote/SFTPWorkspace.swift"
         ),
         encoding: .utf8
     )
 
-    // NSItemProvider completion handlers may execute on Foundation's
-    // callback queue. They must remain Sendable/nonisolated and perform
-    // the actual SFTP/UI work only after an explicit MainActor hop.
-    #expect(
-        source.components(
-            separatedBy: "{ @Sendable data, _ in"
-        ).count >= 4
-    )
-    #expect(
-        source.components(
-            separatedBy: "{ @Sendable object, _ in"
-        ).count >= 3
+    let models = try String(
+        contentsOf: root.appendingPathComponent(
+            "Sources/SelectiveRemote/SFTPBrowserModels.swift"
+        ),
+        encoding: .utf8
     )
 
-    #expect(!source.contains(") { data, _ in"))
-    #expect(!source.contains("NSURL.self) { object, _ in"))
+    // Foundation callbacks must never be created inside SwiftUI Views.
+    #expect(!workspace.contains("loadDataRepresentation("))
+    #expect(!workspace.contains("loadObject(ofClass: NSURL.self)"))
 
-    #expect(source.contains("Task { @MainActor in"))
+    #expect(models.contains("enum SFTPItemProviderBridge"))
+    #expect(models.contains("SFTPMainActorValueHandler"))
+    #expect(models.contains("Task { @MainActor in"))
+}
+
+@Test("SFTP ItemProvider bridge survives asynchronous delivery")
+@MainActor
+func sftpItemProviderBridgeSurvivesAsynchronousDelivery() async {
+    let expected = "selective-remote-server-to-server-probe"
+
+    let provider = NSItemProvider(
+        item: Data(expected.utf8) as NSData,
+        typeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+    )
+
+    let received: String = await withCheckedContinuation { continuation in
+        let handler = SFTPMainActorValueHandler<String> { value in
+            continuation.resume(returning: value)
+        }
+
+        SFTPItemProviderBridge.loadString(
+            from: provider,
+            handler: handler
+        )
+    }
+
+    #expect(received == expected)
 }

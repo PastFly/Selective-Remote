@@ -1361,23 +1361,17 @@ private struct SFTPWorkspaceLocalPaneView: View {
            !source.remote.isBusy,
            !model.isBusy {
             for provider in remoteProviders {
-                provider.loadDataRepresentation(
-                    forTypeIdentifier: SFTPDragType.remoteEntry.identifier
-                ) { @Sendable data, _ in
-                    guard let data,
-                          let payload = try? JSONDecoder().decode(
-                              SFTPRemoteDragPayload.self,
-                              from: data
-                          )
-                    else { return }
-                    Task { @MainActor in
-                        source.remote.download(
-                            payload: payload,
-                            to: destination,
-                            settings: settings
-                        )
-                    }
+                let handler = SFTPMainActorValueHandler<SFTPRemoteDragPayload> { payload in
+                    source.remote.download(
+                        payload: payload,
+                        to: destination,
+                        settings: settings
+                    )
                 }
+                SFTPItemProviderBridge.loadRemotePayload(
+                    from: provider,
+                    handler: handler
+                )
             }
             return true
         }
@@ -1389,19 +1383,16 @@ private struct SFTPWorkspaceLocalPaneView: View {
         }
         if !stringProviders.isEmpty {
   for provider in stringProviders {
-      provider.loadDataRepresentation(
-          forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
-      ) { @Sendable data, _ in
-          guard let data,
-                let value = String(data: data, encoding: .utf8)
-          else { return }
-          Task { @MainActor in
-              _ = acceptInternalRemoteDrag(
-                  [value],
-                  destination: destination
-              )
-          }
+      let handler = SFTPMainActorValueHandler<String> { value in
+          _ = acceptInternalRemoteDrag(
+              [value],
+              destination: destination
+          )
       }
+      SFTPItemProviderBridge.loadString(
+          from: provider,
+          handler: handler
+      )
   }
   return true
         }
@@ -1411,13 +1402,13 @@ private struct SFTPWorkspaceLocalPaneView: View {
         }
         guard !fileProviders.isEmpty else { return false }
         for provider in fileProviders {
-            provider.loadObject(ofClass: NSURL.self) { @Sendable object, _ in
-                guard let nsURL = object as? NSURL else { return }
-                let url = nsURL as URL
-                Task { @MainActor in
-                    model.copyItems([url], to: destination)
-                }
+            let handler = SFTPMainActorValueHandler<URL> { url in
+                model.copyItems([url], to: destination)
             }
+            SFTPItemProviderBridge.loadFileURL(
+                from: provider,
+                handler: handler
+            )
         }
         return true
     }
@@ -1907,17 +1898,17 @@ private struct SFTPWorkspaceRemotePaneView: View {
         }
         if !fileProviders.isEmpty {
   for provider in fileProviders {
-      provider.loadObject(ofClass: NSURL.self) { @Sendable object, _ in
-          guard let nsURL = object as? NSURL else { return }
-          let url = nsURL as URL
-          Task { @MainActor in
-              remote.upload(
-                  localURLs: [url],
-                  to: destinationDirectory,
-                  settings: destinationSettings
-              )
-          }
+      let handler = SFTPMainActorValueHandler<URL> { url in
+          remote.upload(
+              localURLs: [url],
+              to: destinationDirectory,
+              settings: destinationSettings
+          )
       }
+      SFTPItemProviderBridge.loadFileURL(
+          from: provider,
+          handler: handler
+      )
   }
   return true
         }
@@ -1929,20 +1920,17 @@ private struct SFTPWorkspaceRemotePaneView: View {
         }
         guard !stringProviders.isEmpty else { return false }
         for provider in stringProviders {
-  provider.loadDataRepresentation(
-      forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
-  ) { @Sendable data, _ in
-      guard let data,
-            let value = String(data: data, encoding: .utf8)
-      else { return }
-      Task { @MainActor in
-          _ = acceptInternalRemoteDrag(
-              [value],
-              to: destinationDirectory,
-              destinationSettings: destinationSettings
-          )
-      }
+  let handler = SFTPMainActorValueHandler<String> { value in
+      _ = acceptInternalRemoteDrag(
+          [value],
+          to: destinationDirectory,
+          destinationSettings: destinationSettings
+      )
   }
+  SFTPItemProviderBridge.loadString(
+      from: provider,
+      handler: handler
+  )
         }
         return true
 
