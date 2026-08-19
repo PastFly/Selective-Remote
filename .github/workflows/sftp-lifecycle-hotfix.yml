@@ -128,7 +128,7 @@ jobs:
           path.write_text(text)
 
           '''
-          marker = "# Hard invariants before touching CI/release state.\n"
+          marker = "# Hard invariants before compile/tests.\n"
           if body.count(marker) != 1:
               raise SystemExit("cleanup hard-invariant marker not found")
           body = body.replace(marker, diagnostics_cleanup + marker, 1)
