@@ -48,6 +48,28 @@ enum SFTPTransferPhase: String, Sendable {
     }
 }
 
+enum SFTPTransferPollPolicy {
+    static func shouldProbe(phase: SFTPTransferPhase) -> Bool {
+        phase == .running
+    }
+
+    static func delayMilliseconds(
+        elapsed: TimeInterval,
+        phase: SFTPTransferPhase
+    ) -> Int {
+        switch phase {
+        case .paused:
+            return 500
+        case .cancelled, .completed, .failed:
+            return 200
+        case .queued, .running:
+            if elapsed < 8 { return 800 }
+            if elapsed < 30 { return 1_500 }
+            return 2_000
+        }
+    }
+}
+
 enum SFTPConflictPolicy: String, CaseIterable, Identifiable, Sendable {
     case rename
     case replace
@@ -328,14 +350,24 @@ final class SFTPTransferQueue: ObservableObject {
                 try request.operation(isResume, control)
             }
             while !operationState.isFinished {
-                // Progress probes may perform filesystem or SFTP I/O. Never run
-                // them on MainActor: a slow stat/list request used to freeze row
-                // selection and make the progress UI appear stuck.
-                let measured = await Task.detached(priority: .utility) {
-                    request.progressProbe()
-                }.value
-                updateProgress(next, request: request, started: started, measured: measured)
-                try? await Task.sleep(for: .milliseconds(800))
+                let elapsed = Date().timeIntervalSince(started)
+                let phase = index(of: next).map { items[$0].phase } ?? .cancelled
+
+                if SFTPTransferPollPolicy.shouldProbe(phase: phase) {
+                    // Progress probes may perform filesystem or SFTP I/O. Never run
+                    // them on MainActor: a slow stat/list request used to freeze row
+                    // selection and make the progress UI appear stuck.
+                    let measured = await Task.detached(priority: .utility) {
+                        request.progressProbe()
+                    }.value
+                    updateProgress(next, request: request, started: started, measured: measured)
+                }
+
+                let delay = SFTPTransferPollPolicy.delayMilliseconds(
+                    elapsed: elapsed,
+                    phase: phase
+                )
+                try? await Task.sleep(for: .milliseconds(delay))
             }
 
             do {
