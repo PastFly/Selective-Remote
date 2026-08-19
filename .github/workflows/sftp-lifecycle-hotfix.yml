@@ -14,72 +14,72 @@ jobs:
 
           path = Path('Sources/SelectiveRemote/SFTPWorkspace.swift')
           text = path.read_text()
-          old = '''                    .onDrag {
-                        if !model.selectedEntryIDs.contains(entry.id) {
-                            model.selectedEntryIDs = [entry.id]
-                            selectionAnchor = entry.id
-                        }
-                        return NSItemProvider(object: entry.url as NSURL)
-                    }
-'''
-          new = '''                    .onDrag {
-                        NSItemProvider(object: entry.url as NSURL)
-                    }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one local onDrag selection mutation, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          pattern = re.compile(
+              r'(?P<i>^[ \t]*)\.onDrag \{\n'
+              r'[ \t]*if !model\.selectedEntryIDs\.contains\(entry\.id\) \{\n'
+              r'[ \t]*model\.selectedEntryIDs = \[entry\.id\]\n'
+              r'[ \t]*selectionAnchor = entry\.id\n'
+              r'[ \t]*\}\n'
+              r'[ \t]*return NSItemProvider\(object: entry\.url as NSURL\)\n'
+              r'[ \t]*\}',
+              re.M,
+          )
+          match = pattern.search(text)
+          if not match:
+              raise SystemExit('local onDrag selection mutation not found')
+          indent = match.group('i')
+          replacement = (
+              indent + '.onDrag {\n'
+              + indent + '    NSItemProvider(object: entry.url as NSURL)\n'
+              + indent + '}'
+          )
+          text = text[:match.start()] + replacement + text[match.end():]
+          path.write_text(text)
 
           path = Path('Sources/SelectiveRemote/AppModel.swift')
           text = path.read_text()
-          old = '''            },
-            sftpWorkspace.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one AppModel workspace bridge, found {text.count(old)}')
-          path.write_text(text.replace(old, '''            }
-''', 1))
+          pattern = re.compile(
+              r',\n(?P<i>[ \t]*)sftpWorkspace\.objectWillChange\.sink \{ \[weak self\] _ in\n'
+              r'[ \t]*Task \{ @MainActor \[weak self\] in\n'
+              r'[ \t]*self\?\.objectWillChange\.send\(\)\n'
+              r'[ \t]*\}\n'
+              r'[ \t]*\}',
+              re.M,
+          )
+          text, count = pattern.subn('', text, count=1)
+          if count != 1:
+              raise SystemExit(f'AppModel workspace bridge count={count}')
+          path.write_text(text)
 
           path = Path('Sources/SelectiveRemote/ConnectionCenter.swift')
           text = path.read_text()
-          old = '''struct ConnectionCenterView: View {
-    @ObservedObject var model: AppModel
-'''
-          new = '''struct ConnectionCenterView: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var sftpWorkspace: SFTPWorkspaceModel
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'ConnectionCenterView marker count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
+          marker = 'struct ConnectionCenterView: View {\n    @ObservedObject var model: AppModel\n'
+          if marker not in text:
+              raise SystemExit('ConnectionCenterView marker missing')
+          text = text.replace(
+              marker,
+              marker + '    @ObservedObject var sftpWorkspace: SFTPWorkspaceModel\n',
+              1,
+          )
+          path.write_text(text)
 
           path = Path('Sources/SelectiveRemote/ContentView.swift')
           text = path.read_text()
-          old = '''        ConnectionCenterView(
-            model: model,
-            onOpen: openConnectionCenterSource,
-'''
-          new = '''        ConnectionCenterView(
-            model: model,
-            sftpWorkspace: model.sftpWorkspace,
-            onOpen: openConnectionCenterSource,
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'ConnectionCenter call marker count={text.count(old)}')
-          text = text.replace(old, new, 1)
+          marker = '        ConnectionCenterView(\n            model: model,\n            onOpen: openConnectionCenterSource,\n'
+          if marker not in text:
+              raise SystemExit('ConnectionCenter call marker missing')
+          text = text.replace(
+              marker,
+              '        ConnectionCenterView(\n            model: model,\n            sftpWorkspace: model.sftpWorkspace,\n            onOpen: openConnectionCenterSource,\n',
+              1,
+          )
 
-          # Historical runner adds this case itself; remove the current copy first
-          # so the resulting switch contains exactly one .pane branch.
           pane_pattern = re.compile(
-              r"\n[ \t]*case let \.pane\(paneID\):\n"
-              r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n"
-              r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n"
-              r"[ \t]*\}\n"
-              r"[ \t]*setMainArea\(\.sftp\)\n",
+              r'\n[ \t]*case let \.pane\(paneID\):\n'
+              r'[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n'
+              r'[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n'
+              r'[ \t]*\}\n'
+              r'[ \t]*setMainArea\(\.sftp\)\n',
               re.M,
           )
           text, removed = pane_pattern.subn('\n', text, count=1)
