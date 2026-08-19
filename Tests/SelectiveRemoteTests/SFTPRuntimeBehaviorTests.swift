@@ -45,22 +45,22 @@ func sftpControlPathGateAllowsIndependentConnections() {
 
     DispatchQueue.global(qos: .userInitiated).async {
         gate.withLock("server-a") {
-            firstEntered.signal()
-            releaseFirst.wait()
+            _ = firstEntered.signal()
+            _ = releaseFirst.wait(timeout: .now() + 2)
         }
-        firstFinished.signal()
+        _ = firstFinished.signal()
     }
 
     #expect(firstEntered.wait(timeout: .now() + 1) == .success)
 
     DispatchQueue.global(qos: .userInitiated).async {
         gate.withLock("server-b") {
-            secondEntered.signal()
+            _ = secondEntered.signal()
         }
     }
 
     #expect(secondEntered.wait(timeout: .now() + 0.5) == .success)
-    releaseFirst.signal()
+    _ = releaseFirst.signal()
     #expect(firstFinished.wait(timeout: .now() + 1) == .success)
 }
 
@@ -74,22 +74,22 @@ func sftpControlPathGateSerializesOneConnection() {
 
     DispatchQueue.global(qos: .userInitiated).async {
         gate.withLock("shared-server") {
-            firstEntered.signal()
-            releaseFirst.wait()
+            _ = firstEntered.signal()
+            _ = releaseFirst.wait(timeout: .now() + 2)
         }
-        firstFinished.signal()
+        _ = firstFinished.signal()
     }
 
     #expect(firstEntered.wait(timeout: .now() + 1) == .success)
 
     DispatchQueue.global(qos: .userInitiated).async {
         gate.withLock("shared-server") {
-            secondEntered.signal()
+            _ = secondEntered.signal()
         }
     }
 
     #expect(secondEntered.wait(timeout: .now() + 0.15) == .timedOut)
-    releaseFirst.signal()
+    _ = releaseFirst.signal()
     #expect(firstFinished.wait(timeout: .now() + 1) == .success)
     #expect(secondEntered.wait(timeout: .now() + 1) == .success)
 }
