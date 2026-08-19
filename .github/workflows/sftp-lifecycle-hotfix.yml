@@ -1,0 +1,511 @@
+name: Temporary pre-release cleanup carrier
+
+on:
+  workflow_dispatch:
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+          import stat
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, replacement, label, flags=0):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return updated
+
+          # Phase 1: remove the obsolete AppModel single-session runtime now.
+          path = Path("Sources/SelectiveRemote/AppModel.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              "    let sftpSession = SFTPBrowserSession()\n    let globalSFTPSession = SFTPBrowserSession()\n",
+              "",
+              "legacy AppModel SFTP sessions",
+          )
+          text = replace_once(
+              text,
+              "    private var sftpObservers: [AnyCancellable] = []\n",
+              "",
+              "legacy SFTP observer property",
+          )
+          text = sub_once(
+              text,
+              r"\n        sftpObservers = \[\n.*?\n        \]\n        refreshDisplays\(configureEmptyProfile: true\)",
+              "\n        refreshDisplays(configureEmptyProfile: true)",
+              "legacy SFTP observer wiring",
+              re.S,
+          )
+          text = replace_once(
+              text,
+              '''        case let .sftp(scope):
+              switch scope {
+              case let .pane(paneID):
+                  guard let pane = sftpWorkspace.pane(id: paneID),
+                        let settings = pane.session.settings else { return }
+                  pane.session.disconnect()
+                  pane.session.connect(settings)
+              case .profile, .global:
+                  break
+              }
+          ''',
+              '''        case let .sftp(.pane(paneID)):
+              guard let pane = sftpWorkspace.pane(id: paneID),
+                    let settings = pane.session.settings else { return }
+              pane.session.disconnect()
+              pane.session.connect(settings)
+          ''',
+              "SFTP reconnect legacy scopes",
+          )
+          text = replace_once(
+              text,
+              '''        case let .sftp(scope):
+              switch scope {
+              case let .pane(paneID):
+                  sftpWorkspace.pane(id: paneID)?.clear()
+              case let .profile(profileID):
+                  if sftpSession.profileID == profileID {
+                      sftpSession.disconnect()
+                  }
+              case .global:
+                  globalSFTPSession.disconnect()
+              }
+          ''',
+              '''        case let .sftp(.pane(paneID)):
+              sftpWorkspace.pane(id: paneID)?.clear()
+          ''',
+              "SFTP disconnect legacy scopes",
+          )
+          path.write_text(text)
+
+          # Remove unreachable global-SFTP editor/runtime from ContentView, but
+          # temporarily leave legacy Connection Center profile/global cases so
+          # the historical runner can perform its own pane insertion safely.
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''    private static let globalSFTPScopeID = UUID(
+              uuidString: "9C99721B-CFF3-48B7-A0A4-22E627A7D56C"
+          )!
+
+          ''',
+              "",
+              "global SFTP scope ID",
+          )
+          text = replace_once(
+              text,
+              "    @State private var showsGlobalSFTPConnectionEditor = false\n    @State private var globalSFTPConnection: TerminalTabConnection?\n",
+              "",
+              "global SFTP editor state",
+          )
+          text = sub_once(
+              text,
+              r"\n        \.sheet\(isPresented: \$showsGlobalSFTPConnectionEditor\) \{.*?\n        \}\n        \.onAppear \{",
+              "\n        .onAppear {",
+              "global SFTP editor sheet",
+              re.S,
+          )
+          text = sub_once(
+              text,
+              r"\n    private var globalSFTPProfile: ConnectionProfile \{.*?\n    @ViewBuilder\n    private var selectedSettingsContent: some View \{",
+              "\n    @ViewBuilder\n    private var selectedSettingsContent: some View {",
+              "global SFTP helper block",
+              re.S,
+          )
+          # Leave profile/global only; historical runner inserts pane before profile.
+          text = sub_once(
+              text,
+              r"        case let \.sftp\(scope\):\n            switch scope \{\n.*?\n            \}\n        case let \.profileTunnel",
+              '''        case let .sftp(scope):
+              switch scope {
+              case let .profile(profileID):
+                  model.selectProfile(profileID)
+                  selectedTab = .sftp
+                  setMainArea(.connections)
+              case .global:
+                  setMainArea(.sftp)
+              case .pane:
+                  break
+              }
+          case let .profileTunnel''',
+              "temporary Connection Center SFTP routing",
+              re.S,
+          )
+          path.write_text(text)
+
+          # Update the one source-contract assertion that now reflects AppModel's
+          # direct managed-pane reconnect path.
+          path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '#expect(source.contains("case let .sftp(scope):"))',
+              '#expect(source.contains("case let .sftp(.pane(paneID)):"))',
+              "managed SFTP reconnect regression",
+          )
+          path.write_text(text)
+
+          # Remove the obsolete release tag suggestion. Explicit tag stays required.
+          path = Path(".github/workflows/release.yml")
+          text = path.read_text()
+          text = replace_once(text, "        default: v0.20.6\n", "", "stale release default")
+          path.write_text(text)
+
+          # Final phase runs as pre-commit, after the historical runner has inserted
+          # its pane routing. It removes the remaining compatibility cases, formats
+          # carrier-generated blocks, adds cleanup regressions, deletes all carriers,
+          # then reruns tests and a release build on exactly what will be committed.
+          hook = Path(".git/hooks/pre-commit")
+          hook.write_text(r'''#!/bin/bash
+          set -euo pipefail
+          python3 <<'HOOKPY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return text.replace(old, new, 1)
+
+          def sub_once(text, pattern, replacement, label, flags=0):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return updated
+
+          # Connection Center now has exactly one SFTP source type: a live pane.
+          path = Path("Sources/SelectiveRemote/ConnectionCenter.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''enum ConnectionCenterSFTPScope: Hashable {
+              case pane(UUID)
+              case profile(UUID)
+              case global
+          }
+          ''',
+              '''enum ConnectionCenterSFTPScope: Hashable {
+              case pane(UUID)
+          }
+          ''',
+              "Connection Center SFTP enum cleanup",
+          )
+          text = replace_once(
+              text,
+              '''        case let .sftp(scope):
+              switch scope {
+              case let .pane(paneID):
+                  "sftp:pane:\\(paneID.uuidString)"
+              case let .profile(profileID):
+                  "sftp:profile:\\(profileID.uuidString)"
+              case .global:
+                  "sftp:global"
+              }
+          ''',
+              '''        case let .sftp(.pane(paneID)):
+              "sftp:pane:\\(paneID.uuidString)"
+          ''',
+              "Connection Center SFTP stable ID cleanup",
+          )
+          path.write_text(text)
+
+          # Replace whatever pane formatting the historical runner inserted with
+          # the final direct pane route and remove compatibility profile/global cases.
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          text = sub_once(
+              text,
+              r"        case let \.sftp\(scope\):\n            switch scope \{\n.*?\n            \}\n        case let \.profileTunnel",
+              '''        case let .sftp(.pane(paneID)):
+              if let tab = model.sftpWorkspace.tab(containing: paneID) {
+                  model.sftpWorkspace.selectedTabID = tab.id
+              }
+              setMainArea(.sftp)
+          case let .profileTunnel''',
+              "final Connection Center SFTP open route",
+              re.S,
+          )
+          path.write_text(text)
+
+          # Normalize indentation left behind by the earlier DnD carriers.
+          path = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '''            .onDrop(
+        of: sftpWorkspaceDropTypeIdentifiers,
+        isTargeted: $dropTargeted
+    ) { providers in
+        acceptDrops(providers, destination: model.currentDirectory)
+    }
+
+          ''',
+              '''            .onDrop(
+                  of: sftpWorkspaceDropTypeIdentifiers,
+                  isTargeted: $dropTargeted
+              ) { providers in
+                  acceptDrops(providers, destination: model.currentDirectory)
+              }
+
+          ''',
+              "local pane drop formatting",
+          )
+          text = replace_once(
+              text,
+              '''        let stringProviders = providers.filter {
+    $0.hasItemConformingToTypeIdentifier(
+        NSPasteboard.PasteboardType.string.rawValue
+    )
+          }
+          if !stringProviders.isEmpty {
+    for provider in stringProviders {
+        provider.loadDataRepresentation(
+            forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+        ) { data, _ in
+            guard let data,
+                  let value = String(data: data, encoding: .utf8)
+            else { return }
+            Task { @MainActor in
+                _ = acceptInternalRemoteDrag(
+                    [value],
+                    destination: destination
+                )
+            }
+        }
+    }
+    return true
+          }
+          ''',
+              '''        let stringProviders = providers.filter {
+              $0.hasItemConformingToTypeIdentifier(
+                  NSPasteboard.PasteboardType.string.rawValue
+              )
+          }
+          if !stringProviders.isEmpty {
+              for provider in stringProviders {
+                  provider.loadDataRepresentation(
+                      forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+                  ) { data, _ in
+                      guard let data,
+                            let value = String(data: data, encoding: .utf8)
+                      else { return }
+                      Task { @MainActor in
+                          _ = acceptInternalRemoteDrag(
+                              [value],
+                              destination: destination
+                          )
+                      }
+                  }
+              }
+              return true
+          }
+          ''',
+              "local internal drop formatting",
+          )
+          text = replace_once(
+              text,
+              '''                .onDrop(
+            of: sftpWorkspaceDropTypeIdentifiers,
+            isTargeted: $dropTargeted
+        ) { providers in
+            acceptDrops(
+                providers,
+                to: remote.currentPath,
+                destinationSettings: settings
+            )
+        }
+
+          ''',
+              '''                .onDrop(
+                    of: sftpWorkspaceDropTypeIdentifiers,
+                    isTargeted: $dropTargeted
+                ) { providers in
+                    acceptDrops(
+                        providers,
+                        to: remote.currentPath,
+                        destinationSettings: settings
+                    )
+                }
+
+          ''',
+              "remote pane drop formatting",
+          )
+          text = replace_once(
+              text,
+              '''        let fileProviders = providers.filter {
+    $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+          }
+          if !fileProviders.isEmpty {
+    for provider in fileProviders {
+        provider.loadObject(ofClass: NSURL.self) { object, _ in
+            guard let nsURL = object as? NSURL else { return }
+            let url = nsURL as URL
+            Task { @MainActor in
+                remote.upload(
+                    localURLs: [url],
+                    to: destinationDirectory,
+                    settings: destinationSettings
+                )
+            }
+        }
+    }
+    return true
+          }
+
+          let stringProviders = providers.filter {
+    $0.hasItemConformingToTypeIdentifier(
+        NSPasteboard.PasteboardType.string.rawValue
+    )
+          }
+          guard !stringProviders.isEmpty else { return false }
+          for provider in stringProviders {
+    provider.loadDataRepresentation(
+        forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+    ) { data, _ in
+        guard let data,
+              let value = String(data: data, encoding: .utf8)
+        else { return }
+        Task { @MainActor in
+            _ = acceptInternalRemoteDrag(
+                [value],
+                to: destinationDirectory,
+                destinationSettings: destinationSettings
+            )
+        }
+    }
+          }
+          return true
+
+          ''',
+              '''        let fileProviders = providers.filter {
+              $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+          }
+          if !fileProviders.isEmpty {
+              for provider in fileProviders {
+                  provider.loadObject(ofClass: NSURL.self) { object, _ in
+                      guard let nsURL = object as? NSURL else { return }
+                      let url = nsURL as URL
+                      Task { @MainActor in
+                          remote.upload(
+                              localURLs: [url],
+                              to: destinationDirectory,
+                              settings: destinationSettings
+                          )
+                      }
+                  }
+              }
+              return true
+          }
+
+          let stringProviders = providers.filter {
+              $0.hasItemConformingToTypeIdentifier(
+                  NSPasteboard.PasteboardType.string.rawValue
+              )
+          }
+          guard !stringProviders.isEmpty else { return false }
+          for provider in stringProviders {
+              provider.loadDataRepresentation(
+                  forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+              ) { data, _ in
+                  guard let data,
+                        let value = String(data: data, encoding: .utf8)
+                  else { return }
+                  Task { @MainActor in
+                      _ = acceptInternalRemoteDrag(
+                          [value],
+                          to: destinationDirectory,
+                          destinationSettings: destinationSettings
+                      )
+                  }
+              }
+          }
+          return true
+
+          ''',
+              "remote acceptDrops formatting",
+          )
+          path.write_text(text)
+
+          # Add a regression that prevents the superseded runtime from returning.
+          path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
+          text = path.read_text()
+          if "Legacy single-session SFTP runtime stays removed" not in text:
+              text = text.rstrip() + r'''
+
+          @Test("Legacy single-session SFTP runtime stays removed")
+          func legacySingleSessionSFTPRuntimeStaysRemoved() throws {
+              let root = URL(fileURLWithPath: #filePath)
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+                  .deletingLastPathComponent()
+              let appModel = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+                  encoding: .utf8
+              )
+              let content = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+                  encoding: .utf8
+              )
+              let center = try String(
+                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"),
+                  encoding: .utf8
+              )
+              #expect(!appModel.contains("let sftpSession = SFTPBrowserSession()"))
+              #expect(!appModel.contains("globalSFTPSession"))
+              #expect(!appModel.contains("sftpObservers"))
+              #expect(!content.contains("showsGlobalSFTPConnectionEditor"))
+              #expect(!content.contains("globalSFTPScopeID"))
+              #expect(!content.contains("connectGlobalSFTP"))
+              #expect(!center.contains("sftp:profile:"))
+              #expect(!center.contains("sftp:global"))
+          }
+          ''' + "\n"
+          path.write_text(text)
+
+          path = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          text = path.read_text().replace(
+              "contentsOf: projectRoot\n  .appendingPathComponent",
+              "contentsOf: projectRoot\n            .appendingPathComponent",
+          )
+          path.write_text(text)
+
+          # Remove the earlier push-only validator; this hook is the only carrier left.
+          Path(".github/workflows/pre-release-cleanup.yml").unlink(missing_ok=True)
+
+          app = Path("Sources/SelectiveRemote/AppModel.swift").read_text()
+          content = Path("Sources/SelectiveRemote/ContentView.swift").read_text()
+          center = Path("Sources/SelectiveRemote/ConnectionCenter.swift").read_text()
+          release = Path(".github/workflows/release.yml").read_text()
+          for forbidden in ["let sftpSession = SFTPBrowserSession()", "globalSFTPSession", "sftpObservers"]:
+              if forbidden in app:
+                  raise SystemExit(f"legacy AppModel token remains: {forbidden}")
+          for forbidden in ["showsGlobalSFTPConnectionEditor", "globalSFTPScopeID", "connectGlobalSFTP"]:
+              if forbidden in content:
+                  raise SystemExit(f"legacy ContentView token remains: {forbidden}")
+          if "sftp:profile:" in center or "sftp:global" in center:
+              raise SystemExit("legacy Connection Center SFTP scope remains")
+          if "default: v0.20.6" in release:
+              raise SystemExit("stale release default remains")
+          HOOKPY
+
+          git add -A
+          git diff --cached --check
+          swift test
+          swift build -c release
+          git add -A
+          ''')
+          hook.chmod(hook.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+          PY
