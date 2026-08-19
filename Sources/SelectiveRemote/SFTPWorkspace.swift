@@ -2279,7 +2279,7 @@ private func sftpWorkspaceFileRow(
             Image(
                 systemName: isDirectory
                     ? "folder.fill"
-                    : isSymbolicLink ? "link" : "doc.fill"
+                    : isSymbolicLink ? "link" : "doc"
             )
             .foregroundStyle(isDirectory ? Color.blue : Color.secondary)
             Text(name)
