@@ -1,0 +1,234 @@
+name: SFTP lifecycle formatting carrier
+
+on:
+  workflow_dispatch:
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          # Normalize the Connection Center helper that was functionally correct
+          # but poorly indented by the temporary patch carrier.
+          path = Path("Sources/SelectiveRemote/AppModel.swift")
+          text = path.read_text()
+          pattern = re.compile(
+              r"    private func appendConnectionCenterSFTP\(\n.*?\n"
+              r"(?=(?:    )?private func connectionCenterTerminalState\()",
+              re.S,
+          )
+          helper = '''    private func appendConnectionCenterSFTP(
+              pane: SFTPWorkspacePane,
+              into items: inout [ConnectionCenterItem]
+          ) {
+              let session = pane.session
+              guard pane.kind == .remote,
+                    let settings = session.settings,
+                    session.connectionState != .disconnected
+              else { return }
+              let route = connectionCenterRoute(settings: settings)
+              let state: ConnectionCenterState = switch session.connectionState {
+              case .disconnected: .disconnected
+              case .connecting: .connecting
+              case .connected: .connected
+              case .error: .error
+              }
+              items.append(
+                  ConnectionCenterItem(
+                      source: .sftp(scope: .pane(pane.id)),
+                      kind: .sftp,
+                      profileName: settings.profileName,
+                      userHost: connectionCenterUserHost(
+                          username: settings.username,
+                          host: settings.host
+                      ),
+                      port: settings.port,
+                      route: route.summary,
+                      authentication: settings.authenticationMode.title,
+                      state: state,
+                      startedAt: session.connectedAt,
+                      errorMessage: session.lastErrorMessage,
+                      detailSections: [
+                          ConnectionCenterDetailSection(
+                              title: "Основное",
+                              rows: [
+                                  ConnectionCenterDetailRow(
+                                      label: "Профиль",
+                                      value: settings.profileName
+                                  ),
+                                  ConnectionCenterDetailRow(label: "Панель", value: pane.title),
+                                  ConnectionCenterDetailRow(label: "Host", value: settings.host),
+                                  ConnectionCenterDetailRow(
+                                      label: "Port",
+                                      value: String(settings.port)
+                                  ),
+                                  ConnectionCenterDetailRow(
+                                      label: "Путь",
+                                      value: session.remote.currentPath
+                                  ),
+                                  ConnectionCenterDetailRow(
+                                      label: "Transfers",
+                                      value: String(session.transfers.activeCount)
+                                  )
+                              ]
+                          ),
+                          ConnectionCenterDetailSection(
+                              title: "Аутентификация",
+                              rows: connectionCenterAuthenticationRows(
+                                  method: settings.authenticationMode.title,
+                                  identityName: settings.identity?.name
+                              )
+                          ),
+                          ConnectionCenterDetailSection(
+                              title: "Маршрут",
+                              rows: connectionCenterRouteRows(
+                                  jumpHost: route.jumpHost,
+                                  proxy: route.proxy
+                              )
+                          )
+                      ]
+                  )
+              )
+          }
+
+'''
+          text, count = pattern.subn(helper, text, count=1)
+          if count != 1:
+              raise SystemExit(f"AppModel SFTP helper marker mismatch: {count}")
+          text = text.replace(
+              "\nprivate func connectionCenterTerminalState(",
+              "\n    private func connectionCenterTerminalState(",
+              1,
+          )
+          path.write_text(text)
+
+          # Normalize the SFTP session lifecycle tail without changing behavior.
+          path = Path("Sources/SelectiveRemote/SFTPBrowserModels.swift")
+          text = path.read_text()
+          marker = "@MainActor\nfinal class SFTPBrowserSession: ObservableObject {"
+          if text.count(marker) != 1:
+              raise SystemExit("SFTPBrowserSession marker mismatch")
+          prefix = text.split(marker, 1)[0]
+          session = '''@MainActor
+          final class SFTPBrowserSession: ObservableObject {
+              let transfers: SFTPTransferQueue
+              let remote: SFTPBrowserModel
+              let local = SFTPLocalBrowserModel()
+              @Published var settings: SSHConnectionSettings?
+              @Published private(set) var connectionState = SFTPConnectionState.disconnected
+              @Published private(set) var connectedAt: Date?
+              @Published private(set) var lastErrorMessage: String?
+
+              private(set) var profileID: UUID?
+              private var retainedMasterSettings: SSHConnectionSettings?
+
+              init() {
+                  let transfers = SFTPTransferQueue()
+                  self.transfers = transfers
+                  remote = SFTPBrowserModel(transfers: transfers)
+              }
+
+              func prepare(for profileID: UUID) {
+                  guard self.profileID != profileID else { return }
+                  self.profileID = profileID
+                  disconnect()
+              }
+
+              func connect(
+                  _ settings: SSHConnectionSettings,
+                  completion: (@MainActor (Bool) -> Void)? = nil
+              ) {
+                  if let retainedMasterSettings {
+                      SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+                  }
+                  retainedMasterSettings = settings
+                  SFTPService.retainMasterConnection(settings: settings)
+                  self.settings = settings
+                  connectionState = .connecting
+                  connectedAt = nil
+                  lastErrorMessage = nil
+                  remote.load(
+                      settings: settings,
+                      directory: settings.initialDirectory
+                  ) { [weak self] success in
+                      guard let self else {
+                          completion?(success)
+                          return
+                      }
+                      if success {
+                          connectionState = .connected
+                          connectedAt = Date()
+                          lastErrorMessage = nil
+                      } else {
+                          connectionState = .error
+                          connectedAt = nil
+                          lastErrorMessage = remote.errorMessage
+                      }
+                      completion?(success)
+                  }
+              }
+
+              func disconnect() {
+                  transfers.cancelAll()
+                  if let retainedMasterSettings {
+                      SFTPService.releaseMasterConnection(settings: retainedMasterSettings)
+                      self.retainedMasterSettings = nil
+                  }
+                  settings = nil
+                  connectionState = .disconnected
+                  connectedAt = nil
+                  lastErrorMessage = nil
+                  remote.reset()
+              }
+          }
+          '''
+          session = "\n".join(
+              line[10:] if line.startswith("          ") else line
+              for line in session.splitlines()
+          ) + "\n"
+          path.write_text(prefix + session)
+
+          # The saved PR runner will insert this pane case again with canonical
+          # indentation. Remove the already committed copy first.
+          path = Path("Sources/SelectiveRemote/ContentView.swift")
+          text = path.read_text()
+          pattern = re.compile(
+              r"(        case let \.sftp\(scope\):\n"
+              r"            switch scope \{\n)"
+              r"[ \t]*case let \.pane\(paneID\):\n"
+              r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n"
+              r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n"
+              r"[ \t]*\}\n"
+              r"[ \t]*setMainArea\(\.sftp\)\n"
+              r"(?=            case let \.profile\(profileID\):)",
+          )
+          text, count = pattern.subn(r"\1", text, count=1)
+          if count != 1:
+              raise SystemExit(f"ContentView pane formatting marker mismatch: {count}")
+          path.write_text(text)
+
+          # Make the next runner step validate a release build before running
+          # the full test suite. xcrun bypasses this PATH wrapper recursively.
+          wrapper_dir = Path("/tmp/selective-remote-swift-wrapper")
+          wrapper_dir.mkdir(parents=True, exist_ok=True)
+          wrapper = wrapper_dir / "swift"
+          wrapper.write_text('''#!/bin/bash
+          set -euo pipefail
+          if [[ "${1:-}" == "test" ]]; then
+            echo "==> Validating release build before tests"
+            xcrun swift build -c release
+          fi
+          exec xcrun swift "$@"
+          '''.replace("          ", ""))
+          wrapper.chmod(0o755)
+          github_path = os.environ.get("GITHUB_PATH")
+          if not github_path:
+              raise SystemExit("GITHUB_PATH is unavailable")
+          with open(github_path, "a", encoding="utf-8") as output:
+              output.write(str(wrapper_dir) + "\n")
+          PY
