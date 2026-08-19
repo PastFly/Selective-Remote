@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -21,11 +21,8 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - name: Checkout PR branch
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
 
       - name: Environment
         run: |
@@ -33,139 +30,16 @@ jobs:
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
-      - name: Apply SFTP DnD lifecycle fix
-        shell: bash
+      - name: Validate shell scripts
         run: |
-          set -euo pipefail
-          python3 <<'PY'
-          from pathlib import Path
-
-          path = Path('Sources/SelectiveRemote/SFTPWorkspace.swift')
-          text = path.read_text()
-          old = '''                    .onDrag {
-                        if !model.selectedEntryIDs.contains(entry.id) {
-                            model.selectedEntryIDs = [entry.id]
-                            selectionAnchor = entry.id
-                        }
-                        return NSItemProvider(object: entry.url as NSURL)
-                    }
-'''
-          new = '''                    .onDrag {
-                        NSItemProvider(object: entry.url as NSURL)
-                    }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one local onDrag selection mutation, found {text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('Sources/SelectiveRemote/AppModel.swift')
-          text = path.read_text()
-          old = '''            },
-            sftpWorkspace.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
-            }
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one AppModel workspace bridge, found {text.count(old)}')
-          path.write_text(text.replace(old, '''            }
-''', 1))
-
-          path = Path('Sources/SelectiveRemote/ConnectionCenter.swift')
-          text = path.read_text()
-          old = '''struct ConnectionCenterView: View {
-    @ObservedObject var model: AppModel
-'''
-          new = '''struct ConnectionCenterView: View {
-    @ObservedObject var model: AppModel
-    @ObservedObject var sftpWorkspace: SFTPWorkspaceModel
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'ConnectionCenterView marker count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('Sources/SelectiveRemote/ContentView.swift')
-          text = path.read_text()
-          old = '''        ConnectionCenterView(
-            model: model,
-            onOpen: openConnectionCenterSource,
-'''
-          new = '''        ConnectionCenterView(
-            model: model,
-            sftpWorkspace: model.sftpWorkspace,
-            onOpen: openConnectionCenterSource,
-'''
-          if text.count(old) != 1:
-              raise SystemExit(f'ConnectionCenter call marker count={text.count(old)}')
-          path.write_text(text.replace(old, new, 1))
-
-          path = Path('Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift')
-          text = path.read_text()
-          marker = '@Test("SFTP local drag keeps the workspace stable until drop")'
-          if marker not in text:
-              text += '''
-
-@Test("SFTP local drag keeps the workspace stable until drop")
-func sftpLocalDragDoesNotMutateSelectionDuringDragStart() throws {
-    let projectRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let source = try String(
-        contentsOf: projectRoot
-            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
-        encoding: .utf8
-    )
-
-    #expect(source.contains(".onDrag {\\n                        NSItemProvider(object: entry.url as NSURL)\\n                    }"))
-    #expect(!source.contains(".onDrag {\\n                        if !model.selectedEntryIDs.contains(entry.id)"))
-}
-
-@Test("SFTP workspace changes do not invalidate the application root during drag")
-func sftpWorkspaceIsObservedDirectlyByConnectionCenter() throws {
-    let projectRoot = URL(fileURLWithPath: #filePath)
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-        .deletingLastPathComponent()
-    let appModel = try String(
-        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
-        encoding: .utf8
-    )
-    let center = try String(
-        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"),
-        encoding: .utf8
-    )
-    let content = try String(
-        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
-        encoding: .utf8
-    )
-
-    #expect(!appModel.contains("sftpWorkspace.objectWillChange.sink"))
-    #expect(center.contains("@ObservedObject var sftpWorkspace: SFTPWorkspaceModel"))
-    #expect(content.contains("sftpWorkspace: model.sftpWorkspace"))
-}
-'''
-          path.write_text(text)
-          PY
-
-          git diff --check
+          bash -n scripts/build_app.sh
+          bash -n scripts/build_and_install.sh
+          version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          python3 scripts/release_notes.py "$version" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
 
       - name: Test
         run: swift test
 
       - name: Release build
         run: swift build -c release
-
-      - name: Commit clean validated fix
-        shell: bash
-        run: |
-          set -euo pipefail
-          git checkout origin/main -- .github/workflows/ci.yml
-          rm -f .github/workflows/sftp-dnd-fix.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Sources Tests .github/workflows/ci.yml .github/workflows/sftp-dnd-fix.yml
-          git diff --cached --check
-          git commit -m "Fix SFTP drag-and-drop lifecycle [sftp-dnd-applied]"
-          git push origin HEAD:agent/sftp-lifecycle-0.22.2
