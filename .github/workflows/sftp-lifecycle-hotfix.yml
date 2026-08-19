@@ -1,0 +1,299 @@
+name: SFTP unified drop patch carrier
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  carrier:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
+          text = path.read_text()
+
+          # Remove row-level drop destinations. A single pane-level destination
+          # avoids nested/competing SwiftUI destinations inside List.
+          local_row = '''                    .dropDestination(for: String.self) { items, _ in
+                        guard entry.isDirectory, !model.isBusy else { return false }
+                        return acceptInternalRemoteDrag(items, destination: entry.url)
+                    }
+                    .onDrop(
+                        of: [UTType.fileURL.identifier],
+                        isTargeted: nil
+                    ) { providers in
+                        guard entry.isDirectory, !model.isBusy else { return false }
+                        return acceptDrops(providers, destination: entry.url)
+                    }
+'''
+          if local_row not in text:
+              raise SystemExit("local row drop block not found")
+          text = text.replace(local_row, "", 1)
+
+          remote_row = '''                        .dropDestination(for: String.self) { items, _ in
+                            guard entry.isDirectory, !remote.isBusy else { return false }
+                            return acceptInternalRemoteDrag(
+                                items,
+                                to: SFTPService.joinedRemotePath(remote.currentPath, entry.name),
+                                destinationSettings: settings
+                            )
+                        }
+                        .onDrop(
+                            of: [UTType.fileURL.identifier],
+                            isTargeted: nil
+                        ) { providers in
+                            guard entry.isDirectory, !remote.isBusy else { return false }
+                            return acceptDrops(
+                                providers,
+                                to: SFTPService.joinedRemotePath(remote.currentPath, entry.name),
+                                destinationSettings: settings
+                            )
+                        }
+'''
+          if remote_row not in text:
+              raise SystemExit("remote row drop block not found")
+          text = text.replace(remote_row, "", 1)
+
+          local_list = '''            .dropDestination(for: String.self) { items, _ in
+                acceptInternalRemoteDrag(items, destination: model.currentDirectory)
+            } isTargeted: {
+                dropTargeted = $0
+            }
+            .onDrop(
+                of: [UTType.fileURL.identifier],
+                isTargeted: nil
+            ) { providers in
+                acceptDrops(providers, destination: model.currentDirectory)
+            }
+'''
+          local_list_new = '''            .onDrop(
+                of: sftpWorkspaceDropTypeIdentifiers,
+                isTargeted: $dropTargeted
+            ) { providers in
+                acceptDrops(providers, destination: model.currentDirectory)
+            }
+'''
+          if local_list not in text:
+              raise SystemExit("local list drop block not found")
+          text = text.replace(local_list, local_list_new, 1)
+
+          remote_list = '''                .dropDestination(for: String.self) { items, _ in
+                    acceptInternalRemoteDrag(
+                        items,
+                        to: remote.currentPath,
+                        destinationSettings: settings
+                    )
+                } isTargeted: {
+                    dropTargeted = $0
+                }
+                .onDrop(
+                    of: [UTType.fileURL.identifier],
+                    isTargeted: nil
+                ) { providers in
+                    acceptDrops(
+                        providers,
+                        to: remote.currentPath,
+                        destinationSettings: settings
+                    )
+                }
+'''
+          remote_list_new = '''                .onDrop(
+                    of: sftpWorkspaceDropTypeIdentifiers,
+                    isTargeted: $dropTargeted
+                ) { providers in
+                    acceptDrops(
+                        providers,
+                        to: remote.currentPath,
+                        destinationSettings: settings
+                    )
+                }
+'''
+          if remote_list not in text:
+              raise SystemExit("remote list drop block not found")
+          text = text.replace(remote_list, remote_list_new, 1)
+
+          marker = 'private let sftpWorkspaceInternalDragPrefix = "SelectiveRemoteSFTPRemote|"\n'
+          drop_types = '''private let sftpWorkspaceDropTypeIdentifiers = [
+    UTType.fileURL.identifier,
+    NSPasteboard.PasteboardType.string.rawValue,
+    SFTPDragType.remoteEntry.identifier
+]
+
+'''
+          if drop_types not in text:
+              if marker not in text:
+                  raise SystemExit("internal drag prefix marker not found")
+              text = text.replace(marker, drop_types + marker, 1)
+
+          # Local destination: keep legacy custom payload, then accept the
+          # AppKit string token used by server-side rows, then file URLs.
+          local_file_marker = '''        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+'''
+          local_string_branch = '''        let stringProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(
+                NSPasteboard.PasteboardType.string.rawValue
+            )
+        }
+        if !stringProviders.isEmpty {
+            for provider in stringProviders {
+                provider.loadDataRepresentation(
+                    forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+                ) { data, _ in
+                    guard let data,
+                          let value = String(data: data, encoding: .utf8)
+                    else { return }
+                    Task { @MainActor in
+                        _ = acceptInternalRemoteDrag(
+                            [value],
+                            destination: destination
+                        )
+                    }
+                }
+            }
+            return true
+        }
+
+'''
+          # Only insert into the first acceptDrops (local pane).
+          local_accept_start = text.index('    private func acceptDrops(\n        _ providers: [NSItemProvider],\n        destination: URL\n    ) -> Bool {')
+          remote_view_start = text.index('private struct SFTPWorkspaceRemotePaneView: View')
+          local_section = text[local_accept_start:remote_view_start]
+          if local_string_branch not in local_section:
+              pos = local_section.index(local_file_marker)
+              local_section = local_section[:pos] + local_string_branch + local_section[pos:]
+              text = text[:local_accept_start] + local_section + text[remote_view_start:]
+
+          # Remote destination: fileURL means Mac -> server. If there is no
+          # fileURL, accept the AppKit plain-text token for server -> server.
+          remote_old = '''        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+        for provider in fileProviders {
+            provider.loadObject(ofClass: NSURL.self) { object, _ in
+                guard let nsURL = object as? NSURL else { return }
+                let url = nsURL as URL
+                Task { @MainActor in
+                    remote.upload(
+                        localURLs: [url],
+                        to: destinationDirectory,
+                        settings: destinationSettings
+                    )
+                }
+            }
+        }
+        return true
+'''
+          remote_new = '''        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        if !fileProviders.isEmpty {
+            for provider in fileProviders {
+                provider.loadObject(ofClass: NSURL.self) { object, _ in
+                    guard let nsURL = object as? NSURL else { return }
+                    let url = nsURL as URL
+                    Task { @MainActor in
+                        remote.upload(
+                            localURLs: [url],
+                            to: destinationDirectory,
+                            settings: destinationSettings
+                        )
+                    }
+                }
+            }
+            return true
+        }
+
+        let stringProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(
+                NSPasteboard.PasteboardType.string.rawValue
+            )
+        }
+        guard !stringProviders.isEmpty else { return false }
+        for provider in stringProviders {
+            provider.loadDataRepresentation(
+                forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+            ) { data, _ in
+                guard let data,
+                      let value = String(data: data, encoding: .utf8)
+                else { return }
+                Task { @MainActor in
+                    _ = acceptInternalRemoteDrag(
+                        [value],
+                        to: destinationDirectory,
+                        destinationSettings: destinationSettings
+                    )
+                }
+            }
+        }
+        return true
+'''
+          # Replace only the remote acceptDrops instance: the exact old block
+          # occurs there after the previous fileURL fix.
+          remote_accept_start = text.index('    private func acceptDrops(\n        _ providers: [NSItemProvider],\n        to destinationDirectory: String,')
+          remote_tail = text[remote_accept_start:]
+          if remote_old not in remote_tail:
+              raise SystemExit("remote acceptDrops file block not found")
+          remote_tail = remote_tail.replace(remote_old, remote_new, 1)
+          text = text[:remote_accept_start] + remote_tail
+
+          path.write_text(text)
+
+          # Update source-contract tests for the single unified destination.
+          tests = Path("Tests/SelectiveRemoteTests/SFTPWorkspaceSmartLinksTests.swift")
+          test_text = tests.read_text()
+          old_expect = '#expect(source.contains(".dropDestination(for: String.self)"))'
+          count = test_text.count(old_expect)
+          if count != 2:
+              raise SystemExit(f"expected two dropDestination test expectations, found {count}")
+          test_text = test_text.replace(
+              old_expect,
+              '#expect(source.contains("sftpWorkspaceDropTypeIdentifiers"))',
+          )
+
+          marker = '@Test("SFTP uses one unified pane drop destination")'
+          if marker not in test_text:
+              test_text += '''
+
+@Test("SFTP uses one unified pane drop destination")
+func sftpWorkspaceUsesUnifiedPaneDropDestination() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+            .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(!source.contains(".dropDestination(for: String.self)"))
+    #expect(source.contains("NSPasteboard.PasteboardType.string.rawValue"))
+    #expect(source.components(separatedBy: "of: sftpWorkspaceDropTypeIdentifiers").count - 1 == 2)
+    #expect(source.components(separatedBy: "isTargeted: $dropTargeted").count - 1 == 2)
+}
+'''
+          tests.write_text(test_text)
+
+          # Historical reusable runner inserts this exact pane case once. Remove
+          # the existing oddly-indented copy before that runner executes.
+          content = Path("Sources/SelectiveRemote/ContentView.swift")
+          c = content.read_text()
+          pane_block = '''  case let .pane(paneID):
+    if let tab = model.sftpWorkspace.tab(containing: paneID) {
+        model.sftpWorkspace.selectedTabID = tab.id
+    }
+    setMainArea(.sftp)
+'''
+          if pane_block not in c:
+              raise SystemExit("existing pane case block not found")
+          c = c.replace(pane_block, "", 1)
+          content.write_text(c)
+          PY
