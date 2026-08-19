@@ -998,11 +998,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
                         localContextMenu(for: entry)
                     }
                     .onDrag {
-                        if !model.selectedEntryIDs.contains(entry.id) {
-                            model.selectedEntryIDs = [entry.id]
-                            selectionAnchor = entry.id
-                        }
-                        return NSItemProvider(object: entry.url as NSURL)
+                        NSItemProvider(object: entry.url as NSURL)
                     }
                     .dropDestination(for: String.self) { items, _ in
                         guard entry.isDirectory, !model.isBusy else { return false }

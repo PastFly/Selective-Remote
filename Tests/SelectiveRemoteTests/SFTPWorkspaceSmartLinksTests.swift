@@ -290,3 +290,44 @@ func sftpRemoteDragDoesNotInvalidateItsMonitorOnMouseDown() throws {
     #expect(!source.contains("var prepareDrag: (() -> Void)?"))
     #expect(!source.contains("prepareDrag?()"))
 }
+
+
+@Test("SFTP local drag keeps the workspace stable until drop")
+func sftpLocalDragDoesNotMutateSelectionDuringDragStart() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot
+  .appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains(".onDrag {\n                        NSItemProvider(object: entry.url as NSURL)\n                    }"))
+    #expect(!source.contains(".onDrag {\n                        if !model.selectedEntryIDs.contains(entry.id)"))
+}
+
+@Test("SFTP workspace changes do not invalidate the application root during drag")
+func sftpWorkspaceIsObservedDirectlyByConnectionCenter() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let appModel = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+        encoding: .utf8
+    )
+    let center = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+
+    #expect(!appModel.contains("sftpWorkspace.objectWillChange.sink"))
+    #expect(center.contains("@ObservedObject var sftpWorkspace: SFTPWorkspaceModel"))
+    #expect(content.contains("sftpWorkspace: model.sftpWorkspace"))
+}

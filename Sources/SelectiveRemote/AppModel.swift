@@ -515,11 +515,6 @@ final class AppModel: NSObject, ObservableObject {
                 Task { @MainActor [weak self] in
                     self?.objectWillChange.send()
                 }
-            },
-            sftpWorkspace.objectWillChange.sink { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.objectWillChange.send()
-                }
             }
         ]
         refreshDisplays(configureEmptyProfile: true)

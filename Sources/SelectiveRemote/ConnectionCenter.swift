@@ -332,6 +332,7 @@ private enum ConnectionCenterPreferences {
 
 struct ConnectionCenterView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject var sftpWorkspace: SFTPWorkspaceModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpen: (ConnectionCenterSource) -> Void
     let onReconnect: (ConnectionCenterSource) -> Void
