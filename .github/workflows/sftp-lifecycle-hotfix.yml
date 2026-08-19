@@ -95,6 +95,20 @@ jobs:
           if menu_count != 1:
               raise SystemExit(f"cleanup MenuBar section replacement: expected 1 match, found {menu_count}")
 
+          # A generic `case profile(UUID)` legitimately remains for Terminal scope.
+          # Validate only the legacy SFTP namespace instead of banning that token globally.
+          old_test = '#expect(!center.contains("case profile(UUID)"))'
+          new_test = '#expect(!center.contains("sftp:profile:"))'
+          if body.count(old_test) != 1:
+              raise SystemExit("legacy SFTP scope test marker not found")
+          body = body.replace(old_test, new_test, 1)
+
+          old_invariant = 'if "case profile(UUID)" in center or "sftp:global" in center:'
+          new_invariant = 'if "sftp:profile:" in center or "sftp:global" in center:'
+          if body.count(old_invariant) != 1:
+              raise SystemExit("legacy SFTP scope invariant marker not found")
+          body = body.replace(old_invariant, new_invariant, 1)
+
           cleanup = Path("/tmp/final_cleanup.py")
           cleanup.write_text(body)
           compile(body, str(cleanup), "exec")
