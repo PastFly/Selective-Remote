@@ -1,3 +1,11 @@
+## 0.22.4
+
+- Исправлено аварийное завершение приложения при drag-and-drop файлов между двумя SFTP-серверами.
+- NSItemProvider callbacks полностью вынесены из MainActor-изолированных SwiftUI представлений в отдельный non-actor bridge.
+- Обработка данных drag-and-drop теперь возвращается на MainActor только после получения Sendable-значения от Foundation.
+- Исправление применяется также к Mac ↔ Server и Server → Mac путям передачи файлов.
+- Добавлены runtime regression tests для асинхронной доставки NSItemProvider и actor isolation.
+
 ## 0.22.3
 
 - Исправлено аварийное завершение приложения при drag-and-drop файлов между двумя SFTP-серверами.
