@@ -213,15 +213,16 @@ enum SFTPRemoteEntrySorter {
 }
 
 private final class SFTPMasterConnectionManager: @unchecked Sendable {
-    private let lock = NSLock()
+    private let stateLock = NSLock()
+    private let controlPathGate = SFTPControlPathGate()
     private var ownedProcesses: [String: Process] = [:]
     private var sessionReferences: [String: Int] = [:]
 
     func retainSession(settings: SSHConnectionSettings) {
         let controlPath = SSHService.controlPath(settings: settings)
-        lock.lock()
-        sessionReferences[controlPath, default: 0] += 1
-        lock.unlock()
+        stateLock.withLock {
+            sessionReferences[controlPath, default: 0] += 1
+        }
     }
 
     func releaseSession(
@@ -229,15 +230,13 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         executable: String
     ) {
         let controlPath = SSHService.controlPath(settings: settings)
-        var shouldClose = false
-
-        lock.lock()
-        if let count = sessionReferences[controlPath], count > 1 {
-            sessionReferences[controlPath] = count - 1
-        } else if sessionReferences.removeValue(forKey: controlPath) != nil {
-            shouldClose = true
+        let shouldClose = stateLock.withLock { () -> Bool in
+            if let count = sessionReferences[controlPath], count > 1 {
+                sessionReferences[controlPath] = count - 1
+                return false
+            }
+            return sessionReferences.removeValue(forKey: controlPath) != nil
         }
-        lock.unlock()
 
         guard shouldClose else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -255,55 +254,7 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
     ) throws {
         let controlPath = SSHService.controlPath(settings: settings)
 
-        lock.lock()
-        defer { lock.unlock() }
-
-        if controlSocketIsAlive(
-            settings: settings,
-            executable: executable,
-            controlPath: controlPath
-        ) {
-            return
-        }
-
-        if let stale = ownedProcesses.removeValue(forKey: controlPath),
-           stale.isRunning {
-            stale.terminate()
-        }
-        try? FileManager.default.removeItem(atPath: controlPath)
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = SFTPService.persistentMasterArguments(settings: settings)
-        let passwordCredential: KeychainCredentialReference? =
-            (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
-            ? KeychainService.credentialReference(profileID: settings.profileID, kind: .ssh)
-            : nil
-        process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
-            passwordCredential: passwordCredential,
-            proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
-                profileID: settings.profileID,
-                kind: .proxy
-            ),
-            jumpHostPasswordCredential: settings.jumpHostProfileID.map {
-                KeychainService.credentialReference(profileID: $0, kind: .ssh)
-            },
-            jumpHostPromptTokens: settings.jumpHostPromptTokens
-        )
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-
-        do {
-            try process.run()
-        } catch {
-            throw SSHServiceError.launchFailed(error.localizedDescription)
-        }
-        ownedProcesses[controlPath] = process
-
-        // Authentication, including SSH_ASKPASS, happens only in this master.
-        // All SFTP child processes attach to the ready socket with BatchMode=yes.
-        while process.isRunning {
+        try controlPathGate.withLock(controlPath) {
             if controlSocketIsAlive(
                 settings: settings,
                 executable: executable,
@@ -311,18 +262,49 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
             ) {
                 return
             }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
 
-        ownedProcesses.removeValue(forKey: controlPath)
+            let stale = stateLock.withLock {
+                ownedProcesses.removeValue(forKey: controlPath)
+            }
+            if let stale, stale.isRunning {
+                stale.terminate()
+            }
+            try? FileManager.default.removeItem(atPath: controlPath)
 
-        // With ControlPersist OpenSSH may successfully detach the master and
-        // terminate the bootstrap process with status 0 a fraction of a second
-        // before the control socket becomes observable.  Treat that as a
-        // successful bootstrap once the socket answers instead of showing a
-        // false “code 0” error on the first connection attempt.
-        if process.terminationStatus == 0 {
-            for _ in 0..<20 {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = SFTPService.persistentMasterArguments(settings: settings)
+            let passwordCredential: KeychainCredentialReference? =
+                (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
+                ? KeychainService.credentialReference(profileID: settings.profileID, kind: .ssh)
+                : nil
+            process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+                passwordCredential: passwordCredential,
+                proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                    profileID: settings.profileID,
+                    kind: .proxy
+                ),
+                jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                },
+                jumpHostPromptTokens: settings.jumpHostPromptTokens
+            )
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+
+            do {
+                try process.run()
+            } catch {
+                throw SSHServiceError.launchFailed(error.localizedDescription)
+            }
+            stateLock.withLock {
+                ownedProcesses[controlPath] = process
+            }
+
+            // Authentication, including SSH_ASKPASS, happens only in this master.
+            // All SFTP child processes attach to the ready socket with BatchMode=yes.
+            while process.isRunning {
                 if controlSocketIsAlive(
                     settings: settings,
                     executable: executable,
@@ -332,15 +314,37 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 }
                 Thread.sleep(forTimeInterval: 0.05)
             }
-        }
 
-        if process.terminationStatus == 255 {
-            throw SFTPServiceError.authenticationRequired
+            stateLock.withLock {
+                ownedProcesses.removeValue(forKey: controlPath)
+            }
+
+            // With ControlPersist OpenSSH may successfully detach the master and
+            // terminate the bootstrap process with status 0 a fraction of a second
+            // before the control socket becomes observable. Treat that as a
+            // successful bootstrap once the socket answers instead of showing a
+            // false “code 0” error on the first connection attempt.
+            if process.terminationStatus == 0 {
+                for _ in 0..<20 {
+                    if controlSocketIsAlive(
+                        settings: settings,
+                        executable: executable,
+                        controlPath: controlPath
+                    ) {
+                        return
+                    }
+                    Thread.sleep(forTimeInterval: 0.05)
+                }
+            }
+
+            if process.terminationStatus == 255 {
+                throw SFTPServiceError.authenticationRequired
+            }
+            throw SFTPServiceError.commandFailed(
+                "не удалось создать управляющее SSH-соединение "
+                    + "(код \(process.terminationStatus))"
+            )
         }
-        throw SFTPServiceError.commandFailed(
-            "не удалось создать управляющее SSH-соединение "
-                + "(код \(process.terminationStatus))"
-        )
     }
 
     private func closeMasterIfUnreferenced(
@@ -348,37 +352,41 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
         executable: String,
         controlPath: String
     ) {
-        lock.lock()
-        defer { lock.unlock() }
-
-        guard sessionReferences[controlPath] == nil else { return }
-
-        if FileManager.default.fileExists(atPath: controlPath) {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: executable)
-            var arguments = [
-                "-S", controlPath,
-                "-O", "exit",
-                "-p", String(settings.port)
-            ]
-            if !settings.username.isEmpty {
-                arguments += ["-o", "User=\(settings.username)"]
+        controlPathGate.withLock(controlPath) {
+            guard stateLock.withLock({ sessionReferences[controlPath] == nil }) else {
+                return
             }
-            arguments.append(settings.host)
-            process.arguments = arguments
-            process.environment = SSHKeyService.processEnvironment()
-            process.standardInput = FileHandle.nullDevice
-            process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
-            if (try? process.run()) != nil {
-                process.waitUntilExit()
-            }
-        }
 
-        if let owned = ownedProcesses.removeValue(forKey: controlPath), owned.isRunning {
-            owned.terminate()
+            if FileManager.default.fileExists(atPath: controlPath) {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: executable)
+                var arguments = [
+                    "-S", controlPath,
+                    "-O", "exit",
+                    "-p", String(settings.port)
+                ]
+                if !settings.username.isEmpty {
+                    arguments += ["-o", "User=\(settings.username)"]
+                }
+                arguments.append(settings.host)
+                process.arguments = arguments
+                process.environment = SSHKeyService.processEnvironment()
+                process.standardInput = FileHandle.nullDevice
+                process.standardOutput = FileHandle.nullDevice
+                process.standardError = FileHandle.nullDevice
+                if (try? process.run()) != nil {
+                    process.waitUntilExit()
+                }
+            }
+
+            let owned = stateLock.withLock {
+                ownedProcesses.removeValue(forKey: controlPath)
+            }
+            if let owned, owned.isRunning {
+                owned.terminate()
+            }
+            try? FileManager.default.removeItem(atPath: controlPath)
         }
-        try? FileManager.default.removeItem(atPath: controlPath)
     }
 
     private func controlSocketIsAlive(
