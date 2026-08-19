@@ -59,12 +59,9 @@ enum SFTPItemProviderBridge {
         from provider: NSItemProvider,
         handler: SFTPMainActorValueHandler<String>
     ) {
-        provider.loadDataRepresentation(
-            forTypeIdentifier: NSPasteboard.PasteboardType.string.rawValue
-        ) { data, _ in
-            guard let data,
-                  let value = String(data: data, encoding: .utf8)
-            else { return }
+        provider.loadObject(ofClass: NSString.self) { object, _ in
+            guard let nsString = object as? NSString else { return }
+            let value = nsString as String
 
             Task { @MainActor in
                 handler.call(value)

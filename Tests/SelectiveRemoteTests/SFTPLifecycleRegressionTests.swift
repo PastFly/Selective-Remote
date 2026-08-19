@@ -138,8 +138,7 @@ func sftpItemProviderBridgeSurvivesAsynchronousDelivery() async {
     let expected = "selective-remote-server-to-server-probe"
 
     let provider = NSItemProvider(
-        item: Data(expected.utf8) as NSData,
-        typeIdentifier: NSPasteboard.PasteboardType.string.rawValue
+        object: expected as NSString
     )
 
     let received: String = await withCheckedContinuation { continuation in
