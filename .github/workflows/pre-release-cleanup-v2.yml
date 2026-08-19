@@ -1,35 +1,25 @@
 name: Final pre-release SFTP cleanup
 
 on:
-  push:
-    branches: [agent/sftp-lifecycle-0.22.2]
+  workflow_dispatch:
 
 permissions:
   contents: write
 
-concurrency:
-  group: sftp-pre-release-cleanup
-  cancel-in-progress: false
-
 jobs:
-  cleanup-test-commit:
+  cleanup:
     runs-on: macos-14
-    timeout-minutes: 30
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: agent/sftp-lifecycle-0.22.2
-          fetch-depth: 0
-
-      - name: Apply final legacy cleanup
-        shell: bash
-        run: |
-          set -euo pipefail
+      - run: |
           python3 <<'PY'
           from pathlib import Path
           import re
+
+          def sub_once(text: str, pattern: str, replacement: str, label: str, flags=re.S) -> str:
+              result, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, found {count}")
+              return result
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
               count = text.count(old)
@@ -37,13 +27,7 @@ jobs:
                   raise SystemExit(f"{label}: expected 1 match, found {count}")
               return text.replace(old, new, 1)
 
-          def regex_once(text: str, pattern: str, replacement: str, label: str) -> str:
-              result, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1 match, found {count}")
-              return result
-
-          # AppModel: SFTPWorkspaceModel is the only SFTP runtime source of truth.
+          # AppModel: SFTPWorkspaceModel becomes the only SFTP runtime source of truth.
           path = Path("Sources/SelectiveRemote/AppModel.swift")
           text = path.read_text()
           text = replace_once(
@@ -58,113 +42,50 @@ jobs:
               "",
               "legacy SFTP observers property",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''        sftpObservers = [
-              sftpSession.objectWillChange.sink { [weak self] _ in
-                  Task { @MainActor [weak self] in
-                      self?.objectWillChange.send()
-                  }
-              },
-              globalSFTPSession.objectWillChange.sink { [weak self] _ in
-                  Task { @MainActor [weak self] in
-                      self?.objectWillChange.send()
-                  }
-              }
-          ]
-          ''',
-              "",
+              r"\n        sftpObservers = \[\n.*?\n        \]\n",
+              "\n",
               "legacy SFTP observer wiring",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''        case let .sftp(scope):
-              switch scope {
-              case let .pane(paneID):
-                  guard let pane = sftpWorkspace.pane(id: paneID),
-                        let settings = pane.session.settings else { return }
-                  pane.session.disconnect()
-                  pane.session.connect(settings)
-              case .profile, .global:
-                  break
-              }
-          ''',
-              '''        case let .sftp(.pane(paneID)):
-              guard let pane = sftpWorkspace.pane(id: paneID),
-                    let settings = pane.session.settings else { return }
-              pane.session.disconnect()
-              pane.session.connect(settings)
-          ''',
-              "Connection Center SFTP reconnect scope",
+              r"        case let \.sftp\(scope\):\n\s+switch scope \{\n\s+case let \.pane\(paneID\):\n\s+guard let pane = sftpWorkspace\.pane\(id: paneID\),\n\s+let settings = pane\.session\.settings else \{ return \}\n\s+pane\.session\.disconnect\(\)\n\s+pane\.session\.connect\(settings\)\n\s+case \.profile, \.global:\n\s+break\n\s+\}\n",
+              "        case let .sftp(.pane(paneID)):\n            guard let pane = sftpWorkspace.pane(id: paneID),\n                  let settings = pane.session.settings else { return }\n            pane.session.disconnect()\n            pane.session.connect(settings)\n",
+              "Connection Center SFTP reconnect cleanup",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''        case let .sftp(scope):
-              switch scope {
-              case let .pane(paneID):
-                  sftpWorkspace.pane(id: paneID)?.clear()
-              case let .profile(profileID):
-                  if sftpSession.profileID == profileID {
-                      sftpSession.disconnect()
-                  }
-              case .global:
-                  globalSFTPSession.disconnect()
-              }
-          ''',
-              '''        case let .sftp(.pane(paneID)):
-              sftpWorkspace.pane(id: paneID)?.clear()
-          ''',
-              "Connection Center SFTP disconnect scope",
+              r"        case let \.sftp\(scope\):\n\s+switch scope \{\n\s+case let \.pane\(paneID\):\n\s+sftpWorkspace\.pane\(id: paneID\)\?\.clear\(\)\n\s+case let \.profile\(profileID\):\n\s+if sftpSession\.profileID == profileID \{\n\s+sftpSession\.disconnect\(\)\n\s+\}\n\s+case \.global:\n\s+globalSFTPSession\.disconnect\(\)\n\s+\}\n",
+              "        case let .sftp(.pane(paneID)):\n            sftpWorkspace.pane(id: paneID)?.clear()\n",
+              "Connection Center SFTP disconnect cleanup",
           )
           path.write_text(text)
 
-          # Connection Center: only real Workspace panes can be SFTP sources.
+          # Connection Center: SFTP sources are real Workspace panes only.
           path = Path("Sources/SelectiveRemote/ConnectionCenter.swift")
           text = path.read_text()
-          text = replace_once(
+          text = sub_once(
               text,
-              '''enum ConnectionCenterSFTPScope: Hashable {
-              case pane(UUID)
-              case profile(UUID)
-              case global
-          }
-          ''',
-              '''enum ConnectionCenterSFTPScope: Hashable {
-              case pane(UUID)
-          }
-          ''',
-              "legacy SFTP source cases",
+              r"enum ConnectionCenterSFTPScope: Hashable \{\n\s+case pane\(UUID\)\n\s+case profile\(UUID\)\n\s+case global\n\}",
+              "enum ConnectionCenterSFTPScope: Hashable {\n    case pane(UUID)\n}",
+              "legacy Connection Center SFTP scope enum",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''        case let .sftp(scope):
-              switch scope {
-              case let .pane(paneID):
-                  "sftp:pane:\\(paneID.uuidString)"
-              case let .profile(profileID):
-                  "sftp:profile:\\(profileID.uuidString)"
-              case .global:
-                  "sftp:global"
-              }
-          ''',
-              '''        case let .sftp(.pane(paneID)):
-              "sftp:pane:\\(paneID.uuidString)"
-          ''',
-              "legacy SFTP stable IDs",
+              r"        case let \.sftp\(scope\):\n\s+switch scope \{\n\s+case let \.pane\(paneID\):\n\s+\"sftp:pane:\\\(paneID\.uuidString\)\"\n\s+case let \.profile\(profileID\):\n\s+\"sftp:profile:\\\(profileID\.uuidString\)\"\n\s+case \.global:\n\s+\"sftp:global\"\n\s+\}\n",
+              "        case let .sftp(.pane(paneID)):\n            \"sftp:pane:\\(paneID.uuidString)\"\n",
+              "legacy Connection Center SFTP stable IDs",
           )
           path.write_text(text)
 
-          # Workspace: aggregate transfer queues across all panes/tabs for menu-bar controls.
+          # Workspace: expose aggregate transfer state/actions for MenuBarExtra.
           path = Path("Sources/SelectiveRemote/SFTPWorkspace.swift")
           text = path.read_text()
-          text = replace_once(
+          text = sub_once(
               text,
-              '''    var activeRemoteCount: Int {
-              tabs.reduce(0) { $0 + $1.remoteConnectionCount }
-          }
-
-          ''',
-              '''    var activeRemoteCount: Int {
+              r"    var activeRemoteCount: Int \{\n\s+tabs\.reduce\(0\) \{ \$0 \+ \$1\.remoteConnectionCount \}\n\s+\}\n",
+              """    var activeRemoteCount: Int {
               tabs.reduce(0) { $0 + $1.remoteConnectionCount }
           }
 
@@ -197,189 +118,131 @@ jobs:
               func cancelAllTransfers() {
               transferQueues.forEach { $0.cancelAll() }
           }
-
-          ''',
-              "workspace transfer aggregation",
+          """,
+              "Workspace transfer aggregation",
           )
           path.write_text(text)
 
-          # ContentView: remove unreachable global-SFTP runtime/editor and keep sidebar status on Workspace.
+          # ContentView: remove unreachable pre-Workspace global SFTP runtime/editor.
           path = Path("Sources/SelectiveRemote/ContentView.swift")
           text = path.read_text()
-          text = replace_once(
+          text = sub_once(
               text,
-              '''    private static let globalSFTPScopeID = UUID(
-              uuidString: "9C99721B-CFF3-48B7-A0A4-22E627A7D56C"
-          )!
-
-          ''',
+              r"    private static let globalSFTPScopeID = UUID\(\n\s+uuidString: \"9C99721B-CFF3-48B7-A0A4-22E627A7D56C\"\n\s+\)!\n\n",
               "",
               "legacy global SFTP scope ID",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              "    @State private var showsGlobalSFTPConnectionEditor = false\n    @State private var globalSFTPConnection: TerminalTabConnection?\n",
+              r"    @State private var showsGlobalSFTPConnectionEditor = false\n    @State private var globalSFTPConnection: TerminalTabConnection\?\n",
               "",
               "legacy global SFTP state",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''        .sheet(isPresented: $showsGlobalSFTPConnectionEditor) {
-              TerminalConnectionEditor(
-                  profiles: sortedSSHProfiles,
-                  initialConnection: globalSFTPConnection
-                      ?? sortedSSHProfiles.first.map {
-                          .savedProfile($0.id)
-                      }
-                      ?? .custom(host: "", username: ""),
-                  allowsInteractivePassword: true,
-                  actionTitle: "Подключить SFTP",
-                  heading: "Подключение SFTP",
-                  message: "Выберите сохранённый сервер или укажите временный SFTP-адрес. "
-                      + "При необходимости пароль будет запрошен отдельным системным окном.",
-                  customAuthenticationMessage: "SFTP использует системный ssh-agent и ~/.ssh/config. "
-                      + "Если ключа или активной SSH-сессии нет, пароль будет запрошен "
-                      + "в отдельном защищённом окне и не будет сохранён.",
-                  onSave: { connection, _, temporaryPassword in
-                      globalSFTPConnection = connection
-                      connectGlobalSFTP(connection, temporaryPassword: temporaryPassword)
-                  }
-              )
-          }
-          ''',
-              "",
+              r"\n        \.sheet\(isPresented: \$showsGlobalSFTPConnectionEditor\) \{\n.*?\n        \}\n        \.onAppear \{",
+              "\n        .onAppear {",
               "legacy global SFTP sheet",
           )
-          text = regex_once(
+          text = sub_once(
               text,
-              r'''    private var globalSFTPProfile: ConnectionProfile \{.*?    private func connectGlobalSFTP\(.*?^    \}\n\n''',
+              r"    private var globalSFTPProfile: ConnectionProfile \{.*?(?=    @ViewBuilder\n    private var selectedSettingsContent: some View \{)",
               "",
               "legacy global SFTP helpers",
           )
-          text = replace_once(
+          text = sub_once(
               text,
-              '''                            if area == .sftp,
-                                     model.globalSFTPSession.settings != nil {
-                                  Image(systemName: "circle.fill")
-                                      .font(.system(size: 7))
-                                      .foregroundStyle(.green)
-                              }
-          ''',
-              '''                            if area == .sftp {
-                                  SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)
-                              }
-          ''',
-              "sidebar legacy SFTP indicator",
+              r"\s+if area == \.sftp,\n\s+model\.globalSFTPSession\.settings != nil \{\n\s+Image\(systemName: \"circle\.fill\"\)\n\s+\.font\(\.system\(size: 7\)\)\n\s+\.foregroundStyle\(\.green\)\n\s+\}",
+              "\n                            if area == .sftp {\n                                SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)\n                            }",
+              "legacy sidebar SFTP indicator",
           )
-          text = regex_once(
+          text = sub_once(
               text,
-              r'''        case let \.sftp\(scope\):\n            switch scope \{.*?            case \.global:\n                setMainArea\(\.sftp\)\n            \}\n''',
-              '''        case let .sftp(.pane(paneID)):
-              if let tab = model.sftpWorkspace.tab(containing: paneID) {
-                  model.sftpWorkspace.selectedTabID = tab.id
-              }
-              setMainArea(.sftp)
-          ''',
-              "Connection Center SFTP open routing",
+              r"        case let \.sftp\(scope\):\n\s+switch scope \{.*?\s+case \.global:\n\s+setMainArea\(\.sftp\)\n\s+\}\n(?=        case let \.profileTunnel)",
+              "        case let .sftp(.pane(paneID)):\n            if let tab = model.sftpWorkspace.tab(containing: paneID) {\n                model.sftpWorkspace.selectedTabID = tab.id\n            }\n            setMainArea(.sftp)\n",
+              "Connection Center SFTP open cleanup",
           )
           text = replace_once(
               text,
               "struct ContentView: View {\n",
-              '''private struct SFTPWorkspaceSidebarStatus: View {
+              """private struct SFTPWorkspaceSidebarStatus: View {
               @ObservedObject var workspace: SFTPWorkspaceModel
 
               var body: some View {
-                  if workspace.activeRemoteCount > 0 {
-                      Image(systemName: "circle.fill")
-                          .font(.system(size: 7))
-                          .foregroundStyle(.green)
-                  }
+              if workspace.activeRemoteCount > 0 {
+                  Image(systemName: "circle.fill")
+                      .font(.system(size: 7))
+                      .foregroundStyle(.green)
+              }
               }
           }
 
           struct ContentView: View {
-          ''',
-              "workspace sidebar observer",
+          """,
+              "Workspace sidebar observer",
           )
           path.write_text(text)
 
-          # MenuBarExtra: preserve controls, but aggregate the real Workspace queues.
+          # MenuBarExtra: keep controls, now over all real Workspace transfer queues.
           path = Path("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
           text = path.read_text()
-          old_menu = '''            if !model.sftpSession.transfers.items.isEmpty {
-                  Divider()
-                  Text("SFTP-передачи: \\(model.sftpSession.transfers.activeCount) активных")
-                  if model.sftpSession.transfers.items.contains(where: { $0.phase == .paused }) {
-                      Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
-                          model.sftpSession.transfers.resumeAll()
-                      }
-                  } else if model.sftpSession.transfers.activeCount > 0 {
-                      Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
-                          model.sftpSession.transfers.pauseAll()
-                      }
-                  }
-                  Button("Отменить SFTP-передачи", role: .destructive) {
-                      model.sftpSession.transfers.cancelAll()
-                  }
-                  .disabled(model.sftpSession.transfers.activeCount == 0)
-              }
-          '''
-          text = replace_once(
+          text = sub_once(
               text,
-              old_menu,
+              r"            if !model\.sftpSession\.transfers\.items\.isEmpty \{\n.*?            \}\n(?=            Divider\(\)\n            Button\(\"Открыть приложение\")",
               "            SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)\n",
-              "menu-bar legacy SFTP transfer controls",
+              "legacy MenuBarExtra SFTP queue",
           )
           text = replace_once(
               text,
               "@main\nstruct SelectiveRemoteApp: App {\n",
-              '''private struct SFTPMenuBarTransferControls: View {
+              """private struct SFTPMenuBarTransferControls: View {
               @ObservedObject var workspace: SFTPWorkspaceModel
 
               var body: some View {
-                  if workspace.hasTransferItems {
-                      Divider()
-                      Text("SFTP-передачи: \\(workspace.activeTransferCount) активных")
-                      if workspace.hasPausedTransfers {
-                          Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
-                              workspace.resumeAllTransfers()
-                          }
-                      } else if workspace.activeTransferCount > 0 {
-                          Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
-                              workspace.pauseAllTransfers()
-                          }
+              if workspace.hasTransferItems {
+                  Divider()
+                  Text("SFTP-передачи: \\(workspace.activeTransferCount) активных")
+                  if workspace.hasPausedTransfers {
+                      Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
+                          workspace.resumeAllTransfers()
                       }
-                      Button("Отменить SFTP-передачи", role: .destructive) {
-                          workspace.cancelAllTransfers()
+                  } else if workspace.activeTransferCount > 0 {
+                      Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
+                          workspace.pauseAllTransfers()
                       }
-                      .disabled(workspace.activeTransferCount == 0)
                   }
+                  Button("Отменить SFTP-передачи", role: .destructive) {
+                      workspace.cancelAllTransfers()
+                  }
+                  .disabled(workspace.activeTransferCount == 0)
+              }
               }
           }
 
           @main
           struct SelectiveRemoteApp: App {
-          ''',
-              "menu-bar Workspace observer",
+          """,
+              "Workspace MenuBarExtra controls",
           )
           path.write_text(text)
 
-          # The old two-pane view has no source call sites after 0.22.0 Workspace migration.
+          # Delete obsolete pre-Workspace SFTP view.
           legacy_view = Path("Sources/SelectiveRemote/SFTPBrowserView.swift")
           if not legacy_view.exists():
-              raise SystemExit("legacy SFTPBrowserView.swift already missing unexpectedly")
+              raise SystemExit("legacy SFTPBrowserView.swift unexpectedly missing")
           legacy_view.unlink()
 
-          # Tests: reflect the single Workspace architecture and lock the cleanup in place.
+          # Source-contract tests follow the single Workspace architecture.
           path = Path("Tests/SelectiveRemoteTests/SFTPLifecycleRegressionTests.swift")
           text = path.read_text()
           text = replace_once(
               text,
               '#expect(source.contains("case let .sftp(scope):"))',
               '#expect(source.contains("case let .sftp(.pane(paneID)):"))',
-              "managed pane reconnect regression",
+              "managed SFTP reconnect expectation",
           )
-          text += '''
+          if "Legacy single-session SFTP runtime stays removed" not in text:
+              text += r'''
 
           @Test("Legacy single-session SFTP runtime stays removed")
           func legacySingleSessionSFTPRuntimeStaysRemoved() throws {
@@ -387,22 +250,10 @@ jobs:
                   .deletingLastPathComponent()
                   .deletingLastPathComponent()
                   .deletingLastPathComponent()
-              let appModel = try String(
-                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
-                  encoding: .utf8
-              )
-              let content = try String(
-                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
-                  encoding: .utf8
-              )
-              let app = try String(
-                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SelectiveRemoteApp.swift"),
-                  encoding: .utf8
-              )
-              let center = try String(
-                  contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"),
-                  encoding: .utf8
-              )
+              let appModel = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"), encoding: .utf8)
+              let content = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"), encoding: .utf8)
+              let app = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SelectiveRemoteApp.swift"), encoding: .utf8)
+              let center = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ConnectionCenter.swift"), encoding: .utf8)
               #expect(!appModel.contains("let sftpSession = SFTPBrowserSession()"))
               #expect(!appModel.contains("globalSFTPSession"))
               #expect(!appModel.contains("sftpObservers"))
@@ -410,9 +261,7 @@ jobs:
               #expect(!content.contains("connectGlobalSFTP"))
               #expect(!center.contains("case profile(UUID)"))
               #expect(!center.contains("sftp:global"))
-              #expect(!FileManager.default.fileExists(
-                  atPath: root.appendingPathComponent("Sources/SelectiveRemote/SFTPBrowserView.swift").path
-              ))
+              #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("Sources/SelectiveRemote/SFTPBrowserView.swift").path))
               #expect(app.contains("SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)"))
           }
           '''
@@ -420,30 +269,21 @@ jobs:
 
           path = Path("Tests/SelectiveRemoteTests/TerminalTests.swift")
           text = path.read_text()
-          text = replace_once(
+          text = sub_once(
               text,
-              '''    #expect(content.contains("model.globalSFTPSession"))
-              #expect(content.contains("showsGlobalSFTPConnectionEditor"))
-          ''',
-              '''    #expect(content.contains("SFTPWorkspaceView(workspace: model.sftpWorkspace)"))
-              #expect(!content.contains("showsGlobalSFTPConnectionEditor"))
-          ''',
-              "global workspace test expectations",
+              r"    #expect\(content\.contains\(\"model\.globalSFTPSession\"\)\)\n    #expect\(content\.contains\(\"showsGlobalSFTPConnectionEditor\"\)\)\n",
+              "    #expect(content.contains(\"SFTPWorkspaceView(workspace: model.sftpWorkspace)\"))\n    #expect(!content.contains(\"showsGlobalSFTPConnectionEditor\"))\n",
+              "global SFTP Workspace expectations",
           )
           path.write_text(text)
 
-          # Release workflow must require a deliberately typed tag.
+          # Release workflow must require an explicitly typed tag.
           path = Path(".github/workflows/release.yml")
           text = path.read_text()
-          text = replace_once(
-              text,
-              "        default: v0.20.6\n",
-              "",
-              "obsolete release default tag",
-          )
+          text = replace_once(text, "        default: v0.20.6\n", "", "obsolete release default")
           path.write_text(text)
 
-          # Hard assertions before compilation.
+          # Hard invariants before compile/tests.
           app_model = Path("Sources/SelectiveRemote/AppModel.swift").read_text()
           content = Path("Sources/SelectiveRemote/ContentView.swift").read_text()
           app = Path("Sources/SelectiveRemote/SelectiveRemoteApp.swift").read_text()
@@ -457,40 +297,13 @@ jobs:
               if forbidden in content:
                   raise SystemExit(f"legacy ContentView SFTP token remains: {forbidden}")
           if "model.sftpSession" in app:
-              raise SystemExit("MenuBarExtra still references the legacy SFTP session")
+              raise SystemExit("MenuBarExtra still references legacy SFTP session")
           if "case profile(UUID)" in center or "sftp:global" in center:
               raise SystemExit("legacy Connection Center SFTP scopes remain")
-          if "var activeTransferCount: Int" not in workspace or "cancelAllTransfers()" not in workspace:
-              raise SystemExit("Workspace transfer aggregation is missing")
+          if "var activeTransferCount: Int" not in workspace or "func cancelAllTransfers()" not in workspace:
+              raise SystemExit("Workspace transfer aggregation missing")
           if "default: v0.20.6" in release:
-              raise SystemExit("obsolete release workflow default remains")
+              raise SystemExit("obsolete release default remains")
+          if Path("Sources/SelectiveRemote/SFTPBrowserView.swift").exists():
+              raise SystemExit("legacy SFTPBrowserView.swift still exists")
           PY
-
-          git diff --check
-
-      - name: Validate cleanup tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift test
-
-      - name: Validate release build
-        shell: bash
-        run: |
-          set -euo pipefail
-          swift build -c release
-
-      - name: Commit validated cleanup and remove validator
-        shell: bash
-        run: |
-          set -euo pipefail
-          git rm .github/workflows/pre-release-cleanup-v2.yml
-          rm -f .github/workflows/pre-release-cleanup.yml \
-                .github/workflows/sftp-lifecycle-hotfix.yml \
-                .github/workflows/sftp-lifecycle-pr-runner.yml
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --check
-          git commit -m "Remove legacy SFTP runtime before 0.22.2"
-          git push origin HEAD:agent/sftp-lifecycle-0.22.2
