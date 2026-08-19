@@ -3,6 +3,7 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+@MainActor
 @Test("SFTP transfer activity ignores progress-only changes")
 func sftpTransferActivityIgnoresProgressOnlyChanges() {
     let running = transferItem(
@@ -23,6 +24,7 @@ func sftpTransferActivityIgnoresProgressOnlyChanges() {
     )
 }
 
+@MainActor
 @Test("SFTP transfer activity changes for pause and completion")
 func sftpTransferActivityTracksLifecycleChanges() {
     let id = UUID()
@@ -83,6 +85,7 @@ func sftpPanePublishesStructuralChanges() {
     _ = cancellable
 }
 
+@MainActor
 private func transferItem(
     id: UUID = UUID(),
     phase: SFTPTransferPhase,
