@@ -1,3 +1,10 @@
+## 0.22.5
+
+- Исправлено аварийное завершение приложения при drag-and-drop Server → Server и Server → Mac в release-сборках.
+- Внутренний SFTP drag-and-drop больше не читает строковый payload через проблемный NSItemProvider Data callback.
+- Строковый drag payload теперь загружается через NSString/object representation, совместимую с production-сборкой на Xcode 16.2.
+- Исправление проверено на DMG, собранном GitHub Actions тем же toolchain, что используется для production Release.
+
 ## 0.22.4
 
 - Исправлено аварийное завершение приложения при drag-and-drop файлов между двумя SFTP-серверами.
