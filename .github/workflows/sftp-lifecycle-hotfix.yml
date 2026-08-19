@@ -180,28 +180,33 @@ jobs:
 set -euo pipefail
 python3 <<'HOOKPY'
 from pathlib import Path
-import re
 p = Path("Sources/SelectiveRemote/ContentView.swift")
-s = p.read_text()
-pattern = re.compile(
-    r"\n[ \t]*case let \.pane\(paneID\):\n"
-    r"[ \t]*if let tab = model\.sftpWorkspace\.tab\(containing: paneID\) \{\n"
-    r"[ \t]*model\.sftpWorkspace\.selectedTabID = tab\.id\n"
-    r"[ \t]*\}\n"
-    r"[ \t]*setMainArea\(\.sftp\)\n",
-    re.M,
-)
-good = "\n" + "\n".join([
-    "            case let .pane(paneID):",
-    "                if let tab = model.sftpWorkspace.tab(containing: paneID) {",
-    "                    model.sftpWorkspace.selectedTabID = tab.id",
-    "                }",
-    "                setMainArea(.sftp)",
-]) + "\n"
-s, count = pattern.subn(good, s, count=1)
-if count != 1:
-    raise SystemExit(f"pane case normalization failed: count={count}")
-p.write_text(s)
+lines = p.read_text().splitlines()
+needle = "case let .pane(paneID):"
+found = False
+for index, line in enumerate(lines):
+    if line.strip() != needle:
+        continue
+    if index + 4 >= len(lines):
+        continue
+    if lines[index + 1].strip() != "if let tab = model.sftpWorkspace.tab(containing: paneID) {":
+        continue
+    if lines[index + 2].strip() != "model.sftpWorkspace.selectedTabID = tab.id":
+        continue
+    if lines[index + 3].strip() != "}":
+        continue
+    if lines[index + 4].strip() != "setMainArea(.sftp)":
+        continue
+    lines[index] = "            case let .pane(paneID):"
+    lines[index + 1] = "                if let tab = model.sftpWorkspace.tab(containing: paneID) {"
+    lines[index + 2] = "                    model.sftpWorkspace.selectedTabID = tab.id"
+    lines[index + 3] = "                }"
+    lines[index + 4] = "                setMainArea(.sftp)"
+    found = True
+    break
+if not found:
+    raise SystemExit("pane case normalization target not found")
+p.write_text(chr(10).join(lines) + chr(10))
 HOOKPY
 git add Sources Tests
 git diff --cached --check
