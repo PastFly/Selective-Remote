@@ -32,7 +32,7 @@ final class AppLockStore: ObservableObject {
         static let inactivityTimeout = "SelectiveRemote.appLock.inactivityTimeout.v1"
     }
 
-    @Published var enabled: Bool {
+    @Published private(set) var enabled: Bool {
         didSet {
             defaults.set(enabled, forKey: Keys.enabled)
             if !enabled {
@@ -81,6 +81,10 @@ final class AppLockStore: ObservableObject {
     }
 
     func setEnabled(_ value: Bool) {
+        if !value, enabled, isLocked {
+            disableWithSystemAuthentication()
+            return
+        }
         guard !value || touchIDAvailable else {
             lastError = "Touch ID недоступен на этом Mac или для текущего пользователя."
             enabled = false
@@ -260,6 +264,7 @@ struct AppLockGate<Content: View>: View {
         ZStack {
             content
                 .opacity(store.isLocked ? 0 : 1)
+                .disabled(store.isLocked)
                 .allowsHitTesting(!store.isLocked)
                 .accessibilityHidden(store.isLocked)
 
