@@ -65,6 +65,18 @@ func usesSelectiveRemoteBrand() {
     #expect(AppBrand.tagline == "RDP · SSH · SFTP")
 }
 
+@Test("Локальный терминал хранит рабочую папку отдельно от SSH")
+func localTerminalConnectionRoundTrips() throws {
+    let original = TerminalTabConnection.local(workingDirectory: "/tmp")
+    let data = try JSONEncoder().encode(original)
+    let restored = try JSONDecoder().decode(TerminalTabConnection.self, from: data)
+
+    #expect(restored.kind == .local)
+    #expect(restored.workingDirectory == "/tmp")
+    #expect(restored.displayLabel(profiles: []) == "/tmp")
+    #expect(!restored.isValidCustomConnection)
+}
+
 @Test("Прозрачность окна сохраняется между запусками")
 @MainActor
 func persistsApplicationTransparency() throws {
@@ -473,7 +485,9 @@ func includesEnglishLocalizationAndDocumentation() throws {
     #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
     #expect(localization.contains("\"Язык приложения\" = \"Application Language\""))
     #expect(localization.contains("\"SFTP не подключён\" = \"SFTP is not connected\""))
-    #expect(readme.contains("### Terminal Workspace"))
+    #expect(readme.contains("### SSH Workspace"))
+    #expect(readme.contains("### Local Terminal"))
+    #expect(readme.contains("### Snippets"))
     #expect(readme.contains("### Forwarding Manager"))
 }
 

@@ -65,7 +65,12 @@
             duplicate: "Дублировать",
             move: "Переместить",
             remove: "Удалить",
-            run: "Выполнить",
+            run: "Выполнить на Targets",
+            runHere: "Выполнить здесь",
+            insert: "Вставить без запуска",
+            copy: "Скопировать команду",
+            copied: "Команда скопирована в буфер обмена.",
+            inserted: "Команда вставлена в активную строку без запуска.",
             defaultGroup: "Мои команды",
             group: "Группа",
             command: "Команда или скрипт",
@@ -100,7 +105,12 @@
             duplicate: "Duplicate",
             move: "Move to",
             remove: "Remove",
-            run: "Run",
+            run: "Run on targets",
+            runHere: "Run here",
+            insert: "Insert without running",
+            copy: "Copy command",
+            copied: "Command copied to the clipboard.",
+            inserted: "Command inserted into the active prompt without running.",
             defaultGroup: "My commands",
             group: "Group",
             command: "Command or script",
@@ -149,6 +159,7 @@
             cursor: "#36D399",
             cursorAccent: "#101421",
             selectionBackground: "#32527B99",
+            selectionForeground: "#FFFFFF",
             black: "#101421",
             red: "#FF6B7A",
             green: "#36D399",
@@ -663,7 +674,7 @@
     };
 
     const renderInputHighlight = () => {
-        if (!syntaxHighlightingEnabled || isAlternateScreen()) {
+        if (!syntaxHighlightingEnabled || isAlternateScreen() || terminal.hasSelection()) {
             inputHighlightElement.replaceChildren();
             inputHighlightElement.hidden = true;
             return;
@@ -1142,13 +1153,13 @@
 
     let pendingSnippetEditor = false;
 
-    const fillGroupSelect = (select, selectedName = "") => {
+    const fillGroupSelect = (select, selectedGroup = "") => {
         select.replaceChildren();
         snippetGroups.forEach((group) => {
             const option = document.createElement("option");
             option.value = group.id;
             option.textContent = displaySnippetGroupName(group.name);
-            option.selected = group.name === selectedName;
+            option.selected = group.id === selectedGroup || group.name === selectedGroup;
             select.append(option);
         });
     };
@@ -1205,7 +1216,7 @@
         snippetCommand.value = entry?.command || "";
         fillGroupSelect(
             snippetGroup,
-            entry?.category || preferredGroup || snippetGroups[0].name
+            entry?.groupID || entry?.category || preferredGroup || snippetGroups[0].id
         );
         renderSnippetTargets(
             Array.isArray(entry?.targetProfileIDs)
@@ -1274,7 +1285,7 @@
 
     const openSnippetMove = (entry) => {
         snippetMoveID.value = entry.id;
-        fillGroupSelect(snippetMoveGroup, entry.category);
+        fillGroupSelect(snippetMoveGroup, entry.groupID || entry.category);
         snippetMoveDialog.showModal();
     };
 
@@ -1296,7 +1307,9 @@
 
         let renderedSnippets = 0;
         snippetGroups.forEach((group) => {
-            const allEntries = commandTemplates.filter((entry) => entry.category === group.name);
+            const allEntries = commandTemplates.filter((entry) => (
+                entry.groupID === group.id || (!entry.groupID && entry.category === group.name)
+            ));
             const groupMatches = `${group.name} ${displaySnippetGroupName(group.name)}`
                 .toLocaleLowerCase()
                 .includes(query);
@@ -1898,6 +1911,14 @@
     terminal.onScroll(() => {
         scheduleInputHighlightRender();
     });
+    terminal.onSelectionChange(() => {
+        if (terminal.hasSelection()) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+        } else {
+            scheduleInputHighlightRender();
+        }
+    });
     terminalHost.addEventListener("pointerdown", notifyHostFocus, true);
     terminalHost.addEventListener("focusin", notifyHostFocus, true);
 
@@ -2002,8 +2023,7 @@
             inputHighlightElement.hidden = true;
         }
         if (settings.theme && typeof settings.theme === "object") {
-            terminal.options.theme = settings.theme;
-            const theme = settings.theme;
+            const theme = { ...settings.theme };
             const rootStyle = document.documentElement.style;
             if (typeof theme.foreground === "string") {
                 rootStyle.setProperty("--terminal-foreground", theme.foreground);
@@ -2029,12 +2049,14 @@
                     );
                     document.documentElement.style.colorScheme =
                         luminance > 160 ? "light" : "dark";
+                    theme.selectionForeground = luminance > 160 ? "#111827" : "#FFFFFF";
                 }
                 document.documentElement.style.setProperty(
                     "--terminal-background",
                     settings.theme.background
                 );
             }
+            terminal.options.theme = theme;
         }
         if (settings.syntaxPalette && typeof settings.syntaxPalette === "object") {
             const syntax = settings.syntaxPalette;
@@ -2266,6 +2288,7 @@
             id: snippetID.value || null,
             title: snippetTitle.value,
             category: group.name,
+            groupID: group.id,
             command: snippetCommand.value,
             targetProfileIDs
         });
@@ -2319,6 +2342,21 @@
         hideSnippetContextMenu();
         if (action === "run") {
             requestSnippetRun(entry);
+        } else if (action === "runHere") {
+            const command = /\$\{[A-Za-z][A-Za-z0-9_-]{0,39}\}/.test(entry.command)
+                ? resolveTemplate(entry.command)
+                : entry.command;
+            if (command !== null && !isAlternateScreen()) {
+                replaceCurrentLine(command);
+                window.webkit.messageHandlers.terminalInput.postMessage("\r");
+                window.selectiveTerminalSetPanelMode?.("hidden", true, true);
+            }
+        } else if (action === "insert") {
+            replaceCurrentLine(entry.command, true);
+            showSnippetFeedback(snippetText("inserted"));
+        } else if (action === "copy") {
+            postHistory({ action: "copySnippet", command: entry.command });
+            showSnippetFeedback(snippetText("copied"));
         } else if (action === "edit") {
             openSnippetEditor(entry);
         } else if (action === "duplicate") {

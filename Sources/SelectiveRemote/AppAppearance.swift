@@ -105,6 +105,8 @@ enum AppDensity: String, CaseIterable, Identifiable, Sendable {
 
 @MainActor
 final class AppAppearanceStore: ObservableObject {
+    static let shared = AppAppearanceStore()
+
     private enum Key {
         static let transparencyEnabled = "SelectiveRemote.window.transparencyEnabled.v1"
         static let opacity = "SelectiveRemote.window.opacity.v1"
@@ -212,7 +214,9 @@ final class WindowBackdropView: NSVisualEffectView {
         window.isOpaque = !enabled
         window.backgroundColor = enabled ? .clear : .windowBackgroundColor
         window.titlebarAppearsTransparent = enabled
-        window.alphaValue = enabled ? windowSettings.opacity : 1
+        // Keep controls and text fully opaque. Only the material backdrop fades.
+        alphaValue = enabled ? windowSettings.opacity : 1
+        window.alphaValue = 1
         window.hasShadow = true
     }
 }
@@ -256,12 +260,33 @@ struct AppAppearanceSettingsSection: View {
                 }
                 .disabled(!store.transparencyEnabled)
                 Text(
-                    "Системное размытие остаётся активным. Чем меньше значение, "
-                        + "тем прозрачнее всё окно вместе с текстом и кнопками."
+                    "Системное размытие остаётся активным. Непрозрачность меняет "
+                        + "только фон — текст и кнопки сохраняют контраст."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+struct AppAppearanceRoot<Content: View>: View {
+    @ObservedObject var store: AppAppearanceStore
+    let content: Content
+
+    init(store: AppAppearanceStore, @ViewBuilder content: () -> Content) {
+        self.store = store
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .background {
+                AppWindowBackdrop(appearance: store.snapshot)
+                    .ignoresSafeArea()
+            }
+            .preferredColorScheme(store.theme.colorScheme)
+            .appTextSize(store.textSize)
+            .controlSize(store.density.controlSize)
     }
 }

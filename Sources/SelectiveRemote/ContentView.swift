@@ -33,6 +33,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
+    case ssh = "SSH"
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
@@ -47,6 +48,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
         case .snippets: "curlybraces"
+        case .ssh: "network"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
         case .diagnostics: "stethoscope"
@@ -70,9 +72,9 @@ private struct SFTPWorkspaceSidebarStatus: View {
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var appAppearance: AppAppearanceStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
-    @StateObject private var appAppearance = AppAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
@@ -262,6 +264,9 @@ struct ContentView: View {
             selectedTab = .terminal
             model.consumeSSHConsoleNavigationRequest()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteNewLocalTerminal)) { _ in
+            openNewLocalTerminalTab()
+        }
     }
 
     private var sidebar: some View {
@@ -413,11 +418,16 @@ struct ContentView: View {
                                 .frame(width: 22)
                             Text(LocalizedStringKey(area.rawValue))
                             Spacer()
-                            if area == .terminal,
+                            if area == .ssh,
                                model.globalTerminalWorkspace().runningSessionCount > 0 {
                                 Text("\(model.globalTerminalWorkspace().runningSessionCount)")
                                     .font(.caption.bold())
                                     .foregroundStyle(.green)
+                            }
+                            if area == .terminal, model.runningLocalTerminalCount > 0 {
+                                Text("\(model.runningLocalTerminalCount)")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(.blue)
                             }
                             if area == .sftp {
                                 SFTPWorkspaceSidebarStatus(workspace: model.sftpWorkspace)
@@ -628,8 +638,10 @@ struct ContentView: View {
                     store: snippets,
                     model: model
                 )
-            case .terminal:
+            case .ssh:
                 globalTerminalDetail
+            case .terminal:
+                localTerminalDetail
             case .sftp:
                 globalSFTPDetail
             case .diagnostics:
@@ -1818,7 +1830,7 @@ struct ContentView: View {
             if !terminalFocusMode {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Терминал")
+                        Text("SSH")
                             .font(.system(size: 30, weight: .bold, design: .rounded))
                         Text("Независимые SSH-сессии, вкладки и разделённые панели")
                             .foregroundStyle(.secondary)
@@ -1837,6 +1849,41 @@ struct ContentView: View {
         }
         .groupBoxStyle(ModernGroupBoxStyle())
         .controlSize(.large)
+    }
+
+    private var localTerminalDetail: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text("Терминал")
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("Локальный shell этого Mac · вкладки, история и сниппеты")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 10)
+
+            LocalTerminalView(
+                workspace: model.localTerminalWorkspace(),
+                appearance: terminalAppearance,
+                appAppearance: appAppearance,
+                sshProfiles: sortedSSHProfiles,
+                connect: { tab in
+                    model.connectLocalTerminal(
+                        connection: tab.connection,
+                        tabID: tab.id,
+                        session: tab.session
+                    )
+                },
+                executeSnippet: model.runTerminalSnippet
+            )
+            .padding(.horizontal, 10)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private var globalSFTPDetail: some View {
@@ -1940,6 +1987,9 @@ struct ContentView: View {
                 )
                 selectedTab = .sftp
             },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
+            },
             executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
@@ -1961,7 +2011,7 @@ struct ContentView: View {
             workspace: model.globalTerminalWorkspace(),
             appearance: terminalAppearance,
             appAppearance: appAppearance,
-            workspaceTitle: "Терминал",
+            workspaceTitle: "SSH",
             defaultProfileID: profiles.first?.id,
             locksPrimaryConnection: false,
             sshProfiles: profiles,
@@ -1992,6 +2042,9 @@ struct ContentView: View {
                     path: path
                 )
                 setMainArea(.sftp)
+            },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
             },
             executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
@@ -2054,7 +2107,7 @@ struct ContentView: View {
             session: tab.session,
             temporaryPassword: temporaryPassword
         )
-        setMainArea(.terminal)
+        setMainArea(.ssh)
     }
 
     private func openForwardingTerminal(_ connection: TerminalTabConnection) {
@@ -2067,13 +2120,38 @@ struct ContentView: View {
                 title: connection.displayLabel(profiles: sortedSSHProfiles)
             )
         }
-        setMainArea(.terminal)
+        setMainArea(.ssh)
     }
 
     private func openForwardingProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
         selectedTab = .forwarding
         setMainArea(.connections)
+    }
+
+    private func openNewLocalTerminalTab() {
+        let workspace = model.localTerminalWorkspace()
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let tab: TerminalWorkspaceTab?
+        if workspace.displayedTabs.count == 1,
+           let primary = workspace.displayedTabs.first,
+           !primary.session.isRunning {
+            workspace.selectedTabID = primary.id
+            tab = primary
+        } else {
+            tab = workspace.addTab(
+                connection: .local(workingDirectory: home),
+                title: "Terminal \(workspace.displayedTabs.count + 1)"
+            )
+        }
+        if let tab {
+            model.connectLocalTerminal(
+                connection: tab.connection,
+                tabID: tab.id,
+                session: tab.session
+            )
+        }
+        setMainArea(.terminal)
     }
 
     private func openConnectionCenterSource(_ source: ConnectionCenterSource) {
@@ -2088,7 +2166,7 @@ struct ContentView: View {
                 selectedTab = .terminal
                 setMainArea(.connections)
             case .global:
-                setMainArea(.terminal)
+                setMainArea(.ssh)
             }
         case let .sftp(.pane(paneID)):
             if let tab = model.sftpWorkspace.tab(containing: paneID) {
@@ -2105,7 +2183,7 @@ struct ContentView: View {
     }
 
     private func setMainArea(_ area: MainArea) {
-        if area != .terminal {
+        if area != .ssh {
             setTerminalFocusMode(false)
         }
         mainArea = area
@@ -2202,6 +2280,32 @@ struct ContentView: View {
                             TextField("22", value: profileBinding.sshPort, format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 130, alignment: .leading)
+                        }
+                        GridRow {
+                            Text("Операционная система")
+                            HStack(spacing: 9) {
+                                let style = ProfileOperatingSystemStyle.resolve(for: profile)
+                                Image(systemName: style.systemImage)
+                                    .foregroundStyle(style.colors.first ?? Color.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(
+                                        profile.detectedOperatingSystem.isEmpty
+                                            ? "Определится после первого SSH-подключения"
+                                            : profile.detectedOperatingSystem
+                                    )
+                                    .foregroundStyle(
+                                        profile.detectedOperatingSystem.isEmpty
+                                            ? Color.secondary
+                                            : Color.primary
+                                    )
+                                    if let date = profile.operatingSystemDetectedAt {
+                                        Text("Обновлено \(date.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3322,31 +3426,11 @@ private struct ProfileRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: session == nil && !hasActiveSSH
-                                ? profile.connectionType == .ssh
-                                    ? [Color.purple.opacity(0.82), Color.indigo.opacity(0.80)]
-                                    : [Color.blue.opacity(0.82), Color.indigo.opacity(0.80)]
-                                : [Color.green.opacity(0.88), Color.teal.opacity(0.82)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 34, height: 34)
-                Image(systemName: profile.connectionType.systemImage)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                if session != nil || hasActiveSSH || activeTunnelCount > 0 {
-                    Circle()
-                        .fill(session != nil || hasActiveSSH ? Color.green : Color.orange)
-                        .frame(width: 9, height: 9)
-                        .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 2))
-                        .offset(x: 2, y: 2)
-                }
-            }
+            ProfileOperatingSystemBadge(
+                profile: profile,
+                connectionActive: session != nil || hasActiveSSH,
+                tunnelActive: activeTunnelCount > 0
+            )
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
@@ -3363,7 +3447,7 @@ private struct ProfileRow: View {
                             ? "SSH-сессия активна"
                             : activeTunnelCount > 0
                             ? "Туннелей: \(activeTunnelCount)"
-                            : profile.host.isEmpty ? "Hostname не указан" : profile.host)
+                            : inactiveProfileSubtitle)
                 )
                     .font(.caption)
                 .foregroundStyle(
@@ -3376,6 +3460,14 @@ private struct ProfileRow: View {
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
+    }
+
+    private var inactiveProfileSubtitle: String {
+        guard !profile.host.isEmpty else { return "Hostname не указан" }
+        guard profile.connectionType == .ssh,
+              !profile.detectedOperatingSystem.isEmpty
+        else { return profile.host }
+        return "\(profile.host) · \(profile.detectedOperatingSystem)"
     }
 }
 

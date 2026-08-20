@@ -46,6 +46,7 @@ final class PTYProcess: @unchecked Sendable {
         executable: String,
         arguments: [String],
         environment: [String: String],
+        workingDirectory: String? = nil,
         columns: UInt16 = 100,
         rows: UInt16 = 30
     ) throws {
@@ -54,7 +55,8 @@ final class PTYProcess: @unchecked Sendable {
         }
         guard !isRunning else { throw PTYProcessError.alreadyRunning }
         guard !executable.contains("\0"),
-              !arguments.contains(where: { $0.contains("\0") })
+              !arguments.contains(where: { $0.contains("\0") }),
+              workingDirectory?.contains("\0") != true
         else {
             throw PTYProcessError.invalidArgument
         }
@@ -64,17 +66,21 @@ final class PTYProcess: @unchecked Sendable {
             .map { "\($0.key)=\($0.value)" }
             .sorted()
         var primary: Int32 = -1
+        let directory = workingDirectory ?? ""
         let child: pid_t = executable.withCString { executablePointer in
-            withMutableCStringArray(argumentValues) { argumentPointers in
-                withMutableCStringArray(environmentValues) { environmentPointers in
-                    selectiveremote_spawn_pty(
-                        executablePointer,
-                        argumentPointers,
-                        environmentPointers,
-                        columns,
-                        rows,
-                        &primary
-                    )
+            directory.withCString { directoryPointer in
+                withMutableCStringArray(argumentValues) { argumentPointers in
+                    withMutableCStringArray(environmentValues) { environmentPointers in
+                        selectiveremote_spawn_pty(
+                            executablePointer,
+                            argumentPointers,
+                            environmentPointers,
+                            directoryPointer,
+                            columns,
+                            rows,
+                            &primary
+                        )
+                    }
                 }
             }
         }
@@ -328,6 +334,7 @@ final class TerminalSessionModel: ObservableObject {
         arguments: [String],
         title: String,
         environment: [String: String]? = nil,
+        workingDirectory: String? = nil,
         completion: Completion? = nil
     ) throws {
         guard !isRunning else { throw PTYProcessError.alreadyRunning }
@@ -364,6 +371,7 @@ final class TerminalSessionModel: ObservableObject {
                 executable: executable,
                 arguments: arguments,
                 environment: processEnvironment,
+                workingDirectory: workingDirectory,
                 columns: columns,
                 rows: rows
             )

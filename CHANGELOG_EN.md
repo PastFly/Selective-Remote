@@ -1,3 +1,16 @@
+## 0.23.0
+
+- The Snippets library now has a group root, back navigation, persisted folder selection, and list/grid presentation modes.
+- Fixed the library collapsing after an empty-area click by removing its dependency on unstable `List(selection:)` behavior and forced first-item selection.
+- Snippet-to-group relationships now use a stable `groupID`; existing commands and targets migrate automatically without data loss.
+- The in-terminal Snippets panel adds Run Here, Insert Without Running, and Copy Command while keeping execution on assigned targets.
+- The existing global remote Terminal is now named SSH, while a new Terminal section launches the current user's local login shell.
+- Local Terminal supports up to eight tabs, a per-tab working directory, history, themes, Snippets, and the native `⌘T` shortcut.
+- The PTY runtime now supports a working directory without changing the application process directory.
+- Added a native Settings window with Appearance and Updates sections, installed/available version status, release history, manual checks, and automatic check/download controls.
+- Theme, text size, and density now apply to Help, Settings, and What's New; transparency affects the backdrop without dimming controls and text.
+- Added migration, persistence, PTY, SwiftUI, and browser regression coverage for the new model.
+
 ## 0.22.6
 
 - Added a global Snippets library shared by all Terminal workspaces and SSH profiles.

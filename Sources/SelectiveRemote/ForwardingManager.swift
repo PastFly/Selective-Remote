@@ -1601,6 +1601,11 @@ struct ForwardingManagerView: View {
                 "",
                 0
             )
+        case .local:
+            return (
+                "Этот Mac", "localhost", NSUserName(), 0, .automatic,
+                nil, nil, .none, "", 0
+            )
         }
     }
 
@@ -1815,6 +1820,8 @@ struct ForwardingManagerView: View {
             } ?? 0
         case .custom:
             seconds = 30
+        case .local:
+            seconds = 0
         }
         return seconds > 0 ? "Каждые \(seconds) sec" : "Отключён"
     }

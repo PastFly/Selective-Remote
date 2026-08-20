@@ -15,8 +15,87 @@ func terminalHistoryVisibilityIsOwnedBySelectedPane() throws {
         encoding: .utf8
     )
 
-    #expect(source.contains("guard tab.id == workspace.selectedTabID else { return }"))
+    #expect(source.contains("guard workspace.layout != .grid,"))
+    #expect(source.contains("tab.id == workspace.selectedTabID"))
     #expect(!source.contains("if visible { workspace.selectedTabID = tab.id }"))
+}
+
+@Test("Grid Terminal Workspace использует единый полноразмерный инспектор")
+func terminalGridUsesSharedWorkspaceInspector() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let workspaceSource = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/EmbeddedTerminalView.swift"
+        ),
+        encoding: .utf8
+    )
+    let inspectorSource = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/TerminalWorkspaceInspector.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(workspaceSource.contains("terminalWorkspaceWithInspector"))
+    #expect(workspaceSource.contains("workspace.layout == .grid && (showsHistory || showsSnippets)"))
+    #expect(workspaceSource.contains("workspace.layout != .grid"))
+    #expect(inspectorSource.contains("Один клик вставляет · двойной выполняет"))
+    #expect(inspectorSource.contains("TapGesture(count: 2)"))
+    #expect(inspectorSource.contains("Button(\"Выполнить на Targets\""))
+    #expect(inspectorSource.contains("Button(\"Скопировать\""))
+    #expect(inspectorSource.contains("case catalog = \"Общие\""))
+    #expect(inspectorSource.contains("case server = \"Сервер\""))
+    #expect(inspectorSource.contains("case favorites = \"Избранное\""))
+    #expect(inspectorSource.contains("Color(nsColor: .controlBackgroundColor)"))
+}
+
+@Test("Нативный инспектор читает полный каталог общих команд")
+func nativeInspectorLoadsBuiltInCommandCatalog() {
+    let entries = TerminalBuiltInCommandCatalog.entries
+
+    #expect(entries.count >= 300)
+    #expect(entries.contains(where: { $0.command == "pwd" }))
+    #expect(entries.contains(where: { $0.command == "sudo certbot renew --dry-run" }))
+}
+
+@Test("Редактор сниппета объясняет назначение поля команды")
+func snippetEditorShowsCommandPlaceholder() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("Section(\"Команда или скрипт\")"))
+    #expect(source.contains("Введите команду или скрипт, например: docker ps"))
+    #expect(source.contains("if command.isEmpty"))
+}
+
+@Test("Локальный терминал показывает действия напрямую без раскрывающегося меню")
+func localTerminalUsesVisibleHeaderActions() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/LocalTerminalView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("Image(systemName: \"folder\")"))
+    #expect(source.contains("Image(systemName: \"eraser\")"))
+    #expect(source.contains("Image(systemName: \"paintpalette\")"))
+    #expect(!source.contains("Image(systemName: \"ellipsis.circle\")"))
 }
 
 @Test("Отключённая Terminal pane повторно использует свой сервер без открытия редактора")

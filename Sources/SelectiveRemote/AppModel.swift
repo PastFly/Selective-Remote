@@ -327,6 +327,16 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
     @Published var updateInstallError: String?
     @Published var postUpgradeHealthWarning: String?
+    @Published var automaticallyCheckForUpdates = (
+        UserDefaults.standard.object(forKey: "SelectiveRemote.update.autoCheck.v1") as? Bool
+    ) ?? true {
+        didSet {
+            UserDefaults.standard.set(
+                automaticallyCheckForUpdates,
+                forKey: "SelectiveRemote.update.autoCheck.v1"
+            )
+        }
+    }
     @Published var automaticallyDownloadUpdates = UserDefaults.standard.bool(
         forKey: "SelectiveRemote.update.autoDownload.v1"
     ) {
@@ -392,6 +402,9 @@ final class AppModel: NSObject, ObservableObject {
     private let independentPortForwardsKey = "SelectiveRemote.independentPortForwards.v1"
     private static let globalTerminalWorkspaceID = UUID(
         uuidString: "72A7656C-289F-4E2D-9775-8AC0C24EFD55"
+    )!
+    private static let localTerminalWorkspaceID = UUID(
+        uuidString: "1E3FC23B-8AF2-4F1F-A822-7DB733149514"
     )!
     private static let globalForwardingProfileID = UUID(
         uuidString: "227C7A86-DA01-48C2-8098-0C995E75DB79"
@@ -509,7 +522,9 @@ final class AppModel: NSObject, ObservableObject {
         updateCheckTask = Task { @MainActor [weak self] in
             try? await Task.sleep(for: .seconds(3))
             guard let self, !Task.isCancelled else { return }
-            self.checkForUpdates(announcesUpToDate: false)
+            if self.automaticallyCheckForUpdates {
+                self.checkForUpdates(announcesUpToDate: false)
+            }
             while !Task.isCancelled {
                 do {
                     try await Task.sleep(for: .seconds(18_000))
@@ -586,14 +601,20 @@ final class AppModel: NSObject, ObservableObject {
         sshTunnels.values.filter { $0.profileID == Self.globalForwardingProfileID }.count
     }
     var runningSSHTerminalCount: Int {
-        let workspaceProfileIDs = Set(terminalWorkspaces.keys)
-        let workspaceCount = terminalWorkspaces.values.reduce(0) {
+        let remoteWorkspaces = terminalWorkspaces.filter {
+            $0.key != Self.localTerminalWorkspaceID
+        }
+        let workspaceProfileIDs = Set(remoteWorkspaces.keys)
+        let workspaceCount = remoteWorkspaces.values.reduce(0) {
             $0 + $1.runningSessionCount
         }
         let legacyCount = sshTerminalSessions
             .filter { !workspaceProfileIDs.contains($0.key) && $0.value.isRunning }
             .count
         return workspaceCount + legacyCount
+    }
+    var runningLocalTerminalCount: Int {
+        terminalWorkspaces[Self.localTerminalWorkspaceID]?.runningSessionCount ?? 0
     }
     var isSelectedSessionRunning: Bool { isSessionRunning(profileID: selectedProfile.id) }
     var selectedProfileHasActiveTunnels: Bool {
@@ -761,6 +782,15 @@ final class AppModel: NSObject, ObservableObject {
         )
     }
 
+    func localTerminalWorkspace() -> TerminalWorkspaceModel {
+        terminalWorkspace(
+            profileID: Self.localTerminalWorkspaceID,
+            primaryConnection: .local(
+                workingDirectory: FileManager.default.homeDirectoryForCurrentUser.path
+            )
+        )
+    }
+
     func connectionCenterSnapshot(now: Date = Date()) -> ConnectionCenterSnapshot {
         _ = now
         var items: [ConnectionCenterItem] = []
@@ -875,6 +905,7 @@ final class AppModel: NSObject, ObservableObject {
 
         let workspaceProfileIDs = Set(terminalWorkspaces.keys)
         for (workspaceID, workspace) in terminalWorkspaces {
+            if workspaceID == Self.localTerminalWorkspaceID { continue }
             let scope: ConnectionCenterTerminalScope = workspaceID == Self.globalTerminalWorkspaceID
                 ? .global
                 : .profile(workspaceID)
@@ -1303,6 +1334,8 @@ final class AppModel: NSObject, ObservableObject {
                 jumpHost: route.jumpHost,
                 proxy: route.proxy
             )
+        case .local:
+            return nil
         }
     }
 
@@ -2760,6 +2793,8 @@ final class AppModel: NSObject, ObservableObject {
                     profileID: item.id,
                     kind: .forwarding
                 )
+            case .local:
+                credential = nil
             }
             let effectiveCredential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
                 ? credential
@@ -3162,6 +3197,9 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage = error.localizedDescription
                 return nil
             }
+        case .local:
+            errorMessage = "Для локального терминала SSH-настройки не требуются"
+            return nil
         }
     }
 
@@ -3214,6 +3252,8 @@ final class AppModel: NSObject, ObservableObject {
                     credential = temporaryPassword?.isEmpty == false
                         ? KeychainService.credentialReference(profileID: tabID, kind: .ssh)
                         : nil
+                case .local:
+                    credential = nil
                 }
             } else {
                 credential = nil
@@ -3302,6 +3342,48 @@ final class AppModel: NSObject, ObservableObject {
             cancelTerminalSmartReconnect(tabID: tabID, session: session)
             errorMessage = error.localizedDescription
             statusMessage = "SSH не запущен"
+        }
+    }
+
+    func connectLocalTerminal(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel
+    ) {
+        guard connection.kind == .local else {
+            errorMessage = "Локальная вкладка содержит неверный тип подключения"
+            return
+        }
+        guard !session.isRunning else {
+            statusMessage = "Этот локальный терминал уже запущен"
+            return
+        }
+
+        let environment = ProcessInfo.processInfo.environment
+        let configuredShell = environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shell = configuredShell?.isEmpty == false ? configuredShell! : "/bin/zsh"
+        let directory = connection.workingDirectory
+            ?? FileManager.default.homeDirectoryForCurrentUser.path
+        do {
+            try session.start(
+                executable: shell,
+                arguments: ["-l"],
+                title: "Локальный терминал",
+                environment: environment,
+                workingDirectory: directory
+            ) { [weak self] exitCode in
+                self?.terminalStartedAt.removeValue(forKey: tabID)
+                self?.statusMessage = exitCode == 0
+                    ? "Локальный терминал завершён"
+                    : "Локальный терминал завершился с кодом \(exitCode)"
+                self?.objectWillChange.send()
+            }
+            terminalStartedAt[tabID] = Date()
+            statusMessage = "Локальный терминал запущен"
+            errorMessage = nil
+        } catch {
+            errorMessage = error.localizedDescription
+            statusMessage = "Локальный терминал не запущен"
         }
     }
 
@@ -3667,6 +3749,8 @@ final class AppModel: NSObject, ObservableObject {
                     profileID: tabID,
                     kind: .ssh
                 )
+            case .local:
+                passwordCredential = nil
             }
         } else {
             passwordCredential = nil
@@ -3684,10 +3768,37 @@ final class AppModel: NSObject, ObservableObject {
             jumpHostPromptTokens: settings.jumpHostPromptTokens,
             requiresUserPresence: false
         )
-        return try await TerminalRemoteContextService.discover(
+        let snapshot = try await TerminalRemoteContextService.discover(
             settings: settings,
             environment: environment
         )
+        persistDetectedOperatingSystem(snapshot, for: connection)
+        return snapshot
+    }
+
+    private func persistDetectedOperatingSystem(
+        _ snapshot: TerminalRemoteContextSnapshot,
+        for connection: TerminalTabConnection
+    ) {
+        guard let profileID = connection.profileID,
+              let index = profiles.firstIndex(where: {
+                  $0.id == profileID && $0.connectionType == .ssh
+              })
+        else { return }
+
+        let label = snapshot.systemLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty else { return }
+        let osID = snapshot.osID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let osLike = snapshot.osLike.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard profiles[index].detectedOperatingSystem != label
+                || profiles[index].detectedOperatingSystemID != osID
+                || profiles[index].detectedOperatingSystemLike != osLike
+        else { return }
+
+        profiles[index].detectedOperatingSystem = label
+        profiles[index].detectedOperatingSystemID = osID
+        profiles[index].detectedOperatingSystemLike = osLike
+        profiles[index].operatingSystemDetectedAt = snapshot.refreshedAt ?? Date()
     }
 
     func reconnectSelectedProfile() {
@@ -3814,10 +3925,18 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func stopAllSSHTerminals() {
-        for terminal in sshTerminalSessions.values where terminal.isRunning {
+        for (id, terminal) in sshTerminalSessions
+        where id != Self.localTerminalWorkspaceID && terminal.isRunning {
             terminal.stop()
         }
-        terminalWorkspaces.values.forEach { $0.stopAll() }
+        terminalWorkspaces
+            .filter { $0.key != Self.localTerminalWorkspaceID }
+            .values
+            .forEach { $0.stopAll() }
+    }
+
+    func stopAllLocalTerminals() {
+        terminalWorkspaces[Self.localTerminalWorkspaceID]?.stopAll()
     }
 
     func showMainWindow() {
@@ -3923,6 +4042,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func checkForUpdatesAutomatically() {
+        guard automaticallyCheckForUpdates else { return }
         let lastCheck = UserDefaults.standard.double(forKey: lastSuccessfulUpdateCheckKey)
         let interval: TimeInterval = 5 * 60 * 60
         guard Date().timeIntervalSince1970 - lastCheck >= interval else { return }
@@ -4519,6 +4639,8 @@ final class AppModel: NSObject, ObservableObject {
                 }
             case .custom:
                 if forwardingPasswordUserPresenceIDs.contains(summary.id.uuidString) { return false }
+            case .local:
+                return false
             }
             return true
         }
@@ -5313,7 +5435,10 @@ final class AppModel: NSObject, ObservableObject {
     @objc private func workspaceWillSleep() {
         sleepInterruptedProfileIDs = Set(managedSessions.keys).union(rdpReconnectProgress.keys)
         sleepInterruptedTerminalTabIDs = Set(
-            terminalWorkspaces.values.flatMap { workspace in
+            terminalWorkspaces
+                .filter { $0.key != Self.localTerminalWorkspaceID }
+                .values
+                .flatMap { workspace in
                 workspace.tabs.compactMap { tab in
                     (tab.session.isRunning || tab.session.reconnectProgress != nil) ? tab.id : nil
                 }
@@ -5332,7 +5457,8 @@ final class AppModel: NSObject, ObservableObject {
         sshTunnelReconnectAttempts.removeAll()
         sshTunnelReconnectSummaries.removeAll()
 
-        for workspace in terminalWorkspaces.values {
+        for (workspaceID, workspace) in terminalWorkspaces
+        where workspaceID != Self.localTerminalWorkspaceID {
             for tab in workspace.tabs
             where tab.session.isRunning || tab.session.reconnectProgress != nil {
                 tab.session.stop()

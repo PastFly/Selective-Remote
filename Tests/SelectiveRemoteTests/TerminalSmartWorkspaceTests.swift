@@ -160,8 +160,11 @@ func focusModeExposesVisibleRestoreInterfaceButton() throws {
     )
 
     #expect(source.contains("if isFocusMode {\n                Button(\"Вернуть интерфейс\""))
-    #expect(source.contains("if !isFocusMode {\n                    Button(\"Развернуть терминал\""))
+    #expect(source.contains("} else {\n                Button(\"Развернуть терминал\""))
     #expect(!source.contains("Button(isFocusMode ? \"Вернуть интерфейс\""))
+    let expandButton = try #require(source.range(of: "Button(\"Развернуть терминал\""))
+    let actionsMenu = try #require(source.range(of: "Menu {", range: expandButton.upperBound..<source.endIndex))
+    #expect(expandButton.lowerBound < actionsMenu.lowerBound)
     #expect(source.contains("private var gridEmptyPane: some View"))
 }
 
@@ -251,6 +254,43 @@ func exposesGlobalSnippetsWithMultipleTargets() throws {
         category: "Тест",
         profileID: first
     ))
+}
+
+@Test("Многострочный Snippet создаётся, изменяется и сохраняется без потери строк")
+@MainActor
+func persistsAndUpdatesMultilineSnippet() throws {
+    let suiteName = "TerminalMultilineSnippetTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let profileID = UUID()
+    var store = TerminalCommandHistoryStore(defaults: defaults)
+    let original = "cd /var/www\ngit pull"
+
+    #expect(store.saveTemplate(
+        id: nil,
+        title: "Deploy",
+        command: original,
+        category: "Release",
+        profileID: profileID,
+        targetProfileIDs: [profileID]
+    ))
+    let snippet = try #require(store.templates().first)
+    #expect(snippet.command == original)
+
+    let updated = original + "\nsudo systemctl restart nginx"
+    #expect(store.saveTemplate(
+        id: snippet.id,
+        title: snippet.title,
+        command: updated,
+        category: snippet.category,
+        groupID: snippet.groupID,
+        profileID: profileID,
+        targetProfileIDs: [profileID]
+    ))
+    #expect(store.template(id: snippet.id)?.command == updated)
+
+    store = TerminalCommandHistoryStore(defaults: defaults)
+    #expect(store.template(id: snippet.id)?.command == updated)
 }
 
 @Test("Группы сниппетов и команды переживают перезапуск хранилища")
@@ -343,12 +383,16 @@ func migratesLegacyTemplatesToSnippetGroups() throws {
     #expect(migrated.profileID == firstProfile)
     #expect(migrated.targetProfileIDs == [firstProfile])
     #expect(migrated.category == TerminalCommandHistoryStore.defaultSnippetGroupName)
+    #expect(migrated.groupID != TerminalCommandTemplate.legacyUnassignedGroupID)
     #expect(Set(store.snippetGroups().map(\.name)) == Set([
         TerminalCommandHistoryStore.defaultSnippetGroupName, "Logs"
     ]))
     #expect(store.templates(for: firstProfile).count == 2)
     #expect(store.templates(for: secondProfile).count == 2)
     #expect(store.template(id: secondID)?.targetProfileIDs == [secondProfile])
+    let logsGroup = try #require(store.snippetGroups().first(where: { $0.name == "Logs" }))
+    #expect(store.template(id: secondID)?.groupID == logsGroup.id)
+    #expect(store.templates(in: logsGroup.id).map(\.id) == [secondID])
 
     // Migration is idempotent and persists the normalized legacy value.
     store = TerminalCommandHistoryStore(defaults: defaults)
@@ -384,6 +428,8 @@ func validatesGlobalSnippetGroupsAndTargets() throws {
         targetProfileIDs: [first, second, first] + extraTargets
     ))
     #expect(store.templates().first?.targetProfileIDs.count == 8)
+    let docker = try #require(store.snippetGroups().first)
+    #expect(store.templates().first?.groupID == docker.id)
     #expect(Array(store.templates().first?.targetProfileIDs.prefix(2) ?? []) == [first, second])
     #expect(!store.saveTemplate(
         id: nil,
@@ -454,8 +500,13 @@ func preparesMultilineSnippetPTYInput() throws {
     let value = try #require(String(data: data, encoding: .utf8))
 
     #expect(value == "cd /var/www\ngit pull\nsystemctl restart nginx\n")
+    let windowsData = try #require(
+        TerminalSnippetExecution.inputData(for: "cd C:\\work\r\ndir\r\n")
+    )
+    #expect(String(data: windowsData, encoding: .utf8) == "cd C:\\work\ndir\n")
     #expect(TerminalSnippetExecution.inputData(for: "\n\n") == nil)
     #expect(TerminalSnippetExecution.inputData(for: "echo ok\0") == nil)
+    #expect(TerminalSnippetExecution.inputData(for: "echo ok\u{001B}") == nil)
 }
 
 @Test("Контекст сервера создаёт подсказки для служб и контейнеров")

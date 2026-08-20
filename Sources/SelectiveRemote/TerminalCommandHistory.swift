@@ -33,11 +33,16 @@ struct TerminalCommandFavorite: Codable, Equatable, Identifiable {
 }
 
 struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
+    static let legacyUnassignedGroupID = UUID(
+        uuidString: "00000000-0000-0000-0000-000000000000"
+    )!
+
     let id: UUID
     let profileID: UUID
     var title: String
     var command: String
     var category: String
+    var groupID: UUID
     var targetProfileIDs: [UUID]
     var updatedAt: Date
 
@@ -47,6 +52,7 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         title: String,
         command: String,
         category: String,
+        groupID: UUID? = nil,
         targetProfileIDs: [UUID]? = nil,
         updatedAt: Date
     ) {
@@ -55,12 +61,13 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         self.title = title
         self.command = command
         self.category = category
+        self.groupID = groupID ?? Self.legacyUnassignedGroupID
         self.targetProfileIDs = targetProfileIDs ?? [profileID]
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, profileID, title, command, category, targetProfileIDs, updatedAt
+        case id, profileID, title, command, category, groupID, targetProfileIDs, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -70,6 +77,8 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         title = try container.decode(String.self, forKey: .title)
         command = try container.decode(String.self, forKey: .command)
         category = try container.decode(String.self, forKey: .category)
+        groupID = try container.decodeIfPresent(UUID.self, forKey: .groupID)
+            ?? Self.legacyUnassignedGroupID
         targetProfileIDs = try container.decodeIfPresent([UUID].self, forKey: .targetProfileIDs)
             ?? [profileID]
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
@@ -106,6 +115,7 @@ private struct TerminalCommandTemplateWebEntry: Encodable {
     let title: String
     let command: String
     let category: String
+    let groupID: String
     let targetProfileIDs: [String]
     let updatedAt: Int64
 }
@@ -124,6 +134,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     )!
 
     @Published private(set) var snippetRevision = 0
+    @Published private(set) var historyRevision = 0
 
     private enum Key {
         static let entries = "SelectiveRemote.terminal.commandHistory.v1"
@@ -283,6 +294,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    func templates(in groupID: UUID) -> [TerminalCommandTemplate] {
+        templates().filter { $0.groupID == groupID }
+    }
+
+    func snippetGroup(id: UUID) -> TerminalSnippetGroup? {
+        storedSnippetGroups.first { $0.id == id }
+    }
+
     func snippetGroups(for profileID: UUID) -> [TerminalSnippetGroup] {
         _ = profileID
         return snippetGroups()
@@ -331,7 +350,6 @@ final class TerminalCommandHistoryStore: ObservableObject {
               })
         else { return false }
 
-        let oldName = storedSnippetGroups[index].name
         guard !storedSnippetGroups.contains(where: {
             $0.id != id
                 && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
@@ -341,7 +359,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         }
         storedSnippetGroups[index].name = name
         for templateIndex in storedTemplates.indices where
-            storedTemplates[templateIndex].category == oldName {
+            storedTemplates[templateIndex].groupID == id {
             storedTemplates[templateIndex].category = name
         }
         persistSnippetGroups()
@@ -357,10 +375,9 @@ final class TerminalCommandHistoryStore: ObservableObject {
             $0.id == id
         }) else { return false }
 
-        let removedName = storedSnippetGroups[index].name
         storedSnippetGroups.remove(at: index)
         let affected = storedTemplates.indices.filter {
-            storedTemplates[$0].category == removedName
+            storedTemplates[$0].groupID == id
         }
         if !affected.isEmpty {
             let defaultGroup = ensureSnippetGroup(
@@ -369,6 +386,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             )
             for templateIndex in affected {
                 storedTemplates[templateIndex].category = defaultGroup.name
+                storedTemplates[templateIndex].groupID = defaultGroup.id
                 storedTemplates[templateIndex].updatedAt = Date()
             }
             persistTemplates()
@@ -383,6 +401,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         title rawTitle: String,
         command rawCommand: String,
         category rawCategory: String,
+        groupID requestedGroupID: UUID? = nil,
         profileID: UUID,
         targetProfileIDs: [UUID]? = nil
     ) -> Bool {
@@ -391,14 +410,15 @@ final class TerminalCommandHistoryStore: ObservableObject {
         guard !title.isEmpty,
               title.count <= 80,
               category.count <= 60,
-              let command = normalizedCommand(rawCommand),
+              let command = normalizedSnippetCommand(rawCommand),
               !isSensitive(command)
         else { return false }
 
-        let group = ensureSnippetGroup(
-            named: category.isEmpty ? Self.defaultSnippetGroupName : category,
-            profileID: Self.globalSnippetLibraryID
-        )
+        let group = requestedGroupID.flatMap(snippetGroup(id:))
+            ?? ensureSnippetGroup(
+                named: category.isEmpty ? Self.defaultSnippetGroupName : category,
+                profileID: Self.globalSnippetLibraryID
+            )
 
         if let id,
            let index = storedTemplates.firstIndex(where: {
@@ -407,6 +427,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             storedTemplates[index].title = title
             storedTemplates[index].command = command
             storedTemplates[index].category = group.name
+            storedTemplates[index].groupID = group.id
             if let targetProfileIDs {
                 storedTemplates[index].targetProfileIDs = normalizedTargetIDs(targetProfileIDs)
             }
@@ -419,6 +440,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
                     title: title,
                     command: command,
                     category: group.name,
+                    groupID: group.id,
                     targetProfileIDs: normalizedTargetIDs(targetProfileIDs ?? [profileID]),
                     updatedAt: Date()
                 )
@@ -442,6 +464,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         }) else { return false }
 
         storedTemplates[index].category = group.name
+        storedTemplates[index].groupID = group.id
         storedTemplates[index].updatedAt = Date()
         persistTemplates()
         return true
@@ -461,6 +484,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             title: base + suffix,
             command: template.command,
             category: template.category,
+            groupID: template.groupID,
             profileID: Self.globalSnippetLibraryID,
             targetProfileIDs: template.targetProfileIDs
         )
@@ -511,6 +535,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
                     title: $0.title,
                     command: $0.command,
                     category: $0.category,
+                    groupID: $0.groupID.uuidString,
                     targetProfileIDs: $0.targetProfileIDs.map(\.uuidString),
                     updatedAt: Int64($0.updatedAt.timeIntervalSince1970 * 1_000)
                 )
@@ -536,6 +561,22 @@ final class TerminalCommandHistoryStore: ObservableObject {
               })
         else { return nil }
         return withoutNewlines
+    }
+
+    private func normalizedSnippetCommand(_ rawCommand: String) -> String? {
+        let normalizedLineEndings = rawCommand
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let command = normalizedLineEndings.trimmingCharacters(in: .newlines)
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              command.count <= 8_192,
+              !command.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+                      && $0.value != 9
+                      && $0.value != 10
+              })
+        else { return nil }
+        return command
     }
 
     private func isSensitive(_ command: String) -> Bool {
@@ -634,6 +675,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 now: storedTemplates[index].updatedAt
             )
             groupsChanged = groupsChanged || storedSnippetGroups.count != beforeCount
+            if storedTemplates[index].groupID != group.id,
+               (storedTemplates[index].groupID == TerminalCommandTemplate.legacyUnassignedGroupID
+                    || !storedSnippetGroups.contains(where: {
+                        $0.id == storedTemplates[index].groupID
+                    })) {
+                storedTemplates[index].groupID = group.id
+                templatesChanged = true
+            }
             if storedTemplates[index].category != group.name {
                 storedTemplates[index].category = group.name
                 templatesChanged = true
@@ -671,11 +720,13 @@ final class TerminalCommandHistoryStore: ObservableObject {
     private func persist() {
         guard let data = try? JSONEncoder().encode(storedEntries) else { return }
         defaults.set(data, forKey: Key.entries)
+        historyRevision &+= 1
     }
 
     private func persistFavorites() {
         guard let data = try? JSONEncoder().encode(storedFavorites) else { return }
         defaults.set(data, forKey: Key.favorites)
+        historyRevision &+= 1
     }
 
     private func persistTemplates() {

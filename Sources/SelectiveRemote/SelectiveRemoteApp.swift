@@ -1,6 +1,12 @@
 import AppKit
 import SwiftUI
 
+extension Notification.Name {
+    static let selectiveRemoteNewLocalTerminal = Notification.Name(
+        "SelectiveRemote.newLocalTerminal"
+    )
+}
+
 @MainActor
 final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate {
     private var helpWindow: NSWindow?
@@ -15,7 +21,9 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
             NSApp.activate(ignoringOtherApps: true)
             return
         }
-        let controller = NSHostingController(rootView: AppHelpView())
+        let controller = NSHostingController(
+            rootView: AppAppearanceRoot(store: .shared) { AppHelpView() }
+        )
         let window = NSWindow(contentViewController: controller)
         window.title = "Справка Selective Remote"
         window.setContentSize(NSSize(width: 860, height: 700))
@@ -59,12 +67,14 @@ struct SelectiveRemoteApp: App {
     private var appDelegate
     @StateObject private var model = AppModel()
     @StateObject private var language = AppLanguageStore()
+    @StateObject private var appAppearance = AppAppearanceStore.shared
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environmentObject(model)
                 .environmentObject(language)
+                .environmentObject(appAppearance)
                 .environment(\.locale, language.locale)
                 .frame(minWidth: 1050, minHeight: 700)
                 .onAppear {
@@ -73,7 +83,15 @@ struct SelectiveRemoteApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands {
-            CommandGroup(replacing: .newItem) { }
+            CommandGroup(replacing: .newItem) {
+                Button("Новая вкладка терминала", systemImage: "terminal") {
+                    NotificationCenter.default.post(
+                        name: .selectiveRemoteNewLocalTerminal,
+                        object: nil
+                    )
+                }
+                .keyboardShortcut("t", modifiers: [.command])
+            }
             CommandGroup(replacing: .help) {
                 Button("Что нового…", systemImage: "sparkles") {
                     model.openInstalledReleaseNotes()
@@ -139,6 +157,13 @@ struct SelectiveRemoteApp: App {
                         model.stopAllSSHTerminals()
                     }
                 }
+                if model.runningLocalTerminalCount > 0 {
+                    Divider()
+                    Text("Локальных терминалов: \(model.runningLocalTerminalCount)")
+                    Button("Завершить все локальные терминалы", role: .destructive) {
+                        model.stopAllLocalTerminals()
+                    }
+                }
                 Divider()
                 Button("Импортировать профили…") { model.importProfiles() }
                 Button("Экспортировать все профили…") { model.exportAllProfiles() }
@@ -148,6 +173,12 @@ struct SelectiveRemoteApp: App {
                 Divider()
                 Text(AppBuildInfo.fullText)
             }
+        }
+
+        Settings {
+            AppSettingsView(model: model, appearance: appAppearance)
+                .environmentObject(language)
+                .environment(\.locale, language.locale)
         }
 
         MenuBarExtra {
@@ -206,6 +237,13 @@ struct SelectiveRemoteApp: App {
                     model.stopAllSSHTerminals()
                 }
             }
+            if model.runningLocalTerminalCount > 0 {
+                Divider()
+                Text("Локальных терминалов: \(model.runningLocalTerminalCount)")
+                Button("Завершить все локальные терминалы", role: .destructive) {
+                    model.stopAllLocalTerminals()
+                }
+            }
             SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)
             Divider()
             Text("Правый Shift + Enter — полный экран / окно")
@@ -222,6 +260,7 @@ struct SelectiveRemoteApp: App {
                 systemImage: model.isSessionRunning
                     || model.runningSSHTunnelCount > 0
                     || model.runningSSHTerminalCount > 0
+                    || model.runningLocalTerminalCount > 0
                     ? "bolt.horizontal.circle.fill"
                     : "display"
             )

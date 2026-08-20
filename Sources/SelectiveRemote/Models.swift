@@ -717,6 +717,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var friendlyName: String
     var group: String
     var profileDescription: String
+    var detectedOperatingSystem: String
+    var detectedOperatingSystemID: String
+    var detectedOperatingSystemLike: String
+    var operatingSystemDetectedAt: Date?
     var host: String
     var username: String
     var sshPort: Int
@@ -774,6 +778,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         friendlyName = connectionType == .rdp ? "Новое подключение" : "Новое SSH-подключение"
         group = ""
         profileDescription = ""
+        detectedOperatingSystem = ""
+        detectedOperatingSystemID = ""
+        detectedOperatingSystemLike = ""
+        operatingSystemDetectedAt = nil
         host = ""
         username = ""
         sshPort = 22
@@ -827,7 +835,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, connectionType, friendlyName, group, profileDescription, host, username
+        case id, connectionType, friendlyName, group, profileDescription
+        case detectedOperatingSystem, detectedOperatingSystemID
+        case detectedOperatingSystemLike, operatingSystemDetectedAt
+        case host, username
         case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, sshAgentForwarding, portForwards
         case gatewayHost, gatewayUsername
@@ -857,6 +868,22 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
             String.self,
             forKey: .profileDescription
         ) ?? defaults.profileDescription
+        detectedOperatingSystem = try container.decodeIfPresent(
+            String.self,
+            forKey: .detectedOperatingSystem
+        ) ?? defaults.detectedOperatingSystem
+        detectedOperatingSystemID = try container.decodeIfPresent(
+            String.self,
+            forKey: .detectedOperatingSystemID
+        ) ?? defaults.detectedOperatingSystemID
+        detectedOperatingSystemLike = try container.decodeIfPresent(
+            String.self,
+            forKey: .detectedOperatingSystemLike
+        ) ?? defaults.detectedOperatingSystemLike
+        operatingSystemDetectedAt = try container.decodeIfPresent(
+            Date.self,
+            forKey: .operatingSystemDetectedAt
+        )
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
@@ -982,6 +1009,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(friendlyName, forKey: .friendlyName)
         try container.encode(group, forKey: .group)
         try container.encode(profileDescription, forKey: .profileDescription)
+        try container.encode(detectedOperatingSystem, forKey: .detectedOperatingSystem)
+        try container.encode(detectedOperatingSystemID, forKey: .detectedOperatingSystemID)
+        try container.encode(detectedOperatingSystemLike, forKey: .detectedOperatingSystemLike)
+        try container.encodeIfPresent(operatingSystemDetectedAt, forKey: .operatingSystemDetectedAt)
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
