@@ -1,0 +1,47 @@
+name: Test DMG
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-dmg-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build ARM64 test DMG
+    runs-on: macos-14
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+      SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Swift 6 toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          swift --version | grep -E 'Swift version 6\.'
+
+      - name: Install build dependencies
+        run: brew install freerdp sdl3
+
+      - name: Build ad-hoc signed DMG
+        run: ./scripts/build_app.sh
+
+      - name: Upload test DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: SelectiveRemote-test-${{ github.event.pull_request.number || github.run_number }}-arm64
+          path: |
+            dist/*.dmg
+            dist/*.dmg.sha256
+          if-no-files-found: error
+          retention-days: 7
