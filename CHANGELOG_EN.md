@@ -1,3 +1,14 @@
+## 0.22.6
+
+- Added a global Snippets library shared by all Terminal workspaces and SSH profiles.
+- A snippet can target up to eight saved SSH hosts; existing templates migrate without data loss.
+- Snippet execution reuses an active SSH session or connects the required target and sends the command once the shell is ready.
+- Added groups, search, create, edit, duplicate, move, and reliable snippet deletion.
+- Added double-click, Enter, and context-menu execution plus inline creation inside empty groups.
+- The global library now reports per-target delivery state and can manually disconnect the related SSH sessions with confirmation.
+- The in-terminal Snippets editor now supports assigning multiple targets.
+- Added migration, persistence, bridge, and browser regression coverage for global Snippets.
+
 ## 0.22.5
 
 - Fixed application crashes during Server → Server and Server → Mac drag-and-drop in release builds.
