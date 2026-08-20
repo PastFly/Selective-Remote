@@ -36,6 +36,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
+    case snippets = "Сниппеты"
     case diagnostics = "Диагностика"
     case keychain = "Keychain"
 
@@ -45,6 +46,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
+        case .snippets: "curlybraces"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
         case .diagnostics: "stethoscope"
@@ -71,6 +73,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var appAppearance = AppAppearanceStore()
+    @StateObject private var snippets = TerminalCommandHistoryStore.shared
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -620,6 +623,11 @@ struct ContentView: View {
                 connectionCenterDetail
             case .connections:
                 profileDetail
+            case .snippets:
+                TerminalSnippetsLibraryView(
+                    store: snippets,
+                    model: model
+                )
             case .terminal:
                 globalTerminalDetail
             case .sftp:
@@ -1932,6 +1940,7 @@ struct ContentView: View {
                 )
                 selectedTab = .sftp
             },
+            executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
                     connection: tab.connection,
@@ -1984,6 +1993,7 @@ struct ContentView: View {
                 )
                 setMainArea(.sftp)
             },
+            executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
                     connection: tab.connection,

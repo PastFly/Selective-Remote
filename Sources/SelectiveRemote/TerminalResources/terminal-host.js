@@ -19,21 +19,119 @@
     const historyClearButton = document.getElementById("history-clear");
     const historyCloseButton = document.getElementById("history-close");
     const historyOptions = document.getElementById("history-options");
-    const templateOptions = document.getElementById("template-options");
-    const templateAddButton = document.getElementById("template-add");
-    const templateDialog = document.getElementById("template-dialog");
-    const templateForm = document.getElementById("template-form");
-    const templateID = document.getElementById("template-id");
-    const templateTitle = document.getElementById("template-title");
-    const templateCategory = document.getElementById("template-category");
-    const templateCommand = document.getElementById("template-command");
-    const templateCancel = document.getElementById("template-cancel");
+    const snippetOptions = document.getElementById("snippet-options");
+    const snippetAddButton = document.getElementById("snippet-add");
+    const snippetGroupAddButton = document.getElementById("snippet-group-add");
+    const snippetEmptyAddButton = document.getElementById("snippet-empty-add");
+    const snippetsList = document.getElementById("snippets-list");
+    const snippetFeedback = document.getElementById("snippet-feedback");
+    const snippetDialog = document.getElementById("snippet-dialog");
+    const snippetForm = document.getElementById("snippet-form");
+    const snippetID = document.getElementById("snippet-id");
+    const snippetTitle = document.getElementById("snippet-title");
+    const snippetGroup = document.getElementById("snippet-group");
+    const snippetCommand = document.getElementById("snippet-command");
+    const snippetTargetsList = document.getElementById("snippet-targets-list");
+    const snippetTargetsError = document.getElementById("snippet-targets-error");
+    const snippetCancel = document.getElementById("snippet-cancel");
+    const snippetGroupDialog = document.getElementById("snippet-group-dialog");
+    const snippetGroupForm = document.getElementById("snippet-group-form");
+    const snippetGroupID = document.getElementById("snippet-group-id");
+    const snippetGroupName = document.getElementById("snippet-group-name");
+    const snippetGroupCancel = document.getElementById("snippet-group-cancel");
+    const snippetMoveDialog = document.getElementById("snippet-move-dialog");
+    const snippetMoveForm = document.getElementById("snippet-move-form");
+    const snippetMoveID = document.getElementById("snippet-move-id");
+    const snippetMoveGroup = document.getElementById("snippet-move-group");
+    const snippetMoveCancel = document.getElementById("snippet-move-cancel");
+    const snippetContextMenu = document.getElementById("snippet-context-menu");
     const commandPanelTitle = document.getElementById("command-panel-title");
     const commandPanelSubtitle = document.getElementById("command-panel-subtitle");
     const commandEmptyTitle = document.getElementById("command-empty-title");
     const commandEmptyMessage = document.getElementById("command-empty-message");
     const remoteContextRetryButton = document.getElementById("remote-context-retry");
+    const commandPanelFooter = document.getElementById("command-panel-footer");
     const commandTabs = Array.from(document.querySelectorAll("#command-tabs button"));
+
+    const snippetStrings = {
+        ru: {
+            snippets: "Сниппеты",
+            subtitle: "Общая библиотека · запуск по Targets",
+            search: "Поиск сниппетов",
+            newSnippet: "Новый сниппет",
+            newGroup: "Новая группа",
+            editSnippet: "Изменить сниппет",
+            edit: "Изменить",
+            duplicate: "Дублировать",
+            move: "Переместить",
+            remove: "Удалить",
+            run: "Выполнить",
+            defaultGroup: "Мои команды",
+            group: "Группа",
+            command: "Команда или скрипт",
+            targets: "Targets · до 8 SSH-профилей",
+            targetRequired: "Выберите хотя бы один Target.",
+            create: "Создать",
+            save: "Сохранить",
+            cancel: "Отмена",
+            renameGroup: "Переименовать группу",
+            deleteGroup: "Удалить группу",
+            noSnippets: "Сниппетов пока нет",
+            noSnippetsMessage: "Создайте сниппет для команд, которые используете регулярно.",
+            deleteSnippetConfirm: (title) => `Удалить сниппет «${title}»?`,
+            deleteGroupConfirm: (name, count) => count > 0
+                ? `Удалить группу «${name}»? ${count} сниппетов будут перемещены в «Мои команды».`
+                : `Удалить группу «${name}»?`,
+            inactiveSession: "Сниппет не выполнен: активная SSH-сессия не подключена.",
+            connecting: "Подключаем SSH Targets. Сниппет выполнится сразу после подключения.",
+            noTargets: "Сниппет не выполнен: назначьте хотя бы один SSH Target.",
+            alternateScreen: "Сниппет нельзя выполнить, пока терминал занят полноэкранной программой.",
+            invalidSnippet: "Сниппет больше недоступен. Обновите список и повторите попытку.",
+            footer: "Один клик выбирает. Двойной клик или Enter выполняет сниппет."
+        },
+        en: {
+            snippets: "Snippets",
+            subtitle: "Shared library · runs on assigned targets",
+            search: "Search snippets",
+            newSnippet: "New snippet",
+            newGroup: "New group",
+            editSnippet: "Edit snippet",
+            edit: "Edit",
+            duplicate: "Duplicate",
+            move: "Move to",
+            remove: "Remove",
+            run: "Run",
+            defaultGroup: "My commands",
+            group: "Group",
+            command: "Command or script",
+            targets: "Targets · up to 8 SSH profiles",
+            targetRequired: "Select at least one target.",
+            create: "Create",
+            save: "Save",
+            cancel: "Cancel",
+            renameGroup: "Rename group",
+            deleteGroup: "Delete group",
+            noSnippets: "No snippets yet",
+            noSnippetsMessage: "Create a snippet for commands you use regularly.",
+            deleteSnippetConfirm: (title) => `Remove snippet “${title}”?`,
+            deleteGroupConfirm: (name, count) => count > 0
+                ? `Delete group “${name}”? ${count} snippets will move to “My commands”.`
+                : `Delete group “${name}”?`,
+            inactiveSession: "Snippet was not run because the active SSH session is disconnected.",
+            connecting: "Connecting SSH targets. The snippet will run when they are ready.",
+            noTargets: "Snippet was not run because it has no SSH targets.",
+            alternateScreen: "Exit the full-screen terminal program before running a snippet.",
+            invalidSnippet: "This snippet is no longer available. Refresh and try again.",
+            footer: "Single-click selects. Double-click or Enter runs the snippet."
+        }
+    };
+    let snippetLanguage = "ru";
+    const snippetText = (key) => snippetStrings[snippetLanguage]?.[key]
+        ?? snippetStrings.ru[key]
+        ?? key;
+    const displaySnippetGroupName = (name) => name === "Мои команды"
+        ? snippetText("defaultGroup")
+        : name;
 
     const terminal = new Terminal({
         allowProposedApi: false,
@@ -195,6 +293,12 @@
     let historyEnabled = true;
     let favoriteCommands = new Set();
     let commandTemplates = [];
+    let snippetGroups = [];
+    let snippetTargetOptions = [];
+    let defaultSnippetTargetID = "";
+    let selectedSnippetID = null;
+    let contextSnippetID = null;
+    let panelMode = "hidden";
     let remoteCommandEntries = [];
     let remoteContextMessage = "Подключите SSH и обновите сведения о сервере";
     let remoteSystemLabel = "";
@@ -1036,16 +1140,297 @@
         }).format(date);
     };
 
-    const openTemplateEditor = (entry = null) => {
-        templateID.value = entry?.id || "";
-        templateTitle.value = entry?.title || "";
-        templateCategory.value = entry?.category || "Мои команды";
-        templateCommand.value = entry?.command || "";
-        templateDialog.showModal();
-        window.setTimeout(() => templateTitle.focus(), 0);
+    let pendingSnippetEditor = false;
+
+    const fillGroupSelect = (select, selectedName = "") => {
+        select.replaceChildren();
+        snippetGroups.forEach((group) => {
+            const option = document.createElement("option");
+            option.value = group.id;
+            option.textContent = displaySnippetGroupName(group.name);
+            option.selected = group.name === selectedName;
+            select.append(option);
+        });
+    };
+
+    const selectedSnippetTargetIDs = () => Array.from(
+        snippetTargetsList.querySelectorAll('input[type="checkbox"]:checked')
+    ).map((input) => input.value);
+
+    const updateSnippetTargetAvailability = () => {
+        const selectedCount = selectedSnippetTargetIDs().length;
+        snippetTargetsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.disabled = !input.checked && selectedCount >= 8;
+        });
+        if (selectedCount > 0) {
+            snippetTargetsError.hidden = true;
+        }
+    };
+
+    const renderSnippetTargets = (selectedIDs = []) => {
+        const selected = new Set(
+            selectedIDs.filter((id) => typeof id === "string").slice(0, 8)
+        );
+        snippetTargetsList.replaceChildren();
+        snippetTargetsError.hidden = true;
+        snippetTargetOptions.forEach((target) => {
+            const row = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.value = target.id;
+            input.checked = selected.has(target.id);
+            input.addEventListener("change", updateSnippetTargetAvailability);
+
+            const copy = document.createElement("span");
+            copy.className = "snippet-target-copy";
+            const title = document.createElement("span");
+            title.textContent = target.title;
+            const subtitle = document.createElement("small");
+            subtitle.textContent = target.subtitle;
+            copy.append(title, subtitle);
+            row.append(input, copy);
+            snippetTargetsList.append(row);
+        });
+        updateSnippetTargetAvailability();
+    };
+
+    const openSnippetEditor = (entry = null, preferredGroup = "") => {
+        if (snippetGroups.length === 0) {
+            pendingSnippetEditor = true;
+            postHistory({ action: "createSnippetGroup", name: "Мои команды" });
+            return;
+        }
+        snippetID.value = entry?.id || "";
+        snippetTitle.value = entry?.title || "";
+        snippetCommand.value = entry?.command || "";
+        fillGroupSelect(
+            snippetGroup,
+            entry?.category || preferredGroup || snippetGroups[0].name
+        );
+        renderSnippetTargets(
+            Array.isArray(entry?.targetProfileIDs)
+                ? entry.targetProfileIDs
+                : [defaultSnippetTargetID]
+        );
+        document.getElementById("snippet-dialog-title").textContent = entry
+            ? snippetText("editSnippet")
+            : snippetText("newSnippet");
+        snippetDialog.showModal();
+        window.setTimeout(() => snippetTitle.focus(), 0);
+    };
+
+    const openSnippetGroupEditor = (group = null) => {
+        snippetGroupID.value = group?.id || "";
+        snippetGroupName.value = group?.name || "";
+        document.getElementById("snippet-group-dialog-title").textContent = group
+            ? snippetText("renameGroup")
+            : snippetText("newGroup");
+        snippetGroupDialog.showModal();
+        window.setTimeout(() => snippetGroupName.focus(), 0);
+    };
+
+    const snippetByID = (id) => commandTemplates.find((entry) => entry.id === id);
+
+    const showSnippetFeedback = (message) => {
+        snippetFeedback.textContent = message;
+        snippetFeedback.hidden = !message;
+    };
+
+    const requestSnippetRun = (entry) => {
+        if (!entry) {
+            return;
+        }
+        if (isAlternateScreen()) {
+            showSnippetFeedback(snippetText("alternateScreen"));
+            return;
+        }
+        const command = /\$\{[A-Za-z][A-Za-z0-9_-]{0,39}\}/.test(entry.command)
+            ? resolveTemplate(entry.command)
+            : entry.command;
+        if (command === null) {
+            return;
+        }
+        showSnippetFeedback("");
+        postHistory({ action: "runSnippet", id: entry.id, command });
+    };
+
+    const hideSnippetContextMenu = () => {
+        snippetContextMenu.hidden = true;
+        contextSnippetID = null;
+    };
+
+    const showSnippetContextMenu = (entry, x, y) => {
+        contextSnippetID = entry.id;
+        selectedSnippetID = entry.id;
+        snippetsList.querySelectorAll(".snippet-row").forEach((row) => {
+            row.classList.toggle("is-selected", row.dataset.snippetId === entry.id);
+        });
+        snippetContextMenu.hidden = false;
+        const width = snippetContextMenu.offsetWidth;
+        const height = snippetContextMenu.offsetHeight;
+        snippetContextMenu.style.left = `${Math.max(6, Math.min(x, innerWidth - width - 6))}px`;
+        snippetContextMenu.style.top = `${Math.max(6, Math.min(y, innerHeight - height - 6))}px`;
+    };
+
+    const openSnippetMove = (entry) => {
+        snippetMoveID.value = entry.id;
+        fillGroupSelect(snippetMoveGroup, entry.category);
+        snippetMoveDialog.showModal();
+    };
+
+    const renderSnippetsPanel = () => {
+        const query = historyQuery.value.trim().toLocaleLowerCase();
+        commandPanelTitle.textContent = snippetText("snippets");
+        commandPanelSubtitle.textContent = snippetText("subtitle");
+        historyQuery.placeholder = snippetText("search");
+        commandTabs.forEach((button) => { button.hidden = true; });
+        document.getElementById("command-tabs").hidden = true;
+        historyOptions.hidden = true;
+        snippetOptions.hidden = false;
+        historyList.hidden = true;
+        snippetsList.hidden = false;
+        remoteContextRetryButton.hidden = true;
+        snippetEmptyAddButton.hidden = true;
+        commandPanelFooter.textContent = snippetText("footer");
+        snippetsList.replaceChildren();
+
+        let renderedSnippets = 0;
+        snippetGroups.forEach((group) => {
+            const allEntries = commandTemplates.filter((entry) => entry.category === group.name);
+            const groupMatches = `${group.name} ${displaySnippetGroupName(group.name)}`
+                .toLocaleLowerCase()
+                .includes(query);
+            const entries = allEntries.filter((entry) => !query || groupMatches
+                || entry.title.toLocaleLowerCase().includes(query)
+                || entry.command.toLocaleLowerCase().includes(query));
+            if (query && entries.length === 0 && !groupMatches) {
+                return;
+            }
+            renderedSnippets += entries.length;
+
+            const section = document.createElement("section");
+            section.className = "snippet-group";
+            section.dataset.groupId = group.id;
+            section.setAttribute("role", "group");
+
+            const header = document.createElement("div");
+            header.className = "snippet-group-header";
+            const title = document.createElement("span");
+            title.className = "snippet-group-title";
+            title.textContent = displaySnippetGroupName(group.name);
+            const count = document.createElement("span");
+            count.className = "snippet-group-count";
+            count.textContent = String(allEntries.length);
+            const rename = document.createElement("button");
+            rename.type = "button";
+            rename.className = "snippet-group-action";
+            rename.textContent = "✎";
+            rename.title = snippetText("renameGroup");
+            rename.addEventListener("click", () => openSnippetGroupEditor(group));
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "snippet-group-action";
+            remove.textContent = "×";
+            remove.title = snippetText("deleteGroup");
+            remove.addEventListener("click", () => {
+                postHistory({ action: "removeSnippetGroup", id: group.id });
+            });
+            header.append(title, count, rename, remove);
+            section.append(header);
+
+            entries.forEach((entry) => {
+                const row = document.createElement("div");
+                row.className = "snippet-row";
+                row.classList.toggle("is-selected", selectedSnippetID === entry.id);
+                row.dataset.snippetId = entry.id;
+
+                const select = document.createElement("button");
+                select.type = "button";
+                select.className = "snippet-select";
+                select.dataset.snippetId = entry.id;
+                const entryTitle = document.createElement("span");
+                entryTitle.className = "snippet-title";
+                entryTitle.textContent = entry.title;
+                const command = document.createElement("span");
+                command.className = "snippet-command";
+                const targetCount = Array.isArray(entry.targetProfileIDs)
+                    ? entry.targetProfileIDs.length
+                    : 0;
+                command.textContent = `${entry.command.replaceAll("\n", " ↵ ")} · ${targetCount} Targets`;
+                select.append(entryTitle, command);
+                select.addEventListener("click", () => {
+                    const decision = window.SelectiveTerminalSnippetInteractions.decision({
+                        eventType: "click",
+                        targetKind: "snippet"
+                    });
+                    if (decision === "select") {
+                        selectedSnippetID = entry.id;
+                        snippetsList.querySelectorAll(".snippet-row").forEach((item) => {
+                            item.classList.toggle(
+                                "is-selected",
+                                item.dataset.snippetId === entry.id
+                            );
+                        });
+                    }
+                });
+                select.addEventListener("dblclick", (event) => {
+                    event.preventDefault();
+                    const decision = window.SelectiveTerminalSnippetInteractions.decision({
+                        eventType: "dblclick",
+                        targetKind: "snippet"
+                    });
+                    if (decision === "run") {
+                        requestSnippetRun(entry);
+                    }
+                });
+                select.addEventListener("contextmenu", (event) => {
+                    event.preventDefault();
+                    showSnippetContextMenu(entry, event.clientX, event.clientY);
+                });
+
+                const menu = document.createElement("button");
+                menu.type = "button";
+                menu.className = "snippet-row-menu";
+                menu.textContent = "•••";
+                menu.setAttribute("aria-label", `${entry.title}: actions`);
+                menu.addEventListener("click", (event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    showSnippetContextMenu(entry, rect.right - 190, rect.bottom + 4);
+                });
+                row.append(select, menu);
+                section.append(row);
+            });
+            if (allEntries.length === 0 && !query) {
+                const addSnippet = document.createElement("button");
+                addSnippet.type = "button";
+                addSnippet.className = "snippet-empty-group-add";
+                addSnippet.textContent = `+ ${snippetText("newSnippet")}`;
+                addSnippet.addEventListener("click", () => openSnippetEditor(null, group.name));
+                section.append(addSnippet);
+            }
+            snippetsList.append(section);
+        });
+
+        const noGroups = snippetGroups.length === 0;
+        const noMatches = Boolean(query) && renderedSnippets === 0;
+        const noSnippets = commandTemplates.length === 0;
+        const empty = noGroups || noMatches || noSnippets;
+        if (empty) {
+            commandEmptyTitle.textContent = snippetText("noSnippets");
+            commandEmptyMessage.textContent = snippetText("noSnippetsMessage");
+            historyEmpty.hidden = false;
+            snippetEmptyAddButton.hidden = false;
+            snippetsList.hidden = noGroups || noMatches;
+        } else {
+            historyEmpty.hidden = true;
+        }
     };
 
     const renderHistoryPanel = () => {
+        if (panelMode === "snippets") {
+            renderSnippetsPanel();
+            return;
+        }
         const query = historyQuery.value;
         const sections = {
             history: {
@@ -1075,21 +1460,20 @@
                 entries: matchingEntries(favoriteEntries(), query),
                 emptyTitle: "В избранном пока пусто",
                 emptyMessage: "Нажмите звезду рядом с любой командой."
-            },
-            templates: {
-                title: "Мои шаблоны",
-                subtitle: "Параметризованные команды этого подключения",
-                entries: matchingEntries(commandTemplates, query),
-                emptyTitle: "Шаблонов пока нет",
-                emptyMessage: "Создайте команду с параметрами вида ${service}."
             }
         };
         const section = sections[activePanelSection] || sections.history;
         const filtered = section.entries;
         commandPanelTitle.textContent = section.title;
         commandPanelSubtitle.textContent = section.subtitle;
+        historyQuery.placeholder = "Поиск команд";
+        document.getElementById("command-tabs").hidden = false;
+        commandTabs.forEach((button) => { button.hidden = false; });
         historyOptions.hidden = activePanelSection !== "history";
-        templateOptions.hidden = activePanelSection !== "templates";
+        snippetOptions.hidden = true;
+        snippetsList.hidden = true;
+        snippetFeedback.hidden = true;
+        commandPanelFooter.textContent = "Строки с пробелом в начале и признаками секретов не сохраняются.";
         commandTabs.forEach((button) => {
             button.classList.toggle(
                 "is-selected",
@@ -1115,8 +1499,6 @@
             if (activePanelSection === "history") {
                 const used = entry.useCount > 1 ? ` · запусков: ${entry.useCount}` : "";
                 meta.textContent = `${formatHistoryDate(entry.lastUsedAt)}${used}`;
-            } else if (activePanelSection === "templates") {
-                meta.textContent = `${entry.category} · ${entry.title}`;
             } else {
                 meta.textContent = `${entry.category} · ${entry.description}`;
             }
@@ -1148,24 +1530,6 @@
                     postHistory({ action: "remove", id: entry.id });
                 });
                 actions.append(removeButton);
-            } else if (activePanelSection === "templates") {
-                const editButton = document.createElement("button");
-                editButton.type = "button";
-                editButton.className = "history-action";
-                editButton.textContent = "✎";
-                editButton.title = "Изменить шаблон";
-                editButton.addEventListener("click", () => openTemplateEditor(entry));
-                const removeButton = document.createElement("button");
-                removeButton.type = "button";
-                removeButton.className = "history-action";
-                removeButton.textContent = "×";
-                removeButton.title = "Удалить шаблон";
-                removeButton.addEventListener("click", () => {
-                    if (window.confirm(`Удалить шаблон «${entry.title}»?`)) {
-                        postHistory({ action: "removeTemplate", id: entry.id });
-                    }
-                });
-                actions.append(editButton, removeButton);
             }
             row.append(useButton, actions);
             historyList.append(row);
@@ -1729,6 +2093,23 @@
                     keywords: `${entry.title || ""} ${entry.category || ""}`
                 }))
             : [];
+        snippetGroups = Array.isArray(payload.snippetGroups)
+            ? payload.snippetGroups.filter((group) => group
+                && typeof group.id === "string"
+                && typeof group.name === "string")
+            : [];
+        snippetTargetOptions = Array.isArray(payload.snippetTargets)
+            ? payload.snippetTargets.filter((target) => target
+                && typeof target.id === "string"
+                && typeof target.title === "string"
+                && typeof target.subtitle === "string")
+            : [];
+        defaultSnippetTargetID = typeof payload.defaultSnippetTargetID === "string"
+            ? payload.defaultSnippetTargetID
+            : "";
+        if (selectedSnippetID && !commandTemplates.some((entry) => entry.id === selectedSnippetID)) {
+            selectedSnippetID = null;
+        }
         const remote = payload.remote && typeof payload.remote === "object"
             ? payload.remote
             : {};
@@ -1746,16 +2127,71 @@
         remoteContextCanRetry = remote.canRetry === true;
         renderHistoryPanel();
         renderSuggestions();
+        if (pendingSnippetEditor && snippetGroups.length > 0) {
+            pendingSnippetEditor = false;
+            openSnippetEditor();
+        }
     };
 
-    window.selectiveTerminalSetHistoryVisible = (
-        visible,
+    window.selectiveTerminalReportSnippetRun = (result) => {
+        if (result === "success") {
+            showSnippetFeedback("");
+            return;
+        }
+        const resultKey = ["invalidSnippet", "connecting", "noTargets"].includes(result)
+            ? result
+            : "inactiveSession";
+        showSnippetFeedback(snippetText(resultKey));
+    };
+
+    window.selectiveTerminalSetLanguage = (language) => {
+        snippetLanguage = String(language || "").toLocaleLowerCase().startsWith("en")
+            ? "en"
+            : "ru";
+        document.documentElement.lang = snippetLanguage;
+        snippetAddButton.textContent = snippetText("newSnippet");
+        snippetGroupAddButton.textContent = snippetText("newGroup");
+        snippetEmptyAddButton.textContent = snippetText("newSnippet");
+        document.getElementById("snippet-title-label").textContent = snippetLanguage === "en"
+            ? "Title"
+            : "Название";
+        document.getElementById("snippet-group-label").textContent = snippetText("group");
+        document.getElementById("snippet-command-label").textContent = snippetText("command");
+        document.getElementById("snippet-targets-label").textContent = snippetText("targets");
+        snippetTargetsError.textContent = snippetText("targetRequired");
+        document.getElementById("snippet-group-name-label").textContent = snippetLanguage === "en"
+            ? "Group name"
+            : "Название группы";
+        document.getElementById("snippet-move-group-label").textContent = snippetText("group");
+        snippetCancel.textContent = snippetText("cancel");
+        snippetGroupCancel.textContent = snippetText("cancel");
+        snippetMoveCancel.textContent = snippetText("cancel");
+        document.getElementById("snippet-save").textContent = snippetText("save");
+        document.getElementById("snippet-group-save").textContent = snippetText("create");
+        document.getElementById("snippet-move-save").textContent = snippetText("move");
+        document.querySelectorAll("#snippet-context-menu [data-action]").forEach((button) => {
+            const key = button.dataset.action === "new"
+                ? "newSnippet"
+                : button.dataset.action;
+            button.textContent = snippetText(key);
+        });
+        if (panelMode === "snippets") {
+            renderSnippetsPanel();
+        }
+    };
+
+    window.selectiveTerminalSetPanelMode = (
+        mode,
         notifySwift = false,
         restoreTerminalFocus = true
     ) => {
-        const nextVisible = Boolean(visible);
+        const nextMode = ["history", "snippets"].includes(mode) ? mode : "hidden";
+        const nextVisible = nextMode !== "hidden";
+        panelMode = nextMode;
         historyPanel.hidden = !nextVisible;
+        terminalShell.classList.toggle("command-panel-visible", nextVisible);
         hideSuggestions();
+        hideSnippetContextMenu();
         if (nextVisible) {
             renderHistoryPanel();
             window.setTimeout(() => historyQuery.focus(), 0);
@@ -1763,9 +2199,21 @@
             terminal.focus();
         }
         if (notifySwift) {
-            postHistory({ action: "visibility", visible: nextVisible });
+            postHistory({ action: "panelVisibility", mode: nextMode });
         }
+        window.requestAnimationFrame(fitAndReport);
+        window.setTimeout(fitAndReport, 140);
     };
+
+    window.selectiveTerminalSetHistoryVisible = (
+        visible,
+        notifySwift = false,
+        restoreTerminalFocus = true
+    ) => window.selectiveTerminalSetPanelMode(
+        visible ? "history" : "hidden",
+        notifySwift,
+        restoreTerminalFocus
+    );
 
     terminalSearchQuery.addEventListener("input", () => refreshTerminalSearch(false));
     terminalSearchQuery.addEventListener("keydown", (event) => {
@@ -1801,18 +2249,92 @@
             postHistory({ action: "clear" });
         }
     });
-    templateAddButton.addEventListener("click", () => openTemplateEditor());
-    templateCancel.addEventListener("click", () => templateDialog.close());
-    templateForm.addEventListener("submit", (event) => {
+    snippetAddButton.addEventListener("click", () => openSnippetEditor());
+    snippetEmptyAddButton.addEventListener("click", () => openSnippetEditor());
+    snippetGroupAddButton.addEventListener("click", () => openSnippetGroupEditor());
+    snippetCancel.addEventListener("click", () => snippetDialog.close());
+    snippetForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const group = snippetGroups.find((item) => item.id === snippetGroup.value);
+        const targetProfileIDs = selectedSnippetTargetIDs();
+        if (!group || targetProfileIDs.length === 0) {
+            snippetTargetsError.hidden = targetProfileIDs.length > 0;
+            return;
+        }
+        postHistory({
+            action: "saveSnippet",
+            id: snippetID.value || null,
+            title: snippetTitle.value,
+            category: group.name,
+            command: snippetCommand.value,
+            targetProfileIDs
+        });
+        snippetDialog.close();
+    });
+    snippetGroupCancel.addEventListener("click", () => snippetGroupDialog.close());
+    snippetGroupForm.addEventListener("submit", (event) => {
         event.preventDefault();
         postHistory({
-            action: "saveTemplate",
-            id: templateID.value || null,
-            title: templateTitle.value,
-            category: templateCategory.value,
-            command: templateCommand.value
+            action: snippetGroupID.value ? "renameSnippetGroup" : "createSnippetGroup",
+            id: snippetGroupID.value || null,
+            name: snippetGroupName.value
         });
-        templateDialog.close();
+        snippetGroupDialog.close();
+    });
+    snippetMoveCancel.addEventListener("click", () => snippetMoveDialog.close());
+    snippetMoveForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        postHistory({
+            action: "moveSnippet",
+            id: snippetMoveID.value,
+            groupID: snippetMoveGroup.value
+        });
+        snippetMoveDialog.close();
+    });
+    snippetsList.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter") {
+            return;
+        }
+        const button = event.target.closest(".snippet-select[data-snippet-id]");
+        const editorActive = snippetDialog.open
+            || snippetGroupDialog.open
+            || snippetMoveDialog.open;
+        const decision = window.SelectiveTerminalSnippetInteractions.decision({
+            eventType: "enter",
+            targetKind: button ? "snippet" : "group",
+            editorActive
+        });
+        if (decision === "run") {
+            event.preventDefault();
+            requestSnippetRun(snippetByID(button.dataset.snippetId));
+        }
+    });
+    snippetContextMenu.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-action]");
+        const entry = snippetByID(contextSnippetID);
+        if (!button || !entry) {
+            return;
+        }
+        const action = button.dataset.action;
+        hideSnippetContextMenu();
+        if (action === "run") {
+            requestSnippetRun(entry);
+        } else if (action === "edit") {
+            openSnippetEditor(entry);
+        } else if (action === "duplicate") {
+            postHistory({ action: "duplicateSnippet", id: entry.id });
+        } else if (action === "new") {
+            openSnippetEditor(null, entry.category);
+        } else if (action === "move") {
+            openSnippetMove(entry);
+        } else if (action === "remove") {
+            postHistory({ action: "removeSnippet", id: entry.id });
+        }
+    });
+    document.addEventListener("pointerdown", (event) => {
+        if (!snippetContextMenu.hidden && !snippetContextMenu.contains(event.target)) {
+            hideSnippetContextMenu();
+        }
     });
     historyCloseButton.addEventListener("click", () => {
         window.selectiveTerminalSetHistoryVisible(false, true);

@@ -314,6 +314,7 @@ final class AppModel: NSObject, ObservableObject {
     }
     @Published var statusMessage = ""
     @Published var errorMessage: String?
+    @Published private(set) var latestSnippetRun: TerminalSnippetRunSummary?
     @Published var updateMessage: String?
     @Published private(set) var isCheckingForUpdates = false
     @Published private(set) var availableUpdateURL: URL?
@@ -3302,6 +3303,225 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = error.localizedDescription
             statusMessage = "SSH не запущен"
         }
+    }
+
+    @discardableResult
+    func runTerminalSnippet(_ snippet: TerminalCommandTemplate) -> TerminalSnippetRunResult {
+        guard let input = TerminalSnippetExecution.inputData(for: snippet.command) else {
+            return .invalidSnippet
+        }
+        let availableTargets = Set(
+            profiles.lazy.filter { $0.connectionType == .ssh }.map(\.id)
+        )
+        let targets = snippet.targetProfileIDs.filter(availableTargets.contains)
+        guard !targets.isEmpty else { return .noTargets }
+
+        let runID = UUID()
+        latestSnippetRun = TerminalSnippetRunSummary(
+            id: runID,
+            snippetID: snippet.id,
+            title: snippet.title,
+            startedAt: Date(),
+            targets: targets.compactMap { profileID in
+                guard let profile = profiles.first(where: { $0.id == profileID }) else {
+                    return nil
+                }
+                return TerminalSnippetTargetRunStatus(
+                    profileID: profileID,
+                    name: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
+                    state: .connecting
+                )
+            }
+        )
+
+        var startedConnection = false
+        var acceptedTargets = 0
+        for profileID in targets {
+            guard let tab = snippetTerminalTab(for: profileID) else {
+                updateSnippetRun(
+                    id: runID,
+                    profileID: profileID,
+                    state: .failed("Не удалось подготовить вкладку терминала")
+                )
+                continue
+            }
+            acceptedTargets += 1
+            if case .running = tab.session.phase {
+                sendSnippetInput(
+                    input,
+                    command: snippet.command,
+                    profileID: profileID,
+                    session: tab.session,
+                    runID: runID
+                )
+            } else {
+                startedConnection = true
+                if !tab.session.isRunning {
+                    connectSSHTerminal(
+                        connection: tab.connection,
+                        tabID: tab.id,
+                        session: tab.session
+                    )
+                }
+                enqueueSnippetInputAfterConnect(
+                    input,
+                    command: snippet.command,
+                    profileID: profileID,
+                    session: tab.session,
+                    runID: runID
+                )
+            }
+        }
+        guard acceptedTargets > 0 else { return .noTargets }
+        statusMessage = startedConnection
+            ? "Snippets: подключаем Targets и готовим выполнение"
+            : "Snippets: команда отправлена на \(acceptedTargets) SSH-целей"
+        return startedConnection ? .connecting : .success
+    }
+
+    private func snippetTerminalTab(for profileID: UUID) -> TerminalWorkspaceTab? {
+        let connection = TerminalTabConnection.savedProfile(profileID)
+        if let running = terminalWorkspaces.values
+            .flatMap(\.tabs)
+            .first(where: { $0.connection == connection && $0.session.isRunning }) {
+            return running
+        }
+
+        let global = globalTerminalWorkspace()
+        if let existing = global.tabs.first(where: { $0.connection == connection }) {
+            return existing
+        }
+
+        let profileWorkspace = terminalWorkspace(
+            profileID: profileID,
+            primaryConnection: connection
+        )
+        if let existing = profileWorkspace.tabs.first(where: { $0.connection == connection }) {
+            return existing
+        }
+        return profileWorkspace.addTab(
+            connection: connection,
+            title: connection.displayLabel(profiles: profiles),
+            select: false
+        )
+    }
+
+    private func enqueueSnippetInputAfterConnect(
+        _ input: Data,
+        command: String,
+        profileID: UUID,
+        session: TerminalSessionModel,
+        runID: UUID
+    ) {
+        Task { @MainActor [weak self, weak session] in
+            var runningTicks = 0
+            for _ in 0..<400 {
+                guard let self, let session else { return }
+                if case .running = session.phase {
+                    runningTicks += 1
+                    if runningTicks >= 10,
+                       self.snippetShellAppearsReady(session.recentOutputText())
+                            || runningTicks >= 300 {
+                        self.sendSnippetInput(
+                            input,
+                            command: command,
+                            profileID: profileID,
+                            session: session,
+                            runID: runID
+                        )
+                        return
+                    }
+                } else {
+                    runningTicks = 0
+                }
+                if case .finished = session.phase {
+                    self.updateSnippetRun(
+                        id: runID,
+                        profileID: profileID,
+                        state: .failed("SSH-сессия завершилась до отправки команды")
+                    )
+                    self.errorMessage = "Snippets: SSH-подключение к Target завершилось до выполнения команды"
+                    return
+                }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            self?.updateSnippetRun(
+                id: runID,
+                profileID: profileID,
+                state: .failed("SSH не подключился за 40 секунд")
+            )
+            self?.errorMessage = "Snippets: SSH-подключение к Target не завершилось за 40 секунд"
+        }
+    }
+
+    private func snippetShellAppearsReady(_ output: String) -> Bool {
+        let cleaned = output.replacingOccurrences(
+            of: "\u{001B}\\[[0-9;?]*[ -/]*[@-~]",
+            with: "",
+            options: .regularExpression
+        )
+        guard let line = cleaned
+            .split(whereSeparator: { $0.isNewline })
+            .last?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              let marker = line.last
+        else { return false }
+        return marker == "$" || marker == "#" || marker == ">" || marker == "%"
+    }
+
+    private func sendSnippetInput(
+        _ input: Data,
+        command: String,
+        profileID: UUID,
+        session: TerminalSessionModel,
+        runID: UUID
+    ) {
+        _ = TerminalCommandHistoryStore.shared.record(
+            command: command,
+            profileID: profileID
+        )
+        session.sendInput(input)
+        updateSnippetRun(id: runID, profileID: profileID, state: .sent)
+    }
+
+    private func updateSnippetRun(
+        id: UUID,
+        profileID: UUID,
+        state: TerminalSnippetTargetRunState
+    ) {
+        guard var summary = latestSnippetRun, summary.id == id,
+              let index = summary.targets.firstIndex(where: { $0.profileID == profileID })
+        else { return }
+        summary.targets[index].state = state
+        latestSnippetRun = summary
+    }
+
+    func disconnectTerminalSnippetTargets(_ profileIDs: [UUID]) {
+        let targetIDs = Set(profileIDs)
+        guard !targetIDs.isEmpty else { return }
+        var stoppedSessions = Set<ObjectIdentifier>()
+        var stoppedCount = 0
+        for workspace in terminalWorkspaces.values {
+            for tab in workspace.tabs {
+                guard let profileID = tab.connection.profileID,
+                      targetIDs.contains(profileID)
+                else { continue }
+                let identifier = ObjectIdentifier(tab.session)
+                guard tab.session.isRunning, stoppedSessions.insert(identifier).inserted else { continue }
+                tab.session.stop()
+                stoppedCount += 1
+            }
+        }
+        for profileID in targetIDs {
+            guard let session = sshTerminalSessions[profileID], session.isRunning else { continue }
+            let identifier = ObjectIdentifier(session)
+            guard stoppedSessions.insert(identifier).inserted else { continue }
+            session.stop()
+            stoppedCount += 1
+        }
+        statusMessage = stoppedCount == 0
+            ? "Snippets: активных SSH-сессий Targets нет"
+            : "Snippets: отключаем SSH-сессии Targets — \(stoppedCount)"
     }
 
     private func canAutomaticallyReconnectSSH(

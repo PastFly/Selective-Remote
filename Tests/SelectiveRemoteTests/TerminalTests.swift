@@ -207,6 +207,10 @@ func terminalIncludesHistoryInterface() throws {
         contentsOf: resources.appendingPathComponent("terminal-command-catalog.js"),
         encoding: .utf8
     )
+    let snippetInteractions = try String(
+        contentsOf: resources.appendingPathComponent("terminal-snippet-interactions.js"),
+        encoding: .utf8
+    )
 
     #expect(html.contains("id=\"terminal-suggestions\""))
     #expect(html.contains("id=\"terminal-history\""))
@@ -214,8 +218,10 @@ func terminalIncludesHistoryInterface() throws {
     #expect(html.contains("data-section=\"catalog\""))
     #expect(html.contains("data-section=\"remote\""))
     #expect(html.contains("data-section=\"favorites\""))
-    #expect(html.contains("data-section=\"templates\""))
-    #expect(html.contains("id=\"template-dialog\""))
+    #expect(html.contains("id=\"snippets-list\""))
+    #expect(html.contains("id=\"snippet-dialog\""))
+    #expect(html.contains("id=\"snippet-group-dialog\""))
+    #expect(html.contains("id=\"snippet-context-menu\""))
     #expect(html.contains("id=\"remote-context-retry\""))
     #expect(html.contains("terminal-command-catalog.js"))
     #expect(script.contains("selectiveTerminalSetHistory"))
@@ -229,6 +235,12 @@ func terminalIncludesHistoryInterface() throws {
     #expect(script.contains("fuzzyTokenMatch"))
     #expect(script.contains("toggleFavorite"))
     #expect(script.contains("resolveTemplate"))
+    #expect(script.contains("selectiveTerminalSetPanelMode"))
+    #expect(script.contains("runSnippet"))
+    #expect(script.contains("panelVisibility"))
+    #expect(snippetInteractions.contains("eventType === \"click\""))
+    #expect(snippetInteractions.contains("eventType === \"dblclick\""))
+    #expect(snippetInteractions.contains("eventType === \"enter\""))
     #expect(catalog.contains("sudo systemctl restart "))
     #expect(catalog.contains("nano /etc/ssh/sshd_config"))
     #expect(catalog.contains("nano ~/.ssh/authorized_keys"))
