@@ -28,6 +28,13 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
     var updatedAt: Date
 }
 
+struct TerminalSnippetGroup: Codable, Equatable, Identifiable {
+    let id: UUID
+    let profileID: UUID
+    var name: String
+    var createdAt: Date
+}
+
 private struct TerminalHistoryWebEntry: Encodable {
     let id: String
     let command: String
@@ -40,6 +47,7 @@ private struct TerminalHistoryWebPayload: Encodable {
     let entries: [TerminalHistoryWebEntry]
     let favorites: [String]
     let templates: [TerminalCommandTemplateWebEntry]
+    let snippetGroups: [TerminalSnippetGroupWebEntry]
     let remote: TerminalRemoteContextSnapshot
 }
 
@@ -51,15 +59,22 @@ private struct TerminalCommandTemplateWebEntry: Encodable {
     let updatedAt: Int64
 }
 
+private struct TerminalSnippetGroupWebEntry: Encodable {
+    let id: String
+    let name: String
+}
+
 @MainActor
 final class TerminalCommandHistoryStore {
     static let shared = TerminalCommandHistoryStore()
+    static let defaultSnippetGroupName = "Мои команды"
 
     private enum Key {
         static let entries = "SelectiveRemote.terminal.commandHistory.v1"
         static let enabled = "SelectiveRemote.terminal.commandHistory.enabled.v1"
         static let favorites = "SelectiveRemote.terminal.commandFavorites.v1"
         static let templates = "SelectiveRemote.terminal.commandTemplates.v1"
+        static let snippetGroups = "SelectiveRemote.terminal.snippetGroups.v1"
     }
 
     private let defaults: UserDefaults
@@ -67,6 +82,7 @@ final class TerminalCommandHistoryStore {
     private var storedEntries: [TerminalHistoryEntry]
     private var storedFavorites: [TerminalCommandFavorite]
     private var storedTemplates: [TerminalCommandTemplate]
+    private var storedSnippetGroups: [TerminalSnippetGroup]
 
     var isEnabled: Bool {
         didSet { defaults.set(isEnabled, forKey: Key.enabled) }
@@ -98,7 +114,14 @@ final class TerminalCommandHistoryStore {
         } else {
             storedTemplates = []
         }
+        if let data = defaults.data(forKey: Key.snippetGroups),
+           let decoded = try? JSONDecoder().decode([TerminalSnippetGroup].self, from: data) {
+            storedSnippetGroups = decoded
+        } else {
+            storedSnippetGroups = []
+        }
         normalizeAndPersistIfNeeded()
+        migrateTemplatesToSnippetGroupsIfNeeded()
     }
 
     @discardableResult
@@ -200,6 +223,99 @@ final class TerminalCommandHistoryStore {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    func snippetGroups(for profileID: UUID) -> [TerminalSnippetGroup] {
+        storedSnippetGroups
+            .filter { $0.profileID == profileID }
+            .sorted {
+                if $0.createdAt != $1.createdAt {
+                    return $0.createdAt < $1.createdAt
+                }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+    }
+
+    @discardableResult
+    func createSnippetGroup(
+        name rawName: String,
+        profileID: UUID,
+        now: Date = Date()
+    ) -> TerminalSnippetGroup? {
+        guard let name = normalizedSnippetGroupName(rawName),
+              !hasSnippetGroup(named: name, profileID: profileID)
+        else { return nil }
+
+        let group = TerminalSnippetGroup(
+            id: UUID(),
+            profileID: profileID,
+            name: name,
+            createdAt: now
+        )
+        storedSnippetGroups.append(group)
+        persistSnippetGroups()
+        return group
+    }
+
+    @discardableResult
+    func renameSnippetGroup(
+        id: UUID,
+        name rawName: String,
+        profileID: UUID
+    ) -> Bool {
+        guard let name = normalizedSnippetGroupName(rawName),
+              let index = storedSnippetGroups.firstIndex(where: {
+                  $0.id == id && $0.profileID == profileID
+              })
+        else { return false }
+
+        let oldName = storedSnippetGroups[index].name
+        guard !storedSnippetGroups.contains(where: {
+            $0.profileID == profileID
+                && $0.id != id
+                && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+        }) else {
+            return false
+        }
+        storedSnippetGroups[index].name = name
+        for templateIndex in storedTemplates.indices where
+            storedTemplates[templateIndex].profileID == profileID
+                && storedTemplates[templateIndex].category == oldName {
+            storedTemplates[templateIndex].category = name
+        }
+        persistSnippetGroups()
+        persistTemplates()
+        return true
+    }
+
+    /// Removes a group without deleting its snippets. Snippets are moved to the
+    /// existing default group so a category operation cannot destroy commands.
+    @discardableResult
+    func removeSnippetGroup(id: UUID, profileID: UUID) -> Bool {
+        guard let index = storedSnippetGroups.firstIndex(where: {
+            $0.id == id && $0.profileID == profileID
+        }) else { return false }
+
+        let removedName = storedSnippetGroups[index].name
+        storedSnippetGroups.remove(at: index)
+        let affected = storedTemplates.indices.filter {
+            storedTemplates[$0].profileID == profileID
+                && storedTemplates[$0].category == removedName
+        }
+        if !affected.isEmpty {
+            let defaultGroup = ensureSnippetGroup(
+                named: Self.defaultSnippetGroupName,
+                profileID: profileID
+            )
+            for templateIndex in affected {
+                storedTemplates[templateIndex].category = defaultGroup.name
+                storedTemplates[templateIndex].updatedAt = Date()
+            }
+            persistTemplates()
+        }
+        persistSnippetGroups()
+        return true
+    }
+
     @discardableResult
     func saveTemplate(
         id: UUID?,
@@ -217,13 +333,18 @@ final class TerminalCommandHistoryStore {
               !isSensitive(command)
         else { return false }
 
+        let group = ensureSnippetGroup(
+            named: category.isEmpty ? Self.defaultSnippetGroupName : category,
+            profileID: profileID
+        )
+
         if let id,
            let index = storedTemplates.firstIndex(where: {
                $0.id == id && $0.profileID == profileID
            }) {
             storedTemplates[index].title = title
             storedTemplates[index].command = command
-            storedTemplates[index].category = category.isEmpty ? "Мои команды" : category
+            storedTemplates[index].category = group.name
             storedTemplates[index].updatedAt = Date()
         } else {
             storedTemplates.append(
@@ -232,17 +353,54 @@ final class TerminalCommandHistoryStore {
                     profileID: profileID,
                     title: title,
                     command: command,
-                    category: category.isEmpty ? "Мои команды" : category,
+                    category: group.name,
                     updatedAt: Date()
                 )
             )
         }
+        persistSnippetGroups()
         if storedTemplates.count > 500 {
             storedTemplates.sort { $0.updatedAt > $1.updatedAt }
             storedTemplates = Array(storedTemplates.prefix(500))
         }
         persistTemplates()
         return true
+    }
+
+    @discardableResult
+    func moveTemplate(id: UUID, toGroupID groupID: UUID, profileID: UUID) -> Bool {
+        guard let group = storedSnippetGroups.first(where: {
+            $0.id == groupID && $0.profileID == profileID
+        }), let index = storedTemplates.firstIndex(where: {
+            $0.id == id && $0.profileID == profileID
+        }) else { return false }
+
+        storedTemplates[index].category = group.name
+        storedTemplates[index].updatedAt = Date()
+        persistTemplates()
+        return true
+    }
+
+    @discardableResult
+    func duplicateTemplate(id: UUID, profileID: UUID) -> Bool {
+        guard let template = storedTemplates.first(where: {
+            $0.id == id && $0.profileID == profileID
+        }) else { return false }
+
+        let suffix = " — копия"
+        let base = String(template.title.prefix(max(1, 80 - suffix.count)))
+
+        return saveTemplate(
+            id: nil,
+            title: base + suffix,
+            command: template.command,
+            category: template.category,
+            profileID: profileID
+        )
+    }
+
+    func template(id: UUID, profileID: UUID) -> TerminalCommandTemplate? {
+        storedTemplates.first { $0.id == id && $0.profileID == profileID }
     }
 
     func removeTemplate(id: UUID, profileID: UUID) {
@@ -274,6 +432,9 @@ final class TerminalCommandHistoryStore {
                     category: $0.category,
                     updatedAt: Int64($0.updatedAt.timeIntervalSince1970 * 1_000)
                 )
+            },
+            snippetGroups: snippetGroups(for: profileID).map {
+                TerminalSnippetGroupWebEntry(id: $0.id.uuidString, name: $0.name)
             },
             remote: remote
         )
@@ -308,6 +469,73 @@ final class TerminalCommandHistoryStore {
         return markers.contains { lowered.contains($0) }
     }
 
+    private func normalizedSnippetGroupName(_ rawName: String) -> String? {
+        let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, name.count <= 60 else { return nil }
+        return name
+    }
+
+    private func hasSnippetGroup(named name: String, profileID: UUID) -> Bool {
+        storedSnippetGroups.contains {
+            $0.profileID == profileID
+                && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+        }
+    }
+
+    @discardableResult
+    private func ensureSnippetGroup(
+        named rawName: String,
+        profileID: UUID,
+        now: Date = Date()
+    ) -> TerminalSnippetGroup {
+        let name = normalizedSnippetGroupName(rawName) ?? Self.defaultSnippetGroupName
+        if let existing = storedSnippetGroups.first(where: {
+            $0.profileID == profileID
+                && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+        }) {
+            return existing
+        }
+        let group = TerminalSnippetGroup(
+            id: UUID(),
+            profileID: profileID,
+            name: name,
+            createdAt: now
+        )
+        storedSnippetGroups.append(group)
+        return group
+    }
+
+    private func migrateTemplatesToSnippetGroupsIfNeeded() {
+        var templatesChanged = false
+        var groupsChanged = false
+
+        for index in storedTemplates.indices {
+            let trimmed = storedTemplates[index].category
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolved = trimmed.isEmpty ? Self.defaultSnippetGroupName : trimmed
+            if storedTemplates[index].category != resolved {
+                storedTemplates[index].category = resolved
+                templatesChanged = true
+            }
+            let beforeCount = storedSnippetGroups.count
+            let group = ensureSnippetGroup(
+                named: resolved,
+                profileID: storedTemplates[index].profileID,
+                now: storedTemplates[index].updatedAt
+            )
+            groupsChanged = groupsChanged || storedSnippetGroups.count != beforeCount
+            if storedTemplates[index].category != group.name {
+                storedTemplates[index].category = group.name
+                templatesChanged = true
+            }
+        }
+
+        if templatesChanged { persistTemplates() }
+        if groupsChanged { persistSnippetGroups() }
+    }
+
     private func normalizeAndPersistIfNeeded() {
         let normalized = storedEntries
             .filter { normalizedCommand($0.command) != nil }
@@ -340,5 +568,10 @@ final class TerminalCommandHistoryStore {
     private func persistTemplates() {
         guard let data = try? JSONEncoder().encode(storedTemplates) else { return }
         defaults.set(data, forKey: Key.templates)
+    }
+
+    private func persistSnippetGroups() {
+        guard let data = try? JSONEncoder().encode(storedSnippetGroups) else { return }
+        defaults.set(data, forKey: Key.snippetGroups)
     }
 }
