@@ -54,7 +54,7 @@
     const snippetStrings = {
         ru: {
             snippets: "Сниппеты",
-            subtitle: "Команды этого подключения",
+            subtitle: "Общая библиотека · запуск по Targets",
             search: "Поиск сниппетов",
             newSnippet: "Новый сниппет",
             newGroup: "Новая группа",
@@ -79,13 +79,15 @@
                 ? `Удалить группу «${name}»? ${count} сниппетов будут перемещены в «Мои команды».`
                 : `Удалить группу «${name}»?`,
             inactiveSession: "Сниппет не выполнен: активная SSH-сессия не подключена.",
+            connecting: "Подключаем SSH Targets. Сниппет выполнится сразу после подключения.",
+            noTargets: "Сниппет не выполнен: назначьте хотя бы один SSH Target.",
             alternateScreen: "Сниппет нельзя выполнить, пока терминал занят полноэкранной программой.",
             invalidSnippet: "Сниппет больше недоступен. Обновите список и повторите попытку.",
             footer: "Один клик выбирает. Двойной клик или Enter выполняет сниппет."
         },
         en: {
             snippets: "Snippets",
-            subtitle: "Commands for this connection",
+            subtitle: "Shared library · runs on assigned targets",
             search: "Search snippets",
             newSnippet: "New snippet",
             newGroup: "New group",
@@ -110,6 +112,8 @@
                 ? `Delete group “${name}”? ${count} snippets will move to “My commands”.`
                 : `Delete group “${name}”?`,
             inactiveSession: "Snippet was not run because the active SSH session is disconnected.",
+            connecting: "Connecting SSH targets. The snippet will run when they are ready.",
+            noTargets: "Snippet was not run because it has no SSH targets.",
             alternateScreen: "Exit the full-screen terminal program before running a snippet.",
             invalidSnippet: "This snippet is no longer available. Refresh and try again.",
             footer: "Single-click selects. Double-click or Enter runs the snippet."
@@ -1272,12 +1276,7 @@
             remove.textContent = "×";
             remove.title = snippetText("deleteGroup");
             remove.addEventListener("click", () => {
-                if (window.confirm(snippetText("deleteGroupConfirm")(
-                    displaySnippetGroupName(group.name),
-                    allEntries.length
-                ))) {
-                    postHistory({ action: "removeSnippetGroup", id: group.id });
-                }
+                postHistory({ action: "removeSnippetGroup", id: group.id });
             });
             header.append(title, count, rename, remove);
             section.append(header);
@@ -1297,7 +1296,10 @@
                 entryTitle.textContent = entry.title;
                 const command = document.createElement("span");
                 command.className = "snippet-command";
-                command.textContent = entry.command.replaceAll("\n", " ↵ ");
+                const targetCount = Array.isArray(entry.targetProfileIDs)
+                    ? entry.targetProfileIDs.length
+                    : 0;
+                command.textContent = `${entry.command.replaceAll("\n", " ↵ ")} · ${targetCount} Targets`;
                 select.append(entryTitle, command);
                 select.addEventListener("click", () => {
                     const decision = window.SelectiveTerminalSnippetInteractions.decision({
@@ -2062,9 +2064,10 @@
             showSnippetFeedback("");
             return;
         }
-        showSnippetFeedback(snippetText(
-            result === "invalidSnippet" ? "invalidSnippet" : "inactiveSession"
-        ));
+        const resultKey = ["invalidSnippet", "connecting", "noTargets"].includes(result)
+            ? result
+            : "inactiveSession";
+        showSnippetFeedback(snippetText(resultKey));
     };
 
     window.selectiveTerminalSetLanguage = (language) => {
@@ -2241,8 +2244,7 @@
             postHistory({ action: "duplicateSnippet", id: entry.id });
         } else if (action === "move") {
             openSnippetMove(entry);
-        } else if (action === "remove"
-            && window.confirm(snippetText("deleteSnippetConfirm")(entry.title))) {
+        } else if (action === "remove") {
             postHistory({ action: "removeSnippet", id: entry.id });
         }
     });

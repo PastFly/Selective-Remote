@@ -219,9 +219,9 @@ func persistsIndependentForwardingTarget() throws {
     #expect(restored.connection.port == 2222)
 }
 
-@Test("Избранное и шаблоны команд изолированы по SSH-профилям")
+@Test("Избранное остаётся profile-scoped, а Snippets образуют общую библиотеку Targets")
 @MainActor
-func scopesFavoritesAndTemplatesToProfile() throws {
+func exposesGlobalSnippetsWithMultipleTargets() throws {
     let suiteName = "TerminalCommandLibraryTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -235,13 +235,15 @@ func scopesFavoritesAndTemplatesToProfile() throws {
         title: "Перезапустить службу",
         command: "sudo systemctl restart ${service}",
         category: "Службы",
-        profileID: first
+        profileID: first,
+        targetProfileIDs: [first, second]
     ))
 
     #expect(store.favorites(for: first).map(\.command) == ["systemctl status ssh"])
     #expect(store.templates(for: first).count == 1)
     #expect(store.favorites(for: second).isEmpty)
-    #expect(store.templates(for: second).isEmpty)
+    #expect(store.templates(for: second).count == 1)
+    #expect(store.templates().first?.targetProfileIDs == [first, second])
     #expect(!store.saveTemplate(
         id: nil,
         title: "Секрет",
@@ -277,29 +279,31 @@ func persistsSnippetGroupsAndCRUD() throws {
         category: docker.name,
         profileID: profileID
     ))
-    let snippet = try #require(store.templates(for: profileID).first)
+    let snippet = try #require(store.templates().first)
     #expect(store.moveTemplate(id: snippet.id, toGroupID: system.id, profileID: profileID))
     #expect(store.renameSnippetGroup(id: system.id, name: "Host", profileID: profileID))
-    #expect(store.templates(for: profileID).first?.category == "Host")
+    #expect(store.templates().first?.category == "Host")
     #expect(store.duplicateTemplate(id: snippet.id, profileID: profileID))
-    #expect(store.templates(for: profileID).count == 2)
+    #expect(store.templates().count == 2)
 
     store = TerminalCommandHistoryStore(defaults: defaults)
-    #expect(store.snippetGroups(for: profileID).map(\.name).contains("Docker"))
-    #expect(store.snippetGroups(for: profileID).map(\.name).contains("Host"))
-    #expect(store.templates(for: profileID).count == 2)
+    #expect(store.snippetGroups().map(\.name).contains("Docker"))
+    #expect(store.snippetGroups().map(\.name).contains("Host"))
+    #expect(store.templates().count == 2)
 
     #expect(store.removeSnippetGroup(id: system.id, profileID: profileID))
-    #expect(store.templates(for: profileID).allSatisfy {
+    #expect(store.templates().allSatisfy {
         $0.category == TerminalCommandHistoryStore.defaultSnippetGroupName
     })
-    for item in store.templates(for: profileID) {
-        store.removeTemplate(id: item.id, profileID: profileID)
+    for item in store.templates() {
+        #expect(store.removeTemplate(id: item.id))
     }
-    #expect(store.templates(for: profileID).isEmpty)
+    #expect(store.templates().isEmpty)
+    store = TerminalCommandHistoryStore(defaults: defaults)
+    #expect(store.templates().isEmpty)
 }
 
-@Test("Legacy Templates становятся profile-scoped Snippets без потери данных")
+@Test("Legacy Templates становятся глобальными Snippets с исходным профилем как Target")
 @MainActor
 func migratesLegacyTemplatesToSnippetGroups() throws {
     let suiteName = "TerminalSnippetMigrationTests.\(UUID().uuidString)"
@@ -337,24 +341,25 @@ func migratesLegacyTemplatesToSnippetGroups() throws {
     #expect(migrated.title == "Disk usage")
     #expect(migrated.command == "df -h")
     #expect(migrated.profileID == firstProfile)
+    #expect(migrated.targetProfileIDs == [firstProfile])
     #expect(migrated.category == TerminalCommandHistoryStore.defaultSnippetGroupName)
-    #expect(store.snippetGroups(for: firstProfile).map(\.name) == [
-        TerminalCommandHistoryStore.defaultSnippetGroupName
-    ])
-    #expect(store.snippetGroups(for: secondProfile).map(\.name) == ["Logs"])
-    #expect(store.templates(for: firstProfile).count == 1)
-    #expect(store.templates(for: secondProfile).count == 1)
+    #expect(Set(store.snippetGroups().map(\.name)) == Set([
+        TerminalCommandHistoryStore.defaultSnippetGroupName, "Logs"
+    ]))
+    #expect(store.templates(for: firstProfile).count == 2)
+    #expect(store.templates(for: secondProfile).count == 2)
+    #expect(store.template(id: secondID)?.targetProfileIDs == [secondProfile])
 
     // Migration is idempotent and persists the normalized legacy value.
     store = TerminalCommandHistoryStore(defaults: defaults)
-    #expect(store.snippetGroups(for: firstProfile).count == 1)
+    #expect(store.snippetGroups().count == 2)
     #expect(store.template(id: firstID, profileID: firstProfile)?.category
         == TerminalCommandHistoryStore.defaultSnippetGroupName)
 }
 
-@Test("Группы сниппетов валидируются и изолированы по SSH-профилям")
+@Test("Группы Snippets глобальны, а Targets дедуплицируются и ограничены восемью")
 @MainActor
-func validatesAndScopesSnippetGroups() throws {
+func validatesGlobalSnippetGroupsAndTargets() throws {
     let suiteName = "TerminalSnippetGroupScopeTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -366,9 +371,20 @@ func validatesAndScopesSnippetGroups() throws {
     #expect(store.createSnippetGroup(name: String(repeating: "x", count: 61), profileID: first) == nil)
     #expect(store.createSnippetGroup(name: "Docker", profileID: first) != nil)
     #expect(store.createSnippetGroup(name: "docker", profileID: first) == nil)
-    #expect(store.createSnippetGroup(name: "Docker", profileID: second) != nil)
+    #expect(store.createSnippetGroup(name: "Docker", profileID: second) == nil)
     #expect(store.snippetGroups(for: first).count == 1)
     #expect(store.snippetGroups(for: second).count == 1)
+    let extraTargets = (0..<10).map { _ in UUID() }
+    #expect(store.saveTemplate(
+        id: nil,
+        title: "Targets",
+        command: "hostname",
+        category: "Docker",
+        profileID: first,
+        targetProfileIDs: [first, second, first] + extraTargets
+    ))
+    #expect(store.templates().first?.targetProfileIDs.count == 8)
+    #expect(Array(store.templates().first?.targetProfileIDs.prefix(2) ?? []) == [first, second])
     #expect(!store.saveTemplate(
         id: nil,
         title: "",
@@ -399,7 +415,8 @@ func serializesSnippetGroupsForTerminalBridge() throws {
         title: "Containers",
         command: "docker ps",
         category: group.name,
-        profileID: profileID
+        profileID: profileID,
+        targetProfileIDs: [profileID, UUID()]
     ))
 
     let json = try #require(store.webPayload(for: profileID))
@@ -414,28 +431,7 @@ func serializesSnippetGroupsForTerminalBridge() throws {
     #expect(templates.first?["title"] as? String == "Containers")
     #expect(templates.first?["command"] as? String == "docker ps")
     #expect(templates.first?["category"] as? String == "Docker")
-}
-
-@Test("Snippet выполняется только в выбранной активной Terminal session")
-func routesSnippetOnlyToActiveRunningSession() {
-    let active = UUID()
-    let background = UUID()
-
-    #expect(TerminalSnippetExecution.canRun(
-        originTabID: active,
-        selectedTabID: active,
-        sessionIsRunning: true
-    ))
-    #expect(!TerminalSnippetExecution.canRun(
-        originTabID: background,
-        selectedTabID: active,
-        sessionIsRunning: true
-    ))
-    #expect(!TerminalSnippetExecution.canRun(
-        originTabID: active,
-        selectedTabID: active,
-        sessionIsRunning: false
-    ))
+    #expect((templates.first?["targetProfileIDs"] as? [String])?.count == 2)
 }
 
 @Test("Multi-line Snippet сохраняет строки и получает ровно один завершающий Enter")

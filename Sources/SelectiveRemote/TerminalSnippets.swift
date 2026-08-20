@@ -2,6 +2,8 @@ import Foundation
 
 enum TerminalSnippetRunResult: String, Encodable, Equatable {
     case success
+    case connecting
+    case noTargets
     case inactiveSession
     case invalidSnippet
 }
