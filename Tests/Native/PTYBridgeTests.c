@@ -117,6 +117,7 @@ static void test_bidirectional_io_and_resize(char *executable_path) {
         arguments[0],
         arguments,
         environment,
+        NULL,
         120,
         40,
         &primary

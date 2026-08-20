@@ -463,13 +463,15 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
     private func show(_ presentation: UpdateReleaseNotesPresentation) {
         let language = UpdateReleaseNotesLanguage.preferred()
         let content = AnyView(
-            UpdateReleaseNotesView(
-                presentation: presentation,
-                language: language,
-                onClose: { [weak self] in
-                    self?.window?.performClose(nil)
-                }
-            )
+            AppAppearanceRoot(store: .shared) {
+                UpdateReleaseNotesView(
+                    presentation: presentation,
+                    language: language,
+                    onClose: { [weak self] in
+                        self?.window?.performClose(nil)
+                    }
+                )
+            }
             .id("\(presentation.identity)-\(language.rawValue)")
             .environment(\.locale, language.locale)
         )

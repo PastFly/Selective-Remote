@@ -343,12 +343,16 @@ func migratesLegacyTemplatesToSnippetGroups() throws {
     #expect(migrated.profileID == firstProfile)
     #expect(migrated.targetProfileIDs == [firstProfile])
     #expect(migrated.category == TerminalCommandHistoryStore.defaultSnippetGroupName)
+    #expect(migrated.groupID != TerminalCommandTemplate.legacyUnassignedGroupID)
     #expect(Set(store.snippetGroups().map(\.name)) == Set([
         TerminalCommandHistoryStore.defaultSnippetGroupName, "Logs"
     ]))
     #expect(store.templates(for: firstProfile).count == 2)
     #expect(store.templates(for: secondProfile).count == 2)
     #expect(store.template(id: secondID)?.targetProfileIDs == [secondProfile])
+    let logsGroup = try #require(store.snippetGroups().first(where: { $0.name == "Logs" }))
+    #expect(store.template(id: secondID)?.groupID == logsGroup.id)
+    #expect(store.templates(in: logsGroup.id).map(\.id) == [secondID])
 
     // Migration is idempotent and persists the normalized legacy value.
     store = TerminalCommandHistoryStore(defaults: defaults)
@@ -384,6 +388,8 @@ func validatesGlobalSnippetGroupsAndTargets() throws {
         targetProfileIDs: [first, second, first] + extraTargets
     ))
     #expect(store.templates().first?.targetProfileIDs.count == 8)
+    let docker = try #require(store.snippetGroups().first)
+    #expect(store.templates().first?.groupID == docker.id)
     #expect(Array(store.templates().first?.targetProfileIDs.prefix(2) ?? []) == [first, second])
     #expect(!store.saveTemplate(
         id: nil,

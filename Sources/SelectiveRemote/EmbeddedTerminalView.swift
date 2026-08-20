@@ -575,6 +575,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                     title: title,
                     command: command,
                     category: category,
+                    groupID: (payload["groupID"] as? String).flatMap(UUID.init(uuidString:)),
                     profileID: context.profileID,
                     targetProfileIDs: targetProfileIDs
                 )
@@ -612,6 +613,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 else { return }
                 _ = store.duplicateTemplate(id: id, profileID: context.profileID)
                 refreshHistory()
+            case "copySnippet":
+                guard let command = payload["command"] as? String else { return }
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(command, forType: .string)
             case "moveSnippet":
                 guard let snippetValue = payload["id"] as? String,
                       let snippetID = UUID(uuidString: snippetValue),
@@ -1848,6 +1853,8 @@ struct SSHTerminalView: View {
         case .custom:
             let host = tab.connection.normalizedHost
             return host.isEmpty ? "—" : host
+        case .local:
+            return "Этот Mac"
         }
     }
 
@@ -1957,6 +1964,8 @@ struct SSHTerminalView: View {
             }
         case .custom:
             return connection.isValidCustomConnection
+        case .local:
+            return true
         }
     }
 
@@ -2133,7 +2142,7 @@ struct TerminalConnectionEditor: View {
             }
 
             Picker("Источник", selection: $kind) {
-                ForEach(TerminalTabConnection.Kind.allCases) { item in
+                ForEach([TerminalTabConnection.Kind.savedProfile, .custom]) { item in
                     Text(LocalizedStringKey(item.title)).tag(item)
                 }
             }
@@ -2240,6 +2249,8 @@ struct TerminalConnectionEditor: View {
                 username: username,
                 port: port
             ).isValidCustomConnection
+        case .local:
+            return false
         }
     }
 
@@ -2277,12 +2288,14 @@ struct TerminalConnectionEditor: View {
                 let title = "\(effectiveUsername)@\(connection.normalizedHost)"
                 onSave(connection, title, password.isEmpty ? nil : password)
             }
+        case .local:
+            return
         }
         dismiss()
     }
 }
 
-private enum TerminalColorCodecView {
+enum TerminalColorCodecView {
     static func color(_ hex: String) -> Color {
         let cleaned = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
         guard cleaned.count == 6,

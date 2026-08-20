@@ -1,4 +1,13 @@
+import AppKit
 import SwiftUI
+
+private enum SnippetLibraryViewMode: String, CaseIterable, Identifiable {
+    case list
+    case grid
+
+    var id: String { rawValue }
+    var systemImage: String { self == .list ? "list.bullet" : "square.grid.2x2" }
+}
 
 struct TerminalSnippetsLibraryView: View {
     @ObservedObject var store: TerminalCommandHistoryStore
@@ -6,15 +15,32 @@ struct TerminalSnippetsLibraryView: View {
 
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
+    @State private var selectedGroupID: UUID?
     @State private var editorRequest: TerminalSnippetEditorRequest?
     @State private var groupEditor: TerminalSnippetGroup?
     @State private var groupEditorPresented = false
     @State private var deleteSnippet: TerminalCommandTemplate?
     @State private var showsDisconnectConfirmation = false
+    @AppStorage("SelectiveRemote.snippets.libraryViewMode.v1")
+    private var viewModeRaw = SnippetLibraryViewMode.list.rawValue
+    @AppStorage("SelectiveRemote.snippets.selectedGroupID.v1")
+    private var persistedGroupID = ""
+    @AppStorage("SelectiveRemote.snippets.selectedSnippetID.v1")
+    private var persistedSnippetID = ""
+
+    private var viewMode: SnippetLibraryViewMode {
+        get { SnippetLibraryViewMode(rawValue: viewModeRaw) ?? .list }
+        nonmutating set { viewModeRaw = newValue.rawValue }
+    }
 
     private var selectedSnippet: TerminalCommandTemplate? {
         guard let selectedSnippetID else { return nil }
         return store.template(id: selectedSnippetID)
+    }
+
+    private var selectedGroup: TerminalSnippetGroup? {
+        guard let selectedGroupID else { return nil }
+        return store.snippetGroup(id: selectedGroupID)
     }
 
     private var sortedProfiles: [ConnectionProfile] {
@@ -33,11 +59,14 @@ struct TerminalSnippetsLibraryView: View {
                 runStatus(summary)
             }
             Divider()
-            HSplitView {
-                libraryList
-                    .frame(minWidth: 430, idealWidth: 620)
-                inspector
-                    .frame(minWidth: 320, idealWidth: 420)
+            GeometryReader { proxy in
+                HStack(spacing: 0) {
+                    libraryBrowser
+                        .frame(width: max(430, proxy.size.width * 0.56))
+                    Divider()
+                    inspector
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
             }
         }
         .sheet(item: $editorRequest) { request in
@@ -54,10 +83,12 @@ struct TerminalSnippetsLibraryView: View {
                     title: draft.title,
                     command: draft.command,
                     category: draft.category,
+                    groupID: draft.groupID,
                     profileID: profileID,
                     targetProfileIDs: draft.targetProfileIDs
                 ) {
-                    selectedSnippetID = draft.id ?? store.templates().first?.id
+                    let resolved = draft.id ?? store.templates().first?.id
+                    selectSnippet(resolved)
                 }
             }
         }
@@ -87,7 +118,7 @@ struct TerminalSnippetsLibraryView: View {
         ) { snippet in
             Button("Удалить", role: .destructive) {
                 if store.removeTemplate(id: snippet.id), selectedSnippetID == snippet.id {
-                    selectedSnippetID = store.templates().first?.id
+                    selectSnippet(nil)
                 }
                 deleteSnippet = nil
             }
@@ -106,11 +137,14 @@ struct TerminalSnippetsLibraryView: View {
             Text("Активные SSH-сессии Targets последнего запуска будут завершены. Выполняющаяся команда может быть прервана.")
         }
         .onAppear {
-            if selectedSnippetID == nil { selectedSnippetID = store.templates().first?.id }
+            restoreNavigation()
         }
         .onChange(of: store.snippetRevision) { _, _ in
             if let selectedSnippetID, store.template(id: selectedSnippetID) == nil {
-                self.selectedSnippetID = store.templates().first?.id
+                selectSnippet(nil)
+            }
+            if let selectedGroupID, store.snippetGroup(id: selectedGroupID) == nil {
+                openRoot()
             }
         }
     }
@@ -142,103 +176,264 @@ struct TerminalSnippetsLibraryView: View {
         .padding(.vertical, 22)
     }
 
-    private var libraryList: some View {
+    private var libraryBrowser: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
+                if selectedGroup != nil {
+                    Button {
+                        openRoot()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Вернуться ко всем группам")
+                }
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField("Поиск сниппетов", text: $query)
                     .textFieldStyle(.plain)
+                Spacer(minLength: 6)
+                Picker("Вид", selection: Binding(
+                    get: { viewMode },
+                    set: { viewMode = $0 }
+                )) {
+                    ForEach(SnippetLibraryViewMode.allCases) { mode in
+                        Image(systemName: mode.systemImage).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 82)
             }
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
             .padding(14)
 
-            List(selection: $selectedSnippetID) {
-                ForEach(store.snippetGroups()) { group in
-                    Section {
-                        let snippets = filteredSnippets(in: group)
-                        ForEach(snippets) { snippet in
-                            snippetRow(snippet)
-                                .tag(snippet.id)
-                                .simultaneousGesture(
-                                    TapGesture(count: 2).onEnded {
-                                        _ = model.runTerminalSnippet(snippet)
-                                    }
-                                )
-                                .contextMenu {
-                                    Button("Запустить", systemImage: "play.fill") {
-                                        _ = model.runTerminalSnippet(snippet)
-                                    }
-                                    Divider()
-                                    Button("Изменить", systemImage: "pencil") {
-                                        presentEditor(snippet)
-                                    }
-                                    Button("Дублировать", systemImage: "doc.on.doc") {
-                                        _ = store.duplicateTemplate(
-                                            id: snippet.id,
-                                            profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
-                                        )
-                                    }
-                                    Button("Новый сниппет", systemImage: "plus") {
-                                        presentEditor(nil, preferredGroup: group.name)
-                                    }
-                                    Divider()
-                                    Button("Удалить", systemImage: "trash", role: .destructive) {
-                                        deleteSnippet = snippet
-                                    }
-                                }
-                        }
-                        if snippets.isEmpty
-                            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Button {
-                                presentEditor(nil, preferredGroup: group.name)
-                            } label: {
-                                Label("Новый сниппет", systemImage: "plus")
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                            }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(Color.accentColor)
-                            .padding(.vertical, 7)
-                            .disabled(sortedProfiles.isEmpty)
-                        }
-                    } header: {
-                        HStack {
-                            Text(group.name)
-                            Spacer()
-                            Text("\(store.templates().filter { $0.category == group.name }.count)")
-                                .foregroundStyle(.secondary)
-                            Menu {
-                                Button("Переименовать", systemImage: "pencil") {
-                                    groupEditor = group
-                                    groupEditorPresented = true
-                                }
-                                Button("Удалить группу", systemImage: "trash", role: .destructive) {
-                                    _ = store.removeSnippetGroup(
-                                        id: group.id,
-                                        profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
-                                    )
-                                }
-                            } label: {
-                                Image(systemName: "ellipsis")
-                            }
-                            .menuStyle(.borderlessButton)
-                            .frame(width: 28)
-                        }
-                    }
+            HStack(spacing: 6) {
+                Button("Все сниппеты") { openRoot() }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(selectedGroup == nil ? Color.primary : Color.accentColor)
+                if let selectedGroup {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                    Text(selectedGroup.name).fontWeight(.semibold)
                 }
             }
-            .listStyle(.inset)
-            .overlay {
-                if store.snippetGroups().isEmpty {
+            .font(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+
+            ScrollView {
+                if !normalizedQuery.isEmpty {
+                    snippetCollection(searchResults, showsGroup: true)
+                } else if let selectedGroup {
+                    let snippets = store.templates(in: selectedGroup.id)
+                    if snippets.isEmpty {
+                        VStack(spacing: 14) {
+                            ContentUnavailableView(
+                                "Группа пуста",
+                                systemImage: "folder",
+                                description: Text("Добавьте первый сниппет в «\(selectedGroup.name)».")
+                            )
+                            Button("Новый сниппет", systemImage: "plus") {
+                                presentEditor(nil, preferredGroup: selectedGroup.name)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(sortedProfiles.isEmpty)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 70)
+                    } else {
+                        snippetCollection(snippets, showsGroup: false)
+                    }
+                } else if store.snippetGroups().isEmpty {
                     ContentUnavailableView(
                         "Сниппетов пока нет",
                         systemImage: "curlybraces",
                         description: Text("Создайте общую команду и назначьте ей один или несколько SSH Targets.")
                     )
+                    .padding(.top, 70)
+                } else {
+                    groupCollection
                 }
             }
+            .background(Color.clear.contentShape(Rectangle()))
         }
+    }
+
+    @ViewBuilder
+    private var groupCollection: some View {
+        if viewMode == .grid {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
+                ForEach(store.snippetGroups()) { group in groupCard(group) }
+            }
+            .padding(14)
+        } else {
+            LazyVStack(spacing: 8) {
+                ForEach(store.snippetGroups()) { group in groupRow(group) }
+            }
+            .padding(14)
+        }
+    }
+
+    private func groupRow(_ group: TerminalSnippetGroup) -> some View {
+        Button { openGroup(group.id) } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 38)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(group.name).font(.headline)
+                    Text("\(store.templates(in: group.id).count) сниппетов")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .contextMenu { groupActions(group) }
+    }
+
+    private func groupCard(_ group: TerminalSnippetGroup) -> some View {
+        Button { openGroup(group.id) } label: {
+            VStack(alignment: .leading, spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Spacer(minLength: 8)
+                Text(group.name).font(.headline).lineLimit(2)
+                Text("\(store.templates(in: group.id).count) сниппетов")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
+            .padding(16)
+            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .contextMenu { groupActions(group) }
+    }
+
+    @ViewBuilder
+    private func groupActions(_ group: TerminalSnippetGroup) -> some View {
+        Button("Открыть", systemImage: "folder") { openGroup(group.id) }
+        Button("Новый сниппет", systemImage: "plus") {
+            presentEditor(nil, preferredGroup: group.name)
+        }
+        Divider()
+        Button("Переименовать", systemImage: "pencil") {
+            groupEditor = group
+            groupEditorPresented = true
+        }
+        Button("Удалить группу", systemImage: "trash", role: .destructive) {
+            _ = store.removeSnippetGroup(
+                id: group.id,
+                profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func snippetCollection(
+        _ snippets: [TerminalCommandTemplate],
+        showsGroup: Bool
+    ) -> some View {
+        if snippets.isEmpty {
+            ContentUnavailableView.search(text: query)
+                .padding(.top, 70)
+        } else if viewMode == .grid {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: 12)], spacing: 12) {
+                ForEach(snippets) { snippet in snippetCard(snippet, showsGroup: showsGroup) }
+            }
+            .padding(14)
+        } else {
+            LazyVStack(spacing: 7) {
+                ForEach(snippets) { snippet in snippetListButton(snippet, showsGroup: showsGroup) }
+            }
+            .padding(14)
+        }
+    }
+
+    private func snippetListButton(
+        _ snippet: TerminalCommandTemplate,
+        showsGroup: Bool
+    ) -> some View {
+        Button { selectSnippet(snippet.id) } label: {
+            VStack(alignment: .leading, spacing: showsGroup ? 5 : 0) {
+                snippetRow(snippet)
+                if showsGroup {
+                    Text(snippet.category).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .background(
+                selectedSnippetID == snippet.id
+                    ? Color.accentColor.opacity(0.15)
+                    : Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 11)
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { _ = model.runTerminalSnippet(snippet) })
+        .contextMenu { snippetActions(snippet) }
+    }
+
+    private func snippetCard(
+        _ snippet: TerminalCommandTemplate,
+        showsGroup: Bool
+    ) -> some View {
+        Button { selectSnippet(snippet.id) } label: {
+            VStack(alignment: .leading, spacing: 9) {
+                HStack {
+                    Image(systemName: "curlybraces")
+                        .font(.title2.bold()).foregroundStyle(Color.accentColor)
+                    Spacer()
+                    Label("\(snippet.targetProfileIDs.count)", systemImage: "server.rack")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(snippet.title).font(.headline).lineLimit(2)
+                Text(snippet.command.replacingOccurrences(of: "\n", with: " ↵ "))
+                    .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(2)
+                if showsGroup {
+                    Text(snippet.category).font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+            .padding(14)
+            .background(
+                selectedSnippetID == snippet.id
+                    ? Color.accentColor.opacity(0.15)
+                    : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 14)
+            )
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { _ = model.runTerminalSnippet(snippet) })
+        .contextMenu { snippetActions(snippet) }
+    }
+
+    @ViewBuilder
+    private func snippetActions(_ snippet: TerminalCommandTemplate) -> some View {
+        Button("Запустить", systemImage: "play.fill") { _ = model.runTerminalSnippet(snippet) }
+        Button("Скопировать команду", systemImage: "doc.on.doc") { copyCommand(snippet.command) }
+        Divider()
+        Button("Изменить", systemImage: "pencil") { presentEditor(snippet) }
+        Button("Дублировать", systemImage: "plus.square.on.square") {
+            _ = store.duplicateTemplate(
+                id: snippet.id,
+                profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
+            )
+        }
+        Button("Новый сниппет в этой группе", systemImage: "plus") {
+            presentEditor(nil, preferredGroup: snippet.category)
+        }
+        Divider()
+        Button("Удалить", systemImage: "trash", role: .destructive) { deleteSnippet = snippet }
     }
 
     private func snippetRow(_ snippet: TerminalCommandTemplate) -> some View {
@@ -342,15 +537,16 @@ struct TerminalSnippetsLibraryView: View {
         }
     }
 
-    private func filteredSnippets(in group: TerminalSnippetGroup) -> [TerminalCommandTemplate] {
-        let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
-            .localizedLowercase
+    private var normalizedQuery: String {
+        query.trimmingCharacters(in: .whitespacesAndNewlines).localizedLowercase
+    }
+
+    private var searchResults: [TerminalCommandTemplate] {
+        guard !normalizedQuery.isEmpty else { return [] }
         return store.templates().filter { snippet in
-            guard snippet.category == group.name else { return false }
-            return normalized.isEmpty
-                || snippet.title.localizedLowercase.contains(normalized)
-                || snippet.command.localizedLowercase.contains(normalized)
-                || group.name.localizedLowercase.contains(normalized)
+            snippet.title.localizedLowercase.contains(normalizedQuery)
+                || snippet.command.localizedLowercase.contains(normalizedQuery)
+                || snippet.category.localizedLowercase.contains(normalizedQuery)
         }
     }
 
@@ -373,6 +569,35 @@ struct TerminalSnippetsLibraryView: View {
             snippet: snippet,
             preferredGroup: preferredGroup
         )
+    }
+
+    private func openRoot() {
+        selectedGroupID = nil
+        persistedGroupID = ""
+    }
+
+    private func openGroup(_ id: UUID) {
+        selectedGroupID = id
+        persistedGroupID = id.uuidString
+    }
+
+    private func selectSnippet(_ id: UUID?) {
+        selectedSnippetID = id
+        persistedSnippetID = id?.uuidString ?? ""
+    }
+
+    private func restoreNavigation() {
+        if let id = UUID(uuidString: persistedGroupID), store.snippetGroup(id: id) != nil {
+            selectedGroupID = id
+        }
+        if let id = UUID(uuidString: persistedSnippetID), store.template(id: id) != nil {
+            selectedSnippetID = id
+        }
+    }
+
+    private func copyCommand(_ command: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(command, forType: .string)
     }
 
     private func runStatus(_ summary: TerminalSnippetRunSummary) -> some View {
@@ -456,6 +681,7 @@ private struct TerminalSnippetDraft {
     let title: String
     let command: String
     let category: String
+    let groupID: UUID
     let targetProfileIDs: [UUID]
 }
 
@@ -469,7 +695,7 @@ private struct TerminalSnippetEditorView: View {
 
     @State private var title: String
     @State private var command: String
-    @State private var category: String
+    @State private var groupID: UUID
     @State private var targetIDs: Set<UUID>
 
     init(
@@ -486,11 +712,12 @@ private struct TerminalSnippetEditorView: View {
         self.onSave = onSave
         _title = State(initialValue: snippet?.title ?? "")
         _command = State(initialValue: snippet?.command ?? "")
-        _category = State(
-            initialValue: snippet?.category
-                ?? preferredGroup
-                ?? groups.first?.name
-                ?? TerminalCommandHistoryStore.defaultSnippetGroupName
+        let preferredGroupID = groups.first(where: { $0.name == preferredGroup })?.id
+        _groupID = State(
+            initialValue: snippet?.groupID
+                ?? preferredGroupID
+                ?? groups.first?.id
+                ?? TerminalCommandTemplate.legacyUnassignedGroupID
         )
         _targetIDs = State(initialValue: Set(snippet?.targetProfileIDs ?? profiles.first.map { [$0.id] } ?? []))
     }
@@ -499,8 +726,8 @@ private struct TerminalSnippetEditorView: View {
         NavigationStack {
             Form {
                 TextField("Название", text: $title)
-                Picker("Группа", selection: $category) {
-                    ForEach(groups) { group in Text(group.name).tag(group.name) }
+                Picker("Группа", selection: $groupID) {
+                    ForEach(groups) { group in Text(group.name).tag(group.id) }
                 }
                 TextEditor(text: $command)
                     .font(.body.monospaced())
@@ -533,7 +760,9 @@ private struct TerminalSnippetEditorView: View {
                                 id: snippet?.id,
                                 title: title,
                                 command: command,
-                                category: category,
+                                category: groups.first(where: { $0.id == groupID })?.name
+                                    ?? TerminalCommandHistoryStore.defaultSnippetGroupName,
+                                groupID: groupID,
                                 targetProfileIDs: profiles.map(\.id).filter(targetIDs.contains)
                             )
                         )

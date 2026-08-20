@@ -106,6 +106,7 @@ struct TerminalTabConnection: Codable, Equatable {
     enum Kind: String, Codable, CaseIterable, Identifiable {
         case savedProfile
         case custom
+        case local
 
         var id: String { rawValue }
 
@@ -113,6 +114,7 @@ struct TerminalTabConnection: Codable, Equatable {
             switch self {
             case .savedProfile: "Из сохранённых"
             case .custom: "Другой сервер"
+            case .local: "Этот Mac"
             }
         }
     }
@@ -125,6 +127,7 @@ struct TerminalTabConnection: Codable, Equatable {
     var authenticationMode: SSHAuthenticationMode?
     var identityID: UUID?
     var jumpHostProfileID: UUID?
+    var workingDirectory: String?
 
     static func savedProfile(_ id: UUID) -> TerminalTabConnection {
         TerminalTabConnection(
@@ -135,7 +138,8 @@ struct TerminalTabConnection: Codable, Equatable {
             port: 22,
             authenticationMode: nil,
             identityID: nil,
-            jumpHostProfileID: nil
+            jumpHostProfileID: nil,
+            workingDirectory: nil
         )
     }
 
@@ -155,7 +159,22 @@ struct TerminalTabConnection: Codable, Equatable {
             port: port,
             authenticationMode: authenticationMode,
             identityID: identityID,
-            jumpHostProfileID: jumpHostProfileID
+            jumpHostProfileID: jumpHostProfileID,
+            workingDirectory: nil
+        )
+    }
+
+    static func local(workingDirectory: String? = nil) -> TerminalTabConnection {
+        TerminalTabConnection(
+            kind: .local,
+            profileID: nil,
+            host: "",
+            username: "",
+            port: 0,
+            authenticationMode: nil,
+            identityID: nil,
+            jumpHostProfileID: nil,
+            workingDirectory: workingDirectory
         )
     }
 
@@ -188,6 +207,8 @@ struct TerminalTabConnection: Codable, Equatable {
                 ? normalizedHost
                 : "\(normalizedUsername)@\(normalizedHost)"
             return port == 22 ? destination : "\(destination):\(port)"
+        case .local:
+            return workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
         }
     }
 }

@@ -21,6 +21,7 @@ pid_t selectiveremote_spawn_pty(
     const char *executable,
     char *const argv[],
     char *const envp[],
+    const char *working_directory,
     uint16_t columns,
     uint16_t rows,
     int *master_fd
@@ -42,6 +43,10 @@ pid_t selectiveremote_spawn_pty(
         return -1;
     }
     if (child == 0) {
+        if (working_directory != NULL && working_directory[0] != '\0'
+            && chdir(working_directory) != 0) {
+            _exit(126);
+        }
         if (envp != NULL) {
             execve(executable, argv, envp);
         } else {

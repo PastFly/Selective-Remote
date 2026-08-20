@@ -22,6 +22,20 @@ test("terminal snippet editor renders and submits assigned SSH targets", () => {
     assert.match(hostScript, /snippetTargetOptions = Array\.isArray\(payload\.snippetTargets\)/);
     assert.match(hostScript, /const targetProfileIDs = selectedSnippetTargetIDs\(\)/);
     assert.match(hostScript, /command: snippetCommand\.value,\s*targetProfileIDs/);
+    assert.match(hostScript, /groupID: group\.id/);
+});
+
+test("snippet context menu supports local run, insert and clipboard copy", () => {
+    assert.match(hostScript, /action === "runHere"/);
+    assert.match(hostScript, /action === "insert"/);
+    assert.match(hostScript, /action === "copy"/);
+    assert.match(hostScript, /replaceCurrentLine\(entry\.command, true\)/);
+    assert.match(hostScript, /action: "copySnippet"/);
+});
+
+test("snippet rendering uses stable group IDs with a legacy category fallback", () => {
+    assert.match(hostScript, /entry\.groupID === group\.id/);
+    assert.match(hostScript, /!entry\.groupID && entry\.category === group\.name/);
 });
 
 test("empty groups and snippet context menu can create in the current group", () => {

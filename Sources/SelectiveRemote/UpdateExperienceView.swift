@@ -1,5 +1,99 @@
 import SwiftUI
 
+struct AppSettingsView: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var appearance: AppAppearanceStore
+
+    var body: some View {
+        TabView {
+            Form {
+                AppAppearanceSettingsSection(store: appearance)
+                Section {
+                    Button("Сбросить оформление") { appearance.reset() }
+                }
+            }
+            .formStyle(.grouped)
+            .tabItem { Label("Оформление", systemImage: "paintpalette") }
+
+            UpdateSettingsView(model: model)
+                .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+        }
+        .frame(width: 610, height: 520)
+        .background {
+            AppWindowBackdrop(appearance: appearance.snapshot)
+                .ignoresSafeArea()
+        }
+        .preferredColorScheme(appearance.theme.colorScheme)
+        .appTextSize(appearance.textSize)
+        .controlSize(appearance.density.controlSize)
+    }
+}
+
+private struct UpdateSettingsView: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        Form {
+            Section("Версия приложения") {
+                LabeledContent("Установлено") {
+                    Text(AppBuildInfo.fullText).monospacedDigit()
+                }
+                if let manifest = model.availableUpdateManifest {
+                    LabeledContent("Доступно") {
+                        Text(manifest.version)
+                            .monospacedDigit()
+                            .foregroundStyle(Color.accentColor)
+                    }
+                } else {
+                    LabeledContent("Состояние") {
+                        Label(
+                            model.isCheckingForUpdates ? "Проверка…" : "Установлена актуальная версия",
+                            systemImage: model.isCheckingForUpdates
+                                ? "arrow.triangle.2.circlepath"
+                                : "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(model.isCheckingForUpdates ? Color.secondary : Color.green)
+                    }
+                }
+                LabeledContent("Последняя проверка") {
+                    Text(lastCheckText).foregroundStyle(.secondary)
+                }
+            }
+
+            Section("Автоматизация") {
+                Toggle("Проверять обновления при запуске и каждые 5 часов", isOn: $model.automaticallyCheckForUpdates)
+                Toggle("Автоматически загружать найденные обновления", isOn: $model.automaticallyDownloadUpdates)
+                    .disabled(!model.automaticallyCheckForUpdates)
+            }
+
+            Section("Действия") {
+                HStack {
+                    Button("Проверить сейчас", systemImage: "arrow.clockwise") {
+                        model.checkForUpdates()
+                    }
+                    .disabled(model.isCheckingForUpdates)
+                    Spacer()
+                    if model.availableUpdateManifest != nil {
+                        Button("Что нового") { model.openAvailableReleaseNotes() }
+                    } else {
+                        Button("История версий") { model.openInstalledReleaseNotes() }
+                    }
+                }
+                if model.availableUpdateManifest != nil {
+                    UpdateExperiencePopover(model: model)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private var lastCheckText: String {
+        guard let date = model.lastSuccessfulUpdateCheckDate else { return "Ещё не выполнялась" }
+        return date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
 struct UpdateExperiencePopover: View {
     @ObservedObject var model: AppModel
 

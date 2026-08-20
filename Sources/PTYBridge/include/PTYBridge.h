@@ -12,6 +12,7 @@ pid_t selectiveremote_spawn_pty(
     const char *executable,
     char *const argv[],
     char *const envp[],
+    const char *working_directory,
     uint16_t columns,
     uint16_t rows,
     int *master_fd
