@@ -485,7 +485,9 @@ func includesEnglishLocalizationAndDocumentation() throws {
     #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
     #expect(localization.contains("\"Язык приложения\" = \"Application Language\""))
     #expect(localization.contains("\"SFTP не подключён\" = \"SFTP is not connected\""))
-    #expect(readme.contains("### Terminal Workspace"))
+    #expect(readme.contains("### SSH Workspace"))
+    #expect(readme.contains("### Local Terminal"))
+    #expect(readme.contains("### Snippets"))
     #expect(readme.contains("### Forwarding Manager"))
 }
 
