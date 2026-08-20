@@ -3,6 +3,25 @@ import Foundation
 import LocalAuthentication
 import SwiftUI
 
+private final class NotificationObserverBag: @unchecked Sendable {
+    private let center: NotificationCenter
+    private var tokens: [NSObjectProtocol] = []
+
+    init(center: NotificationCenter) {
+        self.center = center
+    }
+
+    func append(_ token: NSObjectProtocol) {
+        tokens.append(token)
+    }
+
+    deinit {
+        for token in tokens {
+            center.removeObserver(token)
+        }
+    }
+}
+
 @MainActor
 final class AppLockStore: ObservableObject {
     private enum Keys {
@@ -40,30 +59,25 @@ final class AppLockStore: ObservableObject {
 
     private let defaults: UserDefaults
     private var inactiveSince: Date?
-    private var notificationTokens: [NSObjectProtocol] = []
-    private var workspaceNotificationTokens: [NSObjectProtocol] = []
+    private let notificationObservers = NotificationObserverBag(center: .default)
+    private let workspaceNotificationObservers = NotificationObserverBag(
+        center: NSWorkspace.shared.notificationCenter
+    )
 
     var touchIDAvailable: Bool { KeychainService.touchIDAvailable }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        enabled = defaults.bool(forKey: Keys.enabled)
-        lockOnLaunch = (defaults.object(forKey: Keys.lockOnLaunch) as? Bool) ?? true
+        let savedEnabled = defaults.bool(forKey: Keys.enabled)
+        let savedLockOnLaunch = (defaults.object(forKey: Keys.lockOnLaunch) as? Bool) ?? true
+        enabled = savedEnabled
+        lockOnLaunch = savedLockOnLaunch
         lockOnWake = (defaults.object(forKey: Keys.lockOnWake) as? Bool) ?? true
         lockOnMinimize = defaults.bool(forKey: Keys.lockOnMinimize)
         let savedTimeout = defaults.object(forKey: Keys.inactivityTimeout) as? Double
         inactivityTimeout = savedTimeout ?? 300
-        isLocked = enabled && lockOnLaunch
+        isLocked = savedEnabled && savedLockOnLaunch
         installLifecycleObservers()
-    }
-
-    deinit {
-        for token in notificationTokens {
-            NotificationCenter.default.removeObserver(token)
-        }
-        for token in workspaceNotificationTokens {
-            NSWorkspace.shared.notificationCenter.removeObserver(token)
-        }
     }
 
     func setEnabled(_ value: Bool) {
@@ -119,7 +133,7 @@ final class AppLockStore: ObservableObject {
 
     private func installLifecycleObservers() {
         let center = NotificationCenter.default
-        notificationTokens.append(
+        notificationObservers.append(
             center.addObserver(
                 forName: NSApplication.didResignActiveNotification,
                 object: nil,
@@ -128,7 +142,7 @@ final class AppLockStore: ObservableObject {
                 Task { @MainActor in self?.applicationDidResignActive() }
             }
         )
-        notificationTokens.append(
+        notificationObservers.append(
             center.addObserver(
                 forName: NSApplication.didBecomeActiveNotification,
                 object: nil,
@@ -137,7 +151,7 @@ final class AppLockStore: ObservableObject {
                 Task { @MainActor in self?.applicationDidBecomeActive() }
             }
         )
-        notificationTokens.append(
+        notificationObservers.append(
             center.addObserver(
                 forName: NSWindow.didMiniaturizeNotification,
                 object: nil,
@@ -151,7 +165,7 @@ final class AppLockStore: ObservableObject {
         )
 
         let workspaceCenter = NSWorkspace.shared.notificationCenter
-        workspaceNotificationTokens.append(
+        workspaceNotificationObservers.append(
             workspaceCenter.addObserver(
                 forName: NSWorkspace.didWakeNotification,
                 object: nil,
