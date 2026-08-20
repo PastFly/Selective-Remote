@@ -8,7 +8,7 @@
 [![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
 [![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
 
-**Selective Remote** is a free, open-source RDP, SSH, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Terminal Workspace, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
+**Selective Remote** is a free, open-source RDP, SSH, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
 
 The project targets Apple Silicon and macOS 14+. The interface is available in English and Russian.
 
@@ -20,7 +20,7 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 
 ### Connection Center
 
-**Connection Center** presents the real state of active RDP, Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
+**Connection Center** presents the real state of active RDP, SSH, local Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
 
 ![Connection Center](docs/images/connection-center.png)
 
@@ -37,19 +37,42 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 - macOS-oriented Command, Option, and Fn behavior;
 - parallel RDP sessions for different profiles.
 
-### Terminal Workspace
+### SSH Workspace
 
 The built-in SSH terminal uses the system `/usr/bin/ssh` and supports:
 
 - independent tabs and split/grid panes;
 - different servers in different tabs and panes;
 - persistent workspace layout;
-- command history, favorites, templates, and suggestions;
-- Server Commands for common Linux, systemd, network, disk, and container tasks;
+- command history, favorites, a built-in catalog, and suggestions;
+- automatically detected Server Commands for Linux, systemd, network, disk, and container tasks;
 - reconnect, duplicate, drag-and-drop ordering, and tab colors;
 - Broadcast Input with an explicit warning;
 - an action palette and quick SFTP handoff;
 - configurable terminal themes, fonts, text size, and cursor.
+
+In split/grid layouts, history, common commands, server commands, favorites, and Snippets share one full-size Inspector for the active pane.
+
+### Local Terminal
+
+The separate **Terminal** workspace launches the current user's system login shell without SSH:
+
+- up to eight independent tabs;
+- a separate working directory for every tab;
+- quick folder selection and screen clearing;
+- history, themes, and the shared Snippets library;
+- the native `⌘T` shortcut for a new tab.
+
+### Snippets
+
+The global **Snippets** library is shared by SSH Workspace and Local Terminal:
+
+- groups with back navigation and persisted folder selection;
+- list and grid presentation modes;
+- create, edit, duplicate, move, and delete commands;
+- multiline commands and scripts without losing line breaks;
+- assignment of one snippet to multiple SSH Targets;
+- run on Targets, run in the current terminal, insert without running, and copy.
 
 ### SFTP
 
@@ -118,7 +141,9 @@ The report intentionally does not read passwords, passphrases, Keychain values, 
 - separate terminal themes;
 - multiple text sizes and interface density options;
 - English and Russian UI;
+- a native **Settings** window for appearance and updates;
 - built-in update checks;
+- automatic checks and optional automatic update downloads;
 - DMG download with SHA-256 verification;
 - update installation only after explicit user confirmation.
 
@@ -168,6 +193,13 @@ Community releases without a Developer ID may use ad-hoc signing. In that case, 
 3. Choose password, SSH ID, Touch ID Key, or the system `ssh-agent` / `~/.ssh/config`.
 4. Configure a Jump Host or Proxy when needed.
 5. Open Terminal, SFTP, or Forwarding.
+
+### Local Terminal and Snippets
+
+1. Open **Terminal** to launch a local login shell.
+2. Use the folder button to select the active tab's working directory.
+3. Open **Snippets**, create a group, and add a command or multiline script.
+4. Run the snippet locally or assign it to one or more SSH Targets.
 
 ## Building from source
 
