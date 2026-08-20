@@ -1637,7 +1637,7 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    static func normalizedProfileTagName(_ value: String) -> String {
+    nonisolated static func normalizedProfileTagName(_ value: String) -> String {
         let words = value
             .split(whereSeparator: { $0.isWhitespace })
             .map(String.init)
