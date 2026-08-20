@@ -639,6 +639,27 @@ enum ProfileSortMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum ProfileCollectionDisplayMode: String, CaseIterable, Identifiable {
+    case list
+    case grid
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .list: "Список"
+        case .grid: "Плитка"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .list: "list.bullet"
+        case .grid: "square.grid.2x2"
+        }
+    }
+}
+
 struct ProfileGroupSection: Identifiable {
     let name: String
     let profiles: [ConnectionProfile]
@@ -716,6 +737,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var connectionType: ConnectionType
     var friendlyName: String
     var group: String
+    var tags: [String]
     var profileDescription: String
     var detectedOperatingSystem: String
     var detectedOperatingSystemID: String
@@ -777,6 +799,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         self.connectionType = connectionType
         friendlyName = connectionType == .rdp ? "Новое подключение" : "Новое SSH-подключение"
         group = ""
+        tags = []
         profileDescription = ""
         detectedOperatingSystem = ""
         detectedOperatingSystemID = ""
@@ -835,7 +858,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, connectionType, friendlyName, group, profileDescription
+        case id, connectionType, friendlyName, group, tags, profileDescription
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
@@ -864,6 +887,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         friendlyName = try container.decodeIfPresent(String.self, forKey: .friendlyName)
             ?? defaults.friendlyName
         group = try container.decodeIfPresent(String.self, forKey: .group) ?? defaults.group
+        tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? defaults.tags
         profileDescription = try container.decodeIfPresent(
             String.self,
             forKey: .profileDescription
@@ -1008,6 +1032,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(connectionType, forKey: .connectionType)
         try container.encode(friendlyName, forKey: .friendlyName)
         try container.encode(group, forKey: .group)
+        try container.encode(tags, forKey: .tags)
         try container.encode(profileDescription, forKey: .profileDescription)
         try container.encode(detectedOperatingSystem, forKey: .detectedOperatingSystem)
         try container.encode(detectedOperatingSystemID, forKey: .detectedOperatingSystemID)

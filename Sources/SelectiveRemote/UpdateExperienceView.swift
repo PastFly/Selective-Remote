@@ -3,6 +3,7 @@ import SwiftUI
 struct AppSettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var appearance: AppAppearanceStore
+    @ObservedObject var appLock: AppLockStore
 
     var body: some View {
         TabView {
@@ -17,6 +18,9 @@ struct AppSettingsView: View {
 
             UpdateSettingsView(model: model)
                 .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+
+            AppLockSettingsView(store: appLock)
+                .tabItem { Label("Безопасность", systemImage: "lock.shield") }
         }
         .frame(width: 610, height: 520)
         .background {

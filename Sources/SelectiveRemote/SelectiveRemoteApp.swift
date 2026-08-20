@@ -68,18 +68,21 @@ struct SelectiveRemoteApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var language = AppLanguageStore()
     @StateObject private var appAppearance = AppAppearanceStore.shared
+    @StateObject private var appLock = AppLockStore()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(model)
-                .environmentObject(language)
-                .environmentObject(appAppearance)
-                .environment(\.locale, language.locale)
-                .frame(minWidth: 1050, minHeight: 700)
-                .onAppear {
-                    model.presentWhatsNewAfterUpgradeIfNeeded()
-                }
+            AppLockGate(store: appLock) {
+                ContentView()
+                    .environmentObject(model)
+                    .environmentObject(language)
+                    .environmentObject(appAppearance)
+                    .environment(\.locale, language.locale)
+                    .frame(minWidth: 1050, minHeight: 700)
+                    .onAppear {
+                        model.presentWhatsNewAfterUpgradeIfNeeded()
+                    }
+            }
         }
         .windowResizability(.contentMinSize)
         .commands {
@@ -115,6 +118,12 @@ struct SelectiveRemoteApp: App {
                 }
             }
             CommandMenu("Сессия") {
+                Button("Заблокировать Selective Remote", systemImage: "lock.fill") {
+                    appLock.lockNow()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(!appLock.enabled || appLock.isLocked)
+                Divider()
                 Button("Quick Connect…", systemImage: "bolt.fill") {
                     model.quickConnectPresented = true
                 }
@@ -176,7 +185,11 @@ struct SelectiveRemoteApp: App {
         }
 
         Settings {
-            AppSettingsView(model: model, appearance: appAppearance)
+            AppSettingsView(
+                model: model,
+                appearance: appAppearance,
+                appLock: appLock
+            )
                 .environmentObject(language)
                 .environment(\.locale, language.locale)
         }

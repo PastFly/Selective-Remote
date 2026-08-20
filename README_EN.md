@@ -18,6 +18,10 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 
 ## Main workspaces
 
+### Profiles and tags
+
+Saved RDP and SSH connections support groups, favorites, and multiple custom tags per profile. Users create their own tags, can rename or delete them across every profile, and can use them in search and combined filtering. The connection catalog switches between list and grid presentation.
+
 ### Connection Center
 
 **Connection Center** presents the real state of active RDP, SSH, local Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
@@ -135,13 +139,17 @@ For bastion scenarios, an SSH profile can use another saved profile as a **Jump 
 
 The report intentionally does not read passwords, passphrases, Keychain values, proxy secrets, or private-key contents. SSH key and certificate paths are reduced to a basename where needed for a safe report.
 
+### Connection Activity
+
+The local activity history stores the time, duration, profile, address, route, and outcome of RDP and SSH connections. Errors are passed through the same secret redaction used by Diagnostics Center. Passwords, keys, commands, and terminal contents are never recorded. The history can be filtered, searched, and completely cleared.
+
 ### Appearance, language, and updates
 
 - system, light, and dark application themes;
 - separate terminal themes;
 - multiple text sizes and interface density options;
 - English and Russian UI;
-- a native **Settings** window for appearance and updates;
+- a native **Settings** window for appearance, security, and updates;
 - built-in update checks;
 - automatic checks and optional automatic update downloads;
 - DMG download with SHA-256 verification;
@@ -152,6 +160,7 @@ The report intentionally does not read passwords, passphrases, Keychain values, 
 Selective Remote prefers native macOS and OpenSSH mechanisms:
 
 - SSH passwords and related secrets are stored in macOS Keychain;
+- optional App Lock protects the application interface with Touch ID on launch, after wake, when minimized, or after the selected inactivity interval;
 - exported profiles do not contain saved passwords;
 - new SSH host keys are not accepted automatically;
 - proxy passwords are not passed in OpenSSH command-line arguments;

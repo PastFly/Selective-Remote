@@ -38,6 +38,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     case sftp = "SFTP"
     case forwarding = "Forwarding"
     case snippets = "Сниппеты"
+    case activity = "Журнал"
     case diagnostics = "Диагностика"
     case keychain = "Keychain"
 
@@ -48,6 +49,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
         case .snippets: "curlybraces"
+        case .activity: "clock.arrow.circlepath"
         case .ssh: "network"
         case .terminal: "terminal"
         case .sftp: "folder.badge.gearshape"
@@ -455,104 +457,8 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            List(selection: Binding(
-                get: { model.selectedProfileID },
-                set: {
-                    if let id = $0 {
-                        model.selectProfile(id)
-                        setMainArea(.connections)
-                    }
-                }
-            )) {
-                ForEach(model.profileGroups) { group in
-                    Section(group.name) {
-                        ForEach(group.profiles) { item in
-                            ProfileRow(
-                                profile: item,
-                                session: model.sessions[item.id],
-                                hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
-                                activeTunnelCount: model.sshTunnels.values.filter {
-                                    $0.profileID == item.id
-                                }.count
-                            )
-                                .tag(item.id)
-                                .contentShape(Rectangle())
-                                .onTapGesture {
-                                    model.selectProfile(item.id)
-                                    setMainArea(.connections)
-                                }
-                                .contextMenu {
-                                    if model.isSessionRunning(profileID: item.id)
-                                        || model.isSSHTerminalRunning(profileID: item.id) {
-                                        Button("Отключить", systemImage: "stop.fill", role: .destructive) {
-                                            model.disconnect(profileID: item.id)
-                                        }
-                                    } else {
-                                        Button(
-                                            item.connectionType == .ssh ? "Подключить SSH" : "Подключить RDP",
-                                            systemImage: item.connectionType == .ssh ? "terminal" : "play.fill"
-                                        ) {
-                                            model.selectProfile(item.id)
-                                            setMainArea(.connections)
-                                            if item.connectionType == .ssh {
-                                                selectedTab = .terminal
-                                            }
-                                            model.connect()
-                                        }
-                                    }
-
-                                    if item.connectionType == .ssh {
-                                        Button("Открыть терминал", systemImage: "terminal") {
-                                            model.selectProfile(item.id)
-                                            setMainArea(.connections)
-                                            selectedTab = .terminal
-                                        }
-                                        Button("Открыть SFTP", systemImage: "folder.badge.gearshape") {
-                                            model.selectProfile(item.id)
-                                            setMainArea(.connections)
-                                            selectedTab = .sftp
-                                        }
-                                        Button("Открыть туннели", systemImage: "arrow.left.arrow.right") {
-                                            model.selectProfile(item.id)
-                                            setMainArea(.connections)
-                                            selectedTab = .forwarding
-                                        }
-                                    }
-
-                                    Divider()
-                                    Button(
-                                        item.isFavorite ? "Убрать из избранного" : "В избранное",
-                                        systemImage: item.isFavorite ? "star.slash" : "star"
-                                    ) {
-                                        model.toggleFavorite(profileID: item.id)
-                                    }
-                                    Menu("Переместить в группу", systemImage: "folder") {
-                                        Button("Без группы") {
-                                            model.setProfileGroup(profileID: item.id, group: "")
-                                        }
-                                        if !model.profileGroupNames.isEmpty { Divider() }
-                                        ForEach(model.profileGroupNames, id: \.self) { groupName in
-                                            Button(groupName) {
-                                                model.setProfileGroup(profileID: item.id, group: groupName)
-                                            }
-                                        }
-                                    }
-                                    Button("Создать копию", systemImage: "doc.on.doc") {
-                                        model.selectProfile(item.id)
-                                        model.duplicateSelectedProfile()
-                                    }
-                                    Divider()
-                                    Button("Удалить", systemImage: "trash", role: .destructive) {
-                                        model.selectProfile(item.id)
-                                        model.deleteSelectedProfile()
-                                    }
-                                }
-                        }
-                    }
-                }
-            }
-            .listStyle(.sidebar)
-            .scrollContentBackground(.hidden)
+            profileTagFilterBar
+            profileCollection
 
             Divider()
             HStack(spacing: 9) {
@@ -575,6 +481,17 @@ struct ContentView: View {
                     .help("Удалить")
 
                 Spacer()
+
+                Menu {
+                    Picker("Вид подключений", selection: $model.profileCollectionDisplayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: model.profileCollectionDisplayMode.systemImage)
+                }
+                .help("Список или плитка подключений")
 
                 Menu {
                     Button("Импортировать…", systemImage: "square.and.arrow.down") {
@@ -615,6 +532,222 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
+    private var profileTagFilterBar: some View {
+        if !model.profileTagNames.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if !model.profileTagFilter.isEmpty {
+                        Button {
+                            model.profileTagFilter.removeAll()
+                        } label: {
+                            Label("Все", systemImage: "xmark.circle.fill")
+                        }
+                        .help("Сбросить фильтр тегов")
+                    }
+                    ForEach(model.profileTagNames, id: \.self) { tag in
+                        let selected = model.profileTagFilter.contains(tag)
+                        Button {
+                            model.toggleProfileTagFilter(tag)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "tag.fill")
+                                Text(tag).lineLimit(1)
+                            }
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(selected ? Color.white : Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 5)
+                            .background(
+                                selected ? Color.accentColor : Color.accentColor.opacity(0.12),
+                                in: Capsule()
+                            )
+                        }
+                        .buttonStyle(.plain)
+                        .help(selected ? "Убрать тег из фильтра" : "Фильтровать по тегу «\(tag)»")
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 3)
+            }
+            .frame(height: 34)
+        }
+    }
+
+    @ViewBuilder
+    private var profileCollection: some View {
+        if model.profileGroups.isEmpty {
+            ContentUnavailableView {
+                Label("Подключения не найдены", systemImage: "rectangle.stack.badge.questionmark")
+            } description: {
+                Text(
+                    model.profileTagFilter.isEmpty
+                        ? "Измените строку поиска или создайте новое подключение."
+                        : "Сбросьте один или несколько фильтров тегов."
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if model.profileCollectionDisplayMode == .list {
+            List(selection: Binding(
+                get: { model.selectedProfileID },
+                set: { if let id = $0 { openProfile(id) } }
+            )) {
+                ForEach(model.profileGroups) { group in
+                    Section(group.name) {
+                        ForEach(group.profiles) { item in
+                            ProfileRow(
+                                profile: item,
+                                session: model.sessions[item.id],
+                                hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
+                                activeTunnelCount: activeTunnelCount(for: item.id)
+                            )
+                            .tag(item.id)
+                            .contentShape(Rectangle())
+                            .onTapGesture { openProfile(item.id) }
+                            .contextMenu { profileContextMenu(item) }
+                        }
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    ForEach(model.profileGroups) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(group.name)
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 2)
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 118), spacing: 9)],
+                                spacing: 9
+                            ) {
+                                ForEach(group.profiles) { item in
+                                    Button {
+                                        openProfile(item.id)
+                                    } label: {
+                                        ProfileGridCard(
+                                            profile: item,
+                                            isSelected: model.selectedProfileID == item.id,
+                                            session: model.sessions[item.id],
+                                            hasActiveSSH: model.isSSHTerminalRunning(
+                                                profileID: item.id
+                                            ),
+                                            activeTunnelCount: activeTunnelCount(for: item.id)
+                                        )
+                                    }
+                                    .buttonStyle(.plain)
+                                    .contextMenu { profileContextMenu(item) }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+            }
+        }
+    }
+
+    private func activeTunnelCount(for profileID: UUID) -> Int {
+        model.sshTunnels.values.filter { $0.profileID == profileID }.count
+    }
+
+    private func openProfile(_ profileID: UUID) {
+        model.selectProfile(profileID)
+        setMainArea(.connections)
+    }
+
+    @ViewBuilder
+    private func profileContextMenu(_ item: ConnectionProfile) -> some View {
+        if model.isSessionRunning(profileID: item.id)
+            || model.isSSHTerminalRunning(profileID: item.id) {
+            Button("Отключить", systemImage: "stop.fill", role: .destructive) {
+                model.disconnect(profileID: item.id)
+            }
+        } else {
+            Button(
+                item.connectionType == .ssh ? "Подключить SSH" : "Подключить RDP",
+                systemImage: item.connectionType == .ssh ? "terminal" : "play.fill"
+            ) {
+                model.selectProfile(item.id)
+                setMainArea(.connections)
+                if item.connectionType == .ssh {
+                    selectedTab = .terminal
+                }
+                model.connect()
+            }
+        }
+
+        if item.connectionType == .ssh {
+            Button("Открыть терминал", systemImage: "terminal") {
+                model.selectProfile(item.id)
+                setMainArea(.connections)
+                selectedTab = .terminal
+            }
+            Button("Открыть SFTP", systemImage: "folder.badge.gearshape") {
+                model.selectProfile(item.id)
+                setMainArea(.connections)
+                selectedTab = .sftp
+            }
+            Button("Открыть туннели", systemImage: "arrow.left.arrow.right") {
+                model.selectProfile(item.id)
+                setMainArea(.connections)
+                selectedTab = .forwarding
+            }
+        }
+
+        Divider()
+        Button(
+            item.isFavorite ? "Убрать из избранного" : "В избранное",
+            systemImage: item.isFavorite ? "star.slash" : "star"
+        ) {
+            model.toggleFavorite(profileID: item.id)
+        }
+        Menu("Теги", systemImage: "tag") {
+            ForEach(model.profileTagNames, id: \.self) { tag in
+                let assigned = item.tags.contains {
+                    $0.compare(
+                        tag,
+                        options: [.caseInsensitive, .diacriticInsensitive]
+                    ) == .orderedSame
+                }
+                Button(assigned ? "Убрать «\(tag)»" : "Добавить «\(tag)»") {
+                    if assigned {
+                        model.removeProfileTag(tag, from: item.id)
+                    } else {
+                        model.addProfileTag(tag, to: item.id)
+                    }
+                }
+            }
+            if model.profileTagNames.isEmpty {
+                Text("Создайте тег в настройках профиля")
+            }
+        }
+        Menu("Переместить в группу", systemImage: "folder") {
+            Button("Без группы") {
+                model.setProfileGroup(profileID: item.id, group: "")
+            }
+            if !model.profileGroupNames.isEmpty { Divider() }
+            ForEach(model.profileGroupNames, id: \.self) { groupName in
+                Button(groupName) {
+                    model.setProfileGroup(profileID: item.id, group: groupName)
+                }
+            }
+        }
+        Button("Создать копию", systemImage: "doc.on.doc") {
+            model.selectProfile(item.id)
+            model.duplicateSelectedProfile()
+        }
+        Divider()
+        Button("Удалить", systemImage: "trash", role: .destructive) {
+            model.selectProfile(item.id)
+            model.deleteSelectedProfile()
+        }
+    }
+
     private var detail: some View {
         ZStack(alignment: .topLeading) {
             LinearGradient(
@@ -638,6 +771,8 @@ struct ContentView: View {
                     store: snippets,
                     model: model
                 )
+            case .activity:
+                ConnectionActivityView(store: model.connectionActivity)
             case .ssh:
                 globalTerminalDetail
             case .terminal:
@@ -2235,6 +2370,14 @@ struct ContentView: View {
                         TextField("Например: Работа", text: profileBinding.group)
                             .textFieldStyle(.roundedBorder)
                     }
+                    GridRow(alignment: .top) {
+                        Text("Теги")
+                            .padding(.top, 7)
+                        ProfileTagsEditor(
+                            model: model,
+                            profileID: profile.id
+                        )
+                    }
                     GridRow {
                         Text("Описание")
                         TextField(
@@ -3418,6 +3561,196 @@ struct ContentView: View {
     }
 }
 
+private struct ProfileTagsEditor: View {
+    @ObservedObject var model: AppModel
+    let profileID: UUID
+    @State private var newTag = ""
+    @State private var renamingTag: String?
+    @State private var renamedTag = ""
+
+    private var profile: ConnectionProfile? {
+        model.profiles.first(where: { $0.id == profileID })
+    }
+
+    private var availableTags: [String] {
+        let assigned = profile?.tags ?? []
+        return model.profileTagNames.filter { candidate in
+            !assigned.contains {
+                $0.compare(
+                    candidate,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) == .orderedSame
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let tags = profile?.tags, !tags.isEmpty {
+                FlowLayout(spacing: 6) {
+                    ForEach(tags, id: \.self) { tag in
+                        HStack(spacing: 5) {
+                            Image(systemName: "tag.fill")
+                            Text(tag).lineLimit(1)
+                            Button {
+                                model.removeProfileTag(tag, from: profileID)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Убрать тег из профиля")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.accentColor.opacity(0.11), in: Capsule())
+                        .contextMenu {
+                            Button("Переименовать везде…", systemImage: "pencil") {
+                                renamingTag = tag
+                                renamedTag = tag
+                            }
+                            Button(
+                                "Удалить из всех профилей",
+                                systemImage: "trash",
+                                role: .destructive
+                            ) {
+                                model.deleteProfileTag(tag)
+                            }
+                        }
+                    }
+                }
+            } else {
+                Text("Теги не назначены")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 7) {
+                TextField("Создать свой тег", text: $newTag)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addNewTag)
+                Button("Добавить", systemImage: "plus", action: addNewTag)
+                    .disabled(
+                        AppModel.normalizedProfileTagName(newTag).isEmpty
+                    )
+                if !availableTags.isEmpty {
+                    Menu("Существующие", systemImage: "tag") {
+                        ForEach(availableTags, id: \.self) { tag in
+                            Button(tag) {
+                                model.addProfileTag(tag, to: profileID)
+                            }
+                        }
+                    }
+                }
+            }
+            Text("До 32 символов. Один профиль может иметь несколько пользовательских тегов.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .sheet(isPresented: Binding(
+            get: { renamingTag != nil },
+            set: { if !$0 { renamingTag = nil } }
+        )) {
+            if let oldTag = renamingTag {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Переименовать тег")
+                        .font(.title2.bold())
+                    Text("Название изменится во всех профилях.")
+                        .foregroundStyle(.secondary)
+                    TextField("Новое название", text: $renamedTag)
+                        .textFieldStyle(.roundedBorder)
+                        .onSubmit { rename(oldTag) }
+                    HStack {
+                        Spacer()
+                        Button("Отмена") { renamingTag = nil }
+                        Button("Переименовать") { rename(oldTag) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                AppModel.normalizedProfileTagName(renamedTag).isEmpty
+                            )
+                    }
+                }
+                .padding(24)
+                .frame(width: 390)
+            }
+        }
+    }
+
+    private func addNewTag() {
+        guard model.addProfileTag(newTag, to: profileID) else { return }
+        newTag = ""
+    }
+
+    private func rename(_ oldTag: String) {
+        let normalized = AppModel.normalizedProfileTagName(renamedTag)
+        guard !normalized.isEmpty else { return }
+        model.renameProfileTag(oldTag, to: normalized)
+        renamingTag = nil
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height),
+            subviews: subviews
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                anchor: .topLeading,
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return (
+            CGSize(
+                width: proposal.width ?? max(0, x - spacing),
+                height: y + lineHeight
+            ),
+            points
+        )
+    }
+}
+
 private struct ProfileRow: View {
     let profile: ConnectionProfile
     let session: RDPSessionSummary?
@@ -3456,6 +3789,24 @@ private struct ProfileRow: View {
                         : activeTunnelCount > 0 ? Color.orange : Color.secondary
                 )
                     .lineLimit(1)
+                if !profile.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(profile.tags.prefix(2)), id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.11), in: Capsule())
+                                .lineLimit(1)
+                        }
+                        if profile.tags.count > 2 {
+                            Text("+\(profile.tags.count - 2)")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
         }
         .padding(.vertical, 5)
@@ -3468,6 +3819,82 @@ private struct ProfileRow: View {
               !profile.detectedOperatingSystem.isEmpty
         else { return profile.host }
         return "\(profile.host) · \(profile.detectedOperatingSystem)"
+    }
+}
+
+private struct ProfileGridCard: View {
+    let profile: ConnectionProfile
+    let isSelected: Bool
+    let session: RDPSessionSummary?
+    let hasActiveSSH: Bool
+    let activeTunnelCount: Int
+
+    private var connectionActive: Bool { session != nil || hasActiveSSH }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .top) {
+                ProfileOperatingSystemBadge(
+                    profile: profile,
+                    connectionActive: connectionActive,
+                    tunnelActive: activeTunnelCount > 0
+                )
+                Spacer()
+                if profile.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                }
+            }
+            Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+            Text(profile.host.isEmpty ? "Hostname не указан" : profile.host)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if !profile.tags.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "tag.fill")
+                    Text(profile.tags.prefix(2).joined(separator: ", "))
+                        .lineLimit(1)
+                }
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+            }
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(
+                        connectionActive
+                            ? Color.green
+                            : activeTunnelCount > 0 ? Color.orange : Color.secondary.opacity(0.45)
+                    )
+                    .frame(width: 6, height: 6)
+                Text(
+                    connectionActive
+                        ? "Подключено"
+                        : activeTunnelCount > 0 ? "Туннель активен" : profile.connectionType.title
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .background(
+            isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(
+                    isSelected ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.08),
+                    lineWidth: isSelected ? 1.5 : 1
+                )
+        }
     }
 }
 
