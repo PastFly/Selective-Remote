@@ -1,6 +1,12 @@
 name: Release DMG
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/build_app.sh"
+      - "Resources/updates.json"
   workflow_dispatch:
     inputs:
       tag:
@@ -12,7 +18,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: release-${{ inputs.tag }}
+  group: release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -26,16 +32,39 @@ jobs:
       - name: Checkout tag
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          tag="${REQUESTED_TAG:-v${version}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Release $tag already exists; nothing to publish."
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Select Swift 6 toolchain
+        if: steps.release.outputs.publish == 'true'
         run: |
           xcodebuild -version
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
       - name: Validate tag and source version
+        if: steps.release.outputs.publish == 'true'
         shell: bash
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
           version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
@@ -44,8 +73,8 @@ jobs:
           manifest_build="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["build"])')"
           manifest_download="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["downloadURL"])')"
           manifest_notes="$(python3 -c 'import json; print(json.load(open("Resources/updates.json"))["releaseNotesURL"])')"
-          if [[ "${{ inputs.tag }}" != "v${version}" ]]; then
-            echo "Tag ${{ inputs.tag }} does not match VERSION=${version}." >&2
+          if [[ "$TAG" != "v${version}" ]]; then
+            echo "Tag $TAG does not match VERSION=${version}." >&2
             exit 1
           fi
           if [[ "$manifest_version" != "$version" || "$manifest_build" != "$build" ]]; then
@@ -60,9 +89,11 @@ jobs:
           fi
 
       - name: Install build dependencies
+        if: steps.release.outputs.publish == 'true'
         run: brew install freerdp sdl3
 
       - name: Configure Developer ID signing when secrets are present
+        if: steps.release.outputs.publish == 'true'
         id: signing
         shell: bash
         env:
@@ -114,6 +145,7 @@ jobs:
           echo "enabled=true" >> "$GITHUB_OUTPUT"
 
       - name: Build, sign and notarize DMG
+        if: steps.release.outputs.publish == 'true'
         shell: bash
         env:
           SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
@@ -126,10 +158,12 @@ jobs:
           ./scripts/build_app.sh
 
       - name: Publish GitHub Release assets
+        if: steps.release.outputs.publish == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.release.outputs.tag }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -142,6 +176,21 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists. Increase VERSION and publish a new tag." >&2
             exit 1
+          fi
+          if [[ "$EVENT_NAME" == "push" ]]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
+              tag_commit="$(git rev-list -n 1 "$TAG")"
+              if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+                echo "Tag $TAG already points to $tag_commit instead of $GITHUB_SHA." >&2
+                exit 1
+              fi
+            else
+              git config user.name "github-actions[bot]"
+              git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+              git tag -a "$TAG" -m "Selective Remote ${TAG#v}" "$GITHUB_SHA"
+              git push origin "refs/tags/$TAG"
+            fi
           fi
           notes="$RUNNER_TEMP/release-notes.md"
           python3 scripts/release_notes.py "${TAG#v}" > "$notes"
