@@ -65,7 +65,9 @@ struct TerminalWorkspaceInspector: View {
     }
 
     private var catalogEntries: [TerminalBuiltInCommand] {
-        TerminalBuiltInCommandCatalog.entries.filter(matchesQuery)
+        TerminalBuiltInCommandCatalog.entries.filter { entry in
+            matchesQuery(entry)
+        }
     }
 
     private var remoteEntries: [TerminalRemoteSuggestion] {
@@ -520,10 +522,10 @@ struct TerminalWorkspaceInspector: View {
     private var headerTitle: String {
         guard mode == .history else { return mode.rawValue }
         switch historySection {
-        case .history: "История"
-        case .catalog: "Общие команды"
-        case .server: "Команды сервера"
-        case .favorites: "Избранное"
+        case .history: return "История"
+        case .catalog: return "Общие команды"
+        case .server: return "Команды сервера"
+        case .favorites: return "Избранное"
         }
     }
 
