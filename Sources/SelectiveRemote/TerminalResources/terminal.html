@@ -69,9 +69,6 @@
                 <button type="button" data-section="favorites">
                     Избранное
                 </button>
-                <button type="button" data-section="templates">
-                    Шаблоны
-                </button>
             </nav>
             <div id="history-options" class="history-options">
                 <label>
@@ -80,49 +77,87 @@
                 </label>
                 <button id="history-clear" type="button">Очистить</button>
             </div>
-            <div id="template-options" class="history-options" hidden>
-                <span>Поля вида ${service} запрашиваются при вставке</span>
-                <button id="template-add" type="button">Добавить</button>
+            <div id="snippet-options" class="history-options" hidden>
+                <button id="snippet-group-add" type="button">Новая группа</button>
+                <button id="snippet-add" type="button" class="primary">Новый сниппет</button>
             </div>
             <div id="history-list" role="list"></div>
+            <div id="snippets-list" role="tree" hidden></div>
             <div id="history-empty" hidden>
                 <strong id="command-empty-title">История пока пуста</strong>
                 <span id="command-empty-message">
                     Выполненные команды появятся здесь автоматически.
                 </span>
                 <button id="remote-context-retry" type="button" hidden>Повторить</button>
+                <button id="snippet-empty-add" type="button" hidden>Новый сниппет</button>
             </div>
-            <footer>
+            <div id="snippet-feedback" role="status" hidden></div>
+            <footer id="command-panel-footer">
                 Строки с пробелом в начале и признаками секретов не сохраняются.
             </footer>
         </aside>
-        <dialog id="template-dialog" aria-labelledby="template-dialog-title">
-            <form id="template-form" method="dialog">
-                <h3 id="template-dialog-title">Шаблон команды</h3>
-                <input id="template-id" type="hidden">
+        <dialog id="snippet-dialog" aria-labelledby="snippet-dialog-title">
+            <form id="snippet-form" method="dialog">
+                <h3 id="snippet-dialog-title">Сниппет</h3>
+                <input id="snippet-id" type="hidden">
                 <label>
-                    <span>Название</span>
-                    <input id="template-title" maxlength="80" required autocomplete="off">
+                    <span id="snippet-title-label">Название</span>
+                    <input id="snippet-title" maxlength="80" required autocomplete="off">
                 </label>
                 <label>
-                    <span>Категория</span>
-                    <input id="template-category" maxlength="60" value="Мои команды" autocomplete="off">
+                    <span id="snippet-group-label">Группа</span>
+                    <select id="snippet-group" required></select>
                 </label>
                 <label>
-                    <span>Команда</span>
-                    <textarea id="template-command" maxlength="8192" rows="5" required spellcheck="false" placeholder="sudo systemctl restart ${service}"></textarea>
+                    <span id="snippet-command-label">Команда или скрипт</span>
+                    <textarea id="snippet-command" maxlength="8192" rows="7" required spellcheck="false" placeholder="docker ps"></textarea>
                 </label>
-                <p>Шаблон только подставляется в терминал и не запускается автоматически.</p>
                 <menu>
-                    <button id="template-cancel" type="button">Отмена</button>
-                    <button type="submit" class="primary">Сохранить</button>
+                    <button id="snippet-cancel" type="button">Отмена</button>
+                    <button id="snippet-save" type="submit" class="primary">Сохранить</button>
                 </menu>
             </form>
         </dialog>
+        <dialog id="snippet-group-dialog" aria-labelledby="snippet-group-dialog-title">
+            <form id="snippet-group-form" method="dialog">
+                <h3 id="snippet-group-dialog-title">Новая группа</h3>
+                <input id="snippet-group-id" type="hidden">
+                <label>
+                    <span id="snippet-group-name-label">Название группы</span>
+                    <input id="snippet-group-name" maxlength="60" required autocomplete="off">
+                </label>
+                <menu>
+                    <button id="snippet-group-cancel" type="button">Отмена</button>
+                    <button id="snippet-group-save" type="submit" class="primary">Создать</button>
+                </menu>
+            </form>
+        </dialog>
+        <dialog id="snippet-move-dialog" aria-labelledby="snippet-move-dialog-title">
+            <form id="snippet-move-form" method="dialog">
+                <h3 id="snippet-move-dialog-title">Переместить в группу</h3>
+                <input id="snippet-move-id" type="hidden">
+                <label>
+                    <span id="snippet-move-group-label">Группа</span>
+                    <select id="snippet-move-group" required></select>
+                </label>
+                <menu>
+                    <button id="snippet-move-cancel" type="button">Отмена</button>
+                    <button id="snippet-move-save" type="submit" class="primary">Переместить</button>
+                </menu>
+            </form>
+        </dialog>
+        <div id="snippet-context-menu" class="terminal-popover snippet-context-menu" hidden>
+            <button type="button" data-action="run">Выполнить</button>
+            <button type="button" data-action="edit">Изменить</button>
+            <button type="button" data-action="duplicate">Дублировать</button>
+            <button type="button" data-action="move">Переместить</button>
+            <button type="button" data-action="remove" class="destructive">Удалить</button>
+        </div>
     </main>
     <script src="xterm.js"></script>
     <script src="addon-fit.js"></script>
     <script src="terminal-command-catalog.js"></script>
+    <script src="terminal-snippet-interactions.js"></script>
     <script src="terminal-host.js"></script>
 </body>
 </html>

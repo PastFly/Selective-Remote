@@ -76,7 +76,7 @@ func terminalHistoryProgrammaticHideDoesNotRefocusOldPane() throws {
 
     #expect(
         swiftSource.contains(
-            "selectiveTerminalSetHistoryVisible?.(\\(visible ? \"true\" : \"false\"), false, false)"
+            "selectiveTerminalSetPanelMode?.('\\(mode)', false, false)"
         )
     )
     #expect(hostScript.contains("restoreTerminalFocus = true"))

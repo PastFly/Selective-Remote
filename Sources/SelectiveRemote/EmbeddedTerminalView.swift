@@ -28,6 +28,7 @@ private enum TerminalResourceLocator {
 }
 
 struct EmbeddedTerminalWebView: NSViewRepresentable {
+    @Environment(\.locale) private var locale
     @ObservedObject var session: TerminalSessionModel
     let appearance: TerminalAppearanceSnapshot
     let historyContext: TerminalHistoryContext?
@@ -37,7 +38,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
     let onInput: (Data) -> Void
     let onTabNavigation: (Int) -> Void
     let onSmartLink: (TerminalSmartLink) -> Void
+    let onSnippetRun: (String) -> TerminalSnippetRunResult
     @Binding var historyVisible: Bool
+    @Binding var snippetsVisible: Bool
 
     init(
         session: TerminalSessionModel,
@@ -49,7 +52,11 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         onInput: ((Data) -> Void)? = nil,
         onTabNavigation: @escaping (Int) -> Void = { _ in },
         onSmartLink: @escaping (TerminalSmartLink) -> Void = { _ in },
-        historyVisible: Binding<Bool> = .constant(false)
+        onSnippetRun: @escaping (String) -> TerminalSnippetRunResult = { _ in
+            .inactiveSession
+        },
+        historyVisible: Binding<Bool> = .constant(false),
+        snippetsVisible: Binding<Bool> = .constant(false)
     ) {
         self.session = session
         self.appearance = appearance
@@ -60,13 +67,16 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         self.onInput = onInput ?? { _ in }
         self.onTabNavigation = onTabNavigation
         self.onSmartLink = onSmartLink
+        self.onSnippetRun = onSnippetRun
         _historyVisible = historyVisible
+        _snippetsVisible = snippetsVisible
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
             session: session,
             appearance: appearance,
+            languageCode: locale.identifier.lowercased().hasPrefix("en") ? "en" : "ru",
             historyContext: historyContext,
             remoteContext: remoteContext,
             onRemoteContextRetry: onRemoteContextRetry,
@@ -74,7 +84,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onInput: onInput,
             onTabNavigation: onTabNavigation,
             onSmartLink: onSmartLink,
-            historyVisible: _historyVisible
+            onSnippetRun: onSnippetRun,
+            historyVisible: _historyVisible,
+            snippetsVisible: _snippetsVisible
         )
     }
 
@@ -138,15 +150,22 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
 
     func updateNSView(_ webView: WKWebView, context: Context) {
         context.coordinator.updateHistoryContext(historyContext)
+        context.coordinator.updateLanguageCode(
+            locale.identifier.lowercased().hasPrefix("en") ? "en" : "ru"
+        )
         context.coordinator.updateRemoteContext(remoteContext)
         context.coordinator.updateRemoteContextRetryHandler(onRemoteContextRetry)
         context.coordinator.updateFocusHandler(onFocus)
         context.coordinator.updateInputHandler(onInput)
         context.coordinator.updateTabNavigationHandler(onTabNavigation)
         context.coordinator.updateSmartLinkHandler(onSmartLink)
+        context.coordinator.updateSnippetRunHandler(onSnippetRun)
         context.coordinator.updateSession(session)
         context.coordinator.updateAppearance(appearance)
-        context.coordinator.updateHistoryVisibility(historyVisible)
+        context.coordinator.updatePanelVisibility(
+            historyVisible: historyVisible,
+            snippetsVisible: snippetsVisible
+        )
     }
 
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
@@ -187,6 +206,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private weak var webView: WKWebView?
         private var observerID: UUID?
         private var appearance: TerminalAppearanceSnapshot
+        private var languageCode: String
         private var historyContext: TerminalHistoryContext?
         private var remoteContext: TerminalRemoteContextSnapshot
         private var onRemoteContextRetry: () -> Void
@@ -194,8 +214,10 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         private var onInput: (Data) -> Void
         private var onTabNavigation: (Int) -> Void
         private var onSmartLink: (TerminalSmartLink) -> Void
+        private var onSnippetRun: (String) -> TerminalSnippetRunResult
         private var historyVisible: Binding<Bool>
-        private var appliedHistoryVisibility: Bool?
+        private var snippetsVisible: Binding<Bool>
+        private var appliedPanelMode: String?
         private var pageReady = false
         private var pendingBase64: [String] = []
         private var writeInFlight = false
@@ -204,6 +226,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         init(
             session: TerminalSessionModel,
             appearance: TerminalAppearanceSnapshot,
+            languageCode: String,
             historyContext: TerminalHistoryContext?,
             remoteContext: TerminalRemoteContextSnapshot,
             onRemoteContextRetry: @escaping () -> Void,
@@ -211,10 +234,13 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onInput: @escaping (Data) -> Void,
             onTabNavigation: @escaping (Int) -> Void,
             onSmartLink: @escaping (TerminalSmartLink) -> Void,
-            historyVisible: Binding<Bool>
+            onSnippetRun: @escaping (String) -> TerminalSnippetRunResult,
+            historyVisible: Binding<Bool>,
+            snippetsVisible: Binding<Bool>
         ) {
             self.session = session
             self.appearance = appearance
+            self.languageCode = languageCode
             self.historyContext = historyContext
             self.remoteContext = remoteContext
             self.onRemoteContextRetry = onRemoteContextRetry
@@ -222,7 +248,9 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             self.onInput = onInput
             self.onTabNavigation = onTabNavigation
             self.onSmartLink = onSmartLink
+            self.onSnippetRun = onSnippetRun
             self.historyVisible = historyVisible
+            self.snippetsVisible = snippetsVisible
         }
 
         func attach(to webView: WKWebView) {
@@ -245,6 +273,12 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             guard appearance != updated else { return }
             appearance = updated
             applyAppearance()
+        }
+
+        func updateLanguageCode(_ updated: String) {
+            guard languageCode != updated else { return }
+            languageCode = updated
+            applyLanguage()
         }
 
         func updateHistoryContext(_ updated: TerminalHistoryContext?) {
@@ -281,19 +315,26 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             onSmartLink = updated
         }
 
-        func updateHistoryVisibility(_ visible: Bool) {
+        func updateSnippetRunHandler(
+            _ updated: @escaping (String) -> TerminalSnippetRunResult
+        ) {
+            onSnippetRun = updated
+        }
+
+        func updatePanelVisibility(historyVisible: Bool, snippetsVisible: Bool) {
             guard pageReady else {
-                appliedHistoryVisibility = nil
+                appliedPanelMode = nil
                 return
             }
-            guard appliedHistoryVisibility != visible else { return }
-            appliedHistoryVisibility = visible
+            let mode = snippetsVisible ? "snippets" : (historyVisible ? "history" : "hidden")
+            guard appliedPanelMode != mode else { return }
+            appliedPanelMode = mode
             webView?.evaluateJavaScript(
-                // Swift synchronizes history visibility when the active grid pane
-                // changes. Do not return focus to a pane merely because its history
-                // panel is being hidden programmatically: that focus event would
+                // Swift synchronizes quick-panel visibility when the active grid pane
+                // changes. Do not return focus to a pane merely because its panel
+                // is being hidden programmatically: that focus event would
                 // select the old pane again and make two panes bounce forever.
-                "window.selectiveTerminalSetHistoryVisible?.(\(visible ? "true" : "false"), false, false)"
+                "window.selectiveTerminalSetPanelMode?.('\(mode)', false, false)"
             )
         }
 
@@ -302,8 +343,8 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             webView = nil
             pageReady = false
             writeInFlight = false
+            appliedPanelMode = nil
             pendingBase64.removeAll()
-            appliedHistoryVisibility = nil
         }
 
         func requestFit() {
@@ -362,10 +403,14 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
             pageReady = true
             applyAppearance()
+            applyLanguage()
             requestFit()
             drainOutputQueue()
             refreshHistory()
-            updateHistoryVisibility(historyVisible.wrappedValue)
+            updatePanelVisibility(
+                historyVisible: historyVisible.wrappedValue,
+                snippetsVisible: snippetsVisible.wrappedValue
+            )
             webView.evaluateJavaScript("window.selectiveTerminalFocus?.()")
 
             // A host switch can recreate the WebView while the PTY keeps running.
@@ -390,7 +435,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             navigationGeneration += 1
             pageReady = false
             writeInFlight = false
-            appliedHistoryVisibility = nil
+            appliedPanelMode = nil
             pendingBase64.removeAll(keepingCapacity: true)
             detachObserver()
             observeSession()
@@ -460,6 +505,13 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
             )
         }
 
+        private func applyLanguage() {
+            guard pageReady else { return }
+            webView?.evaluateJavaScript(
+                "window.selectiveTerminalSetLanguage?.('\(languageCode)')"
+            )
+        }
+
         private func handleHistoryMessage(_ body: Any) {
             guard let payload = body as? [String: Any],
                   let action = payload["action"] as? String
@@ -495,12 +547,13 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 guard let command = payload["command"] as? String else { return }
                 _ = store.toggleFavorite(command: command, profileID: context.profileID)
                 refreshHistory()
-            case "saveTemplate":
+            case "saveTemplate", "saveSnippet":
                 let id = (payload["id"] as? String).flatMap(UUID.init(uuidString:))
                 guard let title = payload["title"] as? String,
                       let command = payload["command"] as? String
                 else { return }
-                let category = payload["category"] as? String ?? "Мои команды"
+                let category = payload["category"] as? String
+                    ?? TerminalCommandHistoryStore.defaultSnippetGroupName
                 _ = store.saveTemplate(
                     id: id,
                     title: title,
@@ -509,20 +562,83 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                     profileID: context.profileID
                 )
                 refreshHistory()
-            case "removeTemplate":
+            case "removeTemplate", "removeSnippet":
                 guard let value = payload["id"] as? String,
                       let id = UUID(uuidString: value)
                 else { return }
                 store.removeTemplate(id: id, profileID: context.profileID)
                 refreshHistory()
+            case "createSnippetGroup":
+                guard let name = payload["name"] as? String else { return }
+                _ = store.createSnippetGroup(name: name, profileID: context.profileID)
+                refreshHistory()
+            case "renameSnippetGroup":
+                guard let value = payload["id"] as? String,
+                      let id = UUID(uuidString: value),
+                      let name = payload["name"] as? String
+                else { return }
+                _ = store.renameSnippetGroup(
+                    id: id,
+                    name: name,
+                    profileID: context.profileID
+                )
+                refreshHistory()
+            case "removeSnippetGroup":
+                guard let value = payload["id"] as? String,
+                      let id = UUID(uuidString: value)
+                else { return }
+                _ = store.removeSnippetGroup(id: id, profileID: context.profileID)
+                refreshHistory()
+            case "duplicateSnippet":
+                guard let value = payload["id"] as? String,
+                      let id = UUID(uuidString: value)
+                else { return }
+                _ = store.duplicateTemplate(id: id, profileID: context.profileID)
+                refreshHistory()
+            case "moveSnippet":
+                guard let snippetValue = payload["id"] as? String,
+                      let snippetID = UUID(uuidString: snippetValue),
+                      let groupValue = payload["groupID"] as? String,
+                      let groupID = UUID(uuidString: groupValue)
+                else { return }
+                _ = store.moveTemplate(
+                    id: snippetID,
+                    toGroupID: groupID,
+                    profileID: context.profileID
+                )
+                refreshHistory()
+            case "runSnippet":
+                guard let value = payload["id"] as? String,
+                      let id = UUID(uuidString: value),
+                      let snippet = store.template(id: id, profileID: context.profileID)
+                else {
+                    reportSnippetRun(.invalidSnippet)
+                    return
+                }
+                let command = payload["command"] as? String ?? snippet.command
+                reportSnippetRun(onSnippetRun(command))
             case "visibility":
                 guard let visible = (payload["visible"] as? NSNumber)?.boolValue
                 else { return }
-                appliedHistoryVisibility = visible
+                appliedPanelMode = visible ? "history" : "hidden"
                 historyVisible.wrappedValue = visible
+                if visible { snippetsVisible.wrappedValue = false }
+            case "panelVisibility":
+                guard let mode = payload["mode"] as? String,
+                      ["hidden", "history", "snippets"].contains(mode)
+                else { return }
+                appliedPanelMode = mode
+                historyVisible.wrappedValue = mode == "history"
+                snippetsVisible.wrappedValue = mode == "snippets"
             default:
                 break
             }
+        }
+
+        private func reportSnippetRun(_ result: TerminalSnippetRunResult) {
+            webView?.evaluateJavaScript(
+                "window.selectiveTerminalReportSnippetRun?.('\(result.rawValue)')"
+            )
         }
 
         private func refreshHistory() {
@@ -556,6 +672,7 @@ private final class TerminalWKWebView: WKWebView {
 }
 
 struct SSHTerminalView: View {
+    @Environment(\.locale) private var locale
     @ObservedObject var workspace: TerminalWorkspaceModel
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
@@ -574,6 +691,7 @@ struct SSHTerminalView: View {
 
     @State private var showsAppearance = false
     @State private var showsHistory = false
+    @State private var showsSnippets = false
     @State private var showsServerCommands = false
     @State private var refreshingContextTabIDs: Set<UUID> = []
     @State private var remoteContextRequestIDs: [UUID: UUID] = [:]
@@ -843,6 +961,7 @@ struct SSHTerminalView: View {
             .help("Команды сервера")
 
             Button {
+                showsSnippets = false
                 showsHistory.toggle()
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
@@ -850,6 +969,16 @@ struct SSHTerminalView: View {
             }
             .buttonStyle(.bordered)
             .help("История и подсказки")
+
+            Button {
+                showsHistory = false
+                showsSnippets.toggle()
+            } label: {
+                Image(systemName: "text.badge.plus")
+                    .font(.title3)
+            }
+            .buttonStyle(.bordered)
+            .help(locale.identifier.lowercased().hasPrefix("en") ? "Snippets" : "Сниппеты")
 
             if isFocusMode {
                 Button("Вернуть интерфейс", systemImage: "arrow.down.right.and.arrow.up.left") {
@@ -1504,6 +1633,9 @@ struct SSHTerminalView: View {
                         NSPasteboard.general.setString(link.value, forType: .string)
                     }
                 },
+                onSnippetRun: { command in
+                    runSnippet(command, in: tab.id)
+                },
                 historyVisible: Binding(
                     get: { showsHistory && tab.id == workspace.selectedTabID },
                     set: { visible in
@@ -1513,6 +1645,15 @@ struct SSHTerminalView: View {
                         // other while the history panel is open.
                         guard tab.id == workspace.selectedTabID else { return }
                         showsHistory = visible
+                        if visible { showsSnippets = false }
+                    }
+                ),
+                snippetsVisible: Binding(
+                    get: { showsSnippets && tab.id == workspace.selectedTabID },
+                    set: { visible in
+                        guard tab.id == workspace.selectedTabID else { return }
+                        showsSnippets = visible
+                        if visible { showsHistory = false }
                     }
                 )
             )
@@ -1866,6 +2007,29 @@ struct SSHTerminalView: View {
                 for: tabID
             )
         }
+    }
+
+    private func runSnippet(
+        _ command: String,
+        in tabID: UUID
+    ) -> TerminalSnippetRunResult {
+        guard TerminalSnippetExecution.canRun(
+            originTabID: tabID,
+            selectedTabID: workspace.selectedTabID,
+            sessionIsRunning: workspace.tabs.first(where: { $0.id == tabID })?.session.isRunning
+                == true
+        ), let tab = workspace.tabs.first(where: { $0.id == tabID }),
+           let input = TerminalSnippetExecution.inputData(for: command)
+        else { return .inactiveSession }
+
+        _ = TerminalCommandHistoryStore.shared.record(
+            command: command,
+            profileID: historyContextID(for: tab)
+        )
+        // Snippets intentionally bypass broadcast mode: their scope is exactly
+        // the selected terminal session that originated the run request.
+        tab.session.sendInput(input)
+        return .success
     }
 
     private func runServerCommand(_ rawCommand: String, in tabID: UUID) {
