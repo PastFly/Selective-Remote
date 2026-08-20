@@ -134,6 +134,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     )!
 
     @Published private(set) var snippetRevision = 0
+    @Published private(set) var historyRevision = 0
 
     private enum Key {
         static let entries = "SelectiveRemote.terminal.commandHistory.v1"
@@ -703,11 +704,13 @@ final class TerminalCommandHistoryStore: ObservableObject {
     private func persist() {
         guard let data = try? JSONEncoder().encode(storedEntries) else { return }
         defaults.set(data, forKey: Key.entries)
+        historyRevision &+= 1
     }
 
     private func persistFavorites() {
         guard let data = try? JSONEncoder().encode(storedFavorites) else { return }
         defaults.set(data, forKey: Key.favorites)
+        historyRevision &+= 1
     }
 
     private func persistTemplates() {

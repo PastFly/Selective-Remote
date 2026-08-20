@@ -160,8 +160,11 @@ func focusModeExposesVisibleRestoreInterfaceButton() throws {
     )
 
     #expect(source.contains("if isFocusMode {\n                Button(\"Вернуть интерфейс\""))
-    #expect(source.contains("if !isFocusMode {\n                    Button(\"Развернуть терминал\""))
+    #expect(source.contains("} else {\n                Button(\"Развернуть терминал\""))
     #expect(!source.contains("Button(isFocusMode ? \"Вернуть интерфейс\""))
+    let expandButton = try #require(source.range(of: "Button(\"Развернуть терминал\""))
+    let actionsMenu = try #require(source.range(of: "Menu {", range: expandButton.upperBound..<source.endIndex))
+    #expect(expandButton.lowerBound < actionsMenu.lowerBound)
     #expect(source.contains("private var gridEmptyPane: some View"))
 }
 

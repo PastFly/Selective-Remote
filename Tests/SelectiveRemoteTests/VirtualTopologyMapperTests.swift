@@ -1180,6 +1180,27 @@ func migratesLegacyClipboardFlag() throws {
     #expect(profile.mapRightCommandToWindows)
     #expect(profile.fnSwitchesWindowsLanguage)
     #expect(profile.rdpWindowMode == .fullScreen)
+    #expect(profile.detectedOperatingSystem.isEmpty)
+    #expect(profile.detectedOperatingSystemID.isEmpty)
+    #expect(profile.detectedOperatingSystemLike.isEmpty)
+    #expect(profile.operatingSystemDetectedAt == nil)
+}
+
+@Test("Определённая ОС сохраняется в SSH-профиле")
+func roundTripsDetectedOperatingSystem() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.detectedOperatingSystem = "Ubuntu 24.04"
+    profile.detectedOperatingSystemID = "ubuntu"
+    profile.detectedOperatingSystemLike = "debian"
+    profile.operatingSystemDetectedAt = Date(timeIntervalSince1970: 1_700_000_000)
+
+    let data = try JSONEncoder().encode(profile)
+    let restored = try JSONDecoder().decode(ConnectionProfile.self, from: data)
+
+    #expect(restored.detectedOperatingSystem == "Ubuntu 24.04")
+    #expect(restored.detectedOperatingSystemID == "ubuntu")
+    #expect(restored.detectedOperatingSystemLike == "debian")
+    #expect(restored.operatingSystemDetectedAt == profile.operatingSystemDetectedAt)
 }
 
 @Test("Архив SelectiveRemote переносит профили без паролей")

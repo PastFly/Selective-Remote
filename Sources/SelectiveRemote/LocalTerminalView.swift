@@ -92,21 +92,30 @@ struct LocalTerminalView: View {
             .buttonStyle(.bordered)
             .help("Сниппеты: вставить, скопировать или выполнить")
 
-            Menu {
-                Button("Выбрать рабочую папку…", systemImage: "folder") {
-                    chooseWorkingDirectory(for: selectedTab)
-                }
-                .disabled(selectedTab.session.isRunning)
-                Button("Очистить терминал", systemImage: "eraser") {
-                    selectedTab.session.clear()
-                }
-                Button("Оформление", systemImage: "paintpalette") {
-                    showsAppearance = true
-                }
+            Button {
+                chooseWorkingDirectory(for: selectedTab)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "folder")
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.bordered)
+            .disabled(selectedTab.session.isRunning)
+            .help("Выбрать рабочую папку")
+
+            Button {
+                selectedTab.session.clear()
+            } label: {
+                Image(systemName: "eraser")
+            }
+            .buttonStyle(.bordered)
+            .help("Очистить терминал")
+
+            Button {
+                showsAppearance.toggle()
+            } label: {
+                Image(systemName: "paintpalette")
+            }
+            .buttonStyle(.bordered)
+            .help("Оформление терминала")
             .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
                 TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
             }

@@ -1987,6 +1987,9 @@ struct ContentView: View {
                 )
                 selectedTab = .sftp
             },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
+            },
             executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
                 try await model.discoverTerminalContext(
@@ -2039,6 +2042,9 @@ struct ContentView: View {
                     path: path
                 )
                 setMainArea(.sftp)
+            },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
             },
             executeSnippet: model.runTerminalSnippet,
             discoverContext: { tab in
@@ -2274,6 +2280,32 @@ struct ContentView: View {
                             TextField("22", value: profileBinding.sshPort, format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 130, alignment: .leading)
+                        }
+                        GridRow {
+                            Text("Операционная система")
+                            HStack(spacing: 9) {
+                                let style = ProfileOperatingSystemStyle.resolve(for: profile)
+                                Image(systemName: style.systemImage)
+                                    .foregroundStyle(style.colors.first ?? Color.secondary)
+                                    .frame(width: 20)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(
+                                        profile.detectedOperatingSystem.isEmpty
+                                            ? "Определится после первого SSH-подключения"
+                                            : profile.detectedOperatingSystem
+                                    )
+                                    .foregroundStyle(
+                                        profile.detectedOperatingSystem.isEmpty
+                                            ? Color.secondary
+                                            : Color.primary
+                                    )
+                                    if let date = profile.operatingSystemDetectedAt {
+                                        Text("Обновлено \(date.formatted(date: .abbreviated, time: .shortened))")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -3394,31 +3426,11 @@ private struct ProfileRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ZStack(alignment: .bottomTrailing) {
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: session == nil && !hasActiveSSH
-                                ? profile.connectionType == .ssh
-                                    ? [Color.purple.opacity(0.82), Color.indigo.opacity(0.80)]
-                                    : [Color.blue.opacity(0.82), Color.indigo.opacity(0.80)]
-                                : [Color.green.opacity(0.88), Color.teal.opacity(0.82)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                    .frame(width: 34, height: 34)
-                Image(systemName: profile.connectionType.systemImage)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.white)
-                if session != nil || hasActiveSSH || activeTunnelCount > 0 {
-                    Circle()
-                        .fill(session != nil || hasActiveSSH ? Color.green : Color.orange)
-                        .frame(width: 9, height: 9)
-                        .overlay(Circle().stroke(Color(nsColor: .windowBackgroundColor), lineWidth: 2))
-                        .offset(x: 2, y: 2)
-                }
-            }
+            ProfileOperatingSystemBadge(
+                profile: profile,
+                connectionActive: session != nil || hasActiveSSH,
+                tunnelActive: activeTunnelCount > 0
+            )
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
                     Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
@@ -3435,7 +3447,7 @@ private struct ProfileRow: View {
                             ? "SSH-сессия активна"
                             : activeTunnelCount > 0
                             ? "Туннелей: \(activeTunnelCount)"
-                            : profile.host.isEmpty ? "Hostname не указан" : profile.host)
+                            : inactiveProfileSubtitle)
                 )
                     .font(.caption)
                 .foregroundStyle(
@@ -3448,6 +3460,14 @@ private struct ProfileRow: View {
         }
         .padding(.vertical, 5)
         .contentShape(Rectangle())
+    }
+
+    private var inactiveProfileSubtitle: String {
+        guard !profile.host.isEmpty else { return "Hostname не указан" }
+        guard profile.connectionType == .ssh,
+              !profile.detectedOperatingSystem.isEmpty
+        else { return profile.host }
+        return "\(profile.host) · \(profile.detectedOperatingSystem)"
     }
 }
 

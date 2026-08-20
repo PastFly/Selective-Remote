@@ -3768,10 +3768,37 @@ final class AppModel: NSObject, ObservableObject {
             jumpHostPromptTokens: settings.jumpHostPromptTokens,
             requiresUserPresence: false
         )
-        return try await TerminalRemoteContextService.discover(
+        let snapshot = try await TerminalRemoteContextService.discover(
             settings: settings,
             environment: environment
         )
+        persistDetectedOperatingSystem(snapshot, for: connection)
+        return snapshot
+    }
+
+    private func persistDetectedOperatingSystem(
+        _ snapshot: TerminalRemoteContextSnapshot,
+        for connection: TerminalTabConnection
+    ) {
+        guard let profileID = connection.profileID,
+              let index = profiles.firstIndex(where: {
+                  $0.id == profileID && $0.connectionType == .ssh
+              })
+        else { return }
+
+        let label = snapshot.systemLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !label.isEmpty else { return }
+        let osID = snapshot.osID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let osLike = snapshot.osLike.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard profiles[index].detectedOperatingSystem != label
+                || profiles[index].detectedOperatingSystemID != osID
+                || profiles[index].detectedOperatingSystemLike != osLike
+        else { return }
+
+        profiles[index].detectedOperatingSystem = label
+        profiles[index].detectedOperatingSystemID = osID
+        profiles[index].detectedOperatingSystemLike = osLike
+        profiles[index].operatingSystemDetectedAt = snapshot.refreshedAt ?? Date()
     }
 
     func reconnectSelectedProfile() {

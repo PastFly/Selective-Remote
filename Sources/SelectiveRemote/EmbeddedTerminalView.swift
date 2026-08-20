@@ -711,6 +711,7 @@ struct SSHTerminalView: View {
     let toggleFocusMode: () -> Void
     let openSFTP: (TerminalWorkspaceTab) -> Void
     let openSFTPPath: (TerminalWorkspaceTab, String) -> Void
+    let openSnippetLibrary: () -> Void
     let executeSnippet: (TerminalCommandTemplate) -> TerminalSnippetRunResult
     let discoverContext: (TerminalWorkspaceTab) async throws -> TerminalRemoteContextSnapshot
 
@@ -745,7 +746,7 @@ struct SSHTerminalView: View {
                 broadcastBanner
             }
 
-            terminalWorkspace
+            terminalWorkspaceWithInspector
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 280)
                 .layoutPriority(1)
@@ -1011,6 +1012,12 @@ struct SSHTerminalView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .help("Показать боковую панель и обычный интерфейс приложения")
+            } else {
+                Button("Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    toggleFocusMode()
+                }
+                .buttonStyle(.bordered)
+                .help("Скрыть навигацию и отдать терминалам максимум места")
             }
 
             Menu {
@@ -1044,11 +1051,6 @@ struct SSHTerminalView: View {
                 Divider()
                 Button("Палитра действий", systemImage: "command") { showsCommandPalette = true }
                 Button("Оформление", systemImage: "paintpalette") { showsAppearance.toggle() }
-                if !isFocusMode {
-                    Button("Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
-                        toggleFocusMode()
-                    }
-                }
                 if hasInstallableKey && tab.isPrimary && !tab.session.isRunning {
                     Divider()
                     Button("Установить SSH-ключ", systemImage: "key.horizontal") { installKey() }
@@ -1357,6 +1359,52 @@ struct SSHTerminalView: View {
         .buttonStyle(.bordered)
         .padding(22)
         .frame(width: 430)
+    }
+
+    private var workspaceInspectorMode: TerminalWorkspaceInspectorMode {
+        showsSnippets ? .snippets : .history
+    }
+
+    private var workspaceInspectorVisible: Bool {
+        workspace.layout == .grid && (showsHistory || showsSnippets)
+    }
+
+    @ViewBuilder
+    private var terminalWorkspaceWithInspector: some View {
+        HStack(spacing: 8) {
+            terminalWorkspace
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if workspaceInspectorVisible {
+                let tab = workspace.selectedTab
+                TerminalWorkspaceInspector(
+                    store: snippetStore,
+                    mode: workspaceInspectorMode,
+                    profileID: historyContextID(for: tab),
+                    terminalTitle: tab.title,
+                    sessionIsRunning: tab.session.isRunning,
+                    selectMode: { mode in
+                        showsHistory = mode == .history
+                        showsSnippets = mode == .snippets
+                    },
+                    close: {
+                        showsHistory = false
+                        showsSnippets = false
+                    },
+                    insert: { command in
+                        replaceCurrentLine(command, run: false)
+                    },
+                    runHere: { command in
+                        replaceCurrentLine(command, run: true)
+                    },
+                    runOnTargets: executeSnippet,
+                    openSnippetLibrary: openSnippetLibrary
+                )
+                .frame(maxHeight: .infinity)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.20), value: workspaceInspectorVisible)
     }
 
     @ViewBuilder
@@ -1668,21 +1716,33 @@ struct SSHTerminalView: View {
                 },
                 onSnippetRun: executeSnippet,
                 historyVisible: Binding(
-                    get: { showsHistory && tab.id == workspace.selectedTabID },
+                    get: {
+                        workspace.layout != .grid
+                            && showsHistory
+                            && tab.id == workspace.selectedTabID
+                    },
                     set: { visible in
                         // Each pane owns a WKWebView and can report its history visibility
                         // asynchronously. Ignore stale callbacks from a pane that stopped
                         // being active, otherwise two grid panes can keep re-selecting each
                         // other while the history panel is open.
-                        guard tab.id == workspace.selectedTabID else { return }
+                        guard workspace.layout != .grid,
+                              tab.id == workspace.selectedTabID
+                        else { return }
                         showsHistory = visible
                         if visible { showsSnippets = false }
                     }
                 ),
                 snippetsVisible: Binding(
-                    get: { showsSnippets && tab.id == workspace.selectedTabID },
+                    get: {
+                        workspace.layout != .grid
+                            && showsSnippets
+                            && tab.id == workspace.selectedTabID
+                    },
                     set: { visible in
-                        guard tab.id == workspace.selectedTabID else { return }
+                        guard workspace.layout != .grid,
+                              tab.id == workspace.selectedTabID
+                        else { return }
                         showsSnippets = visible
                         if visible { showsHistory = false }
                     }
@@ -1742,6 +1802,20 @@ struct SSHTerminalView: View {
                 ? Color.accentColor.opacity(0.20)
                 : (broadcastTarget ? Color.orange.opacity(0.16) : Color.clear),
             radius: isSelected || broadcastTarget ? 8 : 0
+        )
+    }
+
+    private func replaceCurrentLine(_ command: String, run: Bool) {
+        let normalized = command.trimmingCharacters(in: .newlines)
+        guard !normalized.isEmpty,
+              !normalized.contains("\0"),
+              workspace.selectedTab.session.isRunning
+        else { return }
+        let suffix = run ? "\r" : ""
+        workspace.sendInput(
+            Data(("\u{15}\(normalized)\(suffix)").utf8),
+            from: workspace.selectedTabID,
+            broadcast: false
         )
     }
 

@@ -55,3 +55,10 @@ test("snippet deletion posts the command without an unsupported WKWebView confir
         /window\.confirm\(snippetText\("deleteSnippetConfirm"\)/
     );
 });
+
+test("terminal selection keeps readable contrast and hides the syntax overlay", () => {
+    assert.match(hostScript, /selectionForeground: "#FFFFFF"/);
+    assert.match(hostScript, /terminal\.hasSelection\(\)/);
+    assert.match(hostScript, /terminal\.onSelectionChange/);
+    assert.match(hostScript, /luminance > 160 \? "#111827" : "#FFFFFF"/);
+});

@@ -159,6 +159,7 @@
             cursor: "#36D399",
             cursorAccent: "#101421",
             selectionBackground: "#32527B99",
+            selectionForeground: "#FFFFFF",
             black: "#101421",
             red: "#FF6B7A",
             green: "#36D399",
@@ -673,7 +674,7 @@
     };
 
     const renderInputHighlight = () => {
-        if (!syntaxHighlightingEnabled || isAlternateScreen()) {
+        if (!syntaxHighlightingEnabled || isAlternateScreen() || terminal.hasSelection()) {
             inputHighlightElement.replaceChildren();
             inputHighlightElement.hidden = true;
             return;
@@ -1910,6 +1911,14 @@
     terminal.onScroll(() => {
         scheduleInputHighlightRender();
     });
+    terminal.onSelectionChange(() => {
+        if (terminal.hasSelection()) {
+            inputHighlightElement.replaceChildren();
+            inputHighlightElement.hidden = true;
+        } else {
+            scheduleInputHighlightRender();
+        }
+    });
     terminalHost.addEventListener("pointerdown", notifyHostFocus, true);
     terminalHost.addEventListener("focusin", notifyHostFocus, true);
 
@@ -2014,8 +2023,7 @@
             inputHighlightElement.hidden = true;
         }
         if (settings.theme && typeof settings.theme === "object") {
-            terminal.options.theme = settings.theme;
-            const theme = settings.theme;
+            const theme = { ...settings.theme };
             const rootStyle = document.documentElement.style;
             if (typeof theme.foreground === "string") {
                 rootStyle.setProperty("--terminal-foreground", theme.foreground);
@@ -2041,12 +2049,14 @@
                     );
                     document.documentElement.style.colorScheme =
                         luminance > 160 ? "light" : "dark";
+                    theme.selectionForeground = luminance > 160 ? "#111827" : "#FFFFFF";
                 }
                 document.documentElement.style.setProperty(
                     "--terminal-background",
                     settings.theme.background
                 );
             }
+            terminal.options.theme = theme;
         }
         if (settings.syntaxPalette && typeof settings.syntaxPalette === "object") {
             const syntax = settings.syntaxPalette;
