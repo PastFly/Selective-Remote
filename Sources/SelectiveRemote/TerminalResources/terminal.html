@@ -112,6 +112,11 @@
                     <span id="snippet-command-label">Команда или скрипт</span>
                     <textarea id="snippet-command" maxlength="8192" rows="7" required spellcheck="false" placeholder="docker ps"></textarea>
                 </label>
+                <fieldset id="snippet-targets-field">
+                    <legend id="snippet-targets-label">Targets · до 8 SSH-профилей</legend>
+                    <div id="snippet-targets-list"></div>
+                    <span id="snippet-targets-error" role="alert" hidden>Выберите хотя бы один Target.</span>
+                </fieldset>
                 <menu>
                     <button id="snippet-cancel" type="button">Отмена</button>
                     <button id="snippet-save" type="submit" class="primary">Сохранить</button>
@@ -150,6 +155,7 @@
             <button type="button" data-action="run">Выполнить</button>
             <button type="button" data-action="edit">Изменить</button>
             <button type="button" data-action="duplicate">Дублировать</button>
+            <button type="button" data-action="new">Новый сниппет</button>
             <button type="button" data-action="move">Переместить</button>
             <button type="button" data-action="remove" class="destructive">Удалить</button>
         </div>

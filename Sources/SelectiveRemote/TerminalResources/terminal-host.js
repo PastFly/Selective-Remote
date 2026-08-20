@@ -31,6 +31,8 @@
     const snippetTitle = document.getElementById("snippet-title");
     const snippetGroup = document.getElementById("snippet-group");
     const snippetCommand = document.getElementById("snippet-command");
+    const snippetTargetsList = document.getElementById("snippet-targets-list");
+    const snippetTargetsError = document.getElementById("snippet-targets-error");
     const snippetCancel = document.getElementById("snippet-cancel");
     const snippetGroupDialog = document.getElementById("snippet-group-dialog");
     const snippetGroupForm = document.getElementById("snippet-group-form");
@@ -67,6 +69,8 @@
             defaultGroup: "Мои команды",
             group: "Группа",
             command: "Команда или скрипт",
+            targets: "Targets · до 8 SSH-профилей",
+            targetRequired: "Выберите хотя бы один Target.",
             create: "Создать",
             save: "Сохранить",
             cancel: "Отмена",
@@ -100,6 +104,8 @@
             defaultGroup: "My commands",
             group: "Group",
             command: "Command or script",
+            targets: "Targets · up to 8 SSH profiles",
+            targetRequired: "Select at least one target.",
             create: "Create",
             save: "Save",
             cancel: "Cancel",
@@ -288,6 +294,8 @@
     let favoriteCommands = new Set();
     let commandTemplates = [];
     let snippetGroups = [];
+    let snippetTargetOptions = [];
+    let defaultSnippetTargetID = "";
     let selectedSnippetID = null;
     let contextSnippetID = null;
     let panelMode = "hidden";
@@ -1145,7 +1153,48 @@
         });
     };
 
-    const openSnippetEditor = (entry = null) => {
+    const selectedSnippetTargetIDs = () => Array.from(
+        snippetTargetsList.querySelectorAll('input[type="checkbox"]:checked')
+    ).map((input) => input.value);
+
+    const updateSnippetTargetAvailability = () => {
+        const selectedCount = selectedSnippetTargetIDs().length;
+        snippetTargetsList.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+            input.disabled = !input.checked && selectedCount >= 8;
+        });
+        if (selectedCount > 0) {
+            snippetTargetsError.hidden = true;
+        }
+    };
+
+    const renderSnippetTargets = (selectedIDs = []) => {
+        const selected = new Set(
+            selectedIDs.filter((id) => typeof id === "string").slice(0, 8)
+        );
+        snippetTargetsList.replaceChildren();
+        snippetTargetsError.hidden = true;
+        snippetTargetOptions.forEach((target) => {
+            const row = document.createElement("label");
+            const input = document.createElement("input");
+            input.type = "checkbox";
+            input.value = target.id;
+            input.checked = selected.has(target.id);
+            input.addEventListener("change", updateSnippetTargetAvailability);
+
+            const copy = document.createElement("span");
+            copy.className = "snippet-target-copy";
+            const title = document.createElement("span");
+            title.textContent = target.title;
+            const subtitle = document.createElement("small");
+            subtitle.textContent = target.subtitle;
+            copy.append(title, subtitle);
+            row.append(input, copy);
+            snippetTargetsList.append(row);
+        });
+        updateSnippetTargetAvailability();
+    };
+
+    const openSnippetEditor = (entry = null, preferredGroup = "") => {
         if (snippetGroups.length === 0) {
             pendingSnippetEditor = true;
             postHistory({ action: "createSnippetGroup", name: "Мои команды" });
@@ -1154,7 +1203,15 @@
         snippetID.value = entry?.id || "";
         snippetTitle.value = entry?.title || "";
         snippetCommand.value = entry?.command || "";
-        fillGroupSelect(snippetGroup, entry?.category || snippetGroups[0].name);
+        fillGroupSelect(
+            snippetGroup,
+            entry?.category || preferredGroup || snippetGroups[0].name
+        );
+        renderSnippetTargets(
+            Array.isArray(entry?.targetProfileIDs)
+                ? entry.targetProfileIDs
+                : [defaultSnippetTargetID]
+        );
         document.getElementById("snippet-dialog-title").textContent = entry
             ? snippetText("editSnippet")
             : snippetText("newSnippet");
@@ -1343,6 +1400,14 @@
                 row.append(select, menu);
                 section.append(row);
             });
+            if (allEntries.length === 0 && !query) {
+                const addSnippet = document.createElement("button");
+                addSnippet.type = "button";
+                addSnippet.className = "snippet-empty-group-add";
+                addSnippet.textContent = `+ ${snippetText("newSnippet")}`;
+                addSnippet.addEventListener("click", () => openSnippetEditor(null, group.name));
+                section.append(addSnippet);
+            }
             snippetsList.append(section);
         });
 
@@ -2033,6 +2098,15 @@
                 && typeof group.id === "string"
                 && typeof group.name === "string")
             : [];
+        snippetTargetOptions = Array.isArray(payload.snippetTargets)
+            ? payload.snippetTargets.filter((target) => target
+                && typeof target.id === "string"
+                && typeof target.title === "string"
+                && typeof target.subtitle === "string")
+            : [];
+        defaultSnippetTargetID = typeof payload.defaultSnippetTargetID === "string"
+            ? payload.defaultSnippetTargetID
+            : "";
         if (selectedSnippetID && !commandTemplates.some((entry) => entry.id === selectedSnippetID)) {
             selectedSnippetID = null;
         }
@@ -2083,6 +2157,8 @@
             : "Название";
         document.getElementById("snippet-group-label").textContent = snippetText("group");
         document.getElementById("snippet-command-label").textContent = snippetText("command");
+        document.getElementById("snippet-targets-label").textContent = snippetText("targets");
+        snippetTargetsError.textContent = snippetText("targetRequired");
         document.getElementById("snippet-group-name-label").textContent = snippetLanguage === "en"
             ? "Group name"
             : "Название группы";
@@ -2094,7 +2170,9 @@
         document.getElementById("snippet-group-save").textContent = snippetText("create");
         document.getElementById("snippet-move-save").textContent = snippetText("move");
         document.querySelectorAll("#snippet-context-menu [data-action]").forEach((button) => {
-            const key = button.dataset.action === "remove" ? "remove" : button.dataset.action;
+            const key = button.dataset.action === "new"
+                ? "newSnippet"
+                : button.dataset.action;
             button.textContent = snippetText(key);
         });
         if (panelMode === "snippets") {
@@ -2178,7 +2256,9 @@
     snippetForm.addEventListener("submit", (event) => {
         event.preventDefault();
         const group = snippetGroups.find((item) => item.id === snippetGroup.value);
-        if (!group) {
+        const targetProfileIDs = selectedSnippetTargetIDs();
+        if (!group || targetProfileIDs.length === 0) {
+            snippetTargetsError.hidden = targetProfileIDs.length > 0;
             return;
         }
         postHistory({
@@ -2186,7 +2266,8 @@
             id: snippetID.value || null,
             title: snippetTitle.value,
             category: group.name,
-            command: snippetCommand.value
+            command: snippetCommand.value,
+            targetProfileIDs
         });
         snippetDialog.close();
     });
@@ -2242,6 +2323,8 @@
             openSnippetEditor(entry);
         } else if (action === "duplicate") {
             postHistory({ action: "duplicateSnippet", id: entry.id });
+        } else if (action === "new") {
+            openSnippetEditor(null, entry.category);
         } else if (action === "move") {
             openSnippetMove(entry);
         } else if (action === "remove") {

@@ -474,6 +474,21 @@ textarea {
     text-overflow: ellipsis;
 }
 
+.snippet-empty-group-add {
+    width: calc(100% - 20px);
+    margin: 7px 10px 10px;
+    padding: 8px 10px;
+    color: #36d399;
+    background: rgba(54, 211, 153, 0.08);
+    border: 1px dashed rgba(54, 211, 153, 0.32);
+    border-radius: 8px;
+    text-align: left;
+}
+
+.snippet-empty-group-add:hover {
+    background: rgba(54, 211, 153, 0.15);
+}
+
 .snippet-title {
     font-weight: 600;
 }
@@ -581,6 +596,65 @@ textarea {
 
 #snippet-form textarea {
     font-family: "SF Mono", SFMono-Regular, Menlo, monospace;
+}
+
+#snippet-targets-field {
+    min-width: 0;
+    margin: 0;
+    padding: 9px 10px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 9px;
+}
+
+#snippet-targets-field legend {
+    padding: 0 5px;
+}
+
+#snippet-targets-list {
+    display: grid;
+    gap: 4px;
+    max-height: 160px;
+    overflow: auto;
+}
+
+#snippet-targets-list label {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 9px;
+    align-items: center;
+    padding: 6px 7px;
+    border-radius: 7px;
+}
+
+#snippet-targets-list label:hover {
+    background: rgba(54, 211, 153, 0.10);
+}
+
+#snippet-targets-list input {
+    width: auto;
+    margin: 0;
+}
+
+.snippet-target-copy {
+    display: grid;
+    min-width: 0;
+}
+
+.snippet-target-copy small {
+    overflow: hidden;
+    color: #7f899e;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#snippet-targets-error {
+    display: block;
+    margin-top: 7px;
+    color: #ff8787;
+}
+
+#snippet-targets-error[hidden] {
+    display: none;
 }
 
 #snippet-form menu,
@@ -720,6 +794,7 @@ textarea {
 .terminal-theme-light #snippet-form input,
 .terminal-theme-light #snippet-form select,
 .terminal-theme-light #snippet-form textarea,
+.terminal-theme-light #snippet-targets-field,
 .terminal-theme-light #snippet-form menu button,
 .terminal-theme-light #snippet-group-form input,
 .terminal-theme-light #snippet-group-form menu button,

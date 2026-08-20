@@ -82,3 +82,29 @@ func terminalHistoryProgrammaticHideDoesNotRefocusOldPane() throws {
     #expect(hostScript.contains("restoreTerminalFocus = true"))
     #expect(hostScript.contains("else if (restoreTerminalFocus)"))
 }
+
+@Test("Глобальные Snippets расположены перед диагностикой и поддерживают быстрый запуск")
+func globalSnippetsHaveExpectedNavigationAndActions() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let contentSource = try String(
+        contentsOf: projectRoot.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+    let snippetsSource = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    let snippetsRange = try #require(contentSource.range(of: "case snippets = \"Сниппеты\""))
+    let diagnosticsRange = try #require(contentSource.range(of: "case diagnostics = \"Диагностика\""))
+    #expect(snippetsRange.lowerBound < diagnosticsRange.lowerBound)
+    #expect(snippetsSource.contains("TapGesture(count: 2)"))
+    #expect(snippetsSource.contains("Button(\"Запустить\", systemImage: \"play.fill\")"))
+    #expect(snippetsSource.contains("Последний запуск"))
+    #expect(snippetsSource.contains("sheet(item: $editorRequest)"))
+}

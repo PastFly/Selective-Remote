@@ -8,6 +8,28 @@ enum TerminalSnippetRunResult: String, Encodable, Equatable {
     case invalidSnippet
 }
 
+enum TerminalSnippetTargetRunState: Equatable {
+    case connecting
+    case sent
+    case failed(String)
+}
+
+struct TerminalSnippetTargetRunStatus: Identifiable, Equatable {
+    let profileID: UUID
+    let name: String
+    var state: TerminalSnippetTargetRunState
+
+    var id: UUID { profileID }
+}
+
+struct TerminalSnippetRunSummary: Identifiable, Equatable {
+    let id: UUID
+    let snippetID: UUID
+    let title: String
+    let startedAt: Date
+    var targets: [TerminalSnippetTargetRunStatus]
+}
+
 enum TerminalSnippetExecution {
     static func canRun(
         originTabID: UUID,

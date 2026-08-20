@@ -2,16 +2,15 @@ import SwiftUI
 
 struct TerminalSnippetsLibraryView: View {
     @ObservedObject var store: TerminalCommandHistoryStore
-    let profiles: [ConnectionProfile]
-    let onRun: (TerminalCommandTemplate) -> TerminalSnippetRunResult
+    @ObservedObject var model: AppModel
 
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
-    @State private var editorSnippet: TerminalCommandTemplate?
-    @State private var editorPresented = false
+    @State private var editorRequest: TerminalSnippetEditorRequest?
     @State private var groupEditor: TerminalSnippetGroup?
     @State private var groupEditorPresented = false
     @State private var deleteSnippet: TerminalCommandTemplate?
+    @State private var showsDisconnectConfirmation = false
 
     private var selectedSnippet: TerminalCommandTemplate? {
         guard let selectedSnippetID else { return nil }
@@ -19,7 +18,7 @@ struct TerminalSnippetsLibraryView: View {
     }
 
     private var sortedProfiles: [ConnectionProfile] {
-        profiles
+        model.profiles
             .filter { $0.connectionType == .ssh }
             .sorted {
                 $0.friendlyName.localizedStandardCompare($1.friendlyName)
@@ -30,6 +29,9 @@ struct TerminalSnippetsLibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if let summary = model.latestSnippetRun {
+                runStatus(summary)
+            }
             Divider()
             HSplitView {
                 libraryList
@@ -38,9 +40,10 @@ struct TerminalSnippetsLibraryView: View {
                     .frame(minWidth: 320, idealWidth: 420)
             }
         }
-        .sheet(isPresented: $editorPresented) {
+        .sheet(item: $editorRequest) { request in
             TerminalSnippetEditorView(
-                snippet: editorSnippet,
+                snippet: request.snippet,
+                preferredGroup: request.preferredGroup,
                 groups: store.snippetGroups(),
                 profiles: sortedProfiles
             ) { draft in
@@ -91,6 +94,16 @@ struct TerminalSnippetsLibraryView: View {
             Button("Отмена", role: .cancel) { deleteSnippet = nil }
         } message: { snippet in
             Text("«\(snippet.title)» будет удалён из общей библиотеки Snippets.")
+        }
+        .alert("Отключить SSH Targets?", isPresented: $showsDisconnectConfirmation) {
+            Button("Отключить", role: .destructive) {
+                model.disconnectTerminalSnippetTargets(
+                    model.latestSnippetRun?.targets.map(\.profileID) ?? []
+                )
+            }
+            Button("Отмена", role: .cancel) {}
+        } message: {
+            Text("Активные SSH-сессии Targets последнего запуска будут завершены. Выполняющаяся команда может быть прервана.")
         }
         .onAppear {
             if selectedSnippetID == nil { selectedSnippetID = store.templates().first?.id }
@@ -144,10 +157,20 @@ struct TerminalSnippetsLibraryView: View {
             List(selection: $selectedSnippetID) {
                 ForEach(store.snippetGroups()) { group in
                     Section {
-                        ForEach(filteredSnippets(in: group)) { snippet in
+                        let snippets = filteredSnippets(in: group)
+                        ForEach(snippets) { snippet in
                             snippetRow(snippet)
                                 .tag(snippet.id)
+                                .simultaneousGesture(
+                                    TapGesture(count: 2).onEnded {
+                                        _ = model.runTerminalSnippet(snippet)
+                                    }
+                                )
                                 .contextMenu {
+                                    Button("Запустить", systemImage: "play.fill") {
+                                        _ = model.runTerminalSnippet(snippet)
+                                    }
+                                    Divider()
                                     Button("Изменить", systemImage: "pencil") {
                                         presentEditor(snippet)
                                     }
@@ -157,11 +180,27 @@ struct TerminalSnippetsLibraryView: View {
                                             profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
                                         )
                                     }
+                                    Button("Новый сниппет", systemImage: "plus") {
+                                        presentEditor(nil, preferredGroup: group.name)
+                                    }
                                     Divider()
                                     Button("Удалить", systemImage: "trash", role: .destructive) {
                                         deleteSnippet = snippet
                                     }
                                 }
+                        }
+                        if snippets.isEmpty
+                            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button {
+                                presentEditor(nil, preferredGroup: group.name)
+                            } label: {
+                                Label("Новый сниппет", systemImage: "plus")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.vertical, 7)
+                            .disabled(sortedProfiles.isEmpty)
                         }
                     } header: {
                         HStack {
@@ -191,7 +230,7 @@ struct TerminalSnippetsLibraryView: View {
             }
             .listStyle(.inset)
             .overlay {
-                if store.templates().isEmpty {
+                if store.snippetGroups().isEmpty {
                     ContentUnavailableView(
                         "Сниппетов пока нет",
                         systemImage: "curlybraces",
@@ -273,9 +312,22 @@ struct TerminalSnippetsLibraryView: View {
                     .padding(8)
                 }
 
+                if let summary = model.latestSnippetRun,
+                   summary.snippetID == snippet.id {
+                    GroupBox("Последний запуск") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(summary.targets) { target in
+                                targetRunStatusRow(target)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                    }
+                }
+
                 Spacer()
                 Button {
-                    _ = onRun(snippet)
+                    _ = model.runTerminalSnippet(snippet)
                 } label: {
                     Label("Запустить на \(snippet.targetProfileIDs.count) Targets", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
@@ -307,16 +359,96 @@ struct TerminalSnippetsLibraryView: View {
         return sortedProfiles.filter { ids.contains($0.id) }
     }
 
-    private func presentEditor(_ snippet: TerminalCommandTemplate?) {
+    private func presentEditor(
+        _ snippet: TerminalCommandTemplate?,
+        preferredGroup: String? = nil
+    ) {
         if store.snippetGroups().isEmpty {
             _ = store.createSnippetGroup(
                 name: TerminalCommandHistoryStore.defaultSnippetGroupName,
                 profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
             )
         }
-        editorSnippet = snippet
-        editorPresented = true
+        editorRequest = TerminalSnippetEditorRequest(
+            snippet: snippet,
+            preferredGroup: preferredGroup
+        )
     }
+
+    private func runStatus(_ summary: TerminalSnippetRunSummary) -> some View {
+        let sent = summary.targets.filter { $0.state == .sent }.count
+        let connecting = summary.targets.filter { $0.state == .connecting }.count
+        let failed = summary.targets.filter {
+            if case .failed = $0.state { return true }
+            return false
+        }.count
+
+        return HStack(spacing: 14) {
+            Image(
+                systemName: failed > 0
+                    ? "exclamationmark.triangle.fill"
+                    : (connecting > 0 ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+            )
+            .foregroundStyle(failed > 0 ? Color.orange : (connecting > 0 ? Color.blue : Color.green))
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Последний запуск · \(summary.title)")
+                    .font(.subheadline.weight(.semibold))
+                Text(summary.startedAt, style: .time)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            if sent > 0 {
+                Label("Отправлено: \(sent)", systemImage: "paperplane.fill")
+                    .foregroundStyle(.green)
+            }
+            if connecting > 0 {
+                Label("Подключение: \(connecting)", systemImage: "arrow.triangle.2.circlepath")
+                    .foregroundStyle(.blue)
+            }
+            if failed > 0 {
+                Label("Ошибки: \(failed)", systemImage: "xmark.octagon.fill")
+                    .foregroundStyle(.orange)
+            }
+            Button("Отключить SSH Targets") {
+                showsDisconnectConfirmation = true
+            }
+            .disabled(summary.targets.isEmpty)
+        }
+        .font(.caption)
+        .padding(.horizontal, 28)
+        .padding(.vertical, 10)
+        .background(Color.accentColor.opacity(0.07))
+    }
+
+    private func targetRunStatusRow(_ target: TerminalSnippetTargetRunStatus) -> some View {
+        let details: (text: String, icon: String, color: Color) = switch target.state {
+        case .connecting:
+            ("Подключение…", "arrow.triangle.2.circlepath", .blue)
+        case .sent:
+            ("Команда отправлена", "paperplane.fill", .green)
+        case .failed(let message):
+            ("Ошибка: \(message)", "xmark.octagon.fill", .orange)
+        }
+
+        return HStack(spacing: 8) {
+            Image(systemName: details.icon)
+                .foregroundStyle(details.color)
+            Text(target.name)
+                .lineLimit(1)
+            Spacer()
+            Text(details.text)
+                .font(.caption)
+                .foregroundStyle(details.color)
+                .lineLimit(2)
+        }
+    }
+}
+
+private struct TerminalSnippetEditorRequest: Identifiable {
+    let id = UUID()
+    let snippet: TerminalCommandTemplate?
+    let preferredGroup: String?
 }
 
 private struct TerminalSnippetDraft {
@@ -330,6 +462,7 @@ private struct TerminalSnippetDraft {
 private struct TerminalSnippetEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let snippet: TerminalCommandTemplate?
+    let preferredGroup: String?
     let groups: [TerminalSnippetGroup]
     let profiles: [ConnectionProfile]
     let onSave: (TerminalSnippetDraft) -> Void
@@ -341,17 +474,24 @@ private struct TerminalSnippetEditorView: View {
 
     init(
         snippet: TerminalCommandTemplate?,
+        preferredGroup: String?,
         groups: [TerminalSnippetGroup],
         profiles: [ConnectionProfile],
         onSave: @escaping (TerminalSnippetDraft) -> Void
     ) {
         self.snippet = snippet
+        self.preferredGroup = preferredGroup
         self.groups = groups
         self.profiles = profiles
         self.onSave = onSave
         _title = State(initialValue: snippet?.title ?? "")
         _command = State(initialValue: snippet?.command ?? "")
-        _category = State(initialValue: snippet?.category ?? groups.first?.name ?? TerminalCommandHistoryStore.defaultSnippetGroupName)
+        _category = State(
+            initialValue: snippet?.category
+                ?? preferredGroup
+                ?? groups.first?.name
+                ?? TerminalCommandHistoryStore.defaultSnippetGroupName
+        )
         _targetIDs = State(initialValue: Set(snippet?.targetProfileIDs ?? profiles.first.map { [$0.id] } ?? []))
     }
 

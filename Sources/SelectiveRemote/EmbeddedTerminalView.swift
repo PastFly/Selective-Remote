@@ -568,12 +568,15 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                 else { return }
                 let category = payload["category"] as? String
                     ?? TerminalCommandHistoryStore.defaultSnippetGroupName
+                let targetProfileIDs = (payload["targetProfileIDs"] as? [String])?
+                    .compactMap(UUID.init(uuidString:))
                 _ = store.saveTemplate(
                     id: id,
                     title: title,
                     command: command,
                     category: category,
-                    profileID: context.profileID
+                    profileID: context.profileID,
+                    targetProfileIDs: targetProfileIDs
                 )
                 refreshHistory()
             case "removeTemplate", "removeSnippet":
@@ -660,6 +663,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                   let context = historyContext,
                   let json = TerminalCommandHistoryStore.shared.webPayload(
                       for: context.profileID,
+                      snippetTargets: context.snippetTargets,
                       remote: remoteContext
                   )
             else { return }
@@ -1614,7 +1618,14 @@ struct SSHTerminalView: View {
                 session: tab.session,
                 appearance: appearance.snapshot,
                 historyContext: TerminalHistoryContext(
-                    profileID: historyContextID(for: tab)
+                    profileID: historyContextID(for: tab),
+                    snippetTargets: sshProfiles.map { profile in
+                        TerminalSnippetTargetOption(
+                            id: profile.id,
+                            title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
+                            subtitle: profile.host
+                        )
+                    }
                 ),
                 remoteContext: workspace.remoteContext(for: tab.id) ?? .empty,
                 snippetRevision: snippetStore.snippetRevision,

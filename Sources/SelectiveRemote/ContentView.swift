@@ -33,10 +33,10 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
-    case snippets = "Сниппеты"
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
+    case snippets = "Сниппеты"
     case diagnostics = "Диагностика"
     case keychain = "Keychain"
 
@@ -626,8 +626,7 @@ struct ContentView: View {
             case .snippets:
                 TerminalSnippetsLibraryView(
                     store: snippets,
-                    profiles: model.profiles,
-                    onRun: model.runTerminalSnippet
+                    model: model
                 )
             case .terminal:
                 globalTerminalDetail

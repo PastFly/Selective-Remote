@@ -419,19 +419,32 @@ func serializesSnippetGroupsForTerminalBridge() throws {
         targetProfileIDs: [profileID, UUID()]
     ))
 
-    let json = try #require(store.webPayload(for: profileID))
+    let target = TerminalSnippetTargetOption(
+        id: profileID,
+        title: "Production",
+        subtitle: "server.example.com"
+    )
+    let json = try #require(store.webPayload(
+        for: profileID,
+        snippetTargets: [target]
+    ))
     let data = try #require(json.data(using: .utf8))
     let payload = try #require(
         JSONSerialization.jsonObject(with: data) as? [String: Any]
     )
     let groups = try #require(payload["snippetGroups"] as? [[String: Any]])
     let templates = try #require(payload["templates"] as? [[String: Any]])
+    let targets = try #require(payload["snippetTargets"] as? [[String: Any]])
     #expect(groups.first?["id"] as? String == group.id.uuidString)
     #expect(groups.first?["name"] as? String == "Docker")
     #expect(templates.first?["title"] as? String == "Containers")
     #expect(templates.first?["command"] as? String == "docker ps")
     #expect(templates.first?["category"] as? String == "Docker")
     #expect((templates.first?["targetProfileIDs"] as? [String])?.count == 2)
+    #expect(payload["defaultSnippetTargetID"] as? String == profileID.uuidString)
+    #expect(targets.first?["id"] as? String == profileID.uuidString)
+    #expect(targets.first?["title"] as? String == "Production")
+    #expect(targets.first?["subtitle"] as? String == "server.example.com")
 }
 
 @Test("Multi-line Snippet сохраняет строки и получает ровно один завершающий Enter")
