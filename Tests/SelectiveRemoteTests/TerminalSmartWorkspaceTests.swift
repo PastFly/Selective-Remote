@@ -256,6 +256,43 @@ func exposesGlobalSnippetsWithMultipleTargets() throws {
     ))
 }
 
+@Test("Многострочный Snippet создаётся, изменяется и сохраняется без потери строк")
+@MainActor
+func persistsAndUpdatesMultilineSnippet() throws {
+    let suiteName = "TerminalMultilineSnippetTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let profileID = UUID()
+    var store = TerminalCommandHistoryStore(defaults: defaults)
+    let original = "cd /var/www\ngit pull"
+
+    #expect(store.saveTemplate(
+        id: nil,
+        title: "Deploy",
+        command: original,
+        category: "Release",
+        profileID: profileID,
+        targetProfileIDs: [profileID]
+    ))
+    let snippet = try #require(store.templates().first)
+    #expect(snippet.command == original)
+
+    let updated = original + "\nsudo systemctl restart nginx"
+    #expect(store.saveTemplate(
+        id: snippet.id,
+        title: snippet.title,
+        command: updated,
+        category: snippet.category,
+        groupID: snippet.groupID,
+        profileID: profileID,
+        targetProfileIDs: [profileID]
+    ))
+    #expect(store.template(id: snippet.id)?.command == updated)
+
+    store = TerminalCommandHistoryStore(defaults: defaults)
+    #expect(store.template(id: snippet.id)?.command == updated)
+}
+
 @Test("Группы сниппетов и команды переживают перезапуск хранилища")
 @MainActor
 func persistsSnippetGroupsAndCRUD() throws {
@@ -463,8 +500,13 @@ func preparesMultilineSnippetPTYInput() throws {
     let value = try #require(String(data: data, encoding: .utf8))
 
     #expect(value == "cd /var/www\ngit pull\nsystemctl restart nginx\n")
+    let windowsData = try #require(
+        TerminalSnippetExecution.inputData(for: "cd C:\\work\r\ndir\r\n")
+    )
+    #expect(String(data: windowsData, encoding: .utf8) == "cd C:\\work\ndir\n")
     #expect(TerminalSnippetExecution.inputData(for: "\n\n") == nil)
     #expect(TerminalSnippetExecution.inputData(for: "echo ok\0") == nil)
+    #expect(TerminalSnippetExecution.inputData(for: "echo ok\u{001B}") == nil)
 }
 
 @Test("Контекст сервера создаёт подсказки для служб и контейнеров")

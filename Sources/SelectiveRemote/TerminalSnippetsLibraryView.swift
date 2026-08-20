@@ -78,7 +78,7 @@ struct TerminalSnippetsLibraryView: View {
             ) { draft in
                 let profileID = draft.targetProfileIDs.first
                     ?? TerminalCommandHistoryStore.globalSnippetLibraryID
-                if store.saveTemplate(
+                let saved = store.saveTemplate(
                     id: draft.id,
                     title: draft.title,
                     command: draft.command,
@@ -86,10 +86,12 @@ struct TerminalSnippetsLibraryView: View {
                     groupID: draft.groupID,
                     profileID: profileID,
                     targetProfileIDs: draft.targetProfileIDs
-                ) {
+                )
+                if saved {
                     let resolved = draft.id ?? store.templates().first?.id
                     selectSnippet(resolved)
                 }
+                return saved
             }
         }
         .sheet(isPresented: $groupEditorPresented) {
@@ -691,19 +693,20 @@ private struct TerminalSnippetEditorView: View {
     let preferredGroup: String?
     let groups: [TerminalSnippetGroup]
     let profiles: [ConnectionProfile]
-    let onSave: (TerminalSnippetDraft) -> Void
+    let onSave: (TerminalSnippetDraft) -> Bool
 
     @State private var title: String
     @State private var command: String
     @State private var groupID: UUID
     @State private var targetIDs: Set<UUID>
+    @State private var saveError = ""
 
     init(
         snippet: TerminalCommandTemplate?,
         preferredGroup: String?,
         groups: [TerminalSnippetGroup],
         profiles: [ConnectionProfile],
-        onSave: @escaping (TerminalSnippetDraft) -> Void
+        onSave: @escaping (TerminalSnippetDraft) -> Bool
     ) {
         self.snippet = snippet
         self.preferredGroup = preferredGroup
@@ -729,9 +732,21 @@ private struct TerminalSnippetEditorView: View {
                 Picker("Группа", selection: $groupID) {
                     ForEach(groups) { group in Text(group.name).tag(group.id) }
                 }
-                TextEditor(text: $command)
-                    .font(.body.monospaced())
-                    .frame(minHeight: 150)
+                Section("Команда или скрипт") {
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $command)
+                            .font(.body.monospaced())
+                            .frame(minHeight: 150)
+                        if command.isEmpty {
+                            Text("Введите команду или скрипт, например: docker ps")
+                                .font(.body.monospaced())
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 8)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                }
 
                 Section("Targets · до 8 SSH-профилей") {
                     ForEach(profiles) { profile in
@@ -746,6 +761,12 @@ private struct TerminalSnippetEditorView: View {
                         .disabled(!targetIDs.contains(profile.id) && targetIDs.count >= 8)
                     }
                 }
+
+                if !saveError.isEmpty {
+                    Text(saveError)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
             }
             .formStyle(.grouped)
             .navigationTitle(snippet == nil ? "Новый сниппет" : "Изменить сниппет")
@@ -755,18 +776,20 @@ private struct TerminalSnippetEditorView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Сохранить") {
-                        onSave(
-                            TerminalSnippetDraft(
-                                id: snippet?.id,
-                                title: title,
-                                command: command,
-                                category: groups.first(where: { $0.id == groupID })?.name
-                                    ?? TerminalCommandHistoryStore.defaultSnippetGroupName,
-                                groupID: groupID,
-                                targetProfileIDs: profiles.map(\.id).filter(targetIDs.contains)
-                            )
+                        let draft = TerminalSnippetDraft(
+                            id: snippet?.id,
+                            title: title,
+                            command: command,
+                            category: groups.first(where: { $0.id == groupID })?.name
+                                ?? TerminalCommandHistoryStore.defaultSnippetGroupName,
+                            groupID: groupID,
+                            targetProfileIDs: profiles.map(\.id).filter(targetIDs.contains)
                         )
-                        dismiss()
+                        if onSave(draft) {
+                            dismiss()
+                        } else {
+                            saveError = "Не удалось сохранить. Проверьте длину и убедитесь, что команда не содержит секреты."
+                        }
                     }
                     .disabled(
                         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

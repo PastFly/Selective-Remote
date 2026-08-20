@@ -46,6 +46,37 @@ func terminalGridUsesSharedWorkspaceInspector() throws {
     #expect(inspectorSource.contains("TapGesture(count: 2)"))
     #expect(inspectorSource.contains("Button(\"Выполнить на Targets\""))
     #expect(inspectorSource.contains("Button(\"Скопировать\""))
+    #expect(inspectorSource.contains("case catalog = \"Общие\""))
+    #expect(inspectorSource.contains("case server = \"Сервер\""))
+    #expect(inspectorSource.contains("case favorites = \"Избранное\""))
+    #expect(inspectorSource.contains("Color(nsColor: .controlBackgroundColor)"))
+}
+
+@Test("Нативный инспектор читает полный каталог общих команд")
+func nativeInspectorLoadsBuiltInCommandCatalog() {
+    let entries = TerminalBuiltInCommandCatalog.entries
+
+    #expect(entries.count >= 300)
+    #expect(entries.contains(where: { $0.command == "pwd" }))
+    #expect(entries.contains(where: { $0.command == "sudo certbot renew --dry-run" }))
+}
+
+@Test("Редактор сниппета объясняет назначение поля команды")
+func snippetEditorShowsCommandPlaceholder() throws {
+    let projectRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let source = try String(
+        contentsOf: projectRoot.appendingPathComponent(
+            "Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("Section(\"Команда или скрипт\")"))
+    #expect(source.contains("Введите команду или скрипт, например: docker ps"))
+    #expect(source.contains("if command.isEmpty"))
 }
 
 @Test("Локальный терминал показывает действия напрямую без раскрывающегося меню")

@@ -1383,9 +1383,13 @@ struct SSHTerminalView: View {
                     profileID: historyContextID(for: tab),
                     terminalTitle: tab.title,
                     sessionIsRunning: tab.session.isRunning,
+                    remoteContext: workspace.remoteContext(for: tab.id) ?? .empty,
                     selectMode: { mode in
                         showsHistory = mode == .history
                         showsSnippets = mode == .snippets
+                    },
+                    refreshRemoteContext: {
+                        refreshRemoteContext(for: tab.id)
                     },
                     close: {
                         showsHistory = false

@@ -40,10 +40,17 @@ enum TerminalSnippetExecution {
     }
 
     static func inputData(for rawCommand: String) -> Data? {
-        let command = rawCommand.trimmingCharacters(in: .newlines)
+        let normalizedLineEndings = rawCommand
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let command = normalizedLineEndings.trimmingCharacters(in: .newlines)
         guard !command.isEmpty,
-              !command.contains("\0"),
-              command.count <= 8_192
+              command.count <= 8_192,
+              !command.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+                      && $0.value != 9
+                      && $0.value != 10
+              })
         else { return nil }
         return Data((command + "\n").utf8)
     }

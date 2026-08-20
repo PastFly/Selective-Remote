@@ -2,7 +2,7 @@ name: Test DMG
 
 on:
   push:
-    branches: ["work/v0.23.0"]
+    branches: ["work/v0.23.0-polish"]
   workflow_dispatch:
 
 permissions:

@@ -410,7 +410,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         guard !title.isEmpty,
               title.count <= 80,
               category.count <= 60,
-              let command = normalizedCommand(rawCommand),
+              let command = normalizedSnippetCommand(rawCommand),
               !isSensitive(command)
         else { return false }
 
@@ -561,6 +561,22 @@ final class TerminalCommandHistoryStore: ObservableObject {
               })
         else { return nil }
         return withoutNewlines
+    }
+
+    private func normalizedSnippetCommand(_ rawCommand: String) -> String? {
+        let normalizedLineEndings = rawCommand
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+        let command = normalizedLineEndings.trimmingCharacters(in: .newlines)
+        guard !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              command.count <= 8_192,
+              !command.unicodeScalars.contains(where: {
+                  CharacterSet.controlCharacters.contains($0)
+                      && $0.value != 9
+                      && $0.value != 10
+              })
+        else { return nil }
+        return command
     }
 
     private func isSensitive(_ command: String) -> Bool {
