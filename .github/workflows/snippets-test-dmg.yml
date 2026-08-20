@@ -36,6 +36,8 @@ jobs:
     steps:
       - name: Checkout PR
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Environment
         run: |
@@ -52,7 +54,7 @@ jobs:
       - name: Upload test DMG
         uses: actions/upload-artifact@v4
         with:
-          name: SelectiveRemote-snippets-test-${{ github.event.pull_request.number }}-${{ github.sha }}
+          name: SelectiveRemote-snippets-test-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           path: |
             dist/*.dmg
             dist/*.dmg.sha256
