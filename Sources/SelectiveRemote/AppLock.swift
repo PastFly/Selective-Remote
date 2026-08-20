@@ -98,35 +98,66 @@ final class AppLockStore: ObservableObject {
     }
 
     func unlock() {
+        authenticate(
+            policy: .deviceOwnerAuthenticationWithBiometrics,
+            localizedReason: "Разблокировать Selective Remote",
+            requiresTouchID: true,
+            disablesAppLock: false
+        )
+    }
+
+    func disableWithSystemAuthentication() {
+        authenticate(
+            policy: .deviceOwnerAuthentication,
+            localizedReason: "Отключить App Lock в Selective Remote",
+            requiresTouchID: false,
+            disablesAppLock: true
+        )
+    }
+
+    private func authenticate(
+        policy: LAPolicy,
+        localizedReason: String,
+        requiresTouchID: Bool,
+        disablesAppLock: Bool
+    ) {
         guard enabled, isLocked, !isAuthenticating else { return }
         let context = LAContext()
         context.localizedCancelTitle = "Отмена"
         var evaluationError: NSError?
         guard context.canEvaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
+            policy,
             error: &evaluationError
-        ), context.biometryType == .touchID else {
+        ), !requiresTouchID || context.biometryType == .touchID else {
             lastError = evaluationError?.localizedDescription
-                ?? "Touch ID недоступен. Проверьте настройки macOS."
+                ?? (requiresTouchID
+                    ? "Touch ID недоступен. Проверьте настройки macOS."
+                    : "Системная аутентификация недоступна.")
             return
         }
 
         isAuthenticating = true
         lastError = nil
-        context.evaluatePolicy(
-            .deviceOwnerAuthenticationWithBiometrics,
-            localizedReason: "Разблокировать Selective Remote"
-        ) { [weak self] success, error in
-            Task { @MainActor in
+        Task { @MainActor [weak self] in
+            do {
+                let success = try await context.evaluatePolicy(
+                    policy,
+                    localizedReason: localizedReason
+                )
                 guard let self else { return }
                 self.isAuthenticating = false
                 if success {
+                    if disablesAppLock {
+                        self.enabled = false
+                    }
                     self.isLocked = false
                     self.inactiveSince = nil
                     self.lastError = nil
-                } else {
-                    self.lastError = Self.authenticationMessage(error)
                 }
+            } catch {
+                guard let self else { return }
+                self.isAuthenticating = false
+                self.lastError = Self.authenticationMessage(error)
             }
         }
     }
@@ -278,6 +309,13 @@ private struct AppLockScreen: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(store.isAuthenticating)
+
+            Button("Отключить App Lock…") {
+                store.disableWithSystemAuthentication()
+            }
+            .buttonStyle(.link)
+            .disabled(store.isAuthenticating)
+            .help("Потребуется пароль пользователя macOS или Touch ID")
 
             if let error = store.lastError {
                 Text(error)

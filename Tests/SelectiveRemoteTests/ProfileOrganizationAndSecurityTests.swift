@@ -84,8 +84,13 @@ struct ProfileOrganizationAndSecurityTests {
         #expect(app.contains("AppLockGate(store: appLock)"))
         #expect(app.contains("Заблокировать Selective Remote"))
         #expect(lock.contains("deviceOwnerAuthenticationWithBiometrics"))
+        #expect(lock.contains("try await context.evaluatePolicy"))
+        #expect(lock.contains("disableWithSystemAuthentication"))
+        #expect(!lock.contains(") { [weak self] success, error in"))
         #expect(lock.contains("NSWorkspace.didWakeNotification"))
         #expect(content.contains("ProfileCollectionDisplayMode"))
+        #expect(content.contains("ideal: 350, max: 520"))
+        #expect(content.contains("GridItem(.adaptive(minimum: 100)"))
         #expect(content.contains("Создать свой тег"))
         #expect(content.contains("ConnectionActivityView"))
     }

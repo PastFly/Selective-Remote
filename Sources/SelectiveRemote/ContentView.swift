@@ -125,7 +125,7 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 265, ideal: 300, max: 350)
+                .navigationSplitViewColumnWidth(min: 265, ideal: 350, max: 520)
         } detail: {
             detail
         }
@@ -621,7 +621,7 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
                             LazyVGrid(
-                                columns: [GridItem(.adaptive(minimum: 118), spacing: 9)],
+                                columns: [GridItem(.adaptive(minimum: 100), spacing: 8)],
                                 spacing: 9
                             ) {
                                 ForEach(group.profiles) { item in
@@ -3832,7 +3832,7 @@ private struct ProfileGridCard: View {
     private var connectionActive: Bool { session != nil || hasActiveSSH }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .top) {
                 ProfileOperatingSystemBadge(
                     profile: profile,
@@ -3882,8 +3882,8 @@ private struct ProfileGridCard: View {
                 .lineLimit(1)
             }
         }
-        .padding(11)
-        .frame(maxWidth: .infinity, minHeight: 132, alignment: .topLeading)
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
         .background(
             isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.045),
             in: RoundedRectangle(cornerRadius: 13, style: .continuous)

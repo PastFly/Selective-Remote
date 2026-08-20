@@ -588,6 +588,8 @@
 "Подтвердите Touch ID, чтобы снова открыть подключения." = "Confirm Touch ID to access your connections again.";
 "Ожидаем Touch ID…" = "Waiting for Touch ID…";
 "Разблокировать" = "Unlock";
+"Отключить App Lock…" = "Disable App Lock…";
+"Потребуется пароль пользователя macOS или Touch ID" = "Your macOS user password or Touch ID is required";
 "Разблокировка отменена." = "Unlock was cancelled.";
 "Блокировка приложения" = "App Lock";
 "Защищать Selective Remote с помощью Touch ID" = "Protect Selective Remote with Touch ID";
