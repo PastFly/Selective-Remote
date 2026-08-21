@@ -136,3 +136,103 @@ func knownTemplateVariablesSourceRegression() throws {
     #expect(source.contains("hasOwnProperty.call(templateVariables, name)"))
     #expect(source.contains("payload.variables"))
 }
+
+
+@Test("Named Workspace store persists and updates the same name")
+@MainActor
+func namedWorkspaceStorePersists() throws {
+    let suite = "SelectiveRemoteTests.NamedWorkspace.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let scope = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: scope,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .custom(host: "one.example", username: "root"),
+        defaults: defaults
+    )
+    let snapshot = workspace.workspaceSnapshot()
+    let store = TerminalNamedWorkspaceStore(defaults: defaults)
+    let first = try #require(store.save(name: "Production", scopeID: scope, snapshot: snapshot))
+    #expect(store.workspaces(for: scope).count == 1)
+
+    workspace.renameTab(workspace.selectedTabID, to: "Primary")
+    let updated = try #require(store.save(name: "production", scopeID: scope, snapshot: workspace.workspaceSnapshot()))
+    #expect(updated.id == first.id)
+    #expect(store.workspaces(for: scope).count == 1)
+
+    let reloaded = TerminalNamedWorkspaceStore(defaults: defaults)
+    #expect(reloaded.workspaces(for: scope).first?.snapshot.tabs.first?.title == "Primary")
+}
+
+@Test("Named Workspace restores layout, connections and full pane appearance without connecting")
+@MainActor
+func namedWorkspaceRestoresSafely() throws {
+    let suite = "SelectiveRemoteTests.NamedWorkspaceRestore.\(UUID().uuidString)"
+    let defaults = UserDefaults(suiteName: suite)!
+    defer { defaults.removePersistentDomain(forName: suite) }
+
+    let scope = UUID()
+    let firstProfile = UUID()
+    let secondProfile = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: scope,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .savedProfile(firstProfile),
+        defaults: defaults
+    )
+    workspace.renameTab(workspace.selectedTabID, to: "API")
+    let firstID = workspace.selectedTabID
+    let second = try #require(workspace.addTab(
+        connection: .savedProfile(secondProfile),
+        title: "Database"
+    ))
+    workspace.setLayout(.splitHorizontal)
+    workspace.selectedTabID = firstID
+    workspace.selectSecondary(second.id)
+    workspace.tabs.first(where: { $0.id == firstID })?.appearance.applyPreset(.dracula)
+    workspace.tabs.first(where: { $0.id == firstID })?.appearance.fontSize = 18
+    workspace.tabs.first(where: { $0.id == firstID })?.appearance.syntaxFollowTheme = false
+
+    let snapshot = workspace.workspaceSnapshot()
+    workspace.renameTab(firstID, to: "Changed")
+    workspace.setLayout(.single)
+    workspace.tabs.first(where: { $0.id == firstID })?.appearance.applyPreset(.hackerGreen)
+    workspace.tabs.first(where: { $0.id == firstID })?.appearance.fontSize = 12
+
+    #expect(workspace.restoreWorkspaceSnapshot(snapshot))
+    #expect(!workspace.hasRunningSession)
+    #expect(workspace.tabs.count == 2)
+    #expect(workspace.layout == .splitHorizontal)
+    #expect(workspace.tabs.first(where: { $0.id == firstID })?.title == "API")
+    #expect(workspace.tabs.first(where: { $0.id == firstID })?.connection == .savedProfile(firstProfile))
+    #expect(workspace.tabs.first(where: { $0.id == second.id })?.connection == .savedProfile(secondProfile))
+    #expect(workspace.tabs.first(where: { $0.id == firstID })?.appearance.selectedPreset == .dracula)
+    #expect(workspace.tabs.first(where: { $0.id == firstID })?.appearance.fontSize == 18)
+    #expect(workspace.tabs.first(where: { $0.id == firstID })?.appearance.syntaxFollowTheme == false)
+}
+
+@Test("Named Workspaces are exposed in SSH and Local Terminal and never auto-connect on restore")
+func namedWorkspaceSourceRegression() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let ssh = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift"),
+        encoding: .utf8
+    )
+    let local = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/LocalTerminalView.swift"),
+        encoding: .utf8
+    )
+    let workspace = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/TerminalWorkspace.swift"),
+        encoding: .utf8
+    )
+    #expect(ssh.contains("TerminalNamedWorkspaceView"))
+    #expect(local.contains("TerminalNamedWorkspaceView"))
+    #expect(workspace.contains("guard !hasRunningSession else { return false }"))
+    #expect(workspace.contains("restoreWorkspaceSnapshot"))
+}

@@ -701,6 +701,7 @@ struct SSHTerminalView: View {
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
     @ObservedObject var snippetStore = TerminalCommandHistoryStore.shared
+    @ObservedObject private var namedWorkspaceStore = TerminalNamedWorkspaceStore.shared
     let workspaceTitle: String
     let defaultProfileID: UUID?
     let locksPrimaryConnection: Bool
@@ -731,6 +732,7 @@ struct SSHTerminalView: View {
     @State private var showsBroadcastConfirmation = false
     @State private var reconnectingTabIDs: Set<UUID> = []
     @State private var showsCommandPalette = false
+    @State private var showsNamedWorkspaces = false
 
     private var session: TerminalSessionModel { workspace.selectedTab.session }
 
@@ -1275,6 +1277,22 @@ struct SSHTerminalView: View {
             .help("Новая независимая SSH-вкладка")
 
             Button {
+                showsNamedWorkspaces.toggle()
+            } label: {
+                Image(systemName: "rectangle.3.group")
+                    .frame(width: 20, height: 20)
+            }
+            .buttonStyle(.bordered)
+            .fixedSize()
+            .help("Именованные рабочие пространства")
+            .popover(isPresented: $showsNamedWorkspaces, arrowEdge: .bottom) {
+                TerminalNamedWorkspaceView(
+                    store: namedWorkspaceStore,
+                    workspace: workspace
+                )
+            }
+
+            Button {
                 showsLayoutPicker.toggle()
             } label: {
                 Image(systemName: workspace.layout.systemImage)
@@ -1358,6 +1376,10 @@ struct SSHTerminalView: View {
                 }
             }
             .disabled(!workspace.selectedTab.session.isRunning)
+            Button("Рабочие пространства", systemImage: "rectangle.3.group") {
+                showsCommandPalette = false
+                showsNamedWorkspaces = true
+            }
             Button(
                 broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
                 systemImage: "antenna.radiowaves.left.and.right"

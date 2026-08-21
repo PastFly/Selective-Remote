@@ -6,6 +6,7 @@ struct LocalTerminalView: View {
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
     @ObservedObject private var snippetStore = TerminalCommandHistoryStore.shared
+    @ObservedObject private var namedWorkspaceStore = TerminalNamedWorkspaceStore.shared
 
     let sshProfiles: [ConnectionProfile]
     let connect: (TerminalWorkspaceTab) -> Void
@@ -17,6 +18,7 @@ struct LocalTerminalView: View {
     @State private var showsPaneAppearance = false
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
+    @State private var showsNamedWorkspaces = false
 
     private var selectedTab: TerminalWorkspaceTab { workspace.selectedTab }
 
@@ -220,6 +222,20 @@ struct LocalTerminalView: View {
             .buttonStyle(.bordered)
             .disabled(workspace.displayedTabs.count >= 8)
             .help("Новая локальная вкладка")
+
+            Button {
+                showsNamedWorkspaces.toggle()
+            } label: {
+                Image(systemName: "rectangle.3.group")
+            }
+            .buttonStyle(.bordered)
+            .help("Именованные рабочие пространства")
+            .popover(isPresented: $showsNamedWorkspaces, arrowEdge: .bottom) {
+                TerminalNamedWorkspaceView(
+                    store: namedWorkspaceStore,
+                    workspace: workspace
+                )
+            }
         }
     }
 

@@ -524,6 +524,24 @@ struct TerminalAppearanceSnapshot: Codable, Equatable, Sendable {
     let theme: TerminalPalette
 }
 
+struct TerminalAppearanceWorkspaceSnapshot: Codable, Equatable, Sendable {
+    let selectedPreset: String
+    let palette: TerminalPalette
+    let customPalette: TerminalPalette
+    let font: String
+    let fontSize: Double
+    let lineHeight: Double
+    let cursorStyle: String
+    let cursorBlink: Bool
+    let syntaxHighlighting: Bool
+    let syntaxScope: String
+    let syntaxFollowTheme: Bool
+    let syntaxHistoryOpacity: Double
+    let syntaxBoldCommands: Bool
+    let syntaxCustomPalette: TerminalSyntaxPalette
+    let padding: Double
+}
+
 @MainActor
 final class TerminalAppearanceStore: ObservableObject {
     private enum Key {
@@ -695,6 +713,47 @@ final class TerminalAppearanceStore: ObservableObject {
             padding: clampedPadding,
             theme: palette
         )
+    }
+
+    var workspaceSnapshot: TerminalAppearanceWorkspaceSnapshot {
+        TerminalAppearanceWorkspaceSnapshot(
+            selectedPreset: selectedPreset.rawValue,
+            palette: palette,
+            customPalette: customPalette,
+            font: font.rawValue,
+            fontSize: clampedFontSize,
+            lineHeight: clampedLineHeight,
+            cursorStyle: cursorStyle.rawValue,
+            cursorBlink: cursorBlink,
+            syntaxHighlighting: syntaxHighlighting,
+            syntaxScope: syntaxScope.rawValue,
+            syntaxFollowTheme: syntaxFollowTheme,
+            syntaxHistoryOpacity: clampedSyntaxHistoryOpacity,
+            syntaxBoldCommands: syntaxBoldCommands,
+            syntaxCustomPalette: syntaxCustomPalette,
+            padding: clampedPadding
+        )
+    }
+
+    func applyWorkspaceSnapshot(_ snapshot: TerminalAppearanceWorkspaceSnapshot) {
+        selectedPreset = TerminalThemePreset(rawValue: snapshot.selectedPreset) ?? .custom
+        palette = snapshot.palette
+        customPalette = snapshot.customPalette
+        font = TerminalFontChoice(rawValue: snapshot.font) ?? .sfMono
+        fontSize = min(max(snapshot.fontSize, 10), 28)
+        lineHeight = min(max(snapshot.lineHeight, 1.0), 1.6)
+        cursorStyle = TerminalCursorStyle(rawValue: snapshot.cursorStyle) ?? .block
+        cursorBlink = snapshot.cursorBlink
+        syntaxHighlighting = snapshot.syntaxHighlighting
+        syntaxScope = TerminalSyntaxScope(rawValue: snapshot.syntaxScope) ?? .visibleCommands
+        syntaxFollowTheme = snapshot.syntaxFollowTheme
+        syntaxHistoryOpacity = min(max(snapshot.syntaxHistoryOpacity, 0.45), 1.0)
+        syntaxBoldCommands = snapshot.syntaxBoldCommands
+        syntaxCustomPalette = snapshot.syntaxCustomPalette
+        padding = min(max(snapshot.padding, 0), 28)
+        saveCustomPalette()
+        saveSyntaxPalette()
+        savePresetAndPalette()
     }
 
     var customThemePalette: TerminalPalette { customPalette }

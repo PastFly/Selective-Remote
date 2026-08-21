@@ -617,3 +617,217 @@ struct SSHAutomationSettingsView: View {
         )
     }
 }
+
+
+struct NamedTerminalWorkspace: Codable, Equatable, Identifiable, Sendable {
+    let id: UUID
+    let scopeID: UUID
+    var name: String
+    var snapshot: TerminalWorkspaceSnapshot
+    let createdAt: Date
+    var updatedAt: Date
+}
+
+@MainActor
+final class TerminalNamedWorkspaceStore: ObservableObject {
+    static let shared = TerminalNamedWorkspaceStore()
+
+    @Published private(set) var workspaces: [NamedTerminalWorkspace]
+    private let defaults: UserDefaults
+    private let key = "SelectiveRemote.terminal.namedWorkspaces.v1"
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let data = defaults.data(forKey: key),
+           let decoded = try? JSONDecoder().decode([NamedTerminalWorkspace].self, from: data) {
+            workspaces = decoded
+        } else {
+            workspaces = []
+        }
+    }
+
+    func workspaces(for scopeID: UUID) -> [NamedTerminalWorkspace] {
+        workspaces
+            .filter { $0.scopeID == scopeID }
+            .sorted {
+                if $0.updatedAt != $1.updatedAt { return $0.updatedAt > $1.updatedAt }
+                return $0.name.localizedStandardCompare($1.name) == .orderedAscending
+            }
+    }
+
+    @discardableResult
+    func save(
+        name rawName: String,
+        scopeID: UUID,
+        snapshot: TerminalWorkspaceSnapshot,
+        now: Date = Date()
+    ) -> NamedTerminalWorkspace? {
+        guard let name = normalizedName(rawName), !snapshot.tabs.isEmpty else { return nil }
+        if let index = workspaces.firstIndex(where: {
+            $0.scopeID == scopeID && sameName($0.name, name)
+        }) {
+            workspaces[index].name = name
+            workspaces[index].snapshot = snapshot
+            workspaces[index].updatedAt = now
+            persist()
+            return workspaces[index]
+        }
+        let entry = NamedTerminalWorkspace(
+            id: UUID(),
+            scopeID: scopeID,
+            name: name,
+            snapshot: snapshot,
+            createdAt: now,
+            updatedAt: now
+        )
+        workspaces.append(entry)
+        persist()
+        return entry
+    }
+
+    func remove(id: UUID) {
+        let previous = workspaces.count
+        workspaces.removeAll { $0.id == id }
+        if workspaces.count != previous { persist() }
+    }
+
+    private func normalizedName(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed.prefix(60))
+    }
+
+    private func sameName(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.compare(rhs, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+    }
+
+    private func persist() {
+        guard let data = try? JSONEncoder().encode(workspaces) else { return }
+        defaults.set(data, forKey: key)
+    }
+}
+
+struct TerminalNamedWorkspaceView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: TerminalNamedWorkspaceStore
+    @ObservedObject var workspace: TerminalWorkspaceModel
+    @State private var name = ""
+    @State private var feedback: String?
+
+    private var entries: [NamedTerminalWorkspace] {
+        store.workspaces(for: workspace.profileID)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 10) {
+                Image(systemName: "rectangle.3.group")
+                    .font(.title2)
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Рабочие пространства")
+                        .font(.title3.weight(.semibold))
+                    Text("Сохраняют вкладки, компоновку, подключения и оформление")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField("Например, Production", text: $name)
+                    .textFieldStyle(.roundedBorder)
+                Button("Сохранить текущее", systemImage: "square.and.arrow.down") {
+                    guard store.save(
+                        name: name,
+                        scopeID: workspace.profileID,
+                        snapshot: workspace.workspaceSnapshot()
+                    ) != nil else {
+                        feedback = "Введите название рабочего пространства"
+                        return
+                    }
+                    feedback = "Рабочее пространство сохранено"
+                    name = ""
+                }
+                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            if workspace.hasRunningSession {
+                Label(
+                    "Для загрузки другого Workspace сначала отключите активные терминалы. Сохранение текущего состояния доступно.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            } else {
+                Label(
+                    "Загрузка восстанавливает структуру, но никогда не подключается к серверам автоматически.",
+                    systemImage: "shield.checkered"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Divider()
+
+            if entries.isEmpty {
+                ContentUnavailableView(
+                    "Нет сохранённых Workspaces",
+                    systemImage: "rectangle.3.group",
+                    description: Text("Соберите нужные вкладки и панели, затем сохраните текущее состояние.")
+                )
+                .frame(minHeight: 180)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(entries) { entry in
+                            workspaceRow(entry)
+                        }
+                    }
+                }
+                .frame(maxHeight: 330)
+            }
+
+            if let feedback {
+                Text(feedback)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(16)
+        .frame(width: 520)
+    }
+
+    private func workspaceRow(_ entry: NamedTerminalWorkspace) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: entry.snapshot.layout.systemImage)
+                .frame(width: 24)
+                .foregroundStyle(Color.accentColor)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                Text("\(entry.snapshot.tabs.count) вкладок · \(entry.snapshot.layout.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            Button("Загрузить") {
+                if workspace.restoreWorkspaceSnapshot(entry.snapshot) {
+                    feedback = "Workspace «\(entry.name)» загружен"
+                    dismiss()
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(workspace.hasRunningSession)
+            Button(role: .destructive) {
+                store.remove(id: entry.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.bordered)
+            .help("Удалить Workspace")
+        }
+        .padding(10)
+        .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+    }
+}

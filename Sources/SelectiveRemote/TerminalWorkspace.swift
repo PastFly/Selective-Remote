@@ -272,6 +272,23 @@ private struct StoredTerminalWorkspace: Codable {
     var layout: TerminalWorkspaceLayout
 }
 
+struct TerminalWorkspaceSnapshot: Codable, Equatable, Sendable {
+    struct Tab: Codable, Equatable, Sendable {
+        let id: UUID
+        var title: String
+        var isPrimary: Bool
+        var connection: TerminalTabConnection
+        var isPinned: Bool
+        var colorIndex: Int
+        var appearance: TerminalAppearanceWorkspaceSnapshot
+    }
+
+    var tabs: [Tab]
+    var selectedTabID: UUID?
+    var secondaryTabID: UUID?
+    var layout: TerminalWorkspaceLayout
+}
+
 @MainActor
 final class TerminalWorkspaceModel: ObservableObject {
     @Published private(set) var tabs: [TerminalWorkspaceTab]
@@ -601,6 +618,80 @@ final class TerminalWorkspaceModel: ObservableObject {
             return
         }
         secondaryTabID = id
+    }
+
+    func workspaceSnapshot() -> TerminalWorkspaceSnapshot {
+        TerminalWorkspaceSnapshot(
+            tabs: tabs.map { tab in
+                TerminalWorkspaceSnapshot.Tab(
+                    id: tab.id,
+                    title: tab.title,
+                    isPrimary: tab.isPrimary,
+                    connection: tab.connection,
+                    isPinned: tab.isPinned,
+                    colorIndex: tab.colorIndex,
+                    appearance: tab.appearance.workspaceSnapshot
+                )
+            },
+            selectedTabID: selectedTabID,
+            secondaryTabID: secondaryTabID,
+            layout: layout
+        )
+    }
+
+    @discardableResult
+    func restoreWorkspaceSnapshot(_ snapshot: TerminalWorkspaceSnapshot) -> Bool {
+        guard !hasRunningSession else { return false }
+        var metadata = Array(snapshot.tabs.prefix(8))
+        guard !metadata.isEmpty else { return false }
+
+        var seen = Set<UUID>()
+        metadata = metadata.filter { seen.insert($0.id).inserted }
+        guard !metadata.isEmpty else { return false }
+        let primaryIndex = metadata.firstIndex(where: { $0.isPrimary }) ?? 0
+        for index in metadata.indices {
+            metadata[index].isPrimary = index == primaryIndex
+        }
+
+        let reusablePrimarySession = tabs.first(where: { $0.isPrimary })?.session
+            ?? tabs.first?.session
+            ?? TerminalSessionModel()
+
+        isRestoring = true
+        sessionObservers.removeAll()
+        sessionPhaseObservers.removeAll()
+        appearanceObservers.removeAll()
+        remoteContexts.removeAll()
+
+        var restored: [TerminalWorkspaceTab] = []
+        for (index, item) in metadata.enumerated() {
+            let tab = TerminalWorkspaceTab(
+                id: item.id,
+                title: Self.normalizedTitle(item.title, fallback: "Терминал \(index + 1)"),
+                session: item.isPrimary ? reusablePrimarySession : TerminalSessionModel(),
+                isPrimary: item.isPrimary,
+                connection: item.connection,
+                isPinned: item.isPinned,
+                colorIndex: item.colorIndex,
+                appearanceDefaults: defaults
+            )
+            tab.appearance.applyWorkspaceSnapshot(item.appearance)
+            restored.append(tab)
+        }
+
+        tabs = restored
+        selectedTabID = snapshot.selectedTabID.flatMap { id in
+            restored.contains(where: { $0.id == id }) ? id : nil
+        } ?? restored[0].id
+        secondaryTabID = snapshot.secondaryTabID.flatMap { id in
+            restored.contains(where: { $0.id == id && $0.id != selectedTabID }) ? id : nil
+        }
+        layout = snapshot.layout
+        observeSessions()
+        isRestoring = false
+        normalizeSelectionAndPersist()
+        objectWillChange.send()
+        return true
     }
 
     func stopAll() {
