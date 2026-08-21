@@ -1,6 +1,13 @@
 import Foundation
 import Security
 
+struct CredentialVaultMigrationReport: Equatable, Sendable {
+    var discovered = 0
+    var imported = 0
+    var alreadyStored = 0
+    var failed = 0
+}
+
 /// Stores all Selective Remote password secrets inside one generic-password
 /// Keychain item. Ad-hoc signed builds get a new designated identity after an
 /// update, so legacy per-profile Keychain ACLs can ask for authorization once
@@ -91,64 +98,95 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         _ = try loadIfNeeded()
     }
 
-    /// One-time migration for existing per-profile Keychain records. The query
-    /// is performed per Selective Remote service with MatchLimitAll, so macOS
-    /// can authorize the batch instead of the app issuing 100 independent reads.
+    /// One-time migration for existing per-profile Keychain records.
+    ///
+    /// Security.framework does not allow `kSecReturnData` together with
+    /// `kSecMatchLimitAll` for password items. We therefore enumerate only
+    /// non-secret attributes first and then read each password individually.
+    /// Old ad-hoc ACLs may still require a one-time macOS authorization per
+    /// legacy item; once imported, future app builds use the single vault item.
     @discardableResult
-    func importLegacyItems(services: [String]) throws -> Int {
+    func importLegacyItems(services: [String]) throws -> CredentialVaultMigrationReport {
         lock.lock()
         defer { lock.unlock() }
         var secrets = try loadIfNeeded()
-        var imported = 0
+        var report = CredentialVaultMigrationReport()
 
         for service in Array(Set(services)).sorted() where service != Self.service {
-            let query: [String: Any] = [
-                kSecClass as String: kSecClassGenericPassword,
-                kSecAttrService as String: service,
-                kSecMatchLimit as String: kSecMatchLimitAll,
-                kSecReturnAttributes as String: true,
-                kSecReturnData as String: true
-            ]
-            var result: CFTypeRef?
-            let status = SecItemCopyMatching(query as CFDictionary, &result)
-            if status == errSecItemNotFound { continue }
-            guard status == errSecSuccess else {
-                throw KeychainError.unexpectedStatus(status)
-            }
-
-            let items: [[String: Any]]
-            if let array = result as? [[String: Any]] {
-                items = array
-            } else if let item = result as? [String: Any] {
-                items = [item]
-            } else {
-                continue
-            }
-
-            for item in items {
-                guard let account = item[kSecAttrAccount as String] as? String,
-                      let data = item[kSecValueData as String] as? Data,
-                      let secret = String(data: data, encoding: .utf8),
-                      !secret.isEmpty
-                else { continue }
+            let accounts = try legacyAccounts(service: service)
+            for account in accounts where !account.hasSuffix(".ssh-key-authorization") {
+                report.discovered += 1
                 let reference = KeychainCredentialReference(
                     service: service,
                     account: account
                 )
                 let key = Self.entryKey(for: reference)
-                if secrets[key] != secret {
+                if secrets[key] != nil {
+                    report.alreadyStored += 1
+                    continue
+                }
+
+                let read = readLegacySecret(service: service, account: account)
+                if read.status == errSecSuccess {
+                    guard let secret = read.value, !secret.isEmpty else { continue }
                     secrets[key] = secret
-                    imported += 1
+                    report.imported += 1
+                } else if read.status != errSecItemNotFound {
+                    // Do not abort the entire migration because one old ACL is
+                    // inaccessible or the user cancelled one authorization.
+                    report.failed += 1
                 }
             }
         }
 
-        if imported > 0 {
+        if report.imported > 0 {
             try persist(secrets)
             cachedSecrets = secrets
             index = Set(secrets.keys)
         }
-        return imported
+        return report
+    }
+
+    private func legacyAccounts(service: String) throws -> [String] {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+            kSecReturnAttributes as String: true
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return [] }
+        guard status == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+
+        let items: [[String: Any]]
+        if let array = result as? [[String: Any]] {
+            items = array
+        } else if let item = result as? [String: Any] {
+            items = [item]
+        } else {
+            return []
+        }
+        return Array(Set(items.compactMap { $0[kSecAttrAccount as String] as? String })).sorted()
+    }
+
+    private func readLegacySecret(service: String, account: String) -> (value: String?, status: OSStatus) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        guard status == errSecSuccess else { return (nil, status) }
+        guard let data = result as? Data,
+              let value = String(data: data, encoding: .utf8)
+        else { return (nil, errSecDecode) }
+        return (value, errSecSuccess)
     }
 
     private var index: Set<String> {

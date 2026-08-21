@@ -290,7 +290,7 @@ enum KeychainService {
     }
 
     @discardableResult
-    static func migrateCredentialsToUnifiedVault() throws -> Int {
+    static func migrateCredentialsToUnifiedVault() throws -> CredentialVaultMigrationReport {
         try UnifiedCredentialVault.shared.importLegacyItems(
             services: [service, legacyService]
         )

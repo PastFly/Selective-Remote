@@ -1,5 +1,8 @@
 ## 0.26.0
 
+- Fixed Group inheritance editing: shared SSH group values are now always editable, while inheritance switches only control whether the current profile applies each group value.
+- Fixed Merge Passwords migration: removed Keychain `-50` by using a valid two-stage legacy lookup, and inaccessible legacy items no longer abort migration of the remaining credentials.
+- Added Edit to the host context menu; it jumps directly to Connections → General for the selected profile from any workspace.
 - Startup Snippets, Terminal Variables, and Group inheritance now have a dedicated visible Automation tab in SSH profile settings; profiles without a group get an explicit setup hint.
 - Added a unified Keychain Vault for RDP/SSH/Proxy/Forwarding passwords: after the first authorization, secrets are read from one Keychain record and cached only in memory until the app exits, preventing a storm of per-profile prompts after ad-hoc updates.
 - The Keychain screen now includes a one-time Merge Passwords action that batch-migrates existing per-profile records into the unified Vault.

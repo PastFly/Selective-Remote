@@ -701,6 +701,12 @@ struct ContentView: View {
             }
         }
 
+        Button("Изменить", systemImage: "pencil") {
+            model.selectProfile(item.id)
+            setMainArea(.connections)
+            selectedTab = .general
+        }
+
         Divider()
         Button(
             item.isFavorite ? "Убрать из избранного" : "В избранное",

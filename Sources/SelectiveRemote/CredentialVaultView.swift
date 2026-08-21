@@ -314,10 +314,14 @@ struct CredentialVaultView: View {
 
     private func migrateCredentialVault() {
         do {
-            let imported = try KeychainService.migrateCredentialsToUnifiedVault()
-            unifiedVaultMessage = imported > 0
-                ? "Перенесено записей: \(imported). Теперь SSH/RDP/SFTP/Forwarding используют один Keychain Vault, который кэшируется только до завершения приложения."
-                : "Новых записей для переноса нет. Единый Vault уже готов к работе."
+            let report = try KeychainService.migrateCredentialsToUnifiedVault()
+            if report.discovered == 0 {
+                unifiedVaultMessage = "Старых записей для переноса не найдено. Единый Vault уже готов к работе."
+            } else if report.failed > 0 {
+                unifiedVaultMessage = "Перенесено: \(report.imported), уже в Vault: \(report.alreadyStored), не удалось прочитать: \(report.failed). Недоступные записи можно перенести позже повторным запуском или при обычном подключении к профилю."
+            } else {
+                unifiedVaultMessage = "Перенесено: \(report.imported), уже в Vault: \(report.alreadyStored). Теперь сохранённые пароли используют единый Keychain Vault."
+            }
         } catch {
             unifiedVaultMessage = "Не удалось объединить пароли: \(error.localizedDescription)"
         }
@@ -383,7 +387,7 @@ struct CredentialVaultView: View {
                     Label("Объединить пароли", systemImage: "lock.square.stack")
                 }
                 .buttonStyle(.bordered)
-                .help("Однократно переносит сохранённые пароли в один защищённый Keychain Vault. После ad-hoc обновления приложению потребуется доступ максимум к одной записи вместо отдельного запроса для каждого профиля.")
+                .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
                 Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
                     .font(.caption2.monospacedDigit())
                     .foregroundStyle(.secondary)

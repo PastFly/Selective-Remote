@@ -434,7 +434,7 @@ struct SSHAutomationSettingsView: View {
                     .buttonStyle(.borderless)
                 }
             }
-            Text("Каждый параметр наследуется отдельно. Если переключатель выключен, используется значение самого профиля.")
+            Text("Поля справа — общие значения группы и всегда доступны для редактирования. Переключатель слева только определяет, наследует ли этот параметр текущий профиль.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -443,14 +443,12 @@ struct SSHAutomationSettingsView: View {
                     Toggle("Пользователь", isOn: inheritanceBinding(\.username))
                     TextField("admin", text: groupStringBinding(\.username, fallback: ""))
                         .textFieldStyle(.roundedBorder)
-                        .disabled(!profile.sshGroupInheritance.username)
                 }
                 GridRow {
                     Toggle("SSH-порт", isOn: inheritanceBinding(\.port))
                     TextField("22", value: groupIntBinding(\.port, fallback: 22), format: .number.grouping(.never))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 120)
-                        .disabled(!profile.sshGroupInheritance.port)
                 }
                 GridRow {
                     Toggle("Jump Host", isOn: inheritanceBinding(\.jumpHost))
@@ -462,14 +460,12 @@ struct SSHAutomationSettingsView: View {
                         }
                     }
                     .labelsHidden()
-                    .disabled(!profile.sshGroupInheritance.jumpHost)
                 }
                 GridRow {
                     Toggle("Keepalive", isOn: inheritanceBinding(\.keepAlive))
                     TextField("30", value: groupIntBinding(\.keepAliveSeconds, fallback: 30), format: .number.grouping(.never))
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 120)
-                        .disabled(!profile.sshGroupInheritance.keepAlive)
                 }
                 GridRow {
                     Toggle("Startup Snippet", isOn: inheritanceBinding(\.startupSnippet))
@@ -489,14 +485,11 @@ struct SSHAutomationSettingsView: View {
                         .labelsHidden()
                         .frame(width: 170)
                     }
-                    .disabled(!profile.sshGroupInheritance.startupSnippet)
                 }
             }
 
             Toggle("Наследовать переменные группы", isOn: inheritanceBinding(\.variables))
             groupVariableEditor(groupName: name)
-                .disabled(!profile.sshGroupInheritance.variables)
-                .opacity(profile.sshGroupInheritance.variables ? 1 : 0.55)
         }
     }
 
