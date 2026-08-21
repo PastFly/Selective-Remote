@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct LocalTerminalView: View {
+    @EnvironmentObject private var model: AppModel
     @ObservedObject var workspace: TerminalWorkspaceModel
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
@@ -19,14 +20,23 @@ struct LocalTerminalView: View {
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
     @State private var showsNamedWorkspaces = false
+    @State private var showsSnippetLibrary = false
 
     private var selectedTab: TerminalWorkspaceTab { workspace.selectedTab }
+
+    private var inspectorMode: TerminalWorkspaceInspectorMode {
+        showsSnippets ? .snippets : .history
+    }
+
+    private var inspectorVisible: Bool {
+        showsHistory || showsSnippets
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             tabBar
-            terminalPane(selectedTab)
+            terminalWithInspector
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 320)
             Text(
@@ -50,6 +60,10 @@ struct LocalTerminalView: View {
                 if let renameTabID { workspace.renameTab(renameTabID, to: renameValue) }
                 renameTabID = nil
             }
+        }
+        .sheet(isPresented: $showsSnippetLibrary) {
+            TerminalSnippetsLibraryView(store: snippetStore, model: model)
+                .frame(minWidth: 980, minHeight: 680)
         }
     }
 
@@ -239,6 +253,46 @@ struct LocalTerminalView: View {
         }
     }
 
+    private var terminalWithInspector: some View {
+        HStack(spacing: 8) {
+            terminalPane(selectedTab)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            if inspectorVisible {
+                TerminalWorkspaceInspector(
+                    store: snippetStore,
+                    mode: inspectorMode,
+                    profileID: selectedTab.id,
+                    terminalTitle: selectedTab.title,
+                    sessionIsRunning: selectedTab.session.isRunning,
+                    remoteContext: .empty,
+                    selectMode: { mode in
+                        showsHistory = mode == .history
+                        showsSnippets = mode == .snippets
+                    },
+                    refreshRemoteContext: {},
+                    close: {
+                        showsHistory = false
+                        showsSnippets = false
+                    },
+                    insert: { command in
+                        replaceCurrentLine(command, run: false)
+                    },
+                    runHere: { command in
+                        replaceCurrentLine(command, run: true)
+                    },
+                    runOnTargets: executeSnippet,
+                    openSnippetLibrary: {
+                        showsSnippetLibrary = true
+                    }
+                )
+                .frame(maxHeight: .infinity)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            }
+        }
+        .animation(.easeInOut(duration: 0.20), value: inspectorVisible)
+    }
+
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
         let paneAppearance = tab.appearance.snapshot
         return EmbeddedTerminalWebView(
@@ -263,7 +317,7 @@ struct LocalTerminalView: View {
             onSmartLink: { link in open(link) },
             onSnippetRun: executeSnippet,
             historyVisible: Binding(
-                get: { showsHistory && workspace.selectedTabID == tab.id },
+                get: { false },
                 set: { visible in
                     guard workspace.selectedTabID == tab.id else { return }
                     showsHistory = visible
@@ -271,7 +325,7 @@ struct LocalTerminalView: View {
                 }
             ),
             snippetsVisible: Binding(
-                get: { showsSnippets && workspace.selectedTabID == tab.id },
+                get: { false },
                 set: { visible in
                     guard workspace.selectedTabID == tab.id else { return }
                     showsSnippets = visible
@@ -303,6 +357,16 @@ struct LocalTerminalView: View {
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
             }
         }
+    }
+
+    private func replaceCurrentLine(_ command: String, run: Bool) {
+        let normalized = command.trimmingCharacters(in: .newlines)
+        guard !normalized.isEmpty,
+              !normalized.contains("\0"),
+              selectedTab.session.isRunning
+        else { return }
+        let suffix = run ? "\r" : ""
+        selectedTab.session.sendInput(Data(("\u{15}\(normalized)\(suffix)").utf8))
     }
 
     private func addTab() {
