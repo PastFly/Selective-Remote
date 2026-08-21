@@ -37,6 +37,24 @@ jobs:
       - name: Apply Startup Snippets, variables and group inheritance
         run: python3 scripts/v026_phase2_patch.py
 
+      - name: Normalize phase 2 JSON assertion
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('Tests/SelectiveRemoteTests/TerminalProductivity0260Tests.swift')
+          text = path.read_text(encoding='utf-8')
+          old = '''    #expect(json.contains("PROJECT_PATH"))
+              #expect(json.contains("/opt/app"))'''
+          new = '''    let data = try #require(json.data(using: .utf8))
+              let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+              let variables = try #require(object["variables"] as? [String: String])
+              #expect(variables["PROJECT_PATH"] == "/opt/app")
+              #expect(variables["HOST"] == "example.test")'''
+          if old not in text:
+              raise SystemExit('phase2 JSON assertion pattern not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+
       - name: Validate shell scripts and release notes
         run: |
           bash -n scripts/build_app.sh
