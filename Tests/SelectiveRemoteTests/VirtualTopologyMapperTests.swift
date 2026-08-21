@@ -531,7 +531,7 @@ func buildsNativeSingleMonitorWindowedArguments() throws {
     #expect(!arguments.contains(where: { $0.hasPrefix("/monitors:") }))
 }
 
-@Test("Служебные окна SDL скрыты, а верхнее меню доступно в полном экране")
+@Test("Служебные окна SDL скрыты, а macOS menu bar доступен по наведению")
 func configuresSDLSessionEnvironment() {
     let environment = FreeRDPService().launchEnvironment(from: ["KEEP": "value"])
 

@@ -716,6 +716,7 @@ struct SSHTerminalView: View {
     let discoverContext: (TerminalWorkspaceTab) async throws -> TerminalRemoteContextSnapshot
 
     @State private var showsAppearance = false
+    @State private var showsPaneAppearance = false
     @State private var showsHistory = false
     @State private var showsSnippets = false
     @State private var showsServerCommands = false
@@ -1005,6 +1006,26 @@ struct SSHTerminalView: View {
             }
             .buttonStyle(.bordered)
             .help(locale.identifier.lowercased().hasPrefix("en") ? "Snippets" : "Сниппеты")
+
+            Button {
+                showsPaneAppearance.toggle()
+            } label: {
+                Image(systemName: "paintpalette.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.bordered)
+            .help(locale.identifier.lowercased().hasPrefix("en")
+                ? "Appearance for this terminal"
+                : "Индивидуальное оформление этой SSH-вкладки")
+            .popover(isPresented: $showsPaneAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(
+                    store: tab.appearance,
+                    appAppearance: appAppearance,
+                    includesApplicationSettings: false,
+                    individualTitle: tab.title,
+                    copyFrom: appearance
+                )
+            }
 
             if isFocusMode {
                 Button("Вернуть интерфейс", systemImage: "arrow.down.right.and.arrow.up.left") {
@@ -1550,6 +1571,7 @@ struct SSHTerminalView: View {
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
         let color = paneColor(for: tab)
+        let paneAppearance = tab.appearance.snapshot
         let isSelected = tab.id == workspace.selectedTabID
         let state = sessionState(for: tab)
         let broadcastTarget = broadcastsInput && tab.session.isRunning
@@ -1673,7 +1695,7 @@ struct SSHTerminalView: View {
 
             EmbeddedTerminalWebView(
                 session: tab.session,
-                appearance: appearance.snapshot,
+                appearance: paneAppearance,
                 historyContext: TerminalHistoryContext(
                     profileID: historyContextID(for: tab),
                     snippetTargets: sshProfiles.map { profile in
@@ -1789,7 +1811,7 @@ struct SSHTerminalView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TerminalColorCodecView.color(appearance.palette.background))
+        .background(TerminalColorCodecView.color(paneAppearance.theme.background))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)

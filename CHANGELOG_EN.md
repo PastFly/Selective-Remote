@@ -1,3 +1,13 @@
+## 0.25.0
+
+- The Snippets panel in local and SSH terminals no longer closes after running or inserting a snippet; it stays open until the user explicitly closes it.
+- Manual update checks now stay entirely inside Settings: the window no longer loses focus to a main-window alert, and progress/result are rendered inline.
+- Local Terminal right-side controls now match the SSH toolbar's visual scale.
+- Every local and SSH tab now has complete individual terminal appearance settings: the full theme catalog with the same preview, font, size, line height, cursor, syntax highlighting, padding, and custom palette.
+- Individual appearance is persisted by the tab's stable UUID, restored with the Terminal Workspace, and can copy the current global terminal appearance in one click.
+- Added regression coverage for Snippets persistence, update-window locking, local toolbar sizing, and per-pane themes.
+- Fixed single-monitor fullscreen RDP on macOS: native menu/title-bar controls are reachable again at the top edge, while the hidden SDL probe separately subtracts only the top safe-area/menu-bar inset from the negotiated remote desktop height so the Windows taskbar stays visible.
+
 ## 0.24.0
 
 - Added custom connection tags: a profile can have multiple tags with creation, assignment, global rename, deletion, search, and compound filtering.

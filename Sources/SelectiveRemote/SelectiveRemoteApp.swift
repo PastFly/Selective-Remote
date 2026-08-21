@@ -212,6 +212,11 @@ struct SelectiveRemoteApp: App {
                     appearance: appAppearance,
                     appLock: appLock
                 )
+                .background(
+                    SettingsWindowCloseGuard(
+                        preventsClosing: model.isCheckingForUpdates
+                    )
+                )
             }
                 .environmentObject(language)
                 .environment(\.locale, language.locale)

@@ -543,6 +543,12 @@ final class TerminalAppearanceStore: ObservableObject {
         static let padding = "SelectiveRemote.terminal.padding.v1"
         static let customPalette = "SelectiveRemote.terminal.customPalette.v1"
         static let themeFavorites = "SelectiveRemote.terminal.themeFavorites.v1"
+
+        static let all = [
+            preset, palette, font, fontSize, lineHeight, cursorStyle, cursorBlink,
+            syntaxHighlighting, syntaxScope, syntaxFollowTheme, syntaxHistoryOpacity,
+            syntaxBoldCommands, syntaxPalette, padding, customPalette, themeFavorites
+        ]
     }
 
     @Published private(set) var selectedPreset: TerminalThemePreset
@@ -584,15 +590,37 @@ final class TerminalAppearanceStore: ObservableObject {
     }
 
     private let defaults: UserDefaults
+    private let storageNamespace: String?
     private var customPalette: TerminalPalette
 
-    init(defaults: UserDefaults = .standard) {
+    init(
+        defaults: UserDefaults = .standard,
+        storageNamespace: String? = nil,
+        cloneGlobalIfMissing: Bool = false
+    ) {
         self.defaults = defaults
-        let preset = defaults.string(forKey: Key.preset)
+        self.storageNamespace = storageNamespace
+
+        let resolvedKey: (String) -> String = { key in
+            guard let storageNamespace, !storageNamespace.isEmpty else { return key }
+            return "\(key).scope.\(storageNamespace)"
+        }
+
+        if storageNamespace != nil,
+           cloneGlobalIfMissing,
+           defaults.object(forKey: resolvedKey(Key.preset)) == nil {
+            for key in Key.all {
+                if let value = defaults.object(forKey: key) {
+                    defaults.set(value, forKey: resolvedKey(key))
+                }
+            }
+        }
+
+        let preset = defaults.string(forKey: resolvedKey(Key.preset))
             .flatMap(TerminalThemePreset.init(rawValue:)) ?? .midnight
-        let legacyPalette = defaults.data(forKey: Key.palette)
+        let legacyPalette = defaults.data(forKey: resolvedKey(Key.palette))
             .flatMap { try? JSONDecoder().decode(TerminalPalette.self, from: $0) }
-        let storedCustomPalette = defaults.data(forKey: Key.customPalette)
+        let storedCustomPalette = defaults.data(forKey: resolvedKey(Key.customPalette))
             .flatMap { try? JSONDecoder().decode(TerminalPalette.self, from: $0) }
         let migratedCustomPalette = storedCustomPalette
             ?? (preset == .custom ? legacyPalette : nil)
@@ -603,41 +631,51 @@ final class TerminalAppearanceStore: ObservableObject {
         palette = preset == .custom
             ? migratedCustomPalette
             : (legacyPalette ?? preset.palette)
-        favoritePresetIDs = Set(defaults.stringArray(forKey: Key.themeFavorites) ?? [])
+        favoritePresetIDs = Set(
+            defaults.stringArray(forKey: resolvedKey(Key.themeFavorites)) ?? []
+        )
 
         if storedCustomPalette == nil,
            preset == .custom,
            let data = try? JSONEncoder().encode(migratedCustomPalette) {
-            defaults.set(data, forKey: Key.customPalette)
+            defaults.set(data, forKey: resolvedKey(Key.customPalette))
         }
 
-        font = defaults.string(forKey: Key.font)
+        font = defaults.string(forKey: resolvedKey(Key.font))
             .flatMap(TerminalFontChoice.init(rawValue:)) ?? .sfMono
-        let storedFontSize = defaults.double(forKey: Key.fontSize)
+        let storedFontSize = defaults.double(forKey: resolvedKey(Key.fontSize))
         fontSize = storedFontSize > 0 ? min(max(storedFontSize, 10), 28) : 14
-        let storedLineHeight = defaults.double(forKey: Key.lineHeight)
+        let storedLineHeight = defaults.double(forKey: resolvedKey(Key.lineHeight))
         lineHeight = storedLineHeight > 0 ? min(max(storedLineHeight, 1.0), 1.6) : 1.15
-        cursorStyle = defaults.string(forKey: Key.cursorStyle)
+        cursorStyle = defaults.string(forKey: resolvedKey(Key.cursorStyle))
             .flatMap(TerminalCursorStyle.init(rawValue:)) ?? .block
-        cursorBlink = defaults.object(forKey: Key.cursorBlink) as? Bool ?? true
-        syntaxHighlighting = defaults.object(forKey: Key.syntaxHighlighting) as? Bool ?? true
-        syntaxScope = defaults.string(forKey: Key.syntaxScope)
+        cursorBlink = defaults.object(forKey: resolvedKey(Key.cursorBlink)) as? Bool ?? true
+        syntaxHighlighting = defaults.object(
+            forKey: resolvedKey(Key.syntaxHighlighting)
+        ) as? Bool ?? true
+        syntaxScope = defaults.string(forKey: resolvedKey(Key.syntaxScope))
             .flatMap(TerminalSyntaxScope.init(rawValue:)) ?? .visibleCommands
-        syntaxFollowTheme = defaults.object(forKey: Key.syntaxFollowTheme) as? Bool ?? true
-        let storedSyntaxHistoryOpacity = defaults.double(forKey: Key.syntaxHistoryOpacity)
+        syntaxFollowTheme = defaults.object(
+            forKey: resolvedKey(Key.syntaxFollowTheme)
+        ) as? Bool ?? true
+        let storedSyntaxHistoryOpacity = defaults.double(
+            forKey: resolvedKey(Key.syntaxHistoryOpacity)
+        )
         syntaxHistoryOpacity = storedSyntaxHistoryOpacity > 0
             ? min(max(storedSyntaxHistoryOpacity, 0.45), 1.0)
             : 0.82
-        syntaxBoldCommands = defaults.object(forKey: Key.syntaxBoldCommands) as? Bool ?? true
-        syntaxCustomPalette = defaults.data(forKey: Key.syntaxPalette)
+        syntaxBoldCommands = defaults.object(
+            forKey: resolvedKey(Key.syntaxBoldCommands)
+        ) as? Bool ?? true
+        syntaxCustomPalette = defaults.data(forKey: resolvedKey(Key.syntaxPalette))
             .flatMap { try? JSONDecoder().decode(TerminalSyntaxPalette.self, from: $0) }
             ?? TerminalSyntaxPalette(
                 theme: preset == .custom
                     ? migratedCustomPalette
                     : (legacyPalette ?? preset.palette)
             )
-        let storedPadding = defaults.double(forKey: Key.padding)
-        padding = defaults.object(forKey: Key.padding) == nil
+        let storedPadding = defaults.double(forKey: resolvedKey(Key.padding))
+        padding = defaults.object(forKey: resolvedKey(Key.padding)) == nil
             ? 10
             : min(max(storedPadding, 0), 28)
     }
@@ -689,7 +727,7 @@ final class TerminalAppearanceStore: ObservableObject {
         } else {
             favoritePresetIDs.insert(preset.rawValue)
         }
-        defaults.set(favoritePresetIDs.sorted(), forKey: Key.themeFavorites)
+        defaults.set(favoritePresetIDs.sorted(), forKey: storageKey(Key.themeFavorites))
     }
 
     func updateBackground(_ value: String) {
@@ -731,6 +769,32 @@ final class TerminalAppearanceStore: ObservableObject {
         applyPreset(.midnight)
     }
 
+    func copySettings(from source: TerminalAppearanceStore) {
+        selectedPreset = source.selectedPreset
+        palette = source.palette
+        customPalette = source.customThemePalette
+        favoritePresetIDs = source.favoritePresetIDs
+        font = source.font
+        fontSize = source.fontSize
+        lineHeight = source.lineHeight
+        cursorStyle = source.cursorStyle
+        cursorBlink = source.cursorBlink
+        syntaxHighlighting = source.syntaxHighlighting
+        syntaxScope = source.syntaxScope
+        syntaxFollowTheme = source.syntaxFollowTheme
+        syntaxHistoryOpacity = source.syntaxHistoryOpacity
+        syntaxBoldCommands = source.syntaxBoldCommands
+        syntaxCustomPalette = source.syntaxCustomPalette
+        padding = source.padding
+        saveCustomPalette()
+        saveSyntaxPalette()
+        savePresetAndPalette()
+        defaults.set(
+            favoritePresetIDs.sorted(),
+            forKey: storageKey(Key.themeFavorites)
+        )
+    }
+
     func updateSyntaxColor(
         _ keyPath: WritableKeyPath<TerminalSyntaxPalette, String>,
         _ value: String
@@ -766,25 +830,30 @@ final class TerminalAppearanceStore: ObservableObject {
 
     private func saveCustomPalette() {
         if let data = try? JSONEncoder().encode(customPalette) {
-            defaults.set(data, forKey: Key.customPalette)
+            defaults.set(data, forKey: storageKey(Key.customPalette))
         }
     }
 
     private func saveSyntaxPalette() {
         if let data = try? JSONEncoder().encode(syntaxCustomPalette) {
-            defaults.set(data, forKey: Key.syntaxPalette)
+            defaults.set(data, forKey: storageKey(Key.syntaxPalette))
         }
     }
 
     private func savePresetAndPalette() {
-        defaults.set(selectedPreset.rawValue, forKey: Key.preset)
+        defaults.set(selectedPreset.rawValue, forKey: storageKey(Key.preset))
         if let data = try? JSONEncoder().encode(palette) {
-            defaults.set(data, forKey: Key.palette)
+            defaults.set(data, forKey: storageKey(Key.palette))
         }
     }
 
     private func saveScalar(_ value: Any, key: String) {
-        defaults.set(value, forKey: key)
+        defaults.set(value, forKey: storageKey(key))
+    }
+
+    private func storageKey(_ key: String) -> String {
+        guard let storageNamespace, !storageNamespace.isEmpty else { return key }
+        return "\(key).scope.\(storageNamespace)"
     }
 }
 
@@ -792,9 +861,28 @@ struct TerminalAppearanceView: View {
     @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var store: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
+    var includesApplicationSettings = true
+    var individualTitle: String? = nil
+    var copyFrom: TerminalAppearanceStore? = nil
 
     var body: some View {
         Form {
+            if let individualTitle {
+                Section("Индивидуальное оформление") {
+                    Label(individualTitle, systemImage: "rectangle.inset.filled.and.person.filled")
+                        .font(.headline)
+                    Text("Тема, шрифт, курсор, подсветка синтаксиса и своя палитра сохраняются только для этой вкладки терминала.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if let copyFrom {
+                        Button("Скопировать общее оформление", systemImage: "square.on.square") {
+                            store.copySettings(from: copyFrom)
+                        }
+                    }
+                }
+            }
+
+            if includesApplicationSettings {
             Section("Язык приложения") {
                 Picker("Язык", selection: $language.selection) {
                     ForEach(AppLanguage.allCases) { item in
@@ -807,6 +895,7 @@ struct TerminalAppearanceView: View {
             }
 
             AppAppearanceSettingsSection(store: appAppearance)
+            }
 
             Section("Терминал") {
                 TerminalThemeSelector(store: store)
@@ -988,7 +1077,9 @@ struct TerminalAppearanceView: View {
                 Spacer()
                 Button("Сбросить оформление") {
                     store.reset()
-                    appAppearance.reset()
+                    if includesApplicationSettings {
+                        appAppearance.reset()
+                    }
                 }
             }
         }

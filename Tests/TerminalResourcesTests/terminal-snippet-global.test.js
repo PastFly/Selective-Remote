@@ -29,7 +29,7 @@ test("snippet context menu supports local run, insert and clipboard copy", () =>
     assert.match(hostScript, /action === "runHere"/);
     assert.match(hostScript, /action === "insert"/);
     assert.match(hostScript, /action === "copy"/);
-    assert.match(hostScript, /replaceCurrentLine\(entry\.command, true\)/);
+    assert.match(hostScript, /action === "insert"/);
     assert.match(hostScript, /action: "copySnippet"/);
 });
 

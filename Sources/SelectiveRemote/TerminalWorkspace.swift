@@ -221,6 +221,32 @@ struct TerminalWorkspaceTab: Identifiable {
     var connection: TerminalTabConnection
     var isPinned: Bool
     var colorIndex: Int
+    let appearance: TerminalAppearanceStore
+
+    @MainActor
+    init(
+        id: UUID,
+        title: String,
+        session: TerminalSessionModel,
+        isPrimary: Bool,
+        connection: TerminalTabConnection,
+        isPinned: Bool,
+        colorIndex: Int,
+        appearanceDefaults: UserDefaults = .standard
+    ) {
+        self.id = id
+        self.title = title
+        self.session = session
+        self.isPrimary = isPrimary
+        self.connection = connection
+        self.isPinned = isPinned
+        self.colorIndex = colorIndex
+        appearance = TerminalAppearanceStore(
+            defaults: appearanceDefaults,
+            storageNamespace: "pane.\(id.uuidString)",
+            cloneGlobalIfMissing: true
+        )
+    }
 
     @MainActor var isEmptyPlaceholder: Bool {
         !session.isRunning
@@ -265,6 +291,7 @@ final class TerminalWorkspaceModel: ObservableObject {
     private let defaults: UserDefaults
     private var sessionObservers: [UUID: AnyCancellable] = [:]
     private var sessionPhaseObservers: [UUID: AnyCancellable] = [:]
+    private var appearanceObservers: [UUID: AnyCancellable] = [:]
     private var isRestoring = true
     private var storageKey: String {
         "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
@@ -302,7 +329,8 @@ final class TerminalWorkspaceModel: ObservableObject {
                     ?? primaryConnection
                     ?? .savedProfile(profileID),
                 isPinned: primaryMetadata.isPinned ?? false,
-                colorIndex: primaryMetadata.colorIndex ?? 0
+                colorIndex: primaryMetadata.colorIndex ?? 0,
+                appearanceDefaults: defaults
             )
         ]
         let additionalMetadata = Array(
@@ -320,7 +348,8 @@ final class TerminalWorkspaceModel: ObservableObject {
                     isPrimary: false,
                     connection: metadata.connection ?? .savedProfile(profileID),
                     isPinned: metadata.isPinned ?? false,
-                    colorIndex: metadata.colorIndex ?? restoredTabs.count % 6
+                    colorIndex: metadata.colorIndex ?? restoredTabs.count % 6,
+                    appearanceDefaults: defaults
                 )
             )
         }
@@ -424,7 +453,8 @@ final class TerminalWorkspaceModel: ObservableObject {
             isPrimary: false,
             connection: connection ?? .savedProfile(profileID),
             isPinned: false,
-            colorIndex: tabs.count % 6
+            colorIndex: tabs.count % 6,
+            appearanceDefaults: defaults
         )
         tabs.append(tab)
         observe(tab)
@@ -444,6 +474,7 @@ final class TerminalWorkspaceModel: ObservableObject {
         ) else { return nil }
         if let index = tabs.firstIndex(where: { $0.id == created.id }) {
             tabs[index].colorIndex = source.colorIndex
+            tabs[index].appearance.copySettings(from: source.appearance)
             tabs[index].isPinned = false
             persist()
             objectWillChange.send()
@@ -484,6 +515,7 @@ final class TerminalWorkspaceModel: ObservableObject {
         remoteContexts[id] = nil
         sessionObservers[id] = nil
         sessionPhaseObservers[id] = nil
+        appearanceObservers[id] = nil
         tabs.remove(at: index)
         if wasPrimary {
             tabs[0].isPrimary = true
@@ -604,6 +636,11 @@ final class TerminalWorkspaceModel: ObservableObject {
             guard !phase.isRunning else { return }
             Task { @MainActor [weak self] in
                 self?.invalidateRemoteContext(for: tab.id)
+            }
+        }
+        appearanceObservers[tab.id] = tab.appearance.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.objectWillChange.send()
             }
         }
     }
