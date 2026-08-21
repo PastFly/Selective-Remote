@@ -295,8 +295,8 @@ final class SSHGroupConfigurationStore: ObservableObject {
         persist()
     }
 
-    private func normalizedGroup(_ raw: String) -> String {
-        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    private func normalizedGroup(_ rawGroup: String) -> String {
+        rawGroup.trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
     }
@@ -352,37 +352,21 @@ enum TerminalVariableResolver {
 struct SSHAutomationSettingsView: View {
     @Binding var profile: ConnectionProfile
     let sshProfiles: [ConnectionProfile]
-    @ObservedObject private var snippets = TerminalCommandHistoryStore.shared
     @ObservedObject private var groups = SSHGroupConfigurationStore.shared
 
-    private var snippetOptions: [TerminalCommandTemplate] { snippets.templates() }
     private var groupConfiguration: SSHGroupConfiguration? { groups.configuration(for: profile.group) }
     private var hasGroup: Bool { !profile.group.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         GroupBox("Автоматизация SSH") {
             VStack(alignment: .leading, spacing: 14) {
-                HStack(spacing: 12) {
-                    Picker("Startup Snippet", selection: $profile.sshStartupSnippetID) {
-                        Text("Не выбран").tag(UUID?.none)
-                        ForEach(snippetOptions) { snippet in
-                            Text(snippet.title).tag(Optional(snippet.id))
-                        }
-                    }
-                    .frame(maxWidth: 360)
-                    Picker("Запуск", selection: $profile.sshStartupSnippetMode) {
-                        ForEach(TerminalStartupSnippetMode.allCases) { mode in
-                            Text(mode.title).tag(mode)
-                        }
-                    }
-                    .frame(width: 190)
-                    Toggle("После reconnect", isOn: $profile.sshStartupSnippetAfterReconnect)
-                        .disabled(profile.sshStartupSnippetMode == .disabled)
-                }
-
-                Text("Startup Snippet выполняется только после появления shell prompt. Режим «Спрашивать» всегда требует подтверждения перед отправкой команды.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                TerminalStartupSnippetSequenceEditor(
+                    title: "Startup Snippets",
+                    ownerKey: TerminalStartupSnippetSequenceStore.profileOwnerKey(profile.id),
+                    startupSnippetID: $profile.sshStartupSnippetID,
+                    mode: $profile.sshStartupSnippetMode,
+                    afterReconnect: $profile.sshStartupSnippetAfterReconnect
+                )
 
                 Divider()
 
@@ -406,7 +390,7 @@ struct SSHAutomationSettingsView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label("Наследование настроек группы", systemImage: "square.stack.3d.up")
                             .font(.headline)
-                        Text("У этого SSH-профиля пока нет группы. Назначьте группу во вкладке «Основное» — здесь сразу появятся общие username, порт, Jump Host, Keepalive, Startup Snippet и переменные группы.")
+                        Text("У этого SSH-профиля пока нет группы. Назначьте группу во вкладке «Основное» — здесь сразу появятся общие username, порт, Jump Host, Keepalive, Startup Snippets и переменные группы.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -467,26 +451,16 @@ struct SSHAutomationSettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(width: 120)
                 }
-                GridRow {
-                    Toggle("Startup Snippet", isOn: inheritanceBinding(\.startupSnippet))
-                    HStack {
-                        Picker("", selection: groupOptionalUUIDBinding(\.startupSnippetID)) {
-                            Text("Не выбран").tag(UUID?.none)
-                            ForEach(snippetOptions) { snippet in
-                                Text(snippet.title).tag(Optional(snippet.id))
-                            }
-                        }
-                        .labelsHidden()
-                        Picker("", selection: groupStartupModeBinding()) {
-                            ForEach(TerminalStartupSnippetMode.allCases) { mode in
-                                Text(mode.title).tag(mode)
-                            }
-                        }
-                        .labelsHidden()
-                        .frame(width: 170)
-                    }
-                }
             }
+
+            Toggle("Наследовать Startup Snippets", isOn: inheritanceBinding(\.startupSnippet))
+            TerminalStartupSnippetSequenceEditor(
+                title: "Startup Snippets группы",
+                ownerKey: TerminalStartupSnippetSequenceStore.groupOwnerKey(name),
+                startupSnippetID: groupOptionalUUIDBinding(\.startupSnippetID),
+                mode: groupStartupModeBinding(),
+                afterReconnect: groupBoolBinding(\.startupAfterReconnect)
+            )
 
             Toggle("Наследовать переменные группы", isOn: inheritanceBinding(\.variables))
             groupVariableEditor(groupName: name)
@@ -609,6 +583,14 @@ struct SSHAutomationSettingsView: View {
         let name = profile.group
         return Binding(
             get: { groups.configuration(for: name)?[keyPath: keyPath] },
+            set: { value in groups.update(groupName: name) { $0[keyPath: keyPath] = value } }
+        )
+    }
+
+    private func groupBoolBinding(_ keyPath: WritableKeyPath<SSHGroupConfiguration, Bool>) -> Binding<Bool> {
+        let name = profile.group
+        return Binding(
+            get: { groups.configuration(for: name)?[keyPath: keyPath] ?? false },
             set: { value in groups.update(groupName: name) { $0[keyPath: keyPath] = value } }
         )
     }
