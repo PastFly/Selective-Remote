@@ -921,6 +921,35 @@
             .map((candidate) => candidate.entry);
     };
 
+    const normalizedAutocompleteCommand = (value) => value
+        .trim()
+        .toLocaleLowerCase()
+        .replace(/^sudo\s+/, "")
+        .replace(/\s+/g, " ");
+
+    const orderedTokenPrefixMatch = (command, query) => {
+        const commandTokens = normalizedAutocompleteCommand(command).split(" ").filter(Boolean);
+        const queryTokens = normalizedAutocompleteCommand(query).split(" ").filter(Boolean);
+        if (queryTokens.length === 0 || queryTokens.length > commandTokens.length) {
+            return false;
+        }
+        let cursor = 0;
+        for (const queryToken of queryTokens) {
+            let matched = false;
+            while (cursor < commandTokens.length) {
+                const candidate = commandTokens[cursor++];
+                if (candidate.startsWith(queryToken)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) {
+                return false;
+            }
+        }
+        return true;
+    };
+
     const matchingEntries = (entries, query, limit = Number.POSITIVE_INFINITY) => {
         const normalized = query.trim().toLocaleLowerCase();
         if (!normalized) {
@@ -929,14 +958,18 @@
         return entries
             .map((entry, order) => {
                 const command = entry.command.toLocaleLowerCase();
+                const normalizedCommand = normalizedAutocompleteCommand(command);
+                const normalizedQuery = normalizedAutocompleteCommand(normalized);
                 const details = `${entry.title || ""} ${entry.description || ""} ${entry.category || ""} ${entry.keywords || ""}`
                     .toLocaleLowerCase();
                 const commandIndex = command.indexOf(normalized);
+                const normalizedIndex = normalizedCommand.indexOf(normalizedQuery);
                 const detailsIndex = details.indexOf(normalized);
-                const rank = commandIndex === 0 ? 0
-                    : commandIndex > 0 ? 1
-                        : detailsIndex === 0 ? 2
-                            : detailsIndex > 0 ? 3 : 4;
+                const tokenMatch = orderedTokenPrefixMatch(command, normalized);
+                const rank = commandIndex === 0 || normalizedIndex === 0 ? 0
+                    : commandIndex > 0 || normalizedIndex > 0 ? 1
+                        : tokenMatch ? 2
+                            : detailsIndex >= 0 ? 3 : 4;
                 return { entry, order, rank };
             })
             .filter((candidate) => candidate.rank < 4)
