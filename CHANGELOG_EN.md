@@ -1,3 +1,14 @@
+## 0.26.0
+
+- Added Host Insights on top of Server Context: hostname, uptime, load average, RAM, root disk, available updates, listening ports, and logged-in users, using live data from the remote Linux host with quick diagnostic commands.
+- Terminal autocomplete is now context-aware: it understands the current command argument and `sudo`, and combines history, favorites, Snippets, Server Commands, systemd services, and Docker/Podman containers from the active host.
+- SSH profiles now support Startup Snippets with Disabled, Ask, and Automatic modes plus a separate option for running after Smart Reconnect.
+- Added safe Terminal Variables: built-ins `${HOST}`, `${USER}`, `${PORT}`, `${PROFILE}`, `${GROUP}`, `${OS}`, `${OS_ID}` plus user variables; names resembling PASSWORD/TOKEN/SECRET/API_KEY are intentionally rejected so secrets stay in Keychain.
+- SSH groups can now inherit selected settings independently: username, port, Jump Host, keepalive, Startup Snippet, and variables, while each profile can override individual fields.
+- Added Named Workspaces for SSH and Local Terminal, preserving tabs, order, split/grid layout, connections or working directories, and the complete individual appearance of every pane.
+- Named Workspace loading is deliberately safe: it is available only when terminal sessions are stopped, restores a disconnected structure, and never starts SSH connections automatically.
+- Added regression coverage for Host Insights, context-aware autocomplete, Startup Snippets, variables, group inheritance, persistence, and safe Named Workspace restoration.
+
 ## 0.25.0
 
 - The Snippets panel in local and SSH terminals no longer closes after running or inserting a snippet; it stays open until the user explicitly closes it.
