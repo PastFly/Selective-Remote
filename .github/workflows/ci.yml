@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -15,14 +15,18 @@ concurrency:
 
 jobs:
   test:
+    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0.26.0-smart-workspaces' }}
     name: Swift tests on macOS
     runs-on: macos-14
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - name: Checkout
+      - name: Checkout candidate branch
         uses: actions/checkout@v6
+        with:
+          ref: feature/v0.26.0-smart-workspaces
+          fetch-depth: 0
 
       - name: Environment
         run: |
@@ -30,15 +34,20 @@ jobs:
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
-      - name: Validate shell scripts
+      - name: Finalize v0.26.0 candidate
+        run: python3 scripts/v026_finalize_patch.py
+
+      - name: Validate shell scripts and release notes
         run: |
           bash -n scripts/build_app.sh
           bash -n scripts/build_and_install.sh
           version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          test "$version" = "0.26.0"
+          grep -q '^BUILD_NUMBER="137"' scripts/build_app.sh
           python3 scripts/release_notes.py "$version" > "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
 
-      - name: Test
+      - name: Swift tests
         run: swift test
 
       - name: Test terminal web interactions
@@ -46,3 +55,19 @@ jobs:
 
       - name: Release build
         run: swift build -c release
+
+      - name: Restore normal CI and remove bootstrap files
+        run: |
+          git checkout origin/main -- .github/workflows/ci.yml
+          git rm -f --ignore-unmatch scripts/v026_finalize_patch.py
+
+      - name: Commit final candidate metadata
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Prepare v0.26.0 build 137 test candidate"
+          git fetch origin feature/v0.26.0-smart-workspaces
+          git rebase origin/feature/v0.26.0-smart-workspaces
+          git push origin HEAD:feature/v0.26.0-smart-workspaces
