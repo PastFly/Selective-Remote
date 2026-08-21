@@ -1,0 +1,63 @@
+name: v0.26.0 Keychain Vault
+
+on:
+  push:
+    branches:
+      - feature/v0.26.0-smart-workspaces
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v026-keychain-vault-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-test-commit:
+    if: ${{ !contains(github.event.head_commit.message, '[v026-vault applied]') }}
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/v0.26.0-smart-workspaces
+          fetch-depth: 0
+
+      - name: Apply Automation UX and unified Keychain Vault
+        run: python3 scripts/v026_keychain_vault_patch.py
+
+      - name: Validate release metadata
+        run: |
+          bash -n scripts/build_app.sh
+          version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          test "$version" = "0.26.0"
+          grep -q '^BUILD_NUMBER="138"' scripts/build_app.sh
+          python3 scripts/release_notes.py "$version" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Swift tests
+        run: swift test
+
+      - name: Terminal browser tests
+        run: node --test Tests/TerminalResourcesTests/*.test.js
+
+      - name: Release build
+        run: swift build -c release
+
+      - name: Remove bootstrap files
+        run: |
+          git rm -f scripts/v026_keychain_vault_patch.py .github/workflows/v026-keychain-vault.yml
+
+      - name: Commit validated candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Improve SSH automation UX and unify Keychain credentials [v026-vault applied]"
+          git fetch origin feature/v0.26.0-smart-workspaces
+          git rebase origin/feature/v0.26.0-smart-workspaces
+          git push origin HEAD:feature/v0.26.0-smart-workspaces
