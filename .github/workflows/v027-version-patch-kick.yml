@@ -1,0 +1,41 @@
+name: Kick v0.27 test version patch
+
+on:
+  push:
+    branches:
+      - feature/v0.27.0-terminal-ux
+    paths:
+      - .github/workflows/v027-version-patch-kick.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/v0.27.0-terminal-ux
+          fetch-depth: 0
+      - name: Set v0.27 build metadata
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/build_app.sh')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('VERSION="0.26.0"', 'VERSION="0.27.0"', 1)
+          text = text.replace('BUILD_NUMBER="139"', 'BUILD_NUMBER="140"', 1)
+          path.write_text(text, encoding='utf-8')
+          Path('.github/workflows/v027-version-patch-kick.yml').unlink(missing_ok=True)
+          Path('.github/workflows/v027-version-patch.yml').unlink(missing_ok=True)
+          Path('scripts/v027_set_test_version.py').unlink(missing_ok=True)
+          PY
+      - name: Commit test version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- scripts/build_app.sh scripts/v027_set_test_version.py .github/workflows/v027-version-patch.yml .github/workflows/v027-version-patch-kick.yml
+          git diff --cached --check
+          git commit -m "v0.27.0: set test build version 140"
+          git push origin HEAD:feature/v0.27.0-terminal-ux
