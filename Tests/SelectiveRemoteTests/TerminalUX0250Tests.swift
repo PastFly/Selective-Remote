@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+// Final regression gate for the manually testable v0.25.0 candidate.
 struct TerminalUX0250Tests {
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
