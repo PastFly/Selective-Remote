@@ -1,0 +1,72 @@
+name: v0.26.0 Build 139 fixes
+
+on:
+  push:
+    branches:
+      - feature/v0.26.0-smart-workspaces
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v026-build139-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-test-commit:
+    if: ${{ !contains(github.event.head_commit.message, '[build139 applied]') }}
+    runs-on: macos-14
+    timeout-minutes: 40
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/v0.26.0-smart-workspaces
+          fetch-depth: 0
+
+      - name: Environment
+        run: |
+          xcodebuild -version
+          swift --version
+          swift --version | grep -E 'Swift version 6\.'
+
+      - name: Apply build 139 fixes
+        run: |
+          python3 scripts/v026_build139_patch.py
+          python3 scripts/v026_build139_result_fix.py
+
+      - name: Validate release metadata
+        run: |
+          bash -n scripts/build_app.sh
+          bash -n scripts/build_and_install.sh
+          version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
+          test "$version" = "0.26.0"
+          grep -q '^BUILD_NUMBER="139"' scripts/build_app.sh
+          python3 scripts/release_notes.py "$version" > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Swift tests
+        run: swift test
+
+      - name: Terminal browser tests
+        run: node --test Tests/TerminalResourcesTests/*.test.js
+
+      - name: Release build
+        run: swift build -c release
+
+      - name: Remove bootstrap files
+        run: |
+          git rm -f scripts/v026_build139_patch.py scripts/v026_build139_result_fix.py .github/workflows/v026-build139.yml
+
+      - name: Commit validated candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Fix group editing, Keychain migration, and host edit shortcut [build139 applied]"
+          git fetch origin feature/v0.26.0-smart-workspaces
+          git rebase origin/feature/v0.26.0-smart-workspaces
+          git push origin HEAD:feature/v0.26.0-smart-workspaces
