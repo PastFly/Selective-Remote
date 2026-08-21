@@ -89,6 +89,7 @@ struct SelectiveRemoteApp: App {
                     .environmentObject(language)
                     .environmentObject(appAppearance)
                     .environment(\.locale, language.locale)
+                    .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
                     .frame(minWidth: 1050, minHeight: 700)
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
@@ -212,6 +213,7 @@ struct SelectiveRemoteApp: App {
                     appearance: appAppearance,
                     appLock: appLock
                 )
+                .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
                 .background(
                     SettingsWindowCloseGuard(
                         preventsClosing: model.isCheckingForUpdates
