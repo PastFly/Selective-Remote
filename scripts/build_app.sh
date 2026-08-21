@@ -8,7 +8,7 @@ VERSION="0.25.0"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="135"
+BUILD_NUMBER="136"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"

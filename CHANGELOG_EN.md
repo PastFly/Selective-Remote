@@ -6,7 +6,7 @@
 - Every local and SSH tab now has complete individual terminal appearance settings: the full theme catalog with the same preview, font, size, line height, cursor, syntax highlighting, padding, and custom palette.
 - Individual appearance is persisted by the tab's stable UUID, restored with the Terminal Workspace, and can copy the current global terminal appearance in one click.
 - Added regression coverage for Snippets persistence, update-window locking, local toolbar sizing, and per-pane themes.
-- Fixed single-monitor fullscreen RDP on macOS: the system menu bar no longer reserves hidden vertical space that could push the Windows taskbar below the visible desktop.
+- Fixed single-monitor fullscreen RDP on macOS: native menu/title-bar controls are reachable again at the top edge, while the hidden SDL probe separately subtracts only the top safe-area/menu-bar inset from the negotiated remote desktop height so the Windows taskbar stays visible.
 
 ## 0.24.0
 

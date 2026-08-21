@@ -315,6 +315,25 @@ bool displayIDListed(const char* raw, UINT32 displayID)
     return false;
 }
 
+#if !defined(SELECTIVE_RDP_TESTING)
+bool singleDisplaySafeTopRequested(UINT32 displayID)
+{
+    const char* raw = std::getenv("SELECTIVE_RDP_FULLSCREEN_SAFE_SINGLE");
+    if (!raw || (std::strcmp(raw, "1") != 0))
+        return false;
+
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays)
+        return false;
+
+    const bool matchesSoleDisplay =
+        (count == 1) && (static_cast<UINT32>(displays[0]) == displayID);
+    SDL_free(displays);
+    return matchesSoleDisplay;
+}
+#endif
+
 bool monitorComesBefore(const rdpMonitor& lhs, const rdpMonitor& rhs)
 {
     if (lhs.is_primary != rhs.is_primary)
@@ -652,7 +671,9 @@ bool selective_probe_window_size(
     }
 
     const char* safeIDs = std::getenv("SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS");
-    const bool reserveSafeTop = displayIDListed(safeIDs, rawDisplayID);
+    const bool safeByMappedID = displayIDListed(safeIDs, rawDisplayID);
+    const bool safeSingleDisplay = singleDisplaySafeTopRequested(rawDisplayID);
+    const bool reserveSafeTop = safeByMappedID || safeSingleDisplay;
     if (reserveSafeTop)
     {
         SDL_Rect usable = {};
@@ -676,7 +697,9 @@ bool selective_probe_window_size(
         stderr,
         "[SelectiveRemote] Probe display %u uses %s bounds %dx%d at %d,%d\n",
         rawDisplayID,
-        reserveSafeTop ? "fullscreen-safe" : "logical",
+        reserveSafeTop
+            ? (safeSingleDisplay ? "single-display-safe" : "fullscreen-safe")
+            : "logical",
         bounds.w,
         bounds.h,
         bounds.x,

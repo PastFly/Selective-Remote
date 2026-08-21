@@ -98,6 +98,19 @@ struct TerminalUX0250Tests {
         #expect(restored.padding == 7)
     }
 
+    @Test("Single-monitor fullscreen keeps macOS controls and reserves top safe area")
+    func singleMonitorFullscreenUsesSafeProbeWithoutHidingControls() throws {
+        let service = try source("Sources/SelectiveRemote/FreeRDPService.swift")
+        let interposer = try source("Native/MonitorTopologyInterposer.cpp")
+
+        #expect(service.contains(#"environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "1""#))
+        #expect(service.contains("SELECTIVE_RDP_FULLSCREEN_SAFE_SINGLE"))
+        #expect(interposer.contains("singleDisplaySafeTopRequested"))
+        #expect(interposer.contains("SDL_GetDisplays(&count)"))
+        #expect(interposer.contains("SDL_GetDisplayUsableBounds"))
+        #expect(interposer.contains("bounds.h -= topInset"))
+    }
+
     @Test("Local and SSH terminals reuse the complete appearance editor")
     func paneAppearanceUsesFullEditor() throws {
         let appearance = try source("Sources/SelectiveRemote/TerminalAppearance.swift")

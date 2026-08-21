@@ -269,8 +269,9 @@ final class FreeRDPService {
 
         // With one physical display there is no mapping ambiguity, so avoid a
         // separate /list:monitor helper process. `monitorIDs == nil` means the
-        // only current display. The native topology interposer is deliberately
-        // not loaded for this path.
+        // only current display. Fullscreen still uses the native interposer so
+        // its hidden probe can reserve the macOS top safe area without a second
+        // monitor-list process.
         if profile.rdpWindowMode != .fullScreen || !profile.startFullScreen {
             // Windowed sessions use one resizable SDL window. The selected
             // macOS monitor still determines where the user opens it, but no
@@ -324,6 +325,7 @@ final class FreeRDPService {
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_USE_USABLE_BOUNDS")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS")
+        processEnvironment.removeValue(forKey: "SELECTIVE_RDP_FULLSCREEN_SAFE_SINGLE")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_STALE_DISPLAY_EVENT_GUARD")
         processEnvironment.removeValue(forKey: "SELECTIVE_RDP_APP_LOCAL_DISPLAY_LAYOUT")
 
@@ -346,6 +348,13 @@ final class FreeRDPService {
         }
         if fullscreenLogicalBacking {
             processEnvironment["SELECTIVE_RDP_FORCE_LOGICAL_FULLSCREEN"] = "1"
+            if singleDisplayFullscreen {
+                // The single-monitor path intentionally skips /list:monitor, so
+                // there is no SDL monitor ID to put into SAFE_TOP_IDS. Let the
+                // interposer identify the sole current SDL display and subtract
+                // only its top menu/safe-area inset from the negotiated desktop.
+                processEnvironment["SELECTIVE_RDP_FULLSCREEN_SAFE_SINGLE"] = "1"
+            }
             if !builtInSDLMonitorIDs.isEmpty {
                 processEnvironment["SELECTIVE_RDP_FULLSCREEN_SAFE_TOP_IDS"] =
                     builtInSDLMonitorIDs.map(String.init).joined(separator: ",")
@@ -407,7 +416,7 @@ final class FreeRDPService {
         if singleDisplayFullscreen {
             let selectedMonitor = monitorIDs?.map(String.init).joined(separator: ",") ?? "automatic"
             launchMarkers += "[SelectiveRemote Host] Single-monitor fullscreen: "
-                + "native monitor sizing, smart-sizing disabled, "
+                + "logical monitor sizing, macOS top safe-area reserved, smart-sizing disabled, "
                 + "monitor=\(selectedMonitor), multimon disabled\n"
         }
         if monitorLayout.count > 1 {
@@ -674,12 +683,12 @@ final class FreeRDPService {
             environment.removeValue(forKey: "FREERDP_WLROOTS_HACK")
         }
 
-        // Fullscreen RDP owns its macOS Space. An accessible macOS menu bar
-        // reserves vertical space while FreeRDP still creates a full-height
-        // monitor window, which can clip the Windows taskbar below the visible
-        // area. The app provides its own fullscreen escape shortcut, so keep the
-        // system menu hidden for programmatic SDL fullscreen.
-        environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "0"
+        // Keep normal macOS fullscreen behavior: moving the pointer to the
+        // top edge must reveal the menu/title-bar controls. Single-display RDP
+        // geometry is corrected separately by the monitor probe safe-area path;
+        // hiding the menu here would only remove the user's way to reach the
+        // native close/minimize/fullscreen controls.
+        environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "1"
         environment["SDL_WINDOW_FRAME_USABLE_WHILE_CURSOR_HIDDEN"] = "1"
 
         // Community builds carry FreeRDP, SDL and their linked libraries in
