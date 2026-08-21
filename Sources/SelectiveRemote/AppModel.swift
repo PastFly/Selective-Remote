@@ -2584,9 +2584,35 @@ final class AppModel: NSObject, ObservableObject {
         statusMessage = "Секретами Selective Remote нужно управлять из карточки подключения; приложение «Пароли» не показывает generic-password записи и SSH-файлы."
     }
 
+    func effectiveSSHProfile(_ source: ConnectionProfile) -> ConnectionProfile {
+        guard source.connectionType == .ssh,
+              let group = SSHGroupConfigurationStore.shared.configuration(for: source.group)
+        else { return source }
+        var profile = source
+        let inherit = source.sshGroupInheritance
+        if inherit.username, !group.username.isEmpty { profile.username = group.username }
+        if inherit.port, group.port > 0 { profile.sshPort = group.port }
+        if inherit.jumpHost { profile.sshJumpHostProfileID = group.jumpHostProfileID }
+        if inherit.keepAlive { profile.sshKeepAliveSeconds = max(0, group.keepAliveSeconds) }
+        if inherit.startupSnippet {
+            profile.sshStartupSnippetID = group.startupSnippetID
+            profile.sshStartupSnippetMode = group.startupMode
+            profile.sshStartupSnippetAfterReconnect = group.startupAfterReconnect
+        }
+        if inherit.variables {
+            profile.terminalVariables = TerminalVariableResolver.mergedVariables(
+                group: group.variables,
+                profile: source.terminalVariables
+            )
+        }
+        return profile
+    }
+
     private func sshJumpHostProfile(for profile: ConnectionProfile) -> ConnectionProfile? {
-        guard let jumpID = profile.sshJumpHostProfileID, jumpID != profile.id else { return nil }
-        return profiles.first(where: { $0.id == jumpID && $0.connectionType == .ssh })
+        guard let jumpID = profile.sshJumpHostProfileID, jumpID != profile.id,
+              let source = profiles.first(where: { $0.id == jumpID && $0.connectionType == .ssh })
+        else { return nil }
+        return effectiveSSHProfile(source)
     }
 
     func selectedSSHConnectionSettings() -> SSHConnectionSettings? {
@@ -2594,9 +2620,10 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func sshConnectionSettings(profileID: UUID) -> SSHConnectionSettings? {
-        guard let profile = profiles.first(where: { $0.id == profileID }),
-              profile.connectionType == .ssh
+        guard let source = profiles.first(where: { $0.id == profileID }),
+              source.connectionType == .ssh
         else { return nil }
+        let profile = effectiveSSHProfile(source)
         let identity = profile.sshIdentityID.flatMap { keyID in
             sshKeys.first(where: { $0.id == keyID })
         }
@@ -2649,8 +2676,8 @@ final class AppModel: NSObject, ObservableObject {
             && isRunningTerminalTab(connection: connection, tabID: clientID)
         do {
             if let sourceProfileID = connection.profileID,
-               let sourceProfile = profiles.first(where: { $0.id == sourceProfileID }),
-               let jumpProfile = sshJumpHostProfile(for: sourceProfile) {
+               let rawSourceProfile = profiles.first(where: { $0.id == sourceProfileID }),
+               let jumpProfile = sshJumpHostProfile(for: effectiveSSHProfile(rawSourceProfile)) {
                 if let jumpKeyID = jumpProfile.sshIdentityID,
                    let jumpKey = sshKeys.first(where: { $0.id == jumpKeyID }) {
                     if !reusesTerminalAuthorization
@@ -3484,6 +3511,12 @@ final class AppModel: NSObject, ObservableObject {
             )
             terminalRuntimeSettings[tabID] = settings
             terminalStartedAt[tabID] = Date()
+            scheduleStartupSnippetIfNeeded(
+                connection: connection,
+                tabID: tabID,
+                session: session,
+                isReconnect: smartReconnectAttempt != nil
+            )
             if let smartReconnectAttempt {
                 session.setReconnectProgress(
                     SmartReconnectProgress(
@@ -3671,6 +3704,64 @@ final class AppModel: NSObject, ObservableObject {
             title: connection.displayLabel(profiles: profiles),
             select: false
         )
+    }
+
+    private func scheduleStartupSnippetIfNeeded(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel,
+        isReconnect: Bool
+    ) {
+        guard connection.kind == .savedProfile,
+              let profileID = connection.profileID,
+              let raw = profiles.first(where: { $0.id == profileID })
+        else { return }
+        let profile = effectiveSSHProfile(raw)
+        guard profile.sshStartupSnippetMode != .disabled,
+              (!isReconnect || profile.sshStartupSnippetAfterReconnect),
+              let snippetID = profile.sshStartupSnippetID,
+              let snippet = TerminalCommandHistoryStore.shared.template(id: snippetID)
+        else { return }
+        let group = SSHGroupConfigurationStore.shared.configuration(for: raw.group)
+        let variables = TerminalVariableResolver.dictionary(
+            profile: profile,
+            groupConfiguration: group
+        )
+        let command = TerminalVariableResolver.resolve(snippet.command, variables: variables)
+        guard let input = TerminalSnippetExecution.inputData(for: command) else { return }
+
+        Task { @MainActor [weak self, weak session] in
+            var runningTicks = 0
+            for _ in 0..<400 {
+                guard let self, let session else { return }
+                if case .running = session.phase {
+                    runningTicks += 1
+                    if runningTicks >= 10,
+                       self.snippetShellAppearsReady(session.recentOutputText()) || runningTicks >= 300 {
+                        if profile.sshStartupSnippetMode == .ask {
+                            let alert = NSAlert()
+                            alert.alertStyle = .informational
+                            alert.messageText = "Выполнить Startup Snippet?"
+                            alert.informativeText = "\(profile.friendlyName)\n\n\(snippet.title)\n\(command)"
+                            alert.addButton(withTitle: "Выполнить")
+                            alert.addButton(withTitle: "Пропустить")
+                            guard alert.runModal() == .alertFirstButtonReturn else { return }
+                        }
+                        _ = TerminalCommandHistoryStore.shared.record(
+                            command: command,
+                            profileID: profileID
+                        )
+                        session.sendInput(input)
+                        self.statusMessage = "Startup Snippet «\(snippet.title)» выполнен"
+                        return
+                    }
+                } else {
+                    runningTicks = 0
+                }
+                if case .finished = session.phase { return }
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+        }
     }
 
     private func enqueueSnippetInputAfterConnect(

@@ -2905,6 +2905,11 @@ struct ContentView: View {
                 }
                 .padding(8)
             }
+
+            SSHAutomationSettingsView(
+                profile: profileBinding,
+                sshProfiles: model.profiles.filter { $0.connectionType == .ssh }
+            )
         }
     }
 

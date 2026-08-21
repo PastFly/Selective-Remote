@@ -669,6 +669,7 @@ struct EmbeddedTerminalWebView: NSViewRepresentable {
                   let json = TerminalCommandHistoryStore.shared.webPayload(
                       for: context.profileID,
                       snippetTargets: context.snippetTargets,
+                      variables: context.variables,
                       remote: remoteContext
                   )
             else { return }
@@ -1704,7 +1705,8 @@ struct SSHTerminalView: View {
                             title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
                             subtitle: profile.host
                         )
-                    }
+                    },
+                    variables: terminalVariables(for: tab)
                 ),
                 remoteContext: workspace.remoteContext(for: tab.id) ?? .empty,
                 snippetRevision: snippetStore.snippetRevision,
@@ -2162,6 +2164,21 @@ struct SSHTerminalView: View {
 
     private func connectionLabel(for tab: TerminalWorkspaceTab) -> String {
         tab.connection.displayLabel(profiles: sshProfiles)
+    }
+
+    private func terminalVariables(for tab: TerminalWorkspaceTab) -> [String: String] {
+        guard let profileID = tab.connection.profileID,
+              let raw = sshProfiles.first(where: { $0.id == profileID })
+        else { return [:] }
+        let group = SSHGroupConfigurationStore.shared.configuration(for: raw.group)
+        var effective = raw
+        if raw.sshGroupInheritance.username, let value = group?.username, !value.isEmpty {
+            effective.username = value
+        }
+        if raw.sshGroupInheritance.port, let value = group?.port, value > 0 {
+            effective.sshPort = value
+        }
+        return TerminalVariableResolver.dictionary(profile: effective, groupConfiguration: group)
     }
 
     private func historyContextID(for tab: TerminalWorkspaceTab) -> UUID {

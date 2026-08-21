@@ -1087,6 +1087,8 @@
         terminal.focus();
     };
 
+    let templateVariables = {};
+
     const resolveTemplate = (command) => {
         const names = Array.from(new Set(
             Array.from(command.matchAll(/\$\{([A-Za-z][A-Za-z0-9_-]{0,39})\}/g))
@@ -1094,6 +1096,13 @@
         ));
         let resolved = command;
         for (const name of names) {
+            const known = Object.prototype.hasOwnProperty.call(templateVariables, name)
+                ? String(templateVariables[name] ?? "")
+                : null;
+            if (known !== null) {
+                resolved = resolved.replaceAll(`\${${name}}`, known);
+                continue;
+            }
             const value = window.prompt(`Значение для ${name}:`, "");
             if (value === null) {
                 return null;
@@ -2162,6 +2171,13 @@
         defaultSnippetTargetID = typeof payload.defaultSnippetTargetID === "string"
             ? payload.defaultSnippetTargetID
             : "";
+        templateVariables = payload.variables && typeof payload.variables === "object"
+            ? Object.fromEntries(
+                Object.entries(payload.variables)
+                    .filter(([name, value]) => /^[A-Z_][A-Z0-9_]{0,39}$/.test(name)
+                        && typeof value === "string")
+            )
+            : {};
         if (selectedSnippetID && !commandTemplates.some((entry) => entry.id === selectedSnippetID)) {
             selectedSnippetID = null;
         }
