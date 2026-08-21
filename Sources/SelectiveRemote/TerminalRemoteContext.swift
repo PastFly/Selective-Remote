@@ -20,6 +20,7 @@ struct TerminalRemoteContextSnapshot: Codable, Equatable, Sendable {
     var availableCommands: [String] = []
     var services: [TerminalRemoteService] = []
     var containers: [TerminalRemoteContainer] = []
+    var insights: TerminalHostInsights = .empty
 
     func hasCommand(_ name: String) -> Bool {
         availableCommands.contains(name)
@@ -99,6 +100,28 @@ if [ -r /etc/os-release ]; then
     printf 'OS\t%s\t%s\n' "${ID:-}" "${ID_LIKE:-}"
 else
     uname -srm
+fi
+printf 'HOSTNAME\t%s\n' "$(hostname 2>/dev/null || uname -n 2>/dev/null || printf unknown)"
+if [ -r /proc/uptime ]; then
+    awk '{printf "UPTIME\t%.0f\n", $1}' /proc/uptime 2>/dev/null
+fi
+if [ -r /proc/loadavg ]; then
+    awk '{printf "LOAD\t%s\t%s\t%s\n", $1, $2, $3}' /proc/loadavg 2>/dev/null
+fi
+if command -v free >/dev/null 2>&1; then
+    free -b 2>/dev/null | awk '/^Mem:/ {printf "MEMORY\t%s\t%s\n", $3, $2}'
+fi
+df -Pk / 2>/dev/null | awk 'NR == 2 {p=$5; gsub("%", "", p); printf "DISK\t%.0f\t%.0f\t%s\n", $3*1024, $2*1024, p}'
+if command -v ss >/dev/null 2>&1; then
+    printf 'PORTS\t%s\n' "$(ss -H -lntu 2>/dev/null | wc -l | tr -d ' ')"
+fi
+if command -v who >/dev/null 2>&1; then
+    printf 'USERS\t%s\n' "$(who 2>/dev/null | wc -l | tr -d ' ')"
+fi
+if command -v apt >/dev/null 2>&1; then
+    apt list --upgradable 2>/dev/null | awk 'NR > 1 {n++} END {printf "UPDATES\t%d\n", n+0}'
+elif command -v dnf >/dev/null 2>&1; then
+    dnf -q --cacheonly check-update 2>/dev/null | awk '/^[A-Za-z0-9_.+-]+[.]/{n++} END {printf "UPDATES\t%d\n", n+0}'
 fi
 for command_name in systemctl journalctl docker podman kubectl helm git nginx apachectl caddy ufw firewall-cmd apt apt-get dnf yum pacman zypper brew uptime uname hostnamectl free vmstat ip ss ping traceroute tracepath dig nslookup resolvectl df lsblk findmnt mount du dmesg last who w users getenforce sestatus fail2ban-client sort tail; do
     if command -v "$command_name" >/dev/null 2>&1; then printf 'COMMAND\t%s\n' "$command_name"; fi
@@ -207,6 +230,7 @@ fi
         var commands = Set<String>()
         var services: [TerminalRemoteService] = []
         var containers: [TerminalRemoteContainer] = []
+        var insights = TerminalHostInsights.empty
         let safeName = try? NSRegularExpression(pattern: #"^[A-Za-z0-9@_.:-]{1,160}$"#)
 
         for rawLine in output.split(whereSeparator: \.isNewline).prefix(800) {
@@ -225,6 +249,39 @@ fi
                     osLike = String(parts[2].trimmingCharacters(in: .whitespacesAndNewlines).prefix(120)).lowercased()
                 }
                 continue
+            }
+            switch kind {
+            case "HOSTNAME":
+                insights.hostname = String(value.prefix(160))
+                continue
+            case "UPTIME":
+                insights.uptimeSeconds = Int64(value)
+                continue
+            case "LOAD":
+                insights.load1 = Double(value)
+                if parts.count >= 3 { insights.load5 = Double(parts[2].trimmingCharacters(in: .whitespacesAndNewlines)) }
+                if parts.count >= 4 { insights.load15 = Double(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) }
+                continue
+            case "MEMORY":
+                insights.memoryUsedBytes = Int64(value)
+                if parts.count >= 3 { insights.memoryTotalBytes = Int64(parts[2].trimmingCharacters(in: .whitespacesAndNewlines)) }
+                continue
+            case "DISK":
+                insights.rootDiskUsedBytes = Int64(value)
+                if parts.count >= 3 { insights.rootDiskTotalBytes = Int64(parts[2].trimmingCharacters(in: .whitespacesAndNewlines)) }
+                if parts.count >= 4 { insights.rootDiskPercent = Int(parts[3].trimmingCharacters(in: .whitespacesAndNewlines)) }
+                continue
+            case "UPDATES":
+                insights.updatesAvailable = Int(value)
+                continue
+            case "PORTS":
+                insights.listeningPorts = Int(value)
+                continue
+            case "USERS":
+                insights.loggedInUsers = Int(value)
+                continue
+            default:
+                break
             }
             let range = NSRange(value.startIndex..., in: value)
             guard safeName?.firstMatch(in: value, range: range) != nil else { continue }
@@ -325,6 +382,12 @@ fi
         if commands.contains("who") {
             add("who", "Активные пользовательские сеансы", "Безопасность сервера", "security users sessions")
         }
+        if commands.contains("uptime") {
+            add("uptime", "Uptime и load average", "Host Insights", "uptime load health")
+        }
+        if commands.contains("free") {
+            add("free -h", "Использование оперативной памяти", "Host Insights", "memory ram health")
+        }
 
         return TerminalRemoteContextSnapshot(
             hostLabel: settings.host,
@@ -339,7 +402,8 @@ fi
             osLike: osLike,
             availableCommands: commands.sorted(),
             services: services.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
-            containers: containers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            containers: containers.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending },
+            insights: insights
         )
     }
 }

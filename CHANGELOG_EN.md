@@ -1,3 +1,22 @@
+## 0.26.0
+
+> **Important after updating — Merge Passwords.** If you already have saved SSH/RDP passwords, open **Keychain** and click **Merge Passwords**. Selective Remote performs a one-time migration from the old per-profile macOS Keychain items into one protected unified Vault. macOS may still request access to some legacy items during the first migration because the app must read each old secret once. After migration, future builds use a single Vault item, preventing update-time storms of Keychain prompts across large profile collections. The decoded Vault is cached only in process memory and disappears when the app quits.
+
+- Fixed Group inheritance editing: shared SSH group values are now always editable, while inheritance switches only control whether the current profile applies each group value.
+- Fixed Merge Passwords migration: removed Keychain `-50` by using a valid two-stage legacy lookup, and inaccessible legacy items no longer abort migration of the remaining credentials.
+- Added Edit to the host context menu; it jumps directly to Connections → General for the selected profile from any workspace.
+- Startup Snippets, Terminal Variables, and Group inheritance now have a dedicated visible Automation tab in SSH profile settings; profiles without a group get an explicit setup hint.
+- Added a unified Keychain Vault for RDP/SSH/Proxy/Forwarding passwords: after the first authorization, secrets are read from one Keychain record and cached only in memory until the app exits, preventing a storm of per-profile prompts after ad-hoc updates.
+- The Keychain screen now includes a one-time Merge Passwords action that batch-migrates existing per-profile records into the unified Vault.
+- Added Host Insights on top of Server Context: hostname, uptime, load average, RAM, root disk, available updates, listening ports, and logged-in users, using live data from the remote Linux host with quick diagnostic commands.
+- Terminal autocomplete is now context-aware: it understands the current command argument and `sudo`, and combines history, favorites, Snippets, Server Commands, systemd services, and Docker/Podman containers from the active host.
+- SSH profiles now support Startup Snippets with Disabled, Ask, and Automatic modes plus a separate option for running after Smart Reconnect.
+- Added safe Terminal Variables: built-ins `${HOST}`, `${USER}`, `${PORT}`, `${PROFILE}`, `${GROUP}`, `${OS}`, `${OS_ID}` plus user variables; names resembling PASSWORD/TOKEN/SECRET/API_KEY are intentionally rejected so secrets stay in Keychain.
+- SSH groups can now inherit selected settings independently: username, port, Jump Host, keepalive, Startup Snippet, and variables, while each profile can override individual fields.
+- Added Named Workspaces for SSH and Local Terminal, preserving tabs, order, split/grid layout, connections or working directories, and the complete individual appearance of every pane.
+- Named Workspace loading is deliberately safe: it is available only when terminal sessions are stopped, restores a disconnected structure, and never starts SSH connections automatically.
+- Added regression coverage for Host Insights, context-aware autocomplete, Startup Snippets, variables, group inheritance, persistence, and safe Named Workspace restoration.
+
 ## 0.25.0
 
 - The Snippets panel in local and SSH terminals no longer closes after running or inserting a snippet; it stays open until the user explicitly closes it.

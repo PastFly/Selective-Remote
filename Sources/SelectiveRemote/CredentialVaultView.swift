@@ -111,6 +111,7 @@ struct CredentialVaultView: View {
     @State private var knownHostVerification: [String: SSHKnownHostVerification] = [:]
     @State private var knownHostPendingDeletion: SSHKnownHostEntry?
     @State private var knownHostProfileCreationEntry: SSHKnownHostEntry?
+    @State private var unifiedVaultMessage: String?
 
     init(
         presentation: CredentialVaultPresentation = .sheet,
@@ -250,6 +251,14 @@ struct CredentialVaultView: View {
     private var bodyWithLifecycle: some View {
         baseLayout
             .onAppear(perform: handleAppear)
+            .alert("Единый Keychain Vault", isPresented: Binding(
+                get: { unifiedVaultMessage != nil },
+                set: { if !$0 { unifiedVaultMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { unifiedVaultMessage = nil }
+            } message: {
+                Text(unifiedVaultMessage ?? "")
+            }
             .onChange(of: selection) { _, _ in
                 refreshCertificateInfo()
             }
@@ -301,6 +310,21 @@ struct CredentialVaultView: View {
                 }
                 .environmentObject(model)
             }
+    }
+
+    private func migrateCredentialVault() {
+        do {
+            let report = try KeychainService.migrateCredentialsToUnifiedVault()
+            if report.discovered == 0 {
+                unifiedVaultMessage = "Старых записей для переноса не найдено. Единый Vault уже готов к работе."
+            } else if report.failed > 0 {
+                unifiedVaultMessage = "Перенесено: \(report.imported), уже в Vault: \(report.alreadyStored), не удалось прочитать: \(report.failed). Недоступные записи можно перенести позже повторным запуском или при обычном подключении к профилю."
+            } else {
+                unifiedVaultMessage = "Перенесено: \(report.imported), уже в Vault: \(report.alreadyStored). Теперь сохранённые пароли используют единый Keychain Vault."
+            }
+        } catch {
+            unifiedVaultMessage = "Не удалось объединить пароли: \(error.localizedDescription)"
+        }
     }
 
     private func handleAppear() {
@@ -355,6 +379,19 @@ struct CredentialVaultView: View {
             }
 
             Spacer()
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Button {
+                    migrateCredentialVault()
+                } label: {
+                    Label("Объединить пароли", systemImage: "lock.square.stack")
+                }
+                .buttonStyle(.bordered)
+                .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
+                Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
 
             if presentation == .sheet {
                 Button("Готово") { dismiss() }

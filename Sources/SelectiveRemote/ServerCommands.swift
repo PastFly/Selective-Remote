@@ -414,6 +414,12 @@ struct ServerCommandsView: View {
             }
             .padding(16)
 
+            if context.insights.hasData {
+                HostInsightsSummaryView(insights: context.insights, onRun: onRun)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
+            }
+
             Divider()
 
             if category == .services {

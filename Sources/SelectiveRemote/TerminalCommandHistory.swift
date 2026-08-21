@@ -4,10 +4,16 @@ import Foundation
 struct TerminalHistoryContext: Equatable {
     let profileID: UUID
     let snippetTargets: [TerminalSnippetTargetOption]
+    let variables: [String: String]
 
-    init(profileID: UUID, snippetTargets: [TerminalSnippetTargetOption] = []) {
+    init(
+        profileID: UUID,
+        snippetTargets: [TerminalSnippetTargetOption] = [],
+        variables: [String: String] = [:]
+    ) {
         self.profileID = profileID
         self.snippetTargets = snippetTargets
+        self.variables = variables
     }
 }
 
@@ -107,6 +113,7 @@ private struct TerminalHistoryWebPayload: Encodable {
     let snippetGroups: [TerminalSnippetGroupWebEntry]
     let snippetTargets: [TerminalSnippetTargetOption]
     let defaultSnippetTargetID: String
+    let variables: [String: String]
     let remote: TerminalRemoteContextSnapshot
 }
 
@@ -516,6 +523,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     func webPayload(
         for profileID: UUID,
         snippetTargets: [TerminalSnippetTargetOption] = [],
+        variables: [String: String] = [:],
         remote: TerminalRemoteContextSnapshot = .empty
     ) -> String? {
         let payload = TerminalHistoryWebPayload(
@@ -545,6 +553,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             },
             snippetTargets: snippetTargets,
             defaultSnippetTargetID: profileID.uuidString,
+            variables: variables,
             remote: remote
         )
         guard let data = try? JSONEncoder().encode(payload) else { return nil }

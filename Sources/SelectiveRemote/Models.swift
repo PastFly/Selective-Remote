@@ -758,6 +758,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var sshCompression: Bool
     var sshKeepAliveSeconds: Int
     var sshAgentForwarding: Bool
+    var sshStartupSnippetID: UUID?
+    var sshStartupSnippetMode: TerminalStartupSnippetMode
+    var sshStartupSnippetAfterReconnect: Bool
+    var terminalVariables: [TerminalVariable]
+    var sshGroupInheritance: SSHGroupInheritance
     var portForwards: [PortForwardRule]
     var gatewayHost: String
     var gatewayUsername: String
@@ -820,6 +825,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         sshCompression = false
         sshKeepAliveSeconds = 30
         sshAgentForwarding = false
+        sshStartupSnippetID = nil
+        sshStartupSnippetMode = .disabled
+        sshStartupSnippetAfterReconnect = false
+        terminalVariables = []
+        sshGroupInheritance = SSHGroupInheritance()
         portForwards = []
         gatewayHost = ""
         gatewayUsername = ""
@@ -863,7 +873,9 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
         case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
-        case sshCompression, sshKeepAliveSeconds, sshAgentForwarding, portForwards
+        case sshCompression, sshKeepAliveSeconds, sshAgentForwarding
+        case sshStartupSnippetID, sshStartupSnippetMode, sshStartupSnippetAfterReconnect
+        case terminalVariables, sshGroupInheritance, portForwards
         case gatewayHost, gatewayUsername
         case isFavorite, selectedDisplayIDs, primaryDisplayID
         case displayLayoutMode, virtualDisplayOrigins, windowsScale, rdpQuality
@@ -936,6 +948,23 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
             Bool.self,
             forKey: .sshAgentForwarding
         ) ?? defaults.sshAgentForwarding
+        sshStartupSnippetID = try container.decodeIfPresent(UUID.self, forKey: .sshStartupSnippetID)
+        sshStartupSnippetMode = try container.decodeIfPresent(
+            TerminalStartupSnippetMode.self,
+            forKey: .sshStartupSnippetMode
+        ) ?? defaults.sshStartupSnippetMode
+        sshStartupSnippetAfterReconnect = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .sshStartupSnippetAfterReconnect
+        ) ?? defaults.sshStartupSnippetAfterReconnect
+        terminalVariables = try container.decodeIfPresent(
+            [TerminalVariable].self,
+            forKey: .terminalVariables
+        ) ?? defaults.terminalVariables
+        sshGroupInheritance = try container.decodeIfPresent(
+            SSHGroupInheritance.self,
+            forKey: .sshGroupInheritance
+        ) ?? defaults.sshGroupInheritance
         portForwards = try container.decodeIfPresent(
             [PortForwardRule].self,
             forKey: .portForwards
@@ -1053,6 +1082,11 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(sshCompression, forKey: .sshCompression)
         try container.encode(sshKeepAliveSeconds, forKey: .sshKeepAliveSeconds)
         try container.encode(sshAgentForwarding, forKey: .sshAgentForwarding)
+        try container.encodeIfPresent(sshStartupSnippetID, forKey: .sshStartupSnippetID)
+        try container.encode(sshStartupSnippetMode, forKey: .sshStartupSnippetMode)
+        try container.encode(sshStartupSnippetAfterReconnect, forKey: .sshStartupSnippetAfterReconnect)
+        try container.encode(terminalVariables, forKey: .terminalVariables)
+        try container.encode(sshGroupInheritance, forKey: .sshGroupInheritance)
         try container.encode(portForwards, forKey: .portForwards)
         try container.encode(gatewayHost, forKey: .gatewayHost)
         try container.encode(gatewayUsername, forKey: .gatewayUsername)
