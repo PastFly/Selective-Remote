@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A macOS checkbox style with an explicit outline in both light and dark appearances.
