@@ -1,3 +1,14 @@
+## 0.24.0
+
+- Added custom connection tags: a profile can have multiple tags with creation, assignment, global rename, deletion, search, and compound filtering.
+- The connection catalog can now switch between list and compact grid views; the resizable sidebar fits more profile cards per row.
+- Added Touch ID App Lock on launch, wake, minimize, inactivity, or manually with `⌘⇧L`.
+- Fixed a Swift 6 LocalAuthentication crash after successful Touch ID by moving authentication to safe `async/await` handling that resumes on MainActor.
+- Closed App Lock bypasses through the separate Settings window, Session menu, menu-bar extra, and `⌘T`; disabling protection while locked now requires system authentication.
+- Added a local RDP and SSH connection activity log with filters, search, and clearing; it stores no passwords, keys, commands, or terminal contents and redacts potential secrets from errors.
+- Kept the existing Support Project destinations in the Help menu without subscriptions or paid plans.
+- Added a dedicated CI workflow for safe ARM64 test DMG builds without creating a tag or production release.
+
 ## 0.23.0
 
 - The Snippets library now has a group root, back navigation, persisted folder selection, and list/grid presentation modes.
