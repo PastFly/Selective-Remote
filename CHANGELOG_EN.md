@@ -1,3 +1,12 @@
+## 0.25.0
+
+- The Snippets panel in local and SSH terminals no longer closes after running or inserting a snippet; it stays open until the user explicitly closes it.
+- While a manual update check is running, the Settings window cannot be closed; closing is restored automatically when the check finishes.
+- Local Terminal right-side controls now match the SSH toolbar's visual scale.
+- Added per-pane terminal color styling for both local and SSH terminals, with either the shared global theme or an individual palette.
+- Per-pane palettes reuse the workspace's persisted pane color, so the choice is restored with the Terminal Workspace.
+- Added regression coverage for Snippets persistence, update-window locking, local toolbar sizing, and per-pane themes.
+
 ## 0.24.0
 
 - Added custom connection tags: a profile can have multiple tags with creation, assignment, global rename, deletion, search, and compound filtering.
