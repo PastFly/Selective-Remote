@@ -1,0 +1,58 @@
+name: v0.25.0 Round Two
+
+on:
+  push:
+    branches:
+      - feature/v0.25.0-terminal-ux
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v025-round2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-test-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[round2 applied]') }}
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/v0.25.0-terminal-ux
+          fetch-depth: 0
+
+      - name: Apply round-two fixes
+        run: python3 scripts/v025_round2_patch.py
+
+      - name: Validate shell scripts and release notes
+        run: |
+          bash -n scripts/build_app.sh
+          bash -n scripts/build_and_install.sh
+          python3 scripts/release_notes.py 0.25.0 > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Test terminal web interactions
+        run: node --test Tests/TerminalResourcesTests/*.test.js
+
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Validate release build
+        run: swift build -c release
+
+      - name: Remove temporary patch driver
+        run: git rm -- scripts/v025_round2_patch.py .github/workflows/v025-round2.yml
+
+      - name: Commit validated candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "4189824+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Expand per-terminal settings and fix update/RDP UX [round2 applied]"
+          git push origin HEAD:feature/v0.25.0-terminal-ux
