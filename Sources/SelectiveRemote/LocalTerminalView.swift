@@ -14,6 +14,7 @@ struct LocalTerminalView: View {
     @State private var showsHistory = false
     @State private var showsSnippets = false
     @State private var showsAppearance = false
+    @State private var showsPaneTheme = false
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
 
@@ -70,6 +71,7 @@ struct LocalTerminalView: View {
                 restart(selectedTab)
             } label: {
                 Image(systemName: selectedTab.session.isRunning ? "arrow.clockwise" : "play.fill")
+                    .font(.title3)
             }
             .buttonStyle(.borderedProminent)
             .help(selectedTab.session.isRunning ? "Перезапустить shell" : "Запустить shell")
@@ -79,6 +81,7 @@ struct LocalTerminalView: View {
                 showsHistory.toggle()
             } label: {
                 Image(systemName: "clock.arrow.circlepath")
+                    .font(.title3)
             }
             .buttonStyle(.bordered)
             .help("История команд")
@@ -88,6 +91,7 @@ struct LocalTerminalView: View {
                 showsSnippets.toggle()
             } label: {
                 Image(systemName: "text.badge.plus")
+                    .font(.title3)
             }
             .buttonStyle(.bordered)
             .help("Сниппеты: вставить, скопировать или выполнить")
@@ -96,6 +100,7 @@ struct LocalTerminalView: View {
                 chooseWorkingDirectory(for: selectedTab)
             } label: {
                 Image(systemName: "folder")
+                    .font(.title3)
             }
             .buttonStyle(.bordered)
             .disabled(selectedTab.session.isRunning)
@@ -105,17 +110,37 @@ struct LocalTerminalView: View {
                 selectedTab.session.clear()
             } label: {
                 Image(systemName: "eraser")
+                    .font(.title3)
             }
             .buttonStyle(.bordered)
             .help("Очистить терминал")
 
             Button {
+                showsPaneTheme.toggle()
+            } label: {
+                Image(systemName: "paintpalette.fill")
+                    .font(.title3)
+            }
+            .buttonStyle(.bordered)
+            .help("Цвет этой панели")
+            .popover(isPresented: $showsPaneTheme, arrowEdge: .bottom) {
+                TerminalPaneThemePicker(colorIndex: selectedTab.colorIndex) { choice in
+                    setTerminalPaneTheme(
+                        choice,
+                        tabID: selectedTab.id,
+                        workspace: workspace
+                    )
+                }
+            }
+
+            Button {
                 showsAppearance.toggle()
             } label: {
                 Image(systemName: "paintpalette")
+                    .font(.title3)
             }
             .buttonStyle(.bordered)
-            .help("Оформление терминала")
+            .help("Общее оформление терминала")
             .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
                 TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
             }
@@ -199,9 +224,12 @@ struct LocalTerminalView: View {
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
-        EmbeddedTerminalWebView(
+        let paneAppearance = appearance.snapshot.applyingPaneTheme(
+            colorIndex: tab.colorIndex
+        )
+        return EmbeddedTerminalWebView(
             session: tab.session,
-            appearance: appearance.snapshot,
+            appearance: paneAppearance,
             historyContext: TerminalHistoryContext(
                 profileID: tab.id,
                 snippetTargets: sshProfiles.map {
@@ -239,7 +267,7 @@ struct LocalTerminalView: View {
         )
         .id(tab.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TerminalColorCodecView.color(appearance.palette.background))
+        .background(TerminalColorCodecView.color(paneAppearance.theme.background))
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)
