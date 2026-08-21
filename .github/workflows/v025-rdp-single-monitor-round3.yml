@@ -1,0 +1,58 @@
+name: v0.25.0 RDP Single Monitor Round Three
+
+on:
+  push:
+    branches:
+      - feature/v0.25.0-terminal-ux
+
+permissions:
+  contents: write
+
+concurrency:
+  group: v025-rdp-round3-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  patch-test-publish:
+    if: ${{ !contains(github.event.head_commit.message, '[rdp-round3 applied]') }}
+    runs-on: macos-14
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
+    steps:
+      - name: Checkout candidate branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/v0.25.0-terminal-ux
+          fetch-depth: 0
+
+      - name: Apply single-monitor RDP fix
+        run: python3 scripts/v025_rdp_single_monitor_patch.py
+
+      - name: Validate shell scripts and release notes
+        run: |
+          bash -n scripts/build_app.sh
+          bash -n scripts/build_and_install.sh
+          python3 scripts/release_notes.py 0.25.0 > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Test terminal web interactions
+        run: node --test Tests/TerminalResourcesTests/*.test.js
+
+      - name: Run Swift tests
+        run: swift test
+
+      - name: Validate release build
+        run: swift build -c release
+
+      - name: Remove temporary patch driver
+        run: git rm -- scripts/v025_rdp_single_monitor_patch.py .github/workflows/v025-rdp-single-monitor-round3.yml
+
+      - name: Commit validated candidate
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "4189824+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git status --short
+          git commit -m "Fix single-monitor RDP safe area and restore macOS controls [rdp-round3 applied]"
+          git push origin HEAD:feature/v0.25.0-terminal-ux
