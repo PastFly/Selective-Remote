@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - feature/v0.25.0-terminal-ux
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
@@ -14,7 +16,7 @@ concurrency:
 
 jobs:
   patch-test-publish:
-    if: ${{ !contains(github.event.head_commit.message, '[round2 applied]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[round2 applied]') }}
     runs-on: macos-14
     timeout-minutes: 30
     env:
