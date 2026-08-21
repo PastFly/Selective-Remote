@@ -674,11 +674,12 @@ final class FreeRDPService {
             environment.removeValue(forKey: "FREERDP_WLROOTS_HACK")
         }
 
-        // Fullscreen RDP owns its macOS Space. Keeping the menu available
-        // reserves vertical space on notched MacBook displays while FreeRDP
-        // still creates a full-height monitor window, clipping the Windows
-        // taskbar below the visible area.
-        environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "1"
+        // Fullscreen RDP owns its macOS Space. An accessible macOS menu bar
+        // reserves vertical space while FreeRDP still creates a full-height
+        // monitor window, which can clip the Windows taskbar below the visible
+        // area. The app provides its own fullscreen escape shortcut, so keep the
+        // system menu hidden for programmatic SDL fullscreen.
+        environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] = "0"
         environment["SDL_WINDOW_FRAME_USABLE_WHILE_CURSOR_HIDDEN"] = "1"
 
         // Community builds carry FreeRDP, SDL and their linked libraries in

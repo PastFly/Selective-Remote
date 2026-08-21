@@ -531,13 +531,13 @@ func buildsNativeSingleMonitorWindowedArguments() throws {
     #expect(!arguments.contains(where: { $0.hasPrefix("/monitors:") }))
 }
 
-@Test("Служебные окна SDL скрыты, а верхнее меню доступно в полном экране")
+@Test("Служебные окна SDL скрыты, а macOS menu bar не режет fullscreen RDP")
 func configuresSDLSessionEnvironment() {
     let environment = FreeRDPService().launchEnvironment(from: ["KEEP": "value"])
 
     #expect(environment["SDL_QUIT_ON_LAST_WINDOW_CLOSE"] == "0")
     #expect(environment["FREERDP_WLROOTS_HACK"] == "force")
-    #expect(environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] == "1")
+    #expect(environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] == "0")
     #expect(environment["SDL_WINDOW_FRAME_USABLE_WHILE_CURSOR_HIDDEN"] == "1")
     #expect(environment["KEEP"] == "value")
 }
@@ -553,7 +553,7 @@ func keepsNativeRetinaDrawableSizeForSessionWindows() {
     )
 
     #expect(environment["FREERDP_WLROOTS_HACK"] == nil)
-    #expect(environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] == "1")
+    #expect(environment["SDL_VIDEO_MAC_FULLSCREEN_MENU_VISIBILITY"] == "0")
     #expect(environment["SDL_WINDOW_FRAME_USABLE_WHILE_CURSOR_HIDDEN"] == "1")
     #expect(environment["KEEP"] == "value")
 }

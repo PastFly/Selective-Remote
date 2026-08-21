@@ -1,11 +1,12 @@
 ## 0.25.0
 
 - The Snippets panel in local and SSH terminals no longer closes after running or inserting a snippet; it stays open until the user explicitly closes it.
-- While a manual update check is running, the Settings window cannot be closed; closing is restored automatically when the check finishes.
+- Manual update checks now stay entirely inside Settings: the window no longer loses focus to a main-window alert, and progress/result are rendered inline.
 - Local Terminal right-side controls now match the SSH toolbar's visual scale.
-- Added per-pane terminal color styling for both local and SSH terminals, with either the shared global theme or an individual palette.
-- Per-pane palettes reuse the workspace's persisted pane color, so the choice is restored with the Terminal Workspace.
+- Every local and SSH tab now has complete individual terminal appearance settings: the full theme catalog with the same preview, font, size, line height, cursor, syntax highlighting, padding, and custom palette.
+- Individual appearance is persisted by the tab's stable UUID, restored with the Terminal Workspace, and can copy the current global terminal appearance in one click.
 - Added regression coverage for Snippets persistence, update-window locking, local toolbar sizing, and per-pane themes.
+- Fixed single-monitor fullscreen RDP on macOS: the system menu bar no longer reserves hidden vertical space that could push the Windows taskbar below the visible desktop.
 
 ## 0.24.0
 

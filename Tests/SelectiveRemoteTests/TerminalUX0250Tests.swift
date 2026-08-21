@@ -2,7 +2,6 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
-// Final regression contracts for the v0.25.0 terminal UX candidate.
 struct TerminalUX0250Tests {
     private func repositoryRoot() -> URL {
         URL(fileURLWithPath: #filePath)
@@ -18,11 +17,17 @@ struct TerminalUX0250Tests {
         )
     }
 
-    @Test("Update check guards the Settings window from closing")
-    func updateCheckCloseGuardExists() throws {
+    @Test("Update check from Settings stays inline and keeps close guard")
+    func settingsUpdateCheckDoesNotPublishMainWindowAlert() throws {
         let app = try source("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+        let model = try source("Sources/SelectiveRemote/AppModel.swift")
+        let view = try source("Sources/SelectiveRemote/UpdateExperienceView.swift")
         let guardSource = try source("Sources/SelectiveRemote/SettingsWindowCloseGuard.swift")
+
         #expect(app.contains("preventsClosing: model.isCheckingForUpdates"))
+        #expect(model.contains("func checkForUpdatesFromSettings()"))
+        #expect(model.contains("checkForUpdates(announcesUpToDate: false)"))
+        #expect(view.contains("model.checkForUpdatesFromSettings()"))
         #expect(guardSource.contains("window.styleMask.remove(.closable)"))
         #expect(guardSource.contains("window.styleMask.insert(.closable)"))
     }
@@ -35,16 +40,79 @@ struct TerminalUX0250Tests {
         #expect(local.contains("Image(systemName: \"paintpalette.fill\")\n                    .font(.title3)"))
     }
 
-    @Test("Every terminal pane can override the global palette")
-    func paneThemeOverrideIsAppliedToLocalAndSSH() throws {
-        let theme = try source("Sources/SelectiveRemote/TerminalPaneTheme.swift")
+    @Test("Individual terminal appearance persists every setting independently")
+    @MainActor
+    func scopedTerminalAppearancePersistsIndependently() {
+        let suite = "SelectiveRemote.TerminalUX0250Tests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let global = TerminalAppearanceStore(defaults: defaults)
+        global.applyPreset(.dracula)
+        global.font = .menlo
+        global.fontSize = 18
+        global.lineHeight = 1.30
+        global.cursorStyle = .bar
+        global.cursorBlink = false
+        global.syntaxHighlighting = false
+        global.syntaxScope = .currentLine
+        global.syntaxFollowTheme = false
+        global.syntaxHistoryOpacity = 0.65
+        global.syntaxBoldCommands = false
+        global.padding = 22
+
+        let pane = TerminalAppearanceStore(
+            defaults: defaults,
+            storageNamespace: "pane.test",
+            cloneGlobalIfMissing: true
+        )
+        #expect(pane.selectedPreset == .dracula)
+        #expect(pane.font == .menlo)
+        #expect(pane.fontSize == 18)
+        #expect(pane.cursorStyle == .bar)
+        #expect(pane.syntaxHighlighting == false)
+        #expect(pane.padding == 22)
+
+        pane.applyPreset(.hackerGreen)
+        pane.font = .monaco
+        pane.fontSize = 20
+        pane.syntaxHighlighting = true
+        pane.padding = 7
+
+        #expect(global.selectedPreset == .dracula)
+        #expect(global.font == .menlo)
+        #expect(global.fontSize == 18)
+        #expect(global.syntaxHighlighting == false)
+        #expect(global.padding == 22)
+
+        let restored = TerminalAppearanceStore(
+            defaults: defaults,
+            storageNamespace: "pane.test",
+            cloneGlobalIfMissing: true
+        )
+        #expect(restored.selectedPreset == .hackerGreen)
+        #expect(restored.font == .monaco)
+        #expect(restored.fontSize == 20)
+        #expect(restored.syntaxHighlighting == true)
+        #expect(restored.padding == 7)
+    }
+
+    @Test("Local and SSH terminals reuse the complete appearance editor")
+    func paneAppearanceUsesFullEditor() throws {
+        let appearance = try source("Sources/SelectiveRemote/TerminalAppearance.swift")
         let local = try source("Sources/SelectiveRemote/LocalTerminalView.swift")
         let ssh = try source("Sources/SelectiveRemote/EmbeddedTerminalView.swift")
-        #expect(theme.contains("applyingPaneTheme(colorIndex:"))
-        #expect(theme.contains("TerminalPaneThemeChoice"))
-        #expect(local.contains("appearance: paneAppearance"))
-        #expect(ssh.contains("appearance: paneAppearance"))
-        #expect(local.contains("TerminalPaneThemePicker"))
-        #expect(ssh.contains("TerminalPaneThemePicker"))
+        let workspace = try source("Sources/SelectiveRemote/TerminalWorkspace.swift")
+
+        #expect(appearance.contains("TerminalThemeSelector(store: store)"))
+        #expect(appearance.contains("DisclosureGroup(\"Шрифт и курсор\")"))
+        #expect(appearance.contains("DisclosureGroup(\"Подсветка синтаксиса\")"))
+        #expect(appearance.contains("DisclosureGroup(\"Своя тема\")"))
+        #expect(appearance.contains("Скопировать общее оформление"))
+        #expect(local.contains("store: selectedTab.appearance"))
+        #expect(ssh.contains("store: tab.appearance"))
+        #expect(local.contains("let paneAppearance = tab.appearance.snapshot"))
+        #expect(ssh.contains("let paneAppearance = tab.appearance.snapshot"))
+        #expect(workspace.contains("storageNamespace: \"pane.\\(id.uuidString)\""))
     }
 }

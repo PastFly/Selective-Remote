@@ -4226,6 +4226,13 @@ final class AppModel: NSObject, ObservableObject {
         checkForUpdates(announcesUpToDate: true)
     }
 
+    func checkForUpdatesFromSettings() {
+        // Settings already renders checking / up-to-date / available states inline.
+        // Do not publish updateMessage here: ContentView owns that alert and would
+        // steal key-window focus from the separate SwiftUI Settings scene.
+        checkForUpdates(announcesUpToDate: false)
+    }
+
     private func checkForUpdatesAutomatically() {
         guard automaticallyCheckForUpdates else { return }
         let lastCheck = UserDefaults.standard.double(forKey: lastSuccessfulUpdateCheckKey)

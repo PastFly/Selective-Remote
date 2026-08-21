@@ -14,7 +14,7 @@ struct LocalTerminalView: View {
     @State private var showsHistory = false
     @State private var showsSnippets = false
     @State private var showsAppearance = false
-    @State private var showsPaneTheme = false
+    @State private var showsPaneAppearance = false
     @State private var renameTabID: UUID?
     @State private var renameValue = ""
 
@@ -116,21 +116,21 @@ struct LocalTerminalView: View {
             .help("Очистить терминал")
 
             Button {
-                showsPaneTheme.toggle()
+                showsPaneAppearance.toggle()
             } label: {
                 Image(systemName: "paintpalette.fill")
                     .font(.title3)
             }
             .buttonStyle(.bordered)
-            .help("Цвет этой панели")
-            .popover(isPresented: $showsPaneTheme, arrowEdge: .bottom) {
-                TerminalPaneThemePicker(colorIndex: selectedTab.colorIndex) { choice in
-                    setTerminalPaneTheme(
-                        choice,
-                        tabID: selectedTab.id,
-                        workspace: workspace
-                    )
-                }
+            .help("Индивидуальное оформление этой вкладки")
+            .popover(isPresented: $showsPaneAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(
+                    store: selectedTab.appearance,
+                    appAppearance: appAppearance,
+                    includesApplicationSettings: false,
+                    individualTitle: selectedTab.title,
+                    copyFrom: appearance
+                )
             }
 
             Button {
@@ -224,9 +224,7 @@ struct LocalTerminalView: View {
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
-        let paneAppearance = appearance.snapshot.applyingPaneTheme(
-            colorIndex: tab.colorIndex
-        )
+        let paneAppearance = tab.appearance.snapshot
         return EmbeddedTerminalWebView(
             session: tab.session,
             appearance: paneAppearance,

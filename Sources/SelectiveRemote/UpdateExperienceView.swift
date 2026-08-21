@@ -73,7 +73,7 @@ private struct UpdateSettingsView: View {
             Section("Действия") {
                 HStack {
                     Button("Проверить сейчас", systemImage: "arrow.clockwise") {
-                        model.checkForUpdates()
+                        model.checkForUpdatesFromSettings()
                     }
                     .disabled(model.isCheckingForUpdates)
                     Spacer()
