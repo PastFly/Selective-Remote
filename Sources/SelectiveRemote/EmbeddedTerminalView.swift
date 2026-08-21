@@ -1410,7 +1410,7 @@ struct SSHTerminalView: View {
     }
 
     private var workspaceInspectorVisible: Bool {
-        workspace.layout == .grid && (showsHistory || showsSnippets)
+        showsHistory || showsSnippets
     }
 
     @ViewBuilder
@@ -1766,33 +1766,20 @@ struct SSHTerminalView: View {
                 },
                 onSnippetRun: executeSnippet,
                 historyVisible: Binding(
-                    get: {
-                        workspace.layout != .grid
-                            && showsHistory
-                            && tab.id == workspace.selectedTabID
-                    },
+                    get: { false },
                     set: { visible in
-                        // Each pane owns a WKWebView and can report its history visibility
-                        // asynchronously. Ignore stale callbacks from a pane that stopped
-                        // being active, otherwise two grid panes can keep re-selecting each
-                        // other while the history panel is open.
-                        guard workspace.layout != .grid,
-                              tab.id == workspace.selectedTabID
-                        else { return }
+                        // The native SwiftUI inspector is the single History surface in
+                        // every layout. WebView shortcuts may request it, but the embedded
+                        // quick panel itself stays hidden.
+                        guard tab.id == workspace.selectedTabID else { return }
                         showsHistory = visible
                         if visible { showsSnippets = false }
                     }
                 ),
                 snippetsVisible: Binding(
-                    get: {
-                        workspace.layout != .grid
-                            && showsSnippets
-                            && tab.id == workspace.selectedTabID
-                    },
+                    get: { false },
                     set: { visible in
-                        guard workspace.layout != .grid,
-                              tab.id == workspace.selectedTabID
-                        else { return }
+                        guard tab.id == workspace.selectedTabID else { return }
                         showsSnippets = visible
                         if visible { showsHistory = false }
                     }

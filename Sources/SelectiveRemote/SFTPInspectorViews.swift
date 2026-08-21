@@ -277,7 +277,7 @@ struct SFTPPropertiesView: View {
             Toggle("Выполнение для: \(title)", isOn: permissionBinding(execute))
                 .labelsHidden()
         }
-        .toggleStyle(.checkbox)
+        .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
     }
 
     private func permissionBinding(_ mask: Int) -> Binding<Bool> {
