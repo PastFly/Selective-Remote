@@ -1,0 +1,40 @@
+name: Bootstrap v0.25.0 changelog
+
+on:
+  push:
+    branches:
+      - feature/v0.25.0-terminal-ux
+
+permissions:
+  contents: write
+
+jobs:
+  patch-changelog:
+    if: ${{ !contains(github.event.head_commit.message, '[v025 changelog]') }}
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v6
+        with:
+          ref: feature/v0.25.0-terminal-ux
+          fetch-depth: 0
+
+      - name: Add v0.25.0 release notes
+        run: python3 scripts/v025_changelog_patch.py
+
+      - name: Validate release notes
+        run: |
+          python3 scripts/release_notes.py 0.25.0 > "$RUNNER_TEMP/release-notes.md"
+          test -s "$RUNNER_TEMP/release-notes.md"
+
+      - name: Remove bootstrap files
+        run: git rm -- scripts/v025_changelog_patch.py .github/workflows/v025-changelog-bootstrap.yml
+
+      - name: Commit changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md CHANGELOG_EN.md
+          git commit -m "Document 0.25.0 terminal UX candidate [v025 changelog]"
+          git push origin HEAD:feature/v0.25.0-terminal-ux
