@@ -68,18 +68,32 @@ struct SelectiveRemoteApp: App {
     @StateObject private var model = AppModel()
     @StateObject private var language = AppLanguageStore()
     @StateObject private var appAppearance = AppAppearanceStore.shared
+    @StateObject private var appLock = AppLockStore()
+
+    private var menuBarSystemImage: String {
+        if appLock.isLocked { return "lock.fill" }
+        if model.isSessionRunning
+            || model.runningSSHTunnelCount > 0
+            || model.runningSSHTerminalCount > 0
+            || model.runningLocalTerminalCount > 0 {
+            return "bolt.horizontal.circle.fill"
+        }
+        return "display"
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
-                .environmentObject(model)
-                .environmentObject(language)
-                .environmentObject(appAppearance)
-                .environment(\.locale, language.locale)
-                .frame(minWidth: 1050, minHeight: 700)
-                .onAppear {
-                    model.presentWhatsNewAfterUpgradeIfNeeded()
-                }
+            AppLockGate(store: appLock) {
+                ContentView()
+                    .environmentObject(model)
+                    .environmentObject(language)
+                    .environmentObject(appAppearance)
+                    .environment(\.locale, language.locale)
+                    .frame(minWidth: 1050, minHeight: 700)
+                    .onAppear {
+                        model.presentWhatsNewAfterUpgradeIfNeeded()
+                    }
+            }
         }
         .windowResizability(.contentMinSize)
         .commands {
@@ -91,6 +105,7 @@ struct SelectiveRemoteApp: App {
                     )
                 }
                 .keyboardShortcut("t", modifiers: [.command])
+                .disabled(appLock.isLocked)
             }
             CommandGroup(replacing: .help) {
                 Button("Что нового…", systemImage: "sparkles") {
@@ -115,6 +130,20 @@ struct SelectiveRemoteApp: App {
                 }
             }
             CommandMenu("Сессия") {
+                if appLock.isLocked {
+                    Button("Разблокировать Selective Remote", systemImage: "touchid") {
+                        appLock.unlock()
+                    }
+                    Button("Отключить App Lock…", systemImage: "lock.open") {
+                        appLock.disableWithSystemAuthentication()
+                    }
+                } else {
+                Button("Заблокировать Selective Remote", systemImage: "lock.fill") {
+                    appLock.lockNow()
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+                .disabled(!appLock.enabled || appLock.isLocked)
+                Divider()
                 Button("Quick Connect…", systemImage: "bolt.fill") {
                     model.quickConnectPresented = true
                 }
@@ -172,16 +201,33 @@ struct SelectiveRemoteApp: App {
                     .disabled(model.isCheckingForUpdates)
                 Divider()
                 Text(AppBuildInfo.fullText)
+                }
             }
         }
 
         Settings {
-            AppSettingsView(model: model, appearance: appAppearance)
+            AppLockGate(store: appLock) {
+                AppSettingsView(
+                    model: model,
+                    appearance: appAppearance,
+                    appLock: appLock
+                )
+            }
                 .environmentObject(language)
                 .environment(\.locale, language.locale)
         }
 
         MenuBarExtra {
+            if appLock.isLocked {
+                Button("Разблокировать Selective Remote", systemImage: "touchid") {
+                    appLock.unlock()
+                }
+                Button("Отключить App Lock…", systemImage: "lock.open") {
+                    appLock.disableWithSystemAuthentication()
+                }
+                Divider()
+                Button("Завершить \(AppBrand.name)") { model.quitApplication() }
+            } else {
             Button("Показать \(AppBrand.name)") { model.showMainWindow() }
             if !model.favoriteRDPProfiles.isEmpty {
                 Divider()
@@ -254,15 +300,11 @@ struct SelectiveRemoteApp: App {
             Text(AppBuildInfo.fullText)
             Divider()
             Button("Завершить \(AppBrand.name)") { model.quitApplication() }
+            }
         } label: {
             Label(
                 AppBrand.name,
-                systemImage: model.isSessionRunning
-                    || model.runningSSHTunnelCount > 0
-                    || model.runningSSHTerminalCount > 0
-                    || model.runningLocalTerminalCount > 0
-                    ? "bolt.horizontal.circle.fill"
-                    : "display"
+                systemImage: menuBarSystemImage
             )
         }
         .menuBarExtraStyle(.menu)

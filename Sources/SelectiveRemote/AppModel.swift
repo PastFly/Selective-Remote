@@ -288,6 +288,7 @@ private final class ManagedRDPSession {
 @MainActor
 final class AppModel: NSObject, ObservableObject {
     let sftpWorkspace = SFTPWorkspaceModel()
+    let connectionActivity = ConnectionActivityStore()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -312,6 +313,15 @@ final class AppModel: NSObject, ObservableObject {
     @Published var profileSortMode: ProfileSortMode {
         didSet { UserDefaults.standard.set(profileSortMode.rawValue, forKey: sortModeKey) }
     }
+    @Published var profileCollectionDisplayMode: ProfileCollectionDisplayMode {
+        didSet {
+            UserDefaults.standard.set(
+                profileCollectionDisplayMode.rawValue,
+                forKey: profileCollectionDisplayModeKey
+            )
+        }
+    }
+    @Published var profileTagFilter: Set<String> = []
     @Published var statusMessage = ""
     @Published var errorMessage: String?
     @Published private(set) var latestSnippetRun: TerminalSnippetRunSummary?
@@ -392,6 +402,8 @@ final class AppModel: NSObject, ObservableObject {
     private let sshKeysKey = "SelectiveRemote.sshKeys.v1"
     private let storedSSHKeyPassphrasesKey = "SelectiveRemote.storedSSHKeyPassphrases.v1"
     private let sortModeKey = "SelectiveRemote.profileSortMode.v1"
+    private let profileCollectionDisplayModeKey =
+        "SelectiveRemote.profileCollectionDisplayMode.v1"
     private let lastSuccessfulUpdateCheckKey = "SelectiveRemote.lastSuccessfulUpdateCheck.v1"
     private let lastLaunchedVersionKey = "SelectiveRemote.update.lastLaunchedVersion.v1"
     private let lastShownPostUpdateVersionKey = "SelectiveRemote.update.lastShownPostUpdateVersion.v1"
@@ -420,6 +432,8 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
     private var terminalStartedAt: [UUID: Date] = [:]
+    private var rdpActivityIDs: [UUID: UUID] = [:]
+    private var sshActivityIDs: [UUID: UUID] = [:]
     private var terminalReconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var sshTunnelReconnectTasks: [UUID: Task<Void, Never>] = [:]
     private var rdpReconnectTasks: [UUID: Task<Void, Never>] = [:]
@@ -475,6 +489,12 @@ final class AppModel: NSObject, ObservableObject {
         profiles = savedProfiles
         let savedSort = UserDefaults.standard.string(forKey: sortModeKey)
         profileSortMode = ProfileSortMode(rawValue: savedSort ?? "") ?? .favoritesAndName
+        let savedDisplayMode = UserDefaults.standard.string(
+            forKey: profileCollectionDisplayModeKey
+        )
+        profileCollectionDisplayMode = ProfileCollectionDisplayMode(
+            rawValue: savedDisplayMode ?? ""
+        ) ?? .list
         if let rawID = UserDefaults.standard.string(forKey: selectedProfileKey),
            let savedID = UUID(uuidString: rawID),
            savedProfiles.contains(where: { $0.id == savedID }) {
@@ -1601,6 +1621,108 @@ final class AppModel: NSObject, ObservableObject {
             .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
     }
 
+    var profileTagNames: [String] {
+        var namesByFoldedValue: [String: String] = [:]
+        for tag in profiles.flatMap(\.tags) {
+            let normalized = Self.normalizedProfileTagName(tag)
+            guard !normalized.isEmpty else { continue }
+            let folded = normalized.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            )
+            namesByFoldedValue[folded] = namesByFoldedValue[folded] ?? normalized
+        }
+        return namesByFoldedValue.values.sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    nonisolated static func normalizedProfileTagName(_ value: String) -> String {
+        let words = value
+            .split(whereSeparator: { $0.isWhitespace })
+            .map(String.init)
+        return String(words.joined(separator: " ").prefix(32))
+    }
+
+    @discardableResult
+    func addProfileTag(_ rawName: String, to profileID: UUID) -> Bool {
+        let name = Self.normalizedProfileTagName(rawName)
+        guard !name.isEmpty,
+              let index = profiles.firstIndex(where: { $0.id == profileID })
+        else { return false }
+        guard !profiles[index].tags.contains(where: {
+            $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }) else { return false }
+        profiles[index].tags.append(name)
+        profiles[index].tags.sort {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+        statusMessage = "Тег «\(name)» добавлен"
+        return true
+    }
+
+    func removeProfileTag(_ name: String, from profileID: UUID) {
+        guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        profiles[index].tags.removeAll {
+            $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        }
+        let availableTags = profileTagNames
+        profileTagFilter = Set(profileTagFilter.filter { selectedTag in
+            availableTags.contains {
+                $0.compare(
+                    selectedTag,
+                    options: [.caseInsensitive, .diacriticInsensitive]
+                ) == .orderedSame
+            }
+        })
+        statusMessage = "Тег «\(name)» удалён из профиля"
+    }
+
+    func renameProfileTag(_ oldName: String, to rawNewName: String) {
+        let newName = Self.normalizedProfileTagName(rawNewName)
+        guard !newName.isEmpty else { return }
+        for index in profiles.indices {
+            guard profiles[index].tags.contains(where: {
+                $0.compare(oldName, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+            }) else { continue }
+            profiles[index].tags.removeAll {
+                $0.compare(oldName, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+                    || $0.compare(newName, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+            }
+            profiles[index].tags.append(newName)
+            profiles[index].tags.sort {
+                $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+            }
+        }
+        if profileTagFilter.contains(oldName) {
+            profileTagFilter.remove(oldName)
+            profileTagFilter.insert(newName)
+        }
+        statusMessage = "Тег «\(oldName)» переименован в «\(newName)»"
+    }
+
+    func deleteProfileTag(_ name: String) {
+        for index in profiles.indices {
+            profiles[index].tags.removeAll {
+                $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+            }
+        }
+        profileTagFilter.remove(name)
+        statusMessage = "Тег «\(name)» удалён"
+    }
+
+    func toggleProfileTagFilter(_ name: String) {
+        if profileTagFilter.contains(name) {
+            profileTagFilter.remove(name)
+        } else {
+            profileTagFilter.insert(name)
+        }
+    }
+
     func setProfileGroup(profileID: UUID, group: String) {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[index].group = group.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1612,14 +1734,33 @@ final class AppModel: NSObject, ObservableObject {
     var profileGroups: [ProfileGroupSection] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered: [ConnectionProfile]
+        let tagFiltered = profiles.filter { profile in
+            guard !profileTagFilter.isEmpty else { return true }
+            let foldedTags = Set(profile.tags.map {
+                $0.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    locale: .current
+                )
+            })
+            let foldedFilter = Set(profileTagFilter.map {
+                $0.folding(
+                    options: [.caseInsensitive, .diacriticInsensitive],
+                    locale: .current
+                )
+            })
+            return foldedFilter.isSubset(of: foldedTags)
+        }
         if query.isEmpty {
-            filtered = profiles
+            filtered = tagFiltered
         } else {
-            filtered = profiles.filter { profile in
+            filtered = tagFiltered.filter { profile in
                 profile.friendlyName.localizedCaseInsensitiveContains(query)
                     || profile.host.localizedCaseInsensitiveContains(query)
                     || profile.username.localizedCaseInsensitiveContains(query)
                     || profile.group.localizedCaseInsensitiveContains(query)
+                    || profile.tags.contains {
+                        $0.localizedCaseInsensitiveContains(query)
+                    }
                     || profile.connectionType.title.localizedCaseInsensitiveContains(query)
             }
         }
@@ -3284,16 +3425,34 @@ final class AppModel: NSObject, ObservableObject {
                 }
 
                 let nextAttempt = (smartReconnectAttempt ?? 0) + 1
-                if !terminationRequested,
-                   canAutomaticallyReconnectSSH(
+                let shouldReconnect = !terminationRequested
+                    && canAutomaticallyReconnectSSH(
                        settings: settings,
                        connection: connection,
                        temporaryPassword: temporaryPassword
-                   ),
-                   SmartReconnectClassifier.shouldRetrySSH(
+                    )
+                    && SmartReconnectClassifier.shouldRetrySSH(
                        exitCode: exitCode,
                        output: recentOutput
-                   ) {
+                    )
+                if let activityID = sshActivityIDs.removeValue(forKey: tabID) {
+                    let outcome: ConnectionActivityOutcome
+                    if shouldReconnect {
+                        outcome = .interrupted
+                    } else if terminationRequested || exitCode == 0 {
+                        outcome = .completed
+                    } else {
+                        outcome = .failed
+                    }
+                    connectionActivity.finish(
+                        activityID,
+                        outcome: outcome,
+                        errorMessage: outcome == .failed
+                            ? SmartReconnectClassifier.sshReason(output: recentOutput)
+                            : nil
+                    )
+                }
+                if shouldReconnect {
                     scheduleTerminalSmartReconnect(
                         connection: connection,
                         tabID: tabID,
@@ -3309,6 +3468,20 @@ final class AppModel: NSObject, ObservableObject {
                 }
                 objectWillChange.send()
             }
+            let activityProfileID: UUID? = connection.kind == .savedProfile
+                ? connection.profileID
+                : nil
+            let route = settings.jumpHostDestination
+                ?? (settings.proxyMode == .none
+                    ? nil
+                    : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
+            sshActivityIDs[tabID] = connectionActivity.begin(
+                kind: .ssh,
+                profileID: activityProfileID,
+                profileName: settings.profileName,
+                target: "\(settings.host):\(settings.port)",
+                route: route
+            )
             terminalRuntimeSettings[tabID] = settings
             terminalStartedAt[tabID] = Date()
             if let smartReconnectAttempt {
@@ -3340,6 +3513,18 @@ final class AppModel: NSObject, ObservableObject {
                 try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
             }
             cancelTerminalSmartReconnect(tabID: tabID, session: session)
+            let route = settings.jumpHostDestination
+                ?? (settings.proxyMode == .none
+                    ? nil
+                    : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
+            connectionActivity.recordFailure(
+                kind: .ssh,
+                profileID: connection.kind == .savedProfile ? connection.profileID : nil,
+                profileName: settings.profileName,
+                target: "\(settings.host):\(settings.port)",
+                route: route,
+                errorMessage: error.localizedDescription
+            )
             errorMessage = error.localizedDescription
             statusMessage = "SSH не запущен"
         }
@@ -4415,6 +4600,13 @@ final class AppModel: NSObject, ObservableObject {
                 connection: connection,
                 smartReconnectAttempt: smartReconnectAttempt
             )
+            rdpActivityIDs[profileID] = connectionActivity.begin(
+                kind: .rdp,
+                profileID: profileID,
+                profileName: profile.friendlyName,
+                target: profile.host,
+                route: profile.gatewayHost.isEmpty ? nil : profile.gatewayHost
+            )
             managedSessions[profileID] = runtime
             sessions[profileID] = runtime.summary
             reconnectCandidateProfileIDs.remove(profileID)
@@ -4451,6 +4643,14 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage = error.localizedDescription
                 statusMessage = "Подключение не запущено"
             }
+            connectionActivity.recordFailure(
+                kind: .rdp,
+                profileID: profileID,
+                profileName: profile.friendlyName,
+                target: profile.host,
+                route: profile.gatewayHost.isEmpty ? nil : profile.gatewayHost,
+                errorMessage: error.localizedDescription
+            )
             reconnectCandidateProfileIDs.insert(profileID)
         }
     }
@@ -4847,6 +5047,22 @@ final class AppModel: NSObject, ObservableObject {
         )
         let previousReconnectAttempt = runtime.smartReconnectAttempt
         let interruption = runtime.interruption
+        if let activityID = rdpActivityIDs.removeValue(forKey: profileID) {
+            let activityOutcome: ConnectionActivityOutcome
+            switch interruption {
+            case .monitorTopologyChanged, .sleep:
+                activityOutcome = .interrupted
+            case .userRequested:
+                activityOutcome = endedNormally ? .completed : .failed
+            }
+            connectionActivity.finish(
+                activityID,
+                outcome: activityOutcome,
+                errorMessage: activityOutcome == .failed
+                    ? sessionFailureMessage(log: log, status: status)
+                    : runtime.interruptionReason
+            )
+        }
         lastSessionLogURLs[profileID] = runtime.connection.logURL
         managedSessions.removeValue(forKey: profileID)
         sessions.removeValue(forKey: profileID)
