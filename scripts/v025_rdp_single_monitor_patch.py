@@ -70,14 +70,8 @@ replace_once(
 
 replace_once(
     "Sources/SelectiveRemote/FreeRDPService.swift",
-    """            launchMarkers += "[SelectiveRemote Host] Single-monitor fullscreen: "
-                + "native monitor sizing, smart-sizing disabled, "
-                + "monitor=\(selectedMonitor), multimon disabled\n"
-""",
-    """            launchMarkers += "[SelectiveRemote Host] Single-monitor fullscreen: "
-                + "logical monitor sizing, macOS top safe-area reserved, "
-                + "smart-sizing disabled, monitor=\(selectedMonitor), multimon disabled\n"
-""",
+    '                + "native monitor sizing, smart-sizing disabled, "',
+    '                + "logical monitor sizing, macOS top safe-area reserved, smart-sizing disabled, "',
 )
 
 replace_once(
