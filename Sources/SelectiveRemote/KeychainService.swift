@@ -191,6 +191,8 @@ enum KeychainService {
     }
 
     static func passwordExists(reference: KeychainCredentialReference) -> Bool {
+        if UnifiedCredentialVault.shared.contains(reference: reference) { return true }
+        if UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) { return false }
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: reference.service,
@@ -205,6 +207,12 @@ enum KeychainService {
         reference: KeychainCredentialReference,
         authenticationPrompt: String? = nil
     ) throws -> String? {
+        if let value = try UnifiedCredentialVault.shared.read(reference: reference) {
+            return value
+        }
+        if UnifiedCredentialVault.shared.isLegacySuppressed(reference: reference) {
+            return nil
+        }
         var query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: reference.service,
@@ -227,6 +235,9 @@ enum KeychainService {
         guard let data = result as? Data, let value = String(data: data, encoding: .utf8) else {
             throw KeychainError.invalidData
         }
+        // Lazy migration: once a legacy record has been authorized, future
+        // sessions and future app builds use the single unified vault item.
+        try? UnifiedCredentialVault.shared.save(value, reference: reference)
         return value
     }
 
@@ -261,34 +272,28 @@ enum KeychainService {
         kind: KeychainCredentialKind = .rdp,
         requiresUserPresence: Bool = false
     ) throws {
-        let targetService = credentialService(for: kind)
-        let key: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: targetService,
-            kSecAttrAccount as String: kind.account(profileID: profileID)
-        ]
-
-        var item = key
-        item[kSecValueData as String] = Data(password.utf8)
         if requiresUserPresence && !touchIDAvailable {
             throw KeychainError.touchIDUnavailable(
                 "Touch ID недоступен. Добавьте отпечаток в настройках macOS или отключите защиту Touch ID для этого секрета."
             )
         }
-        // Deliberately use the traditional generic-password keychain item here.
-        // Biometric access control on the data-protection keychain requires a
-        // stable entitled identity and returns -34018 in our ad-hoc GitHub
-        // builds. The secret still lives in Keychain; Touch ID is enforced by
-        // LocalAuthentication immediately before the app reads it.
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        let reference = credentialReference(profileID: profileID, kind: kind)
+        try UnifiedCredentialVault.shared.save(password, reference: reference)
+    }
 
-        // Recreate the item so replacement is deterministic.
-        let deleteStatus = SecItemDelete(key as CFDictionary)
-        if deleteStatus != errSecSuccess && deleteStatus != errSecItemNotFound {
-            throw KeychainError.unexpectedStatus(deleteStatus)
-        }
-        let addStatus = SecItemAdd(item as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
+    static var unifiedVaultEntryCount: Int {
+        UnifiedCredentialVault.shared.entryCount
+    }
+
+    static func unlockUnifiedCredentialVault() throws {
+        try UnifiedCredentialVault.shared.unlock()
+    }
+
+    @discardableResult
+    static func migrateCredentialsToUnifiedVault() throws -> Int {
+        try UnifiedCredentialVault.shared.importLegacyItems(
+            services: [service, legacyService]
+        )
     }
 
     static func authorizeSSHKeyUse(profileID: UUID, reason: String) throws {
@@ -310,14 +315,19 @@ enum KeychainService {
         profileID: UUID,
         kind: KeychainCredentialKind = .rdp
     ) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: credentialService(for: kind),
-            kSecAttrAccount as String: kind.account(profileID: profileID)
-        ]
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(status)
+        let reference = credentialReference(profileID: profileID, kind: kind)
+        try UnifiedCredentialVault.shared.delete(reference: reference)
+
+        // SSH and Forwarding used the pre-v2 Keychain service in older builds.
+        // Tombstone the legacy namespace as well so an explicit Delete cannot
+        // accidentally resurrect an old per-profile password through fallback.
+        if kind == .ssh || kind == .forwarding {
+            let legacy = KeychainCredentialReference(
+                service: legacyService,
+                account: kind.account(profileID: profileID),
+                kind: kind
+            )
+            try UnifiedCredentialVault.shared.delete(reference: legacy)
         }
     }
 

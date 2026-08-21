@@ -8,6 +8,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
     case devices = "Устройства и звук"
     case folders = "Папки"
     case terminal = "Терминал"
+    case automation = "Автоматизация"
     case sftp = "SFTP"
     case forwarding = "Туннели"
     case security = "Безопасность"
@@ -23,6 +24,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
         case .devices: "headphones"
         case .folders: "folder"
         case .terminal: "terminal"
+        case .automation: "gearshape.2"
         case .sftp: "folder.badge.gearshape"
         case .forwarding: "arrow.left.arrow.right"
         case .security: "lock.shield"
@@ -101,7 +103,7 @@ struct ContentView: View {
         case .rdp:
             [.general, .display, .devices, .folders, .security]
         case .ssh:
-            [.general, .authentication, .route, .terminal, .sftp, .forwarding, .security]
+            [.general, .authentication, .route, .automation, .terminal, .sftp, .forwarding, .security]
         }
     }
     private var cameraSelectionBinding: Binding<String> {
@@ -1846,6 +1848,8 @@ struct ContentView: View {
             UpdateLocalization.text(ru: "Безопасность", en: "Security")
         case .terminal:
             UpdateLocalization.text(ru: "Терминал", en: "Terminal")
+        case .automation:
+            UpdateLocalization.text(ru: "Автоматизация", en: "Automation")
         case .sftp:
             "SFTP"
         case .forwarding:
@@ -1892,6 +1896,8 @@ struct ContentView: View {
             )
         case .terminal:
             UpdateLocalization.text(ru: "Командная строка", en: "Command line")
+        case .automation:
+            UpdateLocalization.text(ru: "Startup Snippets и группы", en: "Startup Snippets & groups")
         case .sftp:
             UpdateLocalization.text(ru: "Файлы и серверы", en: "Files & servers")
         case .forwarding:
@@ -1945,6 +1951,11 @@ struct ContentView: View {
             UpdateLocalization.text(
                 ru: "Полноразмерный Terminal Workspace этого SSH-профиля.",
                 en: "Full-size Terminal Workspace for this SSH profile."
+            )
+        case .automation:
+            UpdateLocalization.text(
+                ru: "Startup Snippet, переменные и наследование настроек SSH-группы.",
+                en: "Startup Snippet, variables, and SSH group inheritance."
             )
         case .sftp:
             UpdateLocalization.text(
@@ -2074,6 +2085,11 @@ struct ContentView: View {
         case .devices: deviceSettings
         case .folders: folderSettings
         case .terminal: EmptyView()
+        case .automation:
+            SSHAutomationSettingsView(
+                profile: profileBinding,
+                sshProfiles: model.profiles.filter { $0.connectionType == .ssh }
+            )
         case .sftp: EmptyView()
         case .forwarding: EmptyView()
         case .security: securitySettings
@@ -2906,10 +2922,6 @@ struct ContentView: View {
                 .padding(8)
             }
 
-            SSHAutomationSettingsView(
-                profile: profileBinding,
-                sshProfiles: model.profiles.filter { $0.connectionType == .ssh }
-            )
         }
     }
 

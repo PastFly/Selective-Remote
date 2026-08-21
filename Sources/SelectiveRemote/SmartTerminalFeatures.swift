@@ -399,9 +399,20 @@ struct SSHAutomationSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.orange)
 
+                Divider()
                 if hasGroup {
-                    Divider()
                     groupSection
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label("Наследование настроек группы", systemImage: "square.stack.3d.up")
+                            .font(.headline)
+                        Text("У этого SSH-профиля пока нет группы. Назначьте группу во вкладке «Основное» — здесь сразу появятся общие username, порт, Jump Host, Keepalive, Startup Snippet и переменные группы.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                 }
             }
             .padding(8)

@@ -1,5 +1,8 @@
 ## 0.26.0
 
+- Startup Snippets, Terminal Variables, and Group inheritance now have a dedicated visible Automation tab in SSH profile settings; profiles without a group get an explicit setup hint.
+- Added a unified Keychain Vault for RDP/SSH/Proxy/Forwarding passwords: after the first authorization, secrets are read from one Keychain record and cached only in memory until the app exits, preventing a storm of per-profile prompts after ad-hoc updates.
+- The Keychain screen now includes a one-time Merge Passwords action that batch-migrates existing per-profile records into the unified Vault.
 - Added Host Insights on top of Server Context: hostname, uptime, load average, RAM, root disk, available updates, listening ports, and logged-in users, using live data from the remote Linux host with quick diagnostic commands.
 - Terminal autocomplete is now context-aware: it understands the current command argument and `sudo`, and combines history, favorites, Snippets, Server Commands, systemd services, and Docker/Podman containers from the active host.
 - SSH profiles now support Startup Snippets with Disabled, Ask, and Automatic modes plus a separate option for running after Smart Reconnect.

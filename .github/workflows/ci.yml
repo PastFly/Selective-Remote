@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -15,18 +15,14 @@ concurrency:
 
 jobs:
   test:
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'feature/v0.26.0-smart-workspaces' }}
     name: Swift tests on macOS
     runs-on: macos-14
-    timeout-minutes: 40
+    timeout-minutes: 20
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
-      - name: Checkout candidate branch
+      - name: Checkout
         uses: actions/checkout@v6
-        with:
-          ref: feature/v0.26.0-smart-workspaces
-          fetch-depth: 0
 
       - name: Environment
         run: |
@@ -34,22 +30,15 @@ jobs:
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
-      - name: Apply Automation UX and unified Keychain Vault
-        run: |
-          python3 scripts/v026_keychain_vault_patch.py
-          python3 scripts/v026_keychain_vault_fix.py
-
-      - name: Validate release metadata
+      - name: Validate shell scripts
         run: |
           bash -n scripts/build_app.sh
           bash -n scripts/build_and_install.sh
           version="$(sed -nE 's/^VERSION="([^"]+)"/\1/p' scripts/build_app.sh)"
-          test "$version" = "0.26.0"
-          grep -q '^BUILD_NUMBER="138"' scripts/build_app.sh
           python3 scripts/release_notes.py "$version" > "$RUNNER_TEMP/release-notes.md"
           test -s "$RUNNER_TEMP/release-notes.md"
 
-      - name: Swift tests
+      - name: Test
         run: swift test
 
       - name: Test terminal web interactions
@@ -57,19 +46,3 @@ jobs:
 
       - name: Release build
         run: swift build -c release
-
-      - name: Restore normal CI and remove bootstrap files
-        run: |
-          git checkout origin/main -- .github/workflows/ci.yml
-          git rm -f --ignore-unmatch scripts/v026_keychain_vault_patch.py scripts/v026_keychain_vault_fix.py .github/workflows/v026-keychain-vault.yml
-
-      - name: Commit validated candidate
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git status --short
-          git commit -m "Improve SSH automation UX and unify Keychain credentials [v026-vault applied]"
-          git fetch origin feature/v0.26.0-smart-workspaces
-          git rebase origin/feature/v0.26.0-smart-workspaces
-          git push origin HEAD:feature/v0.26.0-smart-workspaces

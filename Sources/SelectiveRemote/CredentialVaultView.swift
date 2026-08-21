@@ -111,6 +111,7 @@ struct CredentialVaultView: View {
     @State private var knownHostVerification: [String: SSHKnownHostVerification] = [:]
     @State private var knownHostPendingDeletion: SSHKnownHostEntry?
     @State private var knownHostProfileCreationEntry: SSHKnownHostEntry?
+    @State private var unifiedVaultMessage: String?
 
     init(
         presentation: CredentialVaultPresentation = .sheet,
@@ -250,6 +251,14 @@ struct CredentialVaultView: View {
     private var bodyWithLifecycle: some View {
         baseLayout
             .onAppear(perform: handleAppear)
+            .alert("Единый Keychain Vault", isPresented: Binding(
+                get: { unifiedVaultMessage != nil },
+                set: { if !$0 { unifiedVaultMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { unifiedVaultMessage = nil }
+            } message: {
+                Text(unifiedVaultMessage ?? "")
+            }
             .onChange(of: selection) { _, _ in
                 refreshCertificateInfo()
             }
@@ -301,6 +310,17 @@ struct CredentialVaultView: View {
                 }
                 .environmentObject(model)
             }
+    }
+
+    private func migrateCredentialVault() {
+        do {
+            let imported = try KeychainService.migrateCredentialsToUnifiedVault()
+            unifiedVaultMessage = imported > 0
+                ? "Перенесено записей: \(imported). Теперь SSH/RDP/SFTP/Forwarding используют один Keychain Vault, который кэшируется только до завершения приложения."
+                : "Новых записей для переноса нет. Единый Vault уже готов к работе."
+        } catch {
+            unifiedVaultMessage = "Не удалось объединить пароли: \(error.localizedDescription)"
+        }
     }
 
     private func handleAppear() {
@@ -355,6 +375,19 @@ struct CredentialVaultView: View {
             }
 
             Spacer()
+
+            VStack(alignment: .trailing, spacing: 3) {
+                Button {
+                    migrateCredentialVault()
+                } label: {
+                    Label("Объединить пароли", systemImage: "lock.square.stack")
+                }
+                .buttonStyle(.bordered)
+                .help("Однократно переносит сохранённые пароли в один защищённый Keychain Vault. После ad-hoc обновления приложению потребуется доступ максимум к одной записи вместо отдельного запроса для каждого профиля.")
+                Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
 
             if presentation == .sheet {
                 Button("Готово") { dismiss() }
