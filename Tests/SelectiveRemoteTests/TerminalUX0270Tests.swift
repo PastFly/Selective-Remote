@@ -34,12 +34,13 @@ func startupSnippetSequencePreservesOrder() throws {
     let status = try #require(library.templates().first(where: { $0.title == "Status" }))
     let ownerKey = TerminalStartupSnippetSequenceStore.profileOwnerKey(UUID())
 
-    let compositeID = try #require(try sequenceStore.apply(
+    let appliedID = try sequenceStore.apply(
         ownerKey: ownerKey,
         snippetIDs: [status.id, prepare.id],
         title: "Startup Snippets",
         library: library
-    ))
+    )
+    let compositeID = try #require(appliedID)
 
     #expect(sequenceStore.sequence(
         ownerKey: ownerKey,
@@ -71,12 +72,13 @@ func singleStartupSnippetUsesOriginalTemplate() throws {
     let snippet = try #require(library.templates().first(where: { $0.title == "One" }))
     let ownerKey = TerminalStartupSnippetSequenceStore.profileOwnerKey(UUID())
 
-    let resolvedID = try #require(try sequenceStore.apply(
+    let appliedID = try sequenceStore.apply(
         ownerKey: ownerKey,
         snippetIDs: [snippet.id],
         title: "Startup Snippets",
         library: library
-    ))
+    )
+    let resolvedID = try #require(appliedID)
 
     #expect(resolvedID == snippet.id)
     #expect(!library.isStartupSequenceTemplate(id: resolvedID))
@@ -111,12 +113,13 @@ func clearingStartupSnippetSequenceRemovesComposite() throws {
     let one = try #require(library.templates().first(where: { $0.title == "One" }))
     let two = try #require(library.templates().first(where: { $0.title == "Two" }))
     let ownerKey = TerminalStartupSnippetSequenceStore.groupOwnerKey("Production")
-    let compositeID = try #require(try sequenceStore.apply(
+    let appliedID = try sequenceStore.apply(
         ownerKey: ownerKey,
         snippetIDs: [one.id, two.id],
         title: "Startup Snippets группы",
         library: library
-    ))
+    )
+    let compositeID = try #require(appliedID)
     #expect(library.template(id: compositeID) != nil)
 
     let cleared = try sequenceStore.apply(
@@ -146,8 +149,9 @@ func terminalInspectorSourceRegression() throws {
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift"),
         encoding: .utf8
     )
-    #expect(sshSource.contains("private var workspaceInspectorVisible: Bool {\n        showsHistory || showsSnippets"))
-    #expect(sshSource.contains("The native SwiftUI inspector is the single History surface"))
+    let normalizedSSHSource = normalizedTerminalUXSwiftSource(sshSource)
+    #expect(normalizedSSHSource.contains("private var workspaceInspectorVisible: Bool { showsHistory || showsSnippets }"))
+    #expect(normalizedSSHSource.contains("guard tab.id == workspace.selectedTabID else { return }"))
 
     let localSource = try String(
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/LocalTerminalView.swift"),
@@ -175,4 +179,11 @@ func contrastCheckboxSourceRegression() throws {
         encoding: .utf8
     )
     #expect(sftpSource.contains(".toggleStyle(SelectiveRemoteCheckboxToggleStyle())"))
+}
+
+private func normalizedTerminalUXSwiftSource(_ source: String) -> String {
+    source
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
 }
