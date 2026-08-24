@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 
@@ -55,7 +56,7 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
     private let maximumBytes: Int64
     private var bytesWritten: Int64 = 0
     private var isTruncated = false
-    private var pendingText = ""
+    private var pendingData = Data()
     private var isClosed = false
 
     init(url: URL, maximumBytes: Int64) throws {
@@ -71,11 +72,11 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
         guard !data.isEmpty else { return }
         queue.async {
             guard !self.isClosed, !self.isTruncated else { return }
-            self.pendingText.append(String(decoding: data, as: UTF8.self))
+            self.pendingData.append(data)
             self.flushCompleteLines()
-            if self.pendingText.utf8.count > 32_768 {
-                self.writeSanitized(self.pendingText)
-                self.pendingText.removeAll(keepingCapacity: true)
+            if self.pendingData.count > 32_768 {
+                self.writeSanitized(String(decoding: self.pendingData, as: UTF8.self))
+                self.pendingData.removeAll(keepingCapacity: true)
             }
         }
     }
@@ -83,9 +84,9 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
     func close(completion: @escaping @Sendable (Int64, Bool) -> Void) {
         queue.async {
             if !self.isClosed {
-                if !self.pendingText.isEmpty {
-                    self.writeSanitized(self.pendingText)
-                    self.pendingText.removeAll()
+                if !self.pendingData.isEmpty {
+                    self.writeSanitized(String(decoding: self.pendingData, as: UTF8.self))
+                    self.pendingData.removeAll()
                 }
                 try? self.handle.synchronize()
                 try? self.handle.close()
@@ -96,11 +97,20 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
     }
 
     private func flushCompleteLines() {
-        while let newline = pendingText.firstIndex(where: { $0 == "\n" || $0 == "\r" }) {
-            let end = pendingText.index(after: newline)
-            let line = String(pendingText[..<end])
-            pendingText.removeSubrange(..<end)
-            writeSanitized(line)
+        while let newline = pendingData.firstIndex(where: { $0 == 10 || $0 == 13 }) {
+            var end = pendingData.index(after: newline)
+            if pendingData[newline] == 13 {
+                // Keep a trailing CR until the next PTY chunk so a split CRLF
+                // boundary is still normalized as one line break.
+                guard end != pendingData.endIndex else { return }
+                if pendingData[end] == 10 {
+                    end = pendingData.index(after: end)
+                }
+            }
+            let length = pendingData.distance(from: pendingData.startIndex, to: end)
+            let line = Data(pendingData.prefix(length))
+            pendingData.removeFirst(length)
+            writeSanitized(String(decoding: line, as: UTF8.self))
         }
     }
 
@@ -127,7 +137,7 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
 
 enum TerminalSessionLogSanitizer {
     private static let ansiExpression = try! NSRegularExpression(
-        pattern: #"\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|[@-_])"#
+        pattern: #"\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)|c|[@-_])"#
     )
 
     static func sanitize(_ value: String) -> String {
@@ -369,6 +379,14 @@ struct TerminalSessionLogsView: View {
     @State private var searchText = ""
     @State private var kindFilter: TerminalSessionLogKind?
     @State private var confirmsClear = false
+    @State private var wrapsLines = true
+    @State private var previewRefresh = Date()
+
+    private let previewTimer = Timer.publish(
+        every: 1,
+        on: .main,
+        in: .common
+    ).autoconnect()
 
     private var filteredRecords: [TerminalSessionLogRecord] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -405,17 +423,7 @@ struct TerminalSessionLogsView: View {
 
                 Group {
                     if let record = selectedRecord {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text(record.profileName).font(.headline)
-                                Spacer()
-                                Button("Finder", systemImage: "folder") { store.reveal(record) }
-                            }
-                            TextEditor(text: .constant(store.text(for: record)))
-                                .font(.system(.body, design: .monospaced))
-                                .textSelection(.enabled)
-                        }
-                        .padding(12)
+                        preview(record)
                     } else {
                         ContentUnavailableView("Выберите сессию", systemImage: "doc.text.magnifyingglass")
                     }
@@ -429,6 +437,11 @@ struct TerminalSessionLogsView: View {
             Button("Отмена", role: .cancel) {}
         } message: {
             Text("Активные логи останутся на месте.")
+        }
+        .onReceive(previewTimer) { date in
+            if selectedRecord?.state == .active {
+                previewRefresh = date
+            }
         }
     }
 
@@ -506,5 +519,134 @@ struct TerminalSessionLogsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private func preview(_ record: TerminalSessionLogRecord) -> some View {
+        // Reading this state makes an active log refresh once per second without
+        // publishing every PTY output chunk through SwiftUI.
+        let _ = previewRefresh
+        let text = store.text(for: record)
+        let axes: Axis.Set = wrapsLines ? .vertical : [.horizontal, .vertical]
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(record.profileName)
+                        .font(.title3.bold())
+                    Text(record.target)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+                Label(stateTitle(record.state), systemImage: stateImage(record.state))
+                    .font(.caption.bold())
+                    .foregroundStyle(stateColor(record.state))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(stateColor(record.state).opacity(0.1), in: Capsule())
+            }
+
+            HStack(spacing: 14) {
+                Label(
+                    record.startedAt.formatted(date: .abbreviated, time: .standard),
+                    systemImage: "calendar"
+                )
+                Label(durationText(record.duration), systemImage: "timer")
+                Label(byteCountText(record), systemImage: "doc.text")
+                if let exitCode = record.exitCode {
+                    Label("Exit \(exitCode)", systemImage: "return")
+                }
+                Spacer()
+                Button {
+                    wrapsLines.toggle()
+                } label: {
+                    Label(
+                        wrapsLines ? "Не переносить строки" : "Переносить строки",
+                        systemImage: "text.word.spacing"
+                    )
+                }
+                .help(wrapsLines ? "Показать исходную ширину строк" : "Переносить длинные строки по ширине окна")
+                Button("Копировать", systemImage: "doc.on.doc") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(text, forType: .string)
+                }
+                .disabled(text.isEmpty)
+                Button("Finder", systemImage: "folder") { store.reveal(record) }
+            }
+            .font(.caption)
+
+            ScrollView(axes) {
+                Text(text.isEmpty ? "Вывод сессии пока пуст." : text)
+                    .font(.system(size: 13, weight: .regular, design: .monospaced))
+                    .foregroundStyle(text.isEmpty ? Color.secondary : Color.primary)
+                    .lineSpacing(3)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: !wrapsLines, vertical: true)
+                    .frame(
+                        maxWidth: wrapsLines ? .infinity : nil,
+                        alignment: .topLeading
+                    )
+                    .padding(14)
+            }
+            .background(
+                Color(nsColor: .textBackgroundColor),
+                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08))
+            }
+        }
+        .padding(12)
+    }
+
+    private func stateTitle(_ state: TerminalSessionLogState) -> String {
+        switch state {
+        case .active: "Запись"
+        case .completed: "Завершено"
+        case .failed: "Ошибка"
+        case .interrupted: "Прервано"
+        }
+    }
+
+    private func stateImage(_ state: TerminalSessionLogState) -> String {
+        switch state {
+        case .active: "record.circle"
+        case .completed: "checkmark.circle"
+        case .failed: "exclamationmark.triangle"
+        case .interrupted: "pause.circle"
+        }
+    }
+
+    private func stateColor(_ state: TerminalSessionLogState) -> Color {
+        switch state {
+        case .active: .red
+        case .completed: .green
+        case .failed: .orange
+        case .interrupted: .secondary
+        }
+    }
+
+    private func durationText(_ duration: TimeInterval) -> String {
+        let seconds = max(0, Int(duration))
+        if seconds < 60 { return "\(seconds) сек." }
+        let minutes = seconds / 60
+        if minutes < 60 { return "\(minutes) мин. \(seconds % 60) сек." }
+        return "\(minutes / 60) ч. \(minutes % 60) мин."
+    }
+
+    private func byteCountText(_ record: TerminalSessionLogRecord) -> String {
+        let currentBytes: Int64
+        if record.state == .active,
+           let attributes = try? FileManager.default.attributesOfItem(
+               atPath: store.fileURL(for: record).path
+           ),
+           let size = attributes[.size] as? NSNumber {
+            currentBytes = size.int64Value
+        } else {
+            currentBytes = record.byteCount
+        }
+        return ByteCountFormatter.string(fromByteCount: currentBytes, countStyle: .file)
     }
 }

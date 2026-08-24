@@ -4,9 +4,10 @@ import Testing
 
 @Test("Session log sanitizer removes terminal escapes and known credentials")
 func sessionLogSanitizerRedactsOutput() {
-    let source = "\u{001B}[32mgreen\u{001B}[0m password=hunter2\r\n"
+    let source = "\u{001B}c\u{001B}[32mgreen\u{001B}[0m password=hunter2\r\n"
     let sanitized = TerminalSessionLogSanitizer.sanitize(source)
 
+    #expect(sanitized.hasPrefix("green"))
     #expect(sanitized.contains("green"))
     #expect(sanitized.contains("password=<redacted>"))
     #expect(!sanitized.contains("hunter2"))
@@ -38,7 +39,8 @@ func sessionLogStoreLifecycle() async throws {
         profileName: "Production",
         target: "example.test:22"
     ))
-    store.append(Data("ready\npassword=secret\n".utf8), to: id)
+    store.append(Data("ready\r".utf8), to: id)
+    store.append(Data("\nsecond line\r\npassword=secret\n".utf8), to: id)
     store.finish(id, exitCode: 0, requested: false)
 
     for _ in 0..<100 where store.records.first?.state == .active {
@@ -49,6 +51,8 @@ func sessionLogStoreLifecycle() async throws {
     #expect(record.state == .completed)
     #expect(record.byteCount > 0)
     #expect(store.text(for: record).contains("ready"))
+    #expect(store.text(for: record).contains("ready\nsecond line\n"))
+    #expect(!store.text(for: record).contains("readysecond"))
     #expect(store.text(for: record).contains("password=<redacted>"))
     #expect(!store.text(for: record).contains("secret"))
 }
@@ -72,4 +76,21 @@ func sessionLogsUseNonInvasiveOutputObservers() throws {
     #expect(appModel.contains("session.removeOutputObserver"))
     #expect(session.contains("private var outputObservers"))
     #expect(!session.contains("TerminalSessionLogStore"))
+}
+
+@Test("Session log preview supports readable wrapping, copy and live refresh")
+func sessionLogPreviewReadabilityRegression() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let source = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/TerminalSessionLogs.swift"),
+        encoding: .utf8
+    )
+
+    #expect(source.contains("Timer.publish("))
+    #expect(source.contains("text.word.spacing"))
+    #expect(source.contains("Button(\"Копировать\""))
+    #expect(source.contains(".lineSpacing(3)"))
+    #expect(source.contains("ScrollView(axes)"))
+    #expect(source.contains("pendingData.firstIndex"))
 }
