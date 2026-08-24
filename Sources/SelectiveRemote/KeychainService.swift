@@ -91,7 +91,6 @@ enum KeychainService {
     // older/ad-hoc-signed build can never block replacing the password.
     static let legacyService = "local.selectiveremote.credentials"
     static let service = "local.selectiveremote.credentials.v2"
-    private static let cloudService = "local.selectiveremote.cloud-credentials.v1"
 
     private static let sshPasswordTouchIDDefaultsKey = "SelectiveRemote.sshPasswordUserPresenceProfiles.v1"
     private static let forwardingPasswordTouchIDDefaultsKey = "SelectiveRemote.forwardingPasswordUserPresenceIDs.v1"
@@ -111,31 +110,6 @@ enum KeychainService {
             service: credentialService(for: kind),
             account: kind.account(profileID: profileID),
             kind: kind
-        )
-    }
-
-    static func cloudCredentialReference(accountID: UUID) -> KeychainCredentialReference {
-        KeychainCredentialReference(
-            service: cloudService,
-            account: "\(accountID.uuidString).cloud",
-            kind: nil
-        )
-    }
-
-    static func saveCloudSecret(_ secret: String, accountID: UUID) throws {
-        try UnifiedCredentialVault.shared.save(
-            secret,
-            reference: cloudCredentialReference(accountID: accountID)
-        )
-    }
-
-    static func readCloudSecret(accountID: UUID) throws -> String? {
-        try readPassword(reference: cloudCredentialReference(accountID: accountID))
-    }
-
-    static func deleteCloudSecret(accountID: UUID) throws {
-        try UnifiedCredentialVault.shared.delete(
-            reference: cloudCredentialReference(accountID: accountID)
         )
     }
 

@@ -35,7 +35,6 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
-    case cloud = "Cloud"
     case ssh = "SSH"
     case terminal = "Терминал"
     case sftp = "SFTP"
@@ -52,7 +51,6 @@ private enum MainArea: String, CaseIterable, Identifiable {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
-        case .cloud: "cloud.fill"
         case .snippets: "curlybraces"
         case .sessionLogs: "doc.text.magnifyingglass"
         case .activity: "clock.arrow.circlepath"
@@ -84,7 +82,6 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
-    @StateObject private var cloudIntegrations = CloudIntegrationStore()
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -818,12 +815,6 @@ struct ContentView: View {
                 connectionCenterDetail
             case .connections:
                 profileDetail
-            case .cloud:
-                CloudIntegrationsView(
-                    store: cloudIntegrations,
-                    onOpenProfile: openCloudProfile
-                )
-                .environmentObject(model)
             case .snippets:
                 TerminalSnippetsLibraryView(
                     store: snippets,
@@ -2480,17 +2471,6 @@ struct ContentView: View {
         case .independentTunnel:
             setMainArea(.forwarding)
         }
-    }
-
-    private func openCloudProfile(_ profileID: UUID, action: QuickConnectAction) {
-        model.selectProfile(profileID)
-        switch action {
-        case .sftp:
-            selectedTab = .sftp
-        case .terminal, .connect:
-            selectedTab = .terminal
-        }
-        setMainArea(.connections)
     }
 
     private func setMainArea(_ area: MainArea) {

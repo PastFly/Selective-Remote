@@ -770,13 +770,6 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var detectedOperatingSystemID: String
     var detectedOperatingSystemLike: String
     var operatingSystemDetectedAt: Date?
-    var cloudProvider: CloudProvider?
-    var cloudAccountID: UUID?
-    var cloudResourceID: String
-    var cloudRegion: String
-    var cloudNetworkName: String
-    var cloudLastKnownState: CloudInstanceState?
-    var cloudTags: [String: String]
     var host: String
     var username: String
     var sshPort: Int
@@ -862,13 +855,6 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         detectedOperatingSystemID = ""
         detectedOperatingSystemLike = ""
         operatingSystemDetectedAt = nil
-        cloudProvider = nil
-        cloudAccountID = nil
-        cloudResourceID = ""
-        cloudRegion = ""
-        cloudNetworkName = ""
-        cloudLastKnownState = nil
-        cloudTags = [:]
         host = ""
         username = ""
         sshPort = connectionType == .telnet ? 23 : 22
@@ -939,8 +925,6 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         case id, connectionType, friendlyName, group, tags, profileDescription
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
-        case cloudProvider, cloudAccountID, cloudResourceID, cloudRegion
-        case cloudNetworkName, cloudLastKnownState, cloudTags
         case host, username
         case sshPort, sshTerminalProtocol, moshUDPPort, moshServerPath
         case serialDevicePath, serialBaudRate, serialDataBits
@@ -993,20 +977,6 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
             Date.self,
             forKey: .operatingSystemDetectedAt
         )
-        cloudProvider = try container.decodeIfPresent(CloudProvider.self, forKey: .cloudProvider)
-        cloudAccountID = try container.decodeIfPresent(UUID.self, forKey: .cloudAccountID)
-        cloudResourceID = try container.decodeIfPresent(String.self, forKey: .cloudResourceID)
-            ?? defaults.cloudResourceID
-        cloudRegion = try container.decodeIfPresent(String.self, forKey: .cloudRegion)
-            ?? defaults.cloudRegion
-        cloudNetworkName = try container.decodeIfPresent(String.self, forKey: .cloudNetworkName)
-            ?? defaults.cloudNetworkName
-        cloudLastKnownState = try container.decodeIfPresent(
-            CloudInstanceState.self,
-            forKey: .cloudLastKnownState
-        )
-        cloudTags = try container.decodeIfPresent([String: String].self, forKey: .cloudTags)
-            ?? defaults.cloudTags
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
@@ -1174,13 +1144,6 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(detectedOperatingSystemID, forKey: .detectedOperatingSystemID)
         try container.encode(detectedOperatingSystemLike, forKey: .detectedOperatingSystemLike)
         try container.encodeIfPresent(operatingSystemDetectedAt, forKey: .operatingSystemDetectedAt)
-        try container.encodeIfPresent(cloudProvider, forKey: .cloudProvider)
-        try container.encodeIfPresent(cloudAccountID, forKey: .cloudAccountID)
-        try container.encode(cloudResourceID, forKey: .cloudResourceID)
-        try container.encode(cloudRegion, forKey: .cloudRegion)
-        try container.encode(cloudNetworkName, forKey: .cloudNetworkName)
-        try container.encodeIfPresent(cloudLastKnownState, forKey: .cloudLastKnownState)
-        try container.encode(cloudTags, forKey: .cloudTags)
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
