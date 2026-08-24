@@ -79,6 +79,7 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
     var category: String
     var groupID: UUID
     var targets: [TerminalSnippetTarget]
+    var isExplicitlyUngrouped: Bool
     var targetProfileIDs: [UUID] {
         get { targets.compactMap { if case .sshProfile(let id) = $0 { id } else { nil } } }
         set { targets = newValue.map(TerminalSnippetTarget.sshProfile) }
@@ -95,6 +96,7 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         groupID: UUID? = nil,
         targetProfileIDs: [UUID]? = nil,
         targets: [TerminalSnippetTarget]? = nil,
+        isExplicitlyUngrouped: Bool = false,
         updatedAt: Date
     ) {
         self.id = id
@@ -104,11 +106,13 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         self.category = category
         self.groupID = groupID ?? Self.legacyUnassignedGroupID
         self.targets = targets ?? (targetProfileIDs ?? [profileID]).map(TerminalSnippetTarget.sshProfile)
+        self.isExplicitlyUngrouped = isExplicitlyUngrouped
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, profileID, title, command, category, groupID, targets, targetProfileIDs, updatedAt
+        case id, profileID, title, command, category, groupID, targets, targetProfileIDs
+        case isExplicitlyUngrouped, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -123,6 +127,10 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         targets = try container.decodeIfPresent([TerminalSnippetTarget].self, forKey: .targets)
             ?? (try container.decodeIfPresent([UUID].self, forKey: .targetProfileIDs) ?? [profileID])
                 .map(TerminalSnippetTarget.sshProfile)
+        isExplicitlyUngrouped = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .isExplicitlyUngrouped
+        ) ?? false
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
     }
 
@@ -136,6 +144,7 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         try container.encode(groupID, forKey: .groupID)
         try container.encode(targets, forKey: .targets)
         try container.encode(targetProfileIDs, forKey: .targetProfileIDs)
+        try container.encode(isExplicitlyUngrouped, forKey: .isExplicitlyUngrouped)
         try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
@@ -484,8 +493,6 @@ final class TerminalCommandHistoryStore: ObservableObject {
                 ?? existingTargets
                 ?? [.sshProfile(profileID)]
         )
-        guard !resolvedTargets.isEmpty else { return false }
-
         if let id,
            let index = storedTemplates.firstIndex(where: {
                $0.id == id
@@ -494,6 +501,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             storedTemplates[index].command = command
             storedTemplates[index].category = group?.name ?? ""
             storedTemplates[index].groupID = group?.id ?? TerminalCommandTemplate.legacyUnassignedGroupID
+            storedTemplates[index].isExplicitlyUngrouped = group == nil
             storedTemplates[index].targets = resolvedTargets
             storedTemplates[index].updatedAt = Date()
         } else {
@@ -507,6 +515,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
                     groupID: group?.id,
                     targetProfileIDs: normalizedTargetIDs(targetProfileIDs ?? [profileID]),
                     targets: resolvedTargets,
+                    isExplicitlyUngrouped: group == nil,
                     updatedAt: Date()
                 )
             )
@@ -530,6 +539,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
         storedTemplates[index].category = group.name
         storedTemplates[index].groupID = group.id
+        storedTemplates[index].isExplicitlyUngrouped = false
         storedTemplates[index].updatedAt = Date()
         persistTemplates()
         return true
@@ -786,7 +796,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
             let trimmed = storedTemplates[index].category
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if storedTemplates[index].groupID == TerminalCommandTemplate.legacyUnassignedGroupID,
-               trimmed.isEmpty {
+               trimmed.isEmpty,
+               storedTemplates[index].isExplicitlyUngrouped {
                 continue
             }
             let resolved = trimmed.isEmpty ? Self.defaultSnippetGroupName : trimmed
