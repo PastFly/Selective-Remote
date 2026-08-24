@@ -101,7 +101,7 @@ func localTerminalUsesVisibleHeaderActionsAndMenu() throws {
 
     #expect(source.contains("Image(systemName: \"folder\")"))
     #expect(source.contains("Image(systemName: \"eraser\")"))
-    #expect(source.contains("Image(systemName: \"paintpalette\")"))
+    #expect(source.contains("Button(\"Общее оформление терминала\", systemImage: \"paintpalette\")"))
     #expect(source.contains("Image(systemName: \"ellipsis.circle\")"))
     #expect(source.contains("Button(\"Развернуть терминал\""))
     #expect(source.contains("Button(\"Вернуть интерфейс\""))
