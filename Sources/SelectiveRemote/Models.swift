@@ -468,6 +468,27 @@ enum ConnectionType: String, Codable, CaseIterable, Identifiable, Sendable {
     }
 }
 
+enum SSHTerminalProtocol: String, Codable, CaseIterable, Identifiable, Sendable {
+    case ssh
+    case mosh
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ssh: "SSH"
+        case .mosh: "Mosh"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .ssh: "terminal"
+        case .mosh: "antenna.radiowaves.left.and.right"
+        }
+    }
+}
+
 
 enum SSHAuthenticationMode: String, Codable, CaseIterable, Identifiable, Sendable {
     case automatic
@@ -746,6 +767,9 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var host: String
     var username: String
     var sshPort: Int
+    var sshTerminalProtocol: SSHTerminalProtocol
+    var moshUDPPort: Int
+    var moshServerPath: String
     var sshAuthenticationMode: SSHAuthenticationMode
     var sshIdentityID: UUID?
     var sshProxyMode: SSHProxyMode
@@ -813,6 +837,9 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         host = ""
         username = ""
         sshPort = 22
+        sshTerminalProtocol = .ssh
+        moshUDPPort = 0
+        moshServerPath = ""
         sshAuthenticationMode = .automatic
         sshIdentityID = nil
         sshProxyMode = .none
@@ -872,7 +899,8 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
-        case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
+        case sshPort, sshTerminalProtocol, moshUDPPort, moshServerPath
+        case sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, sshAgentForwarding
         case sshStartupSnippetID, sshStartupSnippetMode, sshStartupSnippetAfterReconnect
         case terminalVariables, sshGroupInheritance, portForwards
@@ -923,6 +951,14 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
+        sshTerminalProtocol = try container.decodeIfPresent(
+            SSHTerminalProtocol.self,
+            forKey: .sshTerminalProtocol
+        ) ?? defaults.sshTerminalProtocol
+        moshUDPPort = try container.decodeIfPresent(Int.self, forKey: .moshUDPPort)
+            ?? defaults.moshUDPPort
+        moshServerPath = try container.decodeIfPresent(String.self, forKey: .moshServerPath)
+            ?? defaults.moshServerPath
         sshAuthenticationMode = try container.decodeIfPresent(SSHAuthenticationMode.self, forKey: .sshAuthenticationMode) ?? defaults.sshAuthenticationMode
         sshIdentityID = try container.decodeIfPresent(UUID.self, forKey: .sshIdentityID)
         sshProxyMode = try container.decodeIfPresent(SSHProxyMode.self, forKey: .sshProxyMode) ?? defaults.sshProxyMode
@@ -1070,6 +1106,9 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
+        try container.encode(sshTerminalProtocol, forKey: .sshTerminalProtocol)
+        try container.encode(moshUDPPort, forKey: .moshUDPPort)
+        try container.encode(moshServerPath, forKey: .moshServerPath)
         try container.encode(sshAuthenticationMode, forKey: .sshAuthenticationMode)
         try container.encodeIfPresent(sshIdentityID, forKey: .sshIdentityID)
         try container.encode(sshProxyMode, forKey: .sshProxyMode)

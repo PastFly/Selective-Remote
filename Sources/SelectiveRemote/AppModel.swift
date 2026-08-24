@@ -3407,7 +3407,7 @@ final class AppModel: NSObject, ObservableObject {
             tabID: tabID
         ) else { return }
         guard !session.isRunning else {
-            statusMessage = "Эта вкладка SSH уже подключена"
+            statusMessage = "Эта вкладка Terminal уже подключена"
             return
         }
         do {
@@ -3447,21 +3447,40 @@ final class AppModel: NSObject, ObservableObject {
             } else {
                 credential = nil
             }
-            try session.start(
-                executable: "/usr/bin/ssh",
-                arguments: SSHService.interactiveSSHArguments(settings: settings),
-                title: "SSH · \(settings.profileName)",
-                environment: try SSHKeyService.backgroundAuthenticationEnvironment(
-                    passwordCredential: credential,
-                    proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
-                        profileID: settings.profileID,
-                        kind: .proxy
-                    ),
-                    jumpHostPasswordCredential: settings.jumpHostProfileID.map {
-                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
-                    },
-                    jumpHostPromptTokens: settings.jumpHostPromptTokens
+            let launchConfiguration: (executable: String, arguments: [String])
+            switch settings.terminalProtocol {
+            case .ssh:
+                launchConfiguration = (
+                    executable: SSHService.sshPath,
+                    arguments: SSHService.interactiveSSHArguments(settings: settings)
                 )
+            case .mosh:
+                let mosh = try MoshService.launchConfiguration(settings: settings)
+                launchConfiguration = (executable: mosh.executable, arguments: mosh.arguments)
+            }
+            let terminalProtocolTitle = settings.terminalProtocol.title
+            let logKind: TerminalSessionLogKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
+            let activityKind: ConnectionActivityKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
+            var authenticationEnvironment = try SSHKeyService.backgroundAuthenticationEnvironment(
+                passwordCredential: credential,
+                proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                    profileID: settings.profileID,
+                    kind: .proxy
+                ),
+                jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                },
+                jumpHostPromptTokens: settings.jumpHostPromptTokens
+            )
+            if settings.terminalProtocol == .mosh {
+                authenticationEnvironment["LANG"] = authenticationEnvironment["LANG"] ?? "en_US.UTF-8"
+                authenticationEnvironment["LC_CTYPE"] = authenticationEnvironment["LC_CTYPE"] ?? "en_US.UTF-8"
+            }
+            try session.start(
+                executable: launchConfiguration.executable,
+                arguments: launchConfiguration.arguments,
+                title: "\(terminalProtocolTitle) · \(settings.profileName)",
+                environment: authenticationEnvironment
             ) { [weak self, weak session] exitCode in
                 guard let self, let session else { return }
                 finishTerminalSessionLog(
@@ -3479,6 +3498,7 @@ final class AppModel: NSObject, ObservableObject {
 
                 let nextAttempt = (smartReconnectAttempt ?? 0) + 1
                 let shouldReconnect = !terminationRequested
+                    && settings.terminalProtocol == .ssh
                     && canAutomaticallyReconnectSSH(
                        settings: settings,
                        connection: connection,
@@ -3516,15 +3536,15 @@ final class AppModel: NSObject, ObservableObject {
                 } else {
                     cancelTerminalSmartReconnect(tabID: tabID, session: session)
                     statusMessage = terminationRequested || exitCode == 0
-                        ? "SSH-сессия завершена"
-                        : "SSH-сессия завершилась с кодом \(exitCode)"
+                        ? "\(terminalProtocolTitle)-сессия завершена"
+                        : "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)"
                 }
                 objectWillChange.send()
             }
             beginTerminalSessionLog(
                 tabID: tabID,
                 session: session,
-                kind: .ssh,
+                kind: logKind,
                 profileID: connection.kind == .savedProfile ? connection.profileID : nil,
                 profileName: settings.profileName,
                 target: "\(settings.host):\(settings.port)"
@@ -3537,7 +3557,7 @@ final class AppModel: NSObject, ObservableObject {
                     ? nil
                     : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
             sshActivityIDs[tabID] = connectionActivity.begin(
-                kind: .ssh,
+                kind: activityKind,
                 profileID: activityProfileID,
                 profileName: settings.profileName,
                 target: "\(settings.host):\(settings.port)",
@@ -3567,7 +3587,7 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 statusMessage = "SSH: проверяем reconnect \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
             } else {
-                statusMessage = "SSH подключается к \(settings.host)"
+                statusMessage = "\(terminalProtocolTitle) подключается к \(settings.host)"
             }
             if connection.kind == .savedProfile,
                let profileID = connection.profileID,
@@ -3585,7 +3605,7 @@ final class AppModel: NSObject, ObservableObject {
                     ? nil
                     : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
             connectionActivity.recordFailure(
-                kind: .ssh,
+                kind: settings.terminalProtocol == .mosh ? .mosh : .ssh,
                 profileID: connection.kind == .savedProfile ? connection.profileID : nil,
                 profileName: settings.profileName,
                 target: "\(settings.host):\(settings.port)",
@@ -3593,7 +3613,7 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage: error.localizedDescription
             )
             errorMessage = error.localizedDescription
-            statusMessage = "SSH не запущен"
+            statusMessage = "\(settings.terminalProtocol.title) не запущен"
         }
     }
 

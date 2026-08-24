@@ -1285,6 +1285,10 @@ struct ContentView: View {
                 value: profile.sshAuthenticationMode.title
             )
             rdpSummaryLine(
+                "Terminal",
+                value: profile.sshTerminalProtocol.title
+            )
+            rdpSummaryLine(
                 UpdateLocalization.text(ru: "Host key", en: "Host key"),
                 value: profile.sshHostKeyPolicy.title
             )
@@ -2455,6 +2459,44 @@ struct ContentView: View {
                             TextField("22", value: profileBinding.sshPort, format: .number)
                                 .textFieldStyle(.roundedBorder)
                                 .frame(width: 130, alignment: .leading)
+                        }
+                        GridRow(alignment: .top) {
+                            Text("Terminal")
+                                .padding(.top, 7)
+                            VStack(alignment: .leading, spacing: 9) {
+                                Picker("Протокол Terminal", selection: profileBinding.sshTerminalProtocol) {
+                                    ForEach(SSHTerminalProtocol.allCases) { terminalProtocol in
+                                        Label(terminalProtocol.title, systemImage: terminalProtocol.systemImage)
+                                            .tag(terminalProtocol)
+                                    }
+                                }
+                                .labelsHidden()
+                                .pickerStyle(.segmented)
+                                .frame(maxWidth: 320)
+
+                                if profileBinding.wrappedValue.sshTerminalProtocol == .mosh {
+                                    HStack(spacing: 10) {
+                                        TextField(
+                                            "UDP-порт: 0 — автоматически",
+                                            value: profileBinding.moshUDPPort,
+                                            format: .number.grouping(.never)
+                                        )
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 210)
+                                        TextField(
+                                            "Путь к mosh-server (необязательно)",
+                                            text: profileBinding.moshServerPath
+                                        )
+                                        .textFieldStyle(.roundedBorder)
+                                    }
+                                    Text(
+                                        "Mosh использует SSH для входа, затем UDP для устойчивой Terminal-сессии. "
+                                            + "На Mac и сервере должен быть установлен Mosh; SFTP и туннели остаются на SSH."
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         GridRow {
                             Text("Операционная система")
