@@ -163,11 +163,11 @@ enum TerminalSessionLogSanitizer {
 final class TerminalSessionLogStore: ObservableObject {
     @Published private(set) var records: [TerminalSessionLogRecord]
 
-    var isEnabled: Bool {
+    @Published var isEnabled: Bool {
         didSet { defaults.set(isEnabled, forKey: Key.enabled) }
     }
 
-    var retentionDays: Int {
+    @Published var retentionDays: Int {
         didSet {
             retentionDays = min(max(retentionDays, 1), 365)
             defaults.set(retentionDays, forKey: Key.retentionDays)
@@ -408,28 +408,60 @@ struct TerminalSessionLogsView: View {
             header
             settings
             HSplitView {
-                List(filteredRecords, selection: $selectedID) { record in
-                    row(record)
-                        .tag(record.id)
-                        .contextMenu {
-                            Button("Показать в Finder", systemImage: "folder") { store.reveal(record) }
-                            Button("Удалить", systemImage: "trash", role: .destructive) {
-                                store.delete(record)
-                            }
-                            .disabled(record.state == .active)
-                        }
-                }
-                .frame(minWidth: 330, idealWidth: 400)
-
                 Group {
-                    if let record = selectedRecord {
-                        preview(record)
+                    if filteredRecords.isEmpty {
+                        ContentUnavailableView {
+                            Label(
+                                store.records.isEmpty ? "Логов пока нет" : "Ничего не найдено",
+                                systemImage: "doc.text.magnifyingglass"
+                            )
+                        } description: {
+                            Text(
+                                store.records.isEmpty
+                                    ? "Запустите SSH или Local Terminal — новая сессия появится здесь."
+                                    : "Измените поиск или фильтр типа сессии."
+                            )
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        ContentUnavailableView("Выберите сессию", systemImage: "doc.text.magnifyingglass")
+                        List(filteredRecords, selection: $selectedID) { record in
+                            row(record)
+                                .tag(record.id)
+                                .contextMenu {
+                                    Button("Показать в Finder", systemImage: "folder") {
+                                        store.reveal(record)
+                                    }
+                                    Button("Удалить", systemImage: "trash", role: .destructive) {
+                                        store.delete(record)
+                                    }
+                                    .disabled(record.state == .active)
+                                }
+                        }
                     }
                 }
-                .frame(minWidth: 420)
+                .frame(minWidth: 330, idealWidth: 400, maxHeight: .infinity)
+
+                Group {
+                    if filteredRecords.isEmpty {
+                        ContentUnavailableView {
+                            Label("Вывод сессии", systemImage: "terminal")
+                        } description: {
+                            Text("После появления логов выберите сессию слева.")
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if let record = selectedRecord {
+                        preview(record)
+                    } else {
+                        ContentUnavailableView(
+                            "Выберите сессию",
+                            systemImage: "doc.text.magnifyingglass"
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .padding(24)
         .confirmationDialog("Удалить завершённые логи?", isPresented: $confirmsClear) {

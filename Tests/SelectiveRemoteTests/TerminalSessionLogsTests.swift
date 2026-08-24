@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import SelectiveRemote
@@ -57,6 +58,36 @@ func sessionLogStoreLifecycle() async throws {
     #expect(!store.text(for: record).contains("secret"))
 }
 
+@Test("Session log recording preference publishes and persists")
+@MainActor
+func sessionLogRecordingPreferencePersists() throws {
+    let suite = "TerminalSessionLogPreferenceTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suite))
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SelectiveRemotePreferenceTests-\(UUID().uuidString)")
+    defer {
+        defaults.removePersistentDomain(forName: suite)
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    let store = TerminalSessionLogStore(rootURL: root, defaults: defaults)
+    var values: [Bool] = []
+    let observation = store.$isEnabled.sink { values.append($0) }
+    store.isEnabled = false
+
+    #expect(values == [true, false])
+    #expect(store.begin(
+        kind: .local,
+        profileID: nil,
+        profileName: "Local",
+        target: "/tmp"
+    ) == nil)
+
+    let restored = TerminalSessionLogStore(rootURL: root, defaults: defaults)
+    #expect(!restored.isEnabled)
+    _ = observation
+}
+
 @Test("SSH and Local Terminal attach logs through output observers")
 func sessionLogsUseNonInvasiveOutputObservers() throws {
     let root = URL(fileURLWithPath: #filePath)
@@ -93,4 +124,7 @@ func sessionLogPreviewReadabilityRegression() throws {
     #expect(source.contains(".lineSpacing(3)"))
     #expect(source.contains("ScrollView(axes)"))
     #expect(source.contains("pendingData.firstIndex"))
+    #expect(source.contains("@Published var isEnabled"))
+    #expect(source.contains("Логов пока нет"))
+    #expect(source.contains(".frame(maxWidth: .infinity, maxHeight: .infinity)"))
 }
