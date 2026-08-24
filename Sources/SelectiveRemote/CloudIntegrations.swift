@@ -1,7 +1,6 @@
 import Combine
 import CryptoKit
 import Foundation
-import FoundationXML
 
 enum CloudProvider: String, Codable, CaseIterable, Identifiable, Sendable {
     case aws
