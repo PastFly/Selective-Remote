@@ -22,7 +22,7 @@ func terminalThemeLegacyIdentifiersRemainStable() {
 
 @Test("Terminal Themes 2.0 содержит 26 вариантов")
 func terminalThemes2CatalogCount() {
-    #expect(TerminalThemePreset.allCases.count == 26)
+    #expect(TerminalThemePreset.allCases.count == 34)
     #expect(TerminalThemePreset.allCases.contains(.kanagawaWave))
     #expect(TerminalThemePreset.allCases.contains(.lightOwl))
     #expect(TerminalThemePreset.allCases.contains(.catppuccinLatte))

@@ -53,6 +53,8 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
     case nordLight
     case cyberpunk
     case ocean
+    case obsidianEmber, arcticDawn, forestMist, graphite
+    case violetDusk, sandstoneLight, glacierLight, cobaltNight
     case custom
 
     var id: String { rawValue }
@@ -84,6 +86,14 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
         case .nordLight: "Nord Light"
         case .cyberpunk: "Cyberpunk"
         case .ocean: "Ocean"
+        case .obsidianEmber: "Obsidian Ember"
+        case .arcticDawn: "Arctic Dawn"
+        case .forestMist: "Forest Mist"
+        case .graphite: "Graphite"
+        case .violetDusk: "Violet Dusk"
+        case .sandstoneLight: "Sandstone Light"
+        case .glacierLight: "Glacier Light"
+        case .cobaltNight: "Cobalt Night"
         case .custom: "Своя тема"
         }
     }
@@ -402,6 +412,14 @@ enum TerminalThemePreset: String, CaseIterable, Identifiable, Sendable {
             TerminalThemeBuiltins.cyberpunk
         case .ocean:
             TerminalThemeBuiltins.ocean
+        case .obsidianEmber: TerminalThemeBuiltins.obsidianEmber
+        case .arcticDawn: TerminalThemeBuiltins.arcticDawn
+        case .forestMist: TerminalThemeBuiltins.forestMist
+        case .graphite: TerminalThemeBuiltins.graphite
+        case .violetDusk: TerminalThemeBuiltins.violetDusk
+        case .sandstoneLight: TerminalThemeBuiltins.sandstoneLight
+        case .glacierLight: TerminalThemeBuiltins.glacierLight
+        case .cobaltNight: TerminalThemeBuiltins.cobaltNight
         case .solarizedLight:
             TerminalPalette(
                 background: "#FDF6E3",
