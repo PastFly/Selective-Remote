@@ -86,8 +86,8 @@ func snippetEditorShowsCommandPlaceholder() throws {
     #expect(source.contains("if command.isEmpty"))
 }
 
-@Test("Локальный терминал показывает действия напрямую без раскрывающегося меню")
-func localTerminalUsesVisibleHeaderActions() throws {
+@Test("Локальный терминал сочетает основные действия с дополнительным меню")
+func localTerminalUsesVisibleHeaderActionsAndMenu() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .deletingLastPathComponent()
@@ -102,7 +102,9 @@ func localTerminalUsesVisibleHeaderActions() throws {
     #expect(source.contains("Image(systemName: \"folder\")"))
     #expect(source.contains("Image(systemName: \"eraser\")"))
     #expect(source.contains("Image(systemName: \"paintpalette\")"))
-    #expect(!source.contains("Image(systemName: \"ellipsis.circle\")"))
+    #expect(source.contains("Image(systemName: \"ellipsis.circle\")"))
+    #expect(source.contains("Button(\"Развернуть терминал\""))
+    #expect(source.contains("Button(\"Вернуть интерфейс\""))
 }
 
 @Test("Отключённая Terminal pane повторно использует свой сервер без открытия редактора")
