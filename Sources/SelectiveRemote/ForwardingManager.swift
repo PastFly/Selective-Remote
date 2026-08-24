@@ -1601,6 +1601,11 @@ struct ForwardingManagerView: View {
                 "",
                 0
             )
+        case .telnet, .serial:
+            return (
+                "Недоступно для SSH-туннелей", "—", "", 0, .automatic,
+                nil, nil, .none, "", 0
+            )
         case .local:
             return (
                 "Этот Mac", "localhost", NSUserName(), 0, .automatic,
@@ -1820,7 +1825,7 @@ struct ForwardingManagerView: View {
             } ?? 0
         case .custom:
             seconds = 30
-        case .local:
+        case .telnet, .serial, .local:
             seconds = 0
         }
         return seconds > 0 ? "Каждые \(seconds) sec" : "Отключён"

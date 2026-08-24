@@ -3006,7 +3006,7 @@ final class AppModel: NSObject, ObservableObject {
                     profileID: item.id,
                     kind: .forwarding
                 )
-            case .local:
+            case .telnet, .serial, .local:
                 credential = nil
             }
             let effectiveCredential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
@@ -5273,7 +5273,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
             case .custom:
                 if forwardingPasswordUserPresenceIDs.contains(summary.id.uuidString) { return false }
-            case .local:
+            case .telnet, .serial, .local:
                 return false
             }
             return true

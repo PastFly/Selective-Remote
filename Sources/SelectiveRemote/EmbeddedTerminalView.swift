@@ -761,16 +761,7 @@ struct SSHTerminalView: View {
                         .strokeBorder(Color.white.opacity(0.10))
                 }
 
-            Text(
-                "SSH и Mosh используют системные клиенты; Telnet и Serial — изолированный helper внутри \(AppBrand.name). "
-                    + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
-                    + "Telnet не шифрует трафик. "
-                    + "несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
-                    + "строки с пробелом в начале и распространёнными признаками секретов "
-                    + "автоматически пропускаются."
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            terminalPrivacyNote
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
@@ -859,6 +850,18 @@ struct SSHTerminalView: View {
                 broadcastsInput = false
             }
         }
+    }
+
+    private var terminalPrivacyNote: some View {
+        Text(
+            "SSH и Mosh используют системные клиенты; Telnet и Serial — изолированный helper внутри \(AppBrand.name). "
+                + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
+                + "Telnet не шифрует трафик. "
+                + "Несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
+                + "строки с пробелом в начале и распространёнными признаками секретов автоматически пропускаются."
+        )
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     private var broadcastBanner: some View {
