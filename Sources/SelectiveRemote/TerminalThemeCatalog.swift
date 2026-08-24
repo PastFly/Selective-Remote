@@ -10,8 +10,7 @@ extension TerminalThemePreset {
     var tone: TerminalThemeTone {
         switch self {
         case .light, .solarizedLight, .lightOwl, .ayuLight,
-             .gruvboxLight, .catppuccinLatte, .tokyoDay, .nordLight,
-             .arcticDawn, .sandstoneLight, .glacierLight:
+             .gruvboxLight, .catppuccinLatte, .tokyoDay, .nordLight:
             .light
         case .custom:
             .custom
@@ -105,30 +104,6 @@ enum TerminalThemeBuiltins {
         yellow: "#FFD166", blue: "#58A6FF", magenta: "#C792EA", cyan: "#49D6C8", white: "#CFE8EF",
         brightBlack: "#52717C", brightRed: "#FF8A8A", brightGreen: "#8BE7AA", brightYellow: "#FFE08A",
         brightBlue: "#83C3FF", brightMagenta: "#D9ACF5", brightCyan: "#78E8DD", brightWhite: "#FFFFFF"
-    )
-    static let obsidianEmber = TerminalPalette(
-        background: "#12100F", foreground: "#E8DDD3", cursor: "#FF8A50", cursorAccent: "#12100F", selectionBackground: "#66351F99", black: "#171310", red: "#FF654F", green: "#A8C57A", yellow: "#E8B65A", blue: "#6FA6D9", magenta: "#C889B8", cyan: "#73B8AC", white: "#D9CDC3", brightBlack: "#776B63", brightRed: "#FF8A70", brightGreen: "#C2DC92", brightYellow: "#FFD07A", brightBlue: "#91C4EF", brightMagenta: "#E2A9D2", brightCyan: "#95D8CA", brightWhite: "#FFF7F0"
-    )
-    static let arcticDawn = TerminalPalette(
-        background: "#F4F8FA", foreground: "#243442", cursor: "#257A9E", cursorAccent: "#F4F8FA", selectionBackground: "#B8DDEA88", black: "#263746", red: "#C94F62", green: "#397F68", yellow: "#A06F18", blue: "#276EA8", magenta: "#805AA3", cyan: "#167B86", white: "#D9E5EA", brightBlack: "#617887", brightRed: "#DD6D7D", brightGreen: "#55A083", brightYellow: "#BE8B31", brightBlue: "#468DC5", brightMagenta: "#9D77BC", brightCyan: "#3599A3", brightWhite: "#FFFFFF"
-    )
-    static let forestMist = TerminalPalette(
-        background: "#14201B", foreground: "#D5E2D8", cursor: "#9BCB8B", cursorAccent: "#14201B", selectionBackground: "#355B4999", black: "#101814", red: "#E06C75", green: "#8FBC8F", yellow: "#D8B66A", blue: "#70A5A8", magenta: "#AF8CAD", cyan: "#6FB7A5", white: "#CBD8CE", brightBlack: "#607269", brightRed: "#F08B91", brightGreen: "#ACD5A5", brightYellow: "#EACB83", brightBlue: "#8FC2C4", brightMagenta: "#CAA9C7", brightCyan: "#8ED1BF", brightWhite: "#F2FAF4"
-    )
-    static let graphite = TerminalPalette(
-        background: "#181A1D", foreground: "#D7D9DC", cursor: "#C4C7CC", cursorAccent: "#181A1D", selectionBackground: "#555B6699", black: "#111315", red: "#D76D77", green: "#8FBA8B", yellow: "#C9A96E", blue: "#779ECB", magenta: "#A989B7", cyan: "#76AAA9", white: "#C9CDD2", brightBlack: "#686D75", brightRed: "#EB8992", brightGreen: "#A9D0A5", brightYellow: "#DFC589", brightBlue: "#95B9E0", brightMagenta: "#C3A5D0", brightCyan: "#94C5C3", brightWhite: "#F7F8FA"
-    )
-    static let violetDusk = TerminalPalette(
-        background: "#191528", foreground: "#E2DCF2", cursor: "#C6A7FF", cursorAccent: "#191528", selectionBackground: "#57417C99", black: "#12101D", red: "#F0718A", green: "#8CCF9B", yellow: "#E8C47A", blue: "#83A7F2", magenta: "#C58BE2", cyan: "#72C7CF", white: "#D7D0E8", brightBlack: "#6D6580", brightRed: "#FF91A5", brightGreen: "#A9E5B5", brightYellow: "#F8DA96", brightBlue: "#A1C0FF", brightMagenta: "#DDA7F1", brightCyan: "#91E0E5", brightWhite: "#FFFFFF"
-    )
-    static let sandstoneLight = TerminalPalette(
-        background: "#F7F0E4", foreground: "#4B4035", cursor: "#A65D36", cursorAccent: "#F7F0E4", selectionBackground: "#DCC8A888", black: "#4B4035", red: "#B94F4A", green: "#5F7D4E", yellow: "#99701D", blue: "#416F8A", magenta: "#8D587A", cyan: "#427B77", white: "#E5D8C4", brightBlack: "#807267", brightRed: "#CE6A62", brightGreen: "#789761", brightYellow: "#B78B37", brightBlue: "#608CA5", brightMagenta: "#A77494", brightCyan: "#609792", brightWhite: "#FFFDF8"
-    )
-    static let glacierLight = TerminalPalette(
-        background: "#F2F7F9", foreground: "#253A47", cursor: "#1985A1", cursorAccent: "#F2F7F9", selectionBackground: "#B5DDE688", black: "#263B48", red: "#C94D64", green: "#348267", yellow: "#9C7420", blue: "#2476AE", magenta: "#7E5CA4", cyan: "#14818C", white: "#D7E6EA", brightBlack: "#617A87", brightRed: "#DE6B7F", brightGreen: "#51A184", brightYellow: "#B98F39", brightBlue: "#4595CA", brightMagenta: "#9A79C0", brightCyan: "#36A0AA", brightWhite: "#FFFFFF"
-    )
-    static let cobaltNight = TerminalPalette(
-        background: "#08162E", foreground: "#D9E7FF", cursor: "#56C8FF", cursorAccent: "#08162E", selectionBackground: "#174C8299", black: "#061126", red: "#FF657A", green: "#72D69D", yellow: "#FFD166", blue: "#56A8FF", magenta: "#C28BFF", cyan: "#4DD8D1", white: "#D1E2FA", brightBlack: "#526A89", brightRed: "#FF8797", brightGreen: "#94E8B3", brightYellow: "#FFE28B", brightBlue: "#7EC0FF", brightMagenta: "#D6A9FF", brightCyan: "#78ECE5", brightWhite: "#FFFFFF"
     )
 }
 
