@@ -131,7 +131,8 @@ enum TerminalSessionLogSanitizer {
     )
 
     static func sanitize(_ value: String) -> String {
-        let hasLineBreak = value.last == "\n" || value.last == "\r"
+        let finalScalar = value.unicodeScalars.last?.value
+        let hasLineBreak = finalScalar == 10 || finalScalar == 13
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         let withoutANSI = ansiExpression.stringByReplacingMatches(
             in: value,
