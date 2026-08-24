@@ -68,6 +68,26 @@ private struct UpdateSettingsView: View {
                 Toggle("Проверять обновления при запуске и каждые 5 часов", isOn: $model.automaticallyCheckForUpdates)
                 Toggle("Автоматически загружать найденные обновления", isOn: $model.automaticallyDownloadUpdates)
                     .disabled(!model.automaticallyCheckForUpdates)
+                LabeledContent("Каталог автоматической загрузки") {
+                    Text(model.automaticUpdateDownloadDirectoryPath ?? "Внутренний каталог приложения")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                HStack {
+                    Button("Выбрать каталог…", systemImage: "folder") {
+                        model.chooseAutomaticUpdateDownloadDirectory()
+                    }
+                    Spacer()
+                    Button("Использовать внутренний каталог") {
+                        model.resetAutomaticUpdateDownloadDirectory()
+                    }
+                    .disabled(model.automaticUpdateDownloadDirectoryPath == nil)
+                }
+                Text("DMG в выбранном каталоге сохраняется после установки и не удаляется автоматически.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Действия") {
@@ -131,8 +151,8 @@ struct UpdateExperiencePopover: View {
                     }
                     Spacer()
                     if model.downloadedUpdateDMGURL == nil {
-                        Button("Загрузить обновление") {
-                            model.downloadAvailableUpdate()
+                        Button("Сохранить DMG…") {
+                            model.downloadAvailableUpdateChoosingDestination()
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.isDownloadingUpdate)
@@ -146,6 +166,20 @@ struct UpdateExperiencePopover: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(model.updateDownloadStage == .installing)
                     }
+                }
+
+                if model.downloadedUpdateUsesCustomDestination,
+                   let url = model.downloadedUpdateDMGURL {
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "DMG сохранён в выбранной папке и не будет удалён автоматически: \(url.deletingLastPathComponent().path)",
+                            en: "The DMG is saved in your selected folder and will not be removed automatically: \(url.deletingLastPathComponent().path)"
+                        ),
+                        systemImage: "externaldrive.fill.badge.checkmark"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack {

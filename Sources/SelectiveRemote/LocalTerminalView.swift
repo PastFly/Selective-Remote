@@ -10,7 +10,9 @@ struct LocalTerminalView: View {
     @ObservedObject private var namedWorkspaceStore = TerminalNamedWorkspaceStore.shared
 
     let sshProfiles: [ConnectionProfile]
+    let isFocusMode: Bool
     let connect: (TerminalWorkspaceTab) -> Void
+    let toggleFocusMode: () -> Void
     let executeSnippet: (TerminalCommandTemplate) -> TerminalSnippetRunResult
 
     @State private var showsHistory = false
@@ -106,7 +108,7 @@ struct LocalTerminalView: View {
                 showsHistory = false
                 showsSnippets.toggle()
             } label: {
-                Image(systemName: "text.badge.plus")
+                Image(systemName: "curlybraces")
                     .font(.title3)
             }
             .buttonStyle(.bordered)
@@ -149,14 +151,48 @@ struct LocalTerminalView: View {
                 )
             }
 
-            Button {
-                showsAppearance.toggle()
+            if isFocusMode {
+                Button("Вернуть интерфейс", systemImage: "arrow.down.right.and.arrow.up.left") {
+                    toggleFocusMode()
+                }
+                .buttonStyle(.borderedProminent)
+                .help("Показать боковую панель и обычный интерфейс приложения")
+            } else {
+                Button("Развернуть терминал", systemImage: "arrow.up.left.and.arrow.down.right") {
+                    toggleFocusMode()
+                }
+                .buttonStyle(.bordered)
+                .help("Скрыть навигацию и отдать терминалу максимум места")
+            }
+
+            Menu {
+                Button("Переименовать вкладку…", systemImage: "pencil") {
+                    renameValue = selectedTab.title
+                    renameTabID = selectedTab.id
+                }
+                Button("Выбрать рабочую папку…", systemImage: "folder") {
+                    chooseWorkingDirectory(for: selectedTab)
+                }
+                .disabled(selectedTab.session.isRunning)
+                Button("Очистить терминал", systemImage: "eraser") {
+                    selectedTab.session.clear()
+                }
+                Divider()
+                Button("Рабочие пространства", systemImage: "rectangle.3.group") {
+                    showsNamedWorkspaces = true
+                }
+                Button("Управлять сниппетами", systemImage: "curlybraces") {
+                    showsSnippetLibrary = true
+                }
+                Button("Общее оформление терминала", systemImage: "paintpalette") {
+                    showsAppearance = true
+                }
             } label: {
-                Image(systemName: "paintpalette")
+                Image(systemName: "ellipsis.circle")
                     .font(.title3)
             }
-            .buttonStyle(.bordered)
-            .help("Общее оформление терминала")
+            .menuStyle(.borderlessButton)
+            .fixedSize()
             .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
                 TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
             }
@@ -168,8 +204,7 @@ struct LocalTerminalView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .terminalToolbarContainer()
     }
 
     private var tabBar: some View {

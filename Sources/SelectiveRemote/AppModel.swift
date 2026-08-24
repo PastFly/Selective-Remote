@@ -334,6 +334,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var updateDownloadProgress = 0.0
     @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
     @Published private(set) var downloadedUpdateDMGURL: URL?
+    @Published private(set) var downloadedUpdateUsesCustomDestination = false
     @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
     @Published var updateInstallError: String?
     @Published var postUpgradeHealthWarning: String?
@@ -363,6 +364,19 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
     }
+    @Published var automaticUpdateDownloadDirectoryPath = UserDefaults.standard.string(
+        forKey: "SelectiveRemote.update.autoDownloadDirectory.v1"
+    ) {
+        didSet {
+            let key = "SelectiveRemote.update.autoDownloadDirectory.v1"
+            if let automaticUpdateDownloadDirectoryPath,
+               !automaticUpdateDownloadDirectoryPath.isEmpty {
+                UserDefaults.standard.set(automaticUpdateDownloadDirectoryPath, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+    }
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
@@ -378,6 +392,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sshKeyPassphraseStoredIDs: Set<String> = []
     @Published private(set) var sshTunnels: [UUID: SSHTunnelSummary] = [:]
     @Published private(set) var sshTunnelLastErrors: [UUID: String] = [:]
+
+    var isUpdateOperationInProgress: Bool {
+        isCheckingForUpdates || isDownloadingUpdate || updateDownloadStage == .installing
+    }
     @Published private(set) var sshTunnelReconnectProgress: [UUID: SmartReconnectProgress] = [:]
     @Published private(set) var rdpReconnectProgress: [UUID: SmartReconnectProgress] = [:]
     private var sshTunnelReconnectSummaries: [UUID: SSHTunnelSummary] = [:]
@@ -3610,10 +3628,12 @@ final class AppModel: NSObject, ObservableObject {
         guard let input = TerminalSnippetExecution.inputData(for: snippet.command) else {
             return .invalidSnippet
         }
-        let availableTargets = Set(
+        let availableProfiles = Set(
             profiles.lazy.filter { $0.connectionType == .ssh }.map(\.id)
         )
-        let targets = snippet.targetProfileIDs.filter(availableTargets.contains)
+        let targets = snippet.targets.filter { target in
+            isAvailableSnippetTarget(target, availableProfiles: availableProfiles)
+        }
         guard !targets.isEmpty else { return .noTargets }
 
         let runID = UUID()
@@ -3622,21 +3642,41 @@ final class AppModel: NSObject, ObservableObject {
             snippetID: snippet.id,
             title: snippet.title,
             startedAt: Date(),
-            targets: targets.compactMap { profileID in
-                guard let profile = profiles.first(where: { $0.id == profileID }) else {
-                    return nil
-                }
-                return TerminalSnippetTargetRunStatus(
-                    profileID: profileID,
-                    name: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
-                    state: .connecting
-                )
+            targets: targets.compactMap { target in
+                snippetRunStatus(for: target)
             }
         )
 
         var startedConnection = false
         var acceptedTargets = 0
-        for profileID in targets {
+        for target in targets {
+            if target == .localTerminal {
+                let tab = localTerminalWorkspace().selectedTab
+                acceptedTargets += 1
+                if case .running = tab.session.phase {
+                    sendSnippetInput(
+                        input,
+                        command: snippet.command,
+                        profileID: Self.localTerminalWorkspaceID,
+                        session: tab.session,
+                        runID: runID
+                    )
+                } else {
+                    startedConnection = true
+                    if !tab.session.isRunning {
+                        connectLocalTerminal(connection: tab.connection, tabID: tab.id, session: tab.session)
+                    }
+                    enqueueSnippetInputAfterConnect(
+                        input,
+                        command: snippet.command,
+                        profileID: Self.localTerminalWorkspaceID,
+                        session: tab.session,
+                        runID: runID
+                    )
+                }
+                continue
+            }
+            guard case .sshProfile(let profileID) = target else { continue }
             guard let tab = snippetTerminalTab(for: profileID) else {
                 updateSnippetRun(
                     id: runID,
@@ -3675,8 +3715,38 @@ final class AppModel: NSObject, ObservableObject {
         guard acceptedTargets > 0 else { return .noTargets }
         statusMessage = startedConnection
             ? "Snippets: подключаем Targets и готовим выполнение"
-            : "Snippets: команда отправлена на \(acceptedTargets) SSH-целей"
+            : "Snippets: команда отправлена на \(acceptedTargets) Targets"
         return startedConnection ? .connecting : .success
+    }
+
+    private func isAvailableSnippetTarget(
+        _ target: TerminalSnippetTarget,
+        availableProfiles: Set<UUID>
+    ) -> Bool {
+        switch target {
+        case .sshProfile(let id): availableProfiles.contains(id)
+        case .localTerminal: true
+        }
+    }
+
+    private func snippetRunStatus(
+        for target: TerminalSnippetTarget
+    ) -> TerminalSnippetTargetRunStatus? {
+        switch target {
+        case .sshProfile(let profileID):
+            guard let profile = profiles.first(where: { $0.id == profileID }) else { return nil }
+            return TerminalSnippetTargetRunStatus(
+                profileID: profileID,
+                name: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
+                state: .connecting
+            )
+        case .localTerminal:
+            return TerminalSnippetTargetRunStatus(
+                profileID: Self.localTerminalWorkspaceID,
+                name: "Локальный терминал",
+                state: .connecting
+            )
+        }
     }
 
     private func snippetTerminalTab(for profileID: UUID) -> TerminalWorkspaceTab? {
@@ -4363,6 +4433,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableUpdateURL = nil
                     availableReleaseNotesURL = nil
                     downloadedUpdateDMGURL = nil
+                    downloadedUpdateUsesCustomDestination = false
                     updateInstallError = nil
                     updateDownloadStage = .idle
                     if announcesUpToDate {
@@ -4375,6 +4446,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableReleaseNotesURL = manifest.releaseNotesURL
                     if versionChanged {
                         downloadedUpdateDMGURL = nil
+                        downloadedUpdateUsesCustomDestination = false
                         updateInstallError = nil
                         updateDownloadProgress = 0
                         updateDownloadStage = .idle
@@ -4391,6 +4463,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableUpdateURL = nil
                     availableReleaseNotesURL = manifest.releaseNotesURL
                     downloadedUpdateDMGURL = nil
+                    downloadedUpdateUsesCustomDestination = false
                     updateDownloadProgress = 0
                     updateDownloadStage = .idle
                     let minimum = manifest.minimumMacOS
@@ -4415,6 +4488,60 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func downloadAvailableUpdate() {
+        guard let manifest = availableUpdateManifest else { return }
+        let destinationURL = automaticUpdateDownloadDirectoryPath.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+                .appendingPathComponent(manifest.downloadURL.lastPathComponent)
+        }
+        downloadAvailableUpdate(
+            to: destinationURL,
+            userSelectedDestination: destinationURL != nil
+        )
+    }
+
+    func chooseAutomaticUpdateDownloadDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = UpdateLocalization.text(
+            ru: "Выберите каталог для автоматических обновлений",
+            en: "Choose a Folder for Automatic Updates"
+        )
+        panel.prompt = UpdateLocalization.text(ru: "Выбрать", en: "Choose")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if let automaticUpdateDownloadDirectoryPath {
+            panel.directoryURL = URL(
+                fileURLWithPath: automaticUpdateDownloadDirectoryPath,
+                isDirectory: true
+            )
+        }
+        guard panel.runModal() == .OK, let directoryURL = panel.url else { return }
+        automaticUpdateDownloadDirectoryPath = directoryURL.standardizedFileURL.path
+    }
+
+    func resetAutomaticUpdateDownloadDirectory() {
+        automaticUpdateDownloadDirectoryPath = nil
+    }
+
+    func downloadAvailableUpdateChoosingDestination() {
+        guard let manifest = availableUpdateManifest,
+              !isDownloadingUpdate else { return }
+        let panel = NSSavePanel()
+        panel.title = UpdateLocalization.text(
+            ru: "Сохранить обновление Selective Remote",
+            en: "Save Selective Remote Update"
+        )
+        panel.nameFieldStringValue = manifest.downloadURL.lastPathComponent
+        panel.allowedContentTypes = [.diskImage]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.prompt = UpdateLocalization.text(ru: "Сохранить", en: "Save")
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+        downloadAvailableUpdate(to: destinationURL, userSelectedDestination: true)
+    }
+
+    private func downloadAvailableUpdate(to destinationURL: URL?, userSelectedDestination: Bool) {
         guard let manifest = availableUpdateManifest,
               !isDownloadingUpdate else { return }
         isDownloadingUpdate = true
@@ -4427,6 +4554,7 @@ final class AppModel: NSObject, ObservableObject {
             do {
                 self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
                     from: manifest.downloadURL,
+                    destinationURL: destinationURL,
                     progress: { [weak self] value in
                         self?.updateDownloadProgress = value
                     },
@@ -4434,6 +4562,7 @@ final class AppModel: NSObject, ObservableObject {
                         self?.updateDownloadStage = stage
                     }
                 )
+                self.downloadedUpdateUsesCustomDestination = userSelectedDestination
                 self.updateDownloadStage = .ready
             } catch {
                 self.updateDownloadStage = .idle

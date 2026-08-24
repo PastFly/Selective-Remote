@@ -25,7 +25,7 @@ struct TerminalUX0250Tests {
         let view = try source("Sources/SelectiveRemote/UpdateExperienceView.swift")
         let guardSource = try source("Sources/SelectiveRemote/SettingsWindowCloseGuard.swift")
 
-        #expect(app.contains("preventsClosing: model.isCheckingForUpdates"))
+        #expect(app.contains("preventsClosing: model.isUpdateOperationInProgress"))
         #expect(model.contains("func checkForUpdatesFromSettings()"))
         #expect(model.contains("checkForUpdates(announcesUpToDate: false)"))
         #expect(view.contains("model.checkForUpdatesFromSettings()"))
@@ -37,7 +37,7 @@ struct TerminalUX0250Tests {
     func localToolbarUsesTitle3Icons() throws {
         let local = try source("Sources/SelectiveRemote/LocalTerminalView.swift")
         #expect(local.contains("Image(systemName: \"clock.arrow.circlepath\")\n                    .font(.title3)"))
-        #expect(local.contains("Image(systemName: \"text.badge.plus\")\n                    .font(.title3)"))
+        #expect(local.contains("Image(systemName: \"curlybraces\")\n                    .font(.title3)"))
         #expect(local.contains("Image(systemName: \"paintpalette.fill\")\n                    .font(.title3)"))
     }
 
