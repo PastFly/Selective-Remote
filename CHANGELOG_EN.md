@@ -1,3 +1,16 @@
+## 0.28.0
+
+- Snippets now use typed Targets with Local Terminal support while preserving backward compatibility with existing SSH snippets.
+- Fixed snippet creation in the currently open group; the library root correctly creates an ungrouped snippet, and the group remains manually editable.
+- Added name/modified-date sorting with ascending and descending direction at the Snippets root and inside groups.
+- Unified the Snippets icon as `{}` across the sidebar, SSH, and Local Terminal.
+- Aligned the Local Terminal toolbar with SSH in size and composition, adding focus mode and an additional-actions menu; global appearance now lives under `…`.
+- Expanded Terminal Color Schemes with eight complete light and dark palettes including full ANSI colors.
+- Manual update downloads now use a native DMG save-location picker, and user-selected files are retained after installation.
+- Update settings now include a persistent automatic DMG download folder with an option to return to the app-managed internal folder.
+- Settings stays open during update checks, downloads, SHA-256 verification, and installer preparation while showing operation stages and progress.
+- Added regression coverage for target migration, current-group creation, sorting, toolbars, themes, and the update workflow.
+
 ## 0.27.0
 
 - SSH profiles and groups now support ordered Startup Snippets: add up to eight Snippets, reorder them, and run the sequence after the shell prompt appears.
