@@ -16,7 +16,7 @@ func legacySnippetTargetsMigrate() throws {
 }
 
 @Test("Typed local terminal target survives persistence")
-func localTerminalTargetRoundTrip() throws {
+@MainActor func localTerminalTargetRoundTrip() throws {
     let snippet = TerminalCommandTemplate(
         id: UUID(),
         profileID: TerminalCommandHistoryStore.globalSnippetLibraryID,
