@@ -3624,7 +3624,9 @@ final class AppModel: NSObject, ObservableObject {
             snippetID: snippet.id,
             title: snippet.title,
             startedAt: Date(),
-            targets: targets.compactMap(snippetRunStatus(for:))
+            targets: targets.compactMap { target in
+                snippetRunStatus(for: target)
+            }
         )
 
         var startedConnection = false
