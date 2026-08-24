@@ -84,9 +84,7 @@ struct TerminalSnippetsLibraryView: View {
                 groups: store.snippetGroups(),
                 profiles: sortedProfiles
             ) { draft in
-                let profileID = draft.targets.compactMap {
-                    if case .sshProfile(let id) = $0 { id } else { nil }
-                }.first
+                let profileID = draft.firstSSHProfileID
                     ?? TerminalCommandHistoryStore.globalSnippetLibraryID
                 let saved = store.saveTemplate(
                     id: draft.id,
@@ -744,6 +742,13 @@ private struct TerminalSnippetDraft {
     let category: String
     let groupID: UUID
     let targets: [TerminalSnippetTarget]
+
+    var firstSSHProfileID: UUID? {
+        for target in targets {
+            if case .sshProfile(let id) = target { return id }
+        }
+        return nil
+    }
 }
 
 private struct TerminalSnippetEditorView: View {
@@ -844,8 +849,7 @@ private struct TerminalSnippetEditorView: View {
                             command: command,
                             category: groups.first(where: { $0.id == groupID })?.name ?? "",
                             groupID: groupID,
-                            targets: [.localTerminal].filter(targets.contains)
-                                + profiles.map { TerminalSnippetTarget.sshProfile($0.id) }.filter(targets.contains)
+                            targets: orderedTargets
                         )
                         if onSave(draft) {
                             dismiss()
@@ -871,6 +875,16 @@ private struct TerminalSnippetEditorView: View {
                 if selected { targets.insert(target) } else { targets.remove(target) }
             }
         )
+    }
+
+    private var orderedTargets: [TerminalSnippetTarget] {
+        var result: [TerminalSnippetTarget] = []
+        if targets.contains(.localTerminal) { result.append(.localTerminal) }
+        for profile in profiles {
+            let target = TerminalSnippetTarget.sshProfile(profile.id)
+            if targets.contains(target) { result.append(target) }
+        }
+        return result
     }
 }
 
