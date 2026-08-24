@@ -25,7 +25,7 @@ struct TerminalUX0250Tests {
         let view = try source("Sources/SelectiveRemote/UpdateExperienceView.swift")
         let guardSource = try source("Sources/SelectiveRemote/SettingsWindowCloseGuard.swift")
 
-        #expect(app.contains("preventsClosing: model.isCheckingForUpdates"))
+        #expect(app.contains("preventsClosing: model.isUpdateOperationInProgress"))
         #expect(model.contains("func checkForUpdatesFromSettings()"))
         #expect(model.contains("checkForUpdates(announcesUpToDate: false)"))
         #expect(view.contains("model.checkForUpdatesFromSettings()"))

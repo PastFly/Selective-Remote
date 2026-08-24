@@ -151,18 +151,6 @@ struct LocalTerminalView: View {
                 )
             }
 
-            Button {
-                showsAppearance.toggle()
-            } label: {
-                Image(systemName: "paintpalette")
-                    .font(.title3)
-            }
-            .buttonStyle(.bordered)
-            .help("Общее оформление терминала")
-            .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
-                TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
-            }
-
             if isFocusMode {
                 Button("Вернуть интерфейс", systemImage: "arrow.down.right.and.arrow.up.left") {
                     toggleFocusMode()
@@ -196,12 +184,18 @@ struct LocalTerminalView: View {
                 Button("Управлять сниппетами", systemImage: "curlybraces") {
                     showsSnippetLibrary = true
                 }
+                Button("Общее оформление терминала", systemImage: "paintpalette") {
+                    showsAppearance = true
+                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title3)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
+            }
 
             if selectedTab.session.isRunning {
                 Button("Завершить", systemImage: "stop.fill", role: .destructive) {

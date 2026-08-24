@@ -216,7 +216,7 @@ struct SelectiveRemoteApp: App {
                 .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
                 .background(
                     SettingsWindowCloseGuard(
-                        preventsClosing: model.isCheckingForUpdates
+                        preventsClosing: model.isUpdateOperationInProgress
                     )
                 )
             }

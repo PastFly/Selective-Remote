@@ -131,8 +131,8 @@ struct UpdateExperiencePopover: View {
                     }
                     Spacer()
                     if model.downloadedUpdateDMGURL == nil {
-                        Button("Загрузить обновление") {
-                            model.downloadAvailableUpdate()
+                        Button("Сохранить DMG…") {
+                            model.downloadAvailableUpdateChoosingDestination()
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.isDownloadingUpdate)
@@ -146,6 +146,20 @@ struct UpdateExperiencePopover: View {
                         .buttonStyle(.borderedProminent)
                         .disabled(model.updateDownloadStage == .installing)
                     }
+                }
+
+                if model.downloadedUpdateUsesCustomDestination,
+                   let url = model.downloadedUpdateDMGURL {
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "DMG сохранён в выбранной папке и не будет удалён автоматически: \(url.deletingLastPathComponent().path)",
+                            en: "The DMG is saved in your selected folder and will not be removed automatically: \(url.deletingLastPathComponent().path)"
+                        ),
+                        systemImage: "externaldrive.fill.badge.checkmark"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
 
                 HStack {

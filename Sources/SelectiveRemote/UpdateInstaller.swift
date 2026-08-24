@@ -172,6 +172,7 @@ private final class UpdateDownloadOperation: @unchecked Sendable {
 enum UpdateInstaller {
     static func downloadAndValidateDMG(
         from sourceURL: URL,
+        destinationURL requestedDestinationURL: URL? = nil,
         progress: @escaping @MainActor (Double) -> Void,
         stage: @escaping @MainActor (UpdateDownloadStage) -> Void
     ) async throws -> URL {
@@ -180,15 +181,23 @@ enum UpdateInstaller {
             throw UpdateInstallerError.invalidDownload
         }
 
-        let cacheRoot = try FileManager.default.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )
-        .appendingPathComponent("Selective Remote", isDirectory: true)
-        .appendingPathComponent("Updates", isDirectory: true)
-        let destinationURL = cacheRoot.appendingPathComponent(sourceURL.lastPathComponent)
+        let destinationURL: URL
+        if let requestedDestinationURL {
+            guard requestedDestinationURL.pathExtension.lowercased() == "dmg" else {
+                throw UpdateInstallerError.invalidDownload
+            }
+            destinationURL = requestedDestinationURL.standardizedFileURL
+        } else {
+            let cacheRoot = try FileManager.default.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )
+            .appendingPathComponent("Selective Remote", isDirectory: true)
+            .appendingPathComponent("Updates", isDirectory: true)
+            destinationURL = cacheRoot.appendingPathComponent(sourceURL.lastPathComponent)
+        }
         let operation = UpdateDownloadOperation(sourceURL: sourceURL, destinationURL: destinationURL)
         stage(.downloading)
 

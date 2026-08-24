@@ -334,6 +334,7 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var updateDownloadProgress = 0.0
     @Published private(set) var updateDownloadStage: UpdateDownloadStage = .idle
     @Published private(set) var downloadedUpdateDMGURL: URL?
+    @Published private(set) var downloadedUpdateUsesCustomDestination = false
     @Published private(set) var lastSuccessfulUpdateCheckDate: Date?
     @Published var updateInstallError: String?
     @Published var postUpgradeHealthWarning: String?
@@ -378,6 +379,10 @@ final class AppModel: NSObject, ObservableObject {
     @Published private(set) var sshKeyPassphraseStoredIDs: Set<String> = []
     @Published private(set) var sshTunnels: [UUID: SSHTunnelSummary] = [:]
     @Published private(set) var sshTunnelLastErrors: [UUID: String] = [:]
+
+    var isUpdateOperationInProgress: Bool {
+        isCheckingForUpdates || isDownloadingUpdate || updateDownloadStage == .installing
+    }
     @Published private(set) var sshTunnelReconnectProgress: [UUID: SmartReconnectProgress] = [:]
     @Published private(set) var rdpReconnectProgress: [UUID: SmartReconnectProgress] = [:]
     private var sshTunnelReconnectSummaries: [UUID: SSHTunnelSummary] = [:]
@@ -4415,6 +4420,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableUpdateURL = nil
                     availableReleaseNotesURL = nil
                     downloadedUpdateDMGURL = nil
+                    downloadedUpdateUsesCustomDestination = false
                     updateInstallError = nil
                     updateDownloadStage = .idle
                     if announcesUpToDate {
@@ -4427,6 +4433,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableReleaseNotesURL = manifest.releaseNotesURL
                     if versionChanged {
                         downloadedUpdateDMGURL = nil
+                        downloadedUpdateUsesCustomDestination = false
                         updateInstallError = nil
                         updateDownloadProgress = 0
                         updateDownloadStage = .idle
@@ -4443,6 +4450,7 @@ final class AppModel: NSObject, ObservableObject {
                     availableUpdateURL = nil
                     availableReleaseNotesURL = manifest.releaseNotesURL
                     downloadedUpdateDMGURL = nil
+                    downloadedUpdateUsesCustomDestination = false
                     updateDownloadProgress = 0
                     updateDownloadStage = .idle
                     let minimum = manifest.minimumMacOS
@@ -4467,6 +4475,27 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func downloadAvailableUpdate() {
+        downloadAvailableUpdate(to: nil, userSelectedDestination: false)
+    }
+
+    func downloadAvailableUpdateChoosingDestination() {
+        guard let manifest = availableUpdateManifest,
+              !isDownloadingUpdate else { return }
+        let panel = NSSavePanel()
+        panel.title = UpdateLocalization.text(
+            ru: "Сохранить обновление Selective Remote",
+            en: "Save Selective Remote Update"
+        )
+        panel.nameFieldStringValue = manifest.downloadURL.lastPathComponent
+        panel.allowedContentTypes = [.diskImage]
+        panel.canCreateDirectories = true
+        panel.isExtensionHidden = false
+        panel.prompt = UpdateLocalization.text(ru: "Сохранить", en: "Save")
+        guard panel.runModal() == .OK, let destinationURL = panel.url else { return }
+        downloadAvailableUpdate(to: destinationURL, userSelectedDestination: true)
+    }
+
+    private func downloadAvailableUpdate(to destinationURL: URL?, userSelectedDestination: Bool) {
         guard let manifest = availableUpdateManifest,
               !isDownloadingUpdate else { return }
         isDownloadingUpdate = true
@@ -4479,6 +4508,7 @@ final class AppModel: NSObject, ObservableObject {
             do {
                 self.downloadedUpdateDMGURL = try await UpdateInstaller.downloadAndValidateDMG(
                     from: manifest.downloadURL,
+                    destinationURL: destinationURL,
                     progress: { [weak self] value in
                         self?.updateDownloadProgress = value
                     },
@@ -4486,6 +4516,7 @@ final class AppModel: NSObject, ObservableObject {
                         self?.updateDownloadStage = stage
                     }
                 )
+                self.downloadedUpdateUsesCustomDestination = userSelectedDestination
                 self.updateDownloadStage = .ready
             } catch {
                 self.updateDownloadStage = .idle
