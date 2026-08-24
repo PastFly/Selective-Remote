@@ -14,9 +14,12 @@ func terminalHistoryVisibilityIsOwnedBySelectedPane() throws {
         ),
         encoding: .utf8
     )
+    let normalized = normalizedSwiftSource(source)
 
-    #expect(source.contains("guard workspace.layout != .grid,"))
-    #expect(source.contains("tab.id == workspace.selectedTabID"))
+    // The WebView quick panels stay hidden; only the selected pane may request
+    // a visibility change for the shared native Inspector.
+    #expect(normalized.contains("get: { false }"))
+    #expect(normalized.contains("guard tab.id == workspace.selectedTabID else { return }"))
     #expect(!source.contains("if visible { workspace.selectedTabID = tab.id }"))
 }
 
@@ -38,10 +41,14 @@ func terminalGridUsesSharedWorkspaceInspector() throws {
         ),
         encoding: .utf8
     )
+    let normalizedWorkspace = normalizedSwiftSource(workspaceSource)
 
-    #expect(workspaceSource.contains("terminalWorkspaceWithInspector"))
-    #expect(workspaceSource.contains("workspace.layout == .grid && (showsHistory || showsSnippets)"))
-    #expect(workspaceSource.contains("workspace.layout != .grid"))
+    // v0.27 deliberately uses the same Inspector in single/split/grid. Verify
+    // the architecture without depending on indentation or line wrapping.
+    #expect(normalizedWorkspace.contains("private var workspaceInspectorVisible: Bool { showsHistory || showsSnippets }"))
+    #expect(normalizedWorkspace.contains("private var terminalWorkspaceWithInspector: some View"))
+    #expect(workspaceSource.contains("TerminalWorkspaceInspector("))
+    #expect(!workspaceSource.contains("workspace.layout == .grid && (showsHistory || showsSnippets)"))
     #expect(inspectorSource.contains("Один клик вставляет · двойной выполняет"))
     #expect(inspectorSource.contains("TapGesture(count: 2)"))
     #expect(inspectorSource.contains("Button(\"Выполнить на Targets\""))
@@ -186,4 +193,11 @@ func globalSnippetsHaveExpectedNavigationAndActions() throws {
     #expect(snippetsSource.contains("Button(\"Запустить\", systemImage: \"play.fill\")"))
     #expect(snippetsSource.contains("Последний запуск"))
     #expect(snippetsSource.contains("sheet(item: $editorRequest)"))
+}
+
+private func normalizedSwiftSource(_ source: String) -> String {
+    source
+        .components(separatedBy: .whitespacesAndNewlines)
+        .filter { !$0.isEmpty }
+        .joined(separator: " ")
 }

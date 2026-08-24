@@ -139,6 +139,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
     static let globalSnippetLibraryID = UUID(
         uuidString: "5A17407D-9F03-4F7B-80FB-BD06D3FA50B1"
     )!
+    static let internalStartupSequenceCategory = "__selective_remote_startup_sequence__"
 
     @Published private(set) var snippetRevision = 0
     @Published private(set) var historyRevision = 0
@@ -298,6 +299,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
     func templates() -> [TerminalCommandTemplate] {
         storedTemplates
+            .filter { !isInternalTemplate($0) }
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
@@ -506,6 +508,55 @@ final class TerminalCommandHistoryStore: ObservableObject {
         storedTemplates.first { $0.id == id }
     }
 
+    func isStartupSequenceTemplate(id: UUID) -> Bool {
+        guard let template = storedTemplates.first(where: { $0.id == id }) else { return false }
+        return isInternalTemplate(template)
+    }
+
+    @discardableResult
+    func upsertStartupSequenceTemplate(
+        id: UUID,
+        title rawTitle: String,
+        command rawCommand: String
+    ) -> Bool {
+        let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty,
+              title.count <= 80,
+              let command = normalizedSnippetCommand(rawCommand),
+              !isSensitive(command)
+        else { return false }
+
+        if let index = storedTemplates.firstIndex(where: { $0.id == id }) {
+            storedTemplates[index].title = title
+            storedTemplates[index].command = command
+            storedTemplates[index].category = Self.internalStartupSequenceCategory
+            storedTemplates[index].groupID = TerminalCommandTemplate.legacyUnassignedGroupID
+            storedTemplates[index].targetProfileIDs = []
+            storedTemplates[index].updatedAt = Date()
+        } else {
+            storedTemplates.append(
+                TerminalCommandTemplate(
+                    id: id,
+                    profileID: Self.globalSnippetLibraryID,
+                    title: title,
+                    command: command,
+                    category: Self.internalStartupSequenceCategory,
+                    groupID: TerminalCommandTemplate.legacyUnassignedGroupID,
+                    targetProfileIDs: [],
+                    updatedAt: Date()
+                )
+            )
+        }
+        persistTemplates()
+        return true
+    }
+
+    @discardableResult
+    func removeStartupSequenceTemplate(id: UUID) -> Bool {
+        guard isStartupSequenceTemplate(id: id) else { return false }
+        return removeTemplate(id: id)
+    }
+
     @discardableResult
     func removeTemplate(id: UUID, profileID: UUID) -> Bool {
         _ = profileID
@@ -616,6 +667,10 @@ final class TerminalCommandHistoryStore: ObservableObject {
         }
     }
 
+    private func isInternalTemplate(_ template: TerminalCommandTemplate) -> Bool {
+        template.category == Self.internalStartupSequenceCategory
+    }
+
     @discardableResult
     private func ensureSnippetGroup(
         named rawName: String,
@@ -665,6 +720,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
         }
 
         for index in storedTemplates.indices {
+            if isInternalTemplate(storedTemplates[index]) { continue }
+
             let targets = normalizedTargetIDs(storedTemplates[index].targetProfileIDs)
             if targets != storedTemplates[index].targetProfileIDs {
                 storedTemplates[index].targetProfileIDs = targets
