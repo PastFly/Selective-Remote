@@ -69,33 +69,29 @@ private final class TerminalSessionLogWriter: @unchecked Sendable {
 
     func append(_ data: Data) {
         guard !data.isEmpty else { return }
-        queue.async { [weak self] in
-            guard let self, !isClosed, !isTruncated else { return }
-            pendingText.append(String(decoding: data, as: UTF8.self))
-            flushCompleteLines()
-            if pendingText.utf8.count > 32_768 {
-                writeSanitized(pendingText)
-                pendingText.removeAll(keepingCapacity: true)
+        queue.async {
+            guard !self.isClosed, !self.isTruncated else { return }
+            self.pendingText.append(String(decoding: data, as: UTF8.self))
+            self.flushCompleteLines()
+            if self.pendingText.utf8.count > 32_768 {
+                self.writeSanitized(self.pendingText)
+                self.pendingText.removeAll(keepingCapacity: true)
             }
         }
     }
 
     func close(completion: @escaping @Sendable (Int64, Bool) -> Void) {
-        queue.async { [weak self] in
-            guard let self else {
-                completion(0, false)
-                return
-            }
-            if !isClosed {
-                if !pendingText.isEmpty {
-                    writeSanitized(pendingText)
-                    pendingText.removeAll()
+        queue.async {
+            if !self.isClosed {
+                if !self.pendingText.isEmpty {
+                    self.writeSanitized(self.pendingText)
+                    self.pendingText.removeAll()
                 }
-                try? handle.synchronize()
-                try? handle.close()
-                isClosed = true
+                try? self.handle.synchronize()
+                try? self.handle.close()
+                self.isClosed = true
             }
-            completion(bytesWritten, isTruncated)
+            completion(self.bytesWritten, self.isTruncated)
         }
     }
 
@@ -143,13 +139,12 @@ enum TerminalSessionLogSanitizer {
         )
         let hasLineBreak = withoutANSI.last == "\n" || withoutANSI.last == "\r"
         let redacted = DiagnosticRedactor.sanitize(withoutANSI)
-            + (hasLineBreak ? "\n" : "")
-        return redacted.unicodeScalars.reduce(into: "") { output, scalar in
-            if scalar.value == 9 || scalar.value == 10 || scalar.value == 13
-                || !CharacterSet.controlCharacters.contains(scalar) {
+        let filtered = redacted.unicodeScalars.reduce(into: "") { output, scalar in
+            if scalar.value == 9 || !CharacterSet.controlCharacters.contains(scalar) {
                 output.unicodeScalars.append(scalar)
             }
         }
+        return filtered + (hasLineBreak ? "\n" : "")
     }
 }
 
