@@ -37,7 +37,7 @@ struct TerminalUX0250Tests {
     func localToolbarUsesTitle3Icons() throws {
         let local = try source("Sources/SelectiveRemote/LocalTerminalView.swift")
         #expect(local.contains("Image(systemName: \"clock.arrow.circlepath\")\n                    .font(.title3)"))
-        #expect(local.contains("Image(systemName: \"text.badge.plus\")\n                    .font(.title3)"))
+        #expect(local.contains("Image(systemName: \"curlybraces\")\n                    .font(.title3)"))
         #expect(local.contains("Image(systemName: \"paintpalette.fill\")\n                    .font(.title3)"))
     }
 

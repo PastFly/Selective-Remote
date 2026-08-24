@@ -1004,7 +1004,7 @@ struct SSHTerminalView: View {
                 showsHistory = false
                 showsSnippets.toggle()
             } label: {
-                Image(systemName: "text.badge.plus")
+                Image(systemName: "curlybraces")
                     .font(.title3)
             }
             .buttonStyle(.bordered)

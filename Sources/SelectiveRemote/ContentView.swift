@@ -50,7 +50,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
-        case .snippets: "text.badge.plus"
+        case .snippets: "curlybraces"
         case .activity: "clock.arrow.circlepath"
         case .ssh: "network"
         case .terminal: "terminal"
@@ -2005,24 +2005,27 @@ struct ContentView: View {
 
     private var localTerminalDetail: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("Терминал")
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                    Text("Локальный shell этого Mac · вкладки, история и сниппеты")
-                        .foregroundStyle(.secondary)
+            if !terminalFocusMode {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Терминал")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("Локальный shell этого Mac · вкладки, история и сниппеты")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
                 }
-                Spacer()
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 10)
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 10)
 
             LocalTerminalView(
                 workspace: model.localTerminalWorkspace(),
                 appearance: terminalAppearance,
                 appAppearance: appAppearance,
                 sshProfiles: sortedSSHProfiles,
+                isFocusMode: terminalFocusMode,
                 connect: { tab in
                     model.connectLocalTerminal(
                         connection: tab.connection,
@@ -2030,9 +2033,12 @@ struct ContentView: View {
                         session: tab.session
                     )
                 },
+                toggleFocusMode: {
+                    setTerminalFocusMode(!terminalFocusMode)
+                },
                 executeSnippet: model.runTerminalSnippet
             )
-            .padding(.horizontal, 10)
+            .padding(.horizontal, terminalFocusMode ? 0 : 10)
             .padding(.bottom, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }

@@ -10,7 +10,7 @@ enum TerminalWorkspaceInspectorMode: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .history: "clock.arrow.circlepath"
-        case .snippets: "text.badge.plus"
+        case .snippets: "curlybraces"
         }
     }
 }

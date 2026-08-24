@@ -69,7 +69,12 @@ func snippetGroupAndToolbarSourceRegression() throws {
     #expect(snippets.contains("preferredGroupID: selectedGroupID"))
     #expect(snippets.contains("Text(\"Без группы\")"))
     #expect(!snippets.contains("groups.first(where: { $0.name == preferredGroup })"))
-    #expect(content.contains("case .snippets: \"text.badge.plus\""))
+    #expect(content.contains("case .snippets: \"curlybraces\""))
     #expect(local.contains(".terminalToolbarContainer()"))
     #expect(ssh.contains(".terminalToolbarContainer()"))
+    #expect(local.contains("Image(systemName: \"curlybraces\")"))
+    #expect(ssh.contains("Image(systemName: \"curlybraces\")"))
+    #expect(local.contains("Button(\"Развернуть терминал\""))
+    #expect(local.contains("Button(\"Вернуть интерфейс\""))
+    #expect(local.contains("Image(systemName: \"ellipsis.circle\")"))
 }
