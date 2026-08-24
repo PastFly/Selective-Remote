@@ -77,4 +77,5 @@ func snippetGroupAndToolbarSourceRegression() throws {
     #expect(local.contains("Button(\"Развернуть терминал\""))
     #expect(local.contains("Button(\"Вернуть интерфейс\""))
     #expect(local.contains("Image(systemName: \"ellipsis.circle\")"))
+    #expect(!local.contains("Button(\"Оформление\""))
 }

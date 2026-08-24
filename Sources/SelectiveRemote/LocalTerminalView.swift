@@ -196,9 +196,6 @@ struct LocalTerminalView: View {
                 Button("Управлять сниппетами", systemImage: "curlybraces") {
                     showsSnippetLibrary = true
                 }
-                Button("Оформление", systemImage: "paintpalette") {
-                    showsAppearance = true
-                }
             } label: {
                 Image(systemName: "ellipsis.circle")
                     .font(.title3)
