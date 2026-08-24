@@ -267,13 +267,15 @@ final class TerminalSessionLogStore: ObservableObject {
         guard let writer = writers.removeValue(forKey: id) else { return }
         writer.close { [weak self] byteCount, wasTruncated in
             Task { @MainActor [weak self] in
-                guard let self, let index = records.firstIndex(where: { $0.id == id }) else { return }
-                records[index].endedAt = date
-                records[index].exitCode = exitCode
-                records[index].state = requested || exitCode == 0 ? .completed : .failed
-                records[index].byteCount = byteCount
-                records[index].wasTruncated = wasTruncated
-                applyRetentionPolicy()
+                guard let self,
+                      let index = self.records.firstIndex(where: { $0.id == id })
+                else { return }
+                self.records[index].endedAt = date
+                self.records[index].exitCode = exitCode
+                self.records[index].state = requested || exitCode == 0 ? .completed : .failed
+                self.records[index].byteCount = byteCount
+                self.records[index].wasTruncated = wasTruncated
+                self.applyRetentionPolicy()
             }
         }
     }
