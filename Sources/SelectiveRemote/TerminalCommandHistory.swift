@@ -23,6 +23,35 @@ struct TerminalSnippetTargetOption: Encodable, Equatable, Identifiable {
     let subtitle: String
 }
 
+enum TerminalSnippetTarget: Codable, Equatable, Hashable, Sendable {
+    case sshProfile(UUID)
+    case localTerminal
+
+    private enum CodingKeys: String, CodingKey { case kind, profileID }
+    private enum Kind: String, Codable { case sshProfile, localTerminal }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Kind.self, forKey: .kind) {
+        case .sshProfile:
+            self = .sshProfile(try container.decode(UUID.self, forKey: .profileID))
+        case .localTerminal:
+            self = .localTerminal
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .sshProfile(let profileID):
+            try container.encode(Kind.sshProfile, forKey: .kind)
+            try container.encode(profileID, forKey: .profileID)
+        case .localTerminal:
+            try container.encode(Kind.localTerminal, forKey: .kind)
+        }
+    }
+}
+
 struct TerminalHistoryEntry: Codable, Equatable, Identifiable {
     let id: UUID
     let profileID: UUID
@@ -49,7 +78,12 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
     var command: String
     var category: String
     var groupID: UUID
-    var targetProfileIDs: [UUID]
+    var targets: [TerminalSnippetTarget]
+    var targetProfileIDs: [UUID] {
+        get { targets.compactMap { if case .sshProfile(let id) = $0 { id } else { nil } } }
+        set { targets = newValue.map(TerminalSnippetTarget.sshProfile) }
+    }
+    var includesLocalTerminal: Bool { targets.contains(.localTerminal) }
     var updatedAt: Date
 
     init(
@@ -60,6 +94,7 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         category: String,
         groupID: UUID? = nil,
         targetProfileIDs: [UUID]? = nil,
+        targets: [TerminalSnippetTarget]? = nil,
         updatedAt: Date
     ) {
         self.id = id
@@ -68,12 +103,12 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         self.command = command
         self.category = category
         self.groupID = groupID ?? Self.legacyUnassignedGroupID
-        self.targetProfileIDs = targetProfileIDs ?? [profileID]
+        self.targets = targets ?? (targetProfileIDs ?? [profileID]).map(TerminalSnippetTarget.sshProfile)
         self.updatedAt = updatedAt
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, profileID, title, command, category, groupID, targetProfileIDs, updatedAt
+        case id, profileID, title, command, category, groupID, targets, targetProfileIDs, updatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -85,9 +120,23 @@ struct TerminalCommandTemplate: Codable, Equatable, Identifiable {
         category = try container.decode(String.self, forKey: .category)
         groupID = try container.decodeIfPresent(UUID.self, forKey: .groupID)
             ?? Self.legacyUnassignedGroupID
-        targetProfileIDs = try container.decodeIfPresent([UUID].self, forKey: .targetProfileIDs)
-            ?? [profileID]
+        targets = try container.decodeIfPresent([TerminalSnippetTarget].self, forKey: .targets)
+            ?? (try container.decodeIfPresent([UUID].self, forKey: .targetProfileIDs) ?? [profileID])
+                .map(TerminalSnippetTarget.sshProfile)
         updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(profileID, forKey: .profileID)
+        try container.encode(title, forKey: .title)
+        try container.encode(command, forKey: .command)
+        try container.encode(category, forKey: .category)
+        try container.encode(groupID, forKey: .groupID)
+        try container.encode(targets, forKey: .targets)
+        try container.encode(targetProfileIDs, forKey: .targetProfileIDs)
+        try container.encode(updatedAt, forKey: .updatedAt)
     }
 }
 
@@ -412,7 +461,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
         category rawCategory: String,
         groupID requestedGroupID: UUID? = nil,
         profileID: UUID,
-        targetProfileIDs: [UUID]? = nil
+        targetProfileIDs: [UUID]? = nil,
+        targets: [TerminalSnippetTarget]? = nil
     ) -> Bool {
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let category = rawCategory.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -424,10 +474,17 @@ final class TerminalCommandHistoryStore: ObservableObject {
         else { return false }
 
         let group = requestedGroupID.flatMap(snippetGroup(id:))
-            ?? ensureSnippetGroup(
-                named: category.isEmpty ? Self.defaultSnippetGroupName : category,
-                profileID: Self.globalSnippetLibraryID
-            )
+            ?? (requestedGroupID == nil && !category.isEmpty
+                ? ensureSnippetGroup(named: category, profileID: Self.globalSnippetLibraryID)
+                : nil)
+        let existingTargets = id.flatMap { template(id: $0)?.targets }
+        let resolvedTargets = normalizedTargets(
+            targets
+                ?? targetProfileIDs?.map(TerminalSnippetTarget.sshProfile)
+                ?? existingTargets
+                ?? [.sshProfile(profileID)]
+        )
+        guard !resolvedTargets.isEmpty else { return false }
 
         if let id,
            let index = storedTemplates.firstIndex(where: {
@@ -435,11 +492,9 @@ final class TerminalCommandHistoryStore: ObservableObject {
            }) {
             storedTemplates[index].title = title
             storedTemplates[index].command = command
-            storedTemplates[index].category = group.name
-            storedTemplates[index].groupID = group.id
-            if let targetProfileIDs {
-                storedTemplates[index].targetProfileIDs = normalizedTargetIDs(targetProfileIDs)
-            }
+            storedTemplates[index].category = group?.name ?? ""
+            storedTemplates[index].groupID = group?.id ?? TerminalCommandTemplate.legacyUnassignedGroupID
+            storedTemplates[index].targets = resolvedTargets
             storedTemplates[index].updatedAt = Date()
         } else {
             storedTemplates.append(
@@ -448,9 +503,10 @@ final class TerminalCommandHistoryStore: ObservableObject {
                     profileID: profileID,
                     title: title,
                     command: command,
-                    category: group.name,
-                    groupID: group.id,
+                    category: group?.name ?? "",
+                    groupID: group?.id,
                     targetProfileIDs: normalizedTargetIDs(targetProfileIDs ?? [profileID]),
+                    targets: resolvedTargets,
                     updatedAt: Date()
                 )
             )
@@ -495,7 +551,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             category: template.category,
             groupID: template.groupID,
             profileID: Self.globalSnippetLibraryID,
-            targetProfileIDs: template.targetProfileIDs
+            targets: template.targets
         )
     }
 
@@ -722,13 +778,17 @@ final class TerminalCommandHistoryStore: ObservableObject {
         for index in storedTemplates.indices {
             if isInternalTemplate(storedTemplates[index]) { continue }
 
-            let targets = normalizedTargetIDs(storedTemplates[index].targetProfileIDs)
-            if targets != storedTemplates[index].targetProfileIDs {
-                storedTemplates[index].targetProfileIDs = targets
+            let targets = normalizedTargets(storedTemplates[index].targets)
+            if targets != storedTemplates[index].targets {
+                storedTemplates[index].targets = targets
                 templatesChanged = true
             }
             let trimmed = storedTemplates[index].category
                 .trimmingCharacters(in: .whitespacesAndNewlines)
+            if storedTemplates[index].groupID == TerminalCommandTemplate.legacyUnassignedGroupID,
+               trimmed.isEmpty {
+                continue
+            }
             let resolved = trimmed.isEmpty ? Self.defaultSnippetGroupName : trimmed
             if storedTemplates[index].category != resolved {
                 storedTemplates[index].category = resolved
@@ -762,6 +822,11 @@ final class TerminalCommandHistoryStore: ObservableObject {
     private func normalizedTargetIDs(_ ids: [UUID]) -> [UUID] {
         var seen = Set<UUID>()
         return ids.filter { seen.insert($0).inserted }.prefix(8).map { $0 }
+    }
+
+    private func normalizedTargets(_ targets: [TerminalSnippetTarget]) -> [TerminalSnippetTarget] {
+        var seen = Set<TerminalSnippetTarget>()
+        return targets.filter { seen.insert($0).inserted }.prefix(8).map { $0 }
     }
 
     private func normalizeAndPersistIfNeeded() {

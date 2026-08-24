@@ -168,8 +168,7 @@ struct LocalTerminalView: View {
                 .buttonStyle(.bordered)
             }
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .terminalToolbarContainer()
     }
 
     private var tabBar: some View {

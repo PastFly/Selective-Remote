@@ -446,7 +446,10 @@ struct TerminalWorkspaceInspector: View {
                 HStack {
                     Text(snippet.title).font(.callout.weight(.semibold)).lineLimit(1)
                     Spacer()
-                    Label("\(snippet.targetProfileIDs.count)", systemImage: "server.rack")
+                    Label(
+                        "\(snippet.targets.count)",
+                        systemImage: snippet.includesLocalTerminal ? "terminal" : "server.rack"
+                    )
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }

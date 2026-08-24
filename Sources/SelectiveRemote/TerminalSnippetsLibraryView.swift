@@ -9,6 +9,12 @@ private enum SnippetLibraryViewMode: String, CaseIterable, Identifiable {
     var systemImage: String { self == .list ? "list.bullet" : "square.grid.2x2" }
 }
 
+private enum SnippetLibrarySort: String, CaseIterable, Identifiable {
+    case name, modified
+    var id: String { rawValue }
+    var title: String { self == .name ? "Имя" : "Последнее изменение" }
+}
+
 struct TerminalSnippetsLibraryView: View {
     @ObservedObject var store: TerminalCommandHistoryStore
     @ObservedObject var model: AppModel
@@ -27,6 +33,8 @@ struct TerminalSnippetsLibraryView: View {
     private var persistedGroupID = ""
     @AppStorage("SelectiveRemote.snippets.selectedSnippetID.v1")
     private var persistedSnippetID = ""
+    @AppStorage("SelectiveRemote.snippets.sort.v1") private var sortRaw = SnippetLibrarySort.name.rawValue
+    @AppStorage("SelectiveRemote.snippets.sortAscending.v1") private var sortAscending = true
 
     private var viewMode: SnippetLibraryViewMode {
         get { SnippetLibraryViewMode(rawValue: viewModeRaw) ?? .list }
@@ -72,11 +80,13 @@ struct TerminalSnippetsLibraryView: View {
         .sheet(item: $editorRequest) { request in
             TerminalSnippetEditorView(
                 snippet: request.snippet,
-                preferredGroup: request.preferredGroup,
+                preferredGroupID: request.preferredGroupID,
                 groups: store.snippetGroups(),
                 profiles: sortedProfiles
             ) { draft in
-                let profileID = draft.targetProfileIDs.first
+                let profileID = draft.targets.compactMap {
+                    if case .sshProfile(let id) = $0 { id } else { nil }
+                }.first
                     ?? TerminalCommandHistoryStore.globalSnippetLibraryID
                 let saved = store.saveTemplate(
                     id: draft.id,
@@ -85,7 +95,7 @@ struct TerminalSnippetsLibraryView: View {
                     category: draft.category,
                     groupID: draft.groupID,
                     profileID: profileID,
-                    targetProfileIDs: draft.targetProfileIDs
+                    targets: draft.targets
                 )
                 if saved {
                     let resolved = draft.id ?? store.templates().first?.id
@@ -156,7 +166,7 @@ struct TerminalSnippetsLibraryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Сниппеты")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
-                Text("Общая библиотека команд · один сниппет может запускаться на нескольких SSH Targets")
+                Text("Общая библиотека команд · SSH и Локальный терминал используют одни Snippets")
                     .foregroundStyle(.secondary)
             }
             Spacer()
@@ -167,12 +177,11 @@ struct TerminalSnippetsLibraryView: View {
                 Label("Новая группа", systemImage: "folder.badge.plus")
             }
             Button {
-                presentEditor(nil)
+                presentEditor(nil, preferredGroupID: selectedGroupID)
             } label: {
                 Label("Новый сниппет", systemImage: "plus")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(sortedProfiles.isEmpty)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
@@ -206,6 +215,21 @@ struct TerminalSnippetsLibraryView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 82)
+                Menu {
+                    Picker("Сортировка", selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in
+                            Text(option.title).tag(option.rawValue)
+                        }
+                    }
+                    Divider()
+                    Button(sortAscending ? "По убыванию" : "По возрастанию") {
+                        sortAscending.toggle()
+                    }
+                } label: {
+                    Image(systemName: sortAscending ? "arrow.up.arrow.down.circle" : "arrow.down.arrow.up.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .help("Сортировка")
             }
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -231,7 +255,7 @@ struct TerminalSnippetsLibraryView: View {
                 if !normalizedQuery.isEmpty {
                     snippetCollection(searchResults, showsGroup: true)
                 } else if let selectedGroup {
-                    let snippets = store.templates(in: selectedGroup.id)
+                    let snippets = sortedSnippets(store.templates(in: selectedGroup.id))
                     if snippets.isEmpty {
                         VStack(spacing: 14) {
                             ContentUnavailableView(
@@ -240,21 +264,20 @@ struct TerminalSnippetsLibraryView: View {
                                 description: Text("Добавьте первый сниппет в «\(selectedGroup.name)».")
                             )
                             Button("Новый сниппет", systemImage: "plus") {
-                                presentEditor(nil, preferredGroup: selectedGroup.name)
+                                presentEditor(nil, preferredGroupID: selectedGroup.id)
                             }
                             .buttonStyle(.borderedProminent)
-                            .disabled(sortedProfiles.isEmpty)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 70)
                     } else {
                         snippetCollection(snippets, showsGroup: false)
                     }
-                } else if store.snippetGroups().isEmpty {
+                } else if store.snippetGroups().isEmpty && ungroupedSnippets.isEmpty {
                     ContentUnavailableView(
                         "Сниппетов пока нет",
                         systemImage: "curlybraces",
-                        description: Text("Создайте общую команду и назначьте ей один или несколько SSH Targets.")
+                        description: Text("Создайте общую команду и назначьте ей SSH или Локальный терминал.")
                     )
                     .padding(.top, 70)
                 } else {
@@ -269,12 +292,25 @@ struct TerminalSnippetsLibraryView: View {
     private var groupCollection: some View {
         if viewMode == .grid {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
-                ForEach(store.snippetGroups()) { group in groupCard(group) }
+                ForEach(sortedGroups) { group in groupCard(group) }
+                ForEach(sortedSnippets(ungroupedSnippets)) { snippet in
+                    snippetCard(snippet, showsGroup: false)
+                }
             }
             .padding(14)
         } else {
             LazyVStack(spacing: 8) {
-                ForEach(store.snippetGroups()) { group in groupRow(group) }
+                ForEach(sortedGroups) { group in groupRow(group) }
+                if !ungroupedSnippets.isEmpty {
+                    Text("Без группы")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 8)
+                    ForEach(sortedSnippets(ungroupedSnippets)) { snippet in
+                        snippetListButton(snippet, showsGroup: false)
+                    }
+                }
             }
             .padding(14)
         }
@@ -325,7 +361,7 @@ struct TerminalSnippetsLibraryView: View {
     private func groupActions(_ group: TerminalSnippetGroup) -> some View {
         Button("Открыть", systemImage: "folder") { openGroup(group.id) }
         Button("Новый сниппет", systemImage: "plus") {
-            presentEditor(nil, preferredGroup: group.name)
+            presentEditor(nil, preferredGroupID: group.id)
         }
         Divider()
         Button("Переименовать", systemImage: "pencil") {
@@ -395,7 +431,7 @@ struct TerminalSnippetsLibraryView: View {
                     Image(systemName: "curlybraces")
                         .font(.title2.bold()).foregroundStyle(Color.accentColor)
                     Spacer()
-                    Label("\(snippet.targetProfileIDs.count)", systemImage: "server.rack")
+                    Label("\(snippet.targets.count)", systemImage: snippet.includesLocalTerminal ? "terminal" : "server.rack")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text(snippet.title).font(.headline).lineLimit(2)
@@ -432,7 +468,7 @@ struct TerminalSnippetsLibraryView: View {
             )
         }
         Button("Новый сниппет в этой группе", systemImage: "plus") {
-            presentEditor(nil, preferredGroup: snippet.category)
+            presentEditor(nil, preferredGroupID: snippet.groupID)
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) { deleteSnippet = snippet }
@@ -454,7 +490,7 @@ struct TerminalSnippetsLibraryView: View {
                     .lineLimit(1)
             }
             Spacer()
-            Label("\(snippet.targetProfileIDs.count)", systemImage: "server.rack")
+            Label("\(snippet.targets.count)", systemImage: snippet.includesLocalTerminal ? "terminal" : "server.rack")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -504,6 +540,9 @@ struct TerminalSnippetsLibraryView: View {
                                 Image(systemName: "server.rack")
                             }
                         }
+                        if snippet.includesLocalTerminal {
+                            Label("Локальный терминал", systemImage: "terminal")
+                        }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(8)
@@ -526,12 +565,12 @@ struct TerminalSnippetsLibraryView: View {
                 Button {
                     _ = model.runTerminalSnippet(snippet)
                 } label: {
-                    Label("Запустить на \(snippet.targetProfileIDs.count) Targets", systemImage: "play.fill")
+                    Label("Запустить на \(snippet.targets.count) Targets", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.large)
-                .disabled(targetProfiles(for: snippet).isEmpty)
+                .disabled(targetProfiles(for: snippet).isEmpty && !snippet.includesLocalTerminal)
             }
             .padding(22)
         } else {
@@ -545,11 +584,11 @@ struct TerminalSnippetsLibraryView: View {
 
     private var searchResults: [TerminalCommandTemplate] {
         guard !normalizedQuery.isEmpty else { return [] }
-        return store.templates().filter { snippet in
+        return sortedSnippets(store.templates().filter { snippet in
             snippet.title.localizedLowercase.contains(normalizedQuery)
                 || snippet.command.localizedLowercase.contains(normalizedQuery)
                 || snippet.category.localizedLowercase.contains(normalizedQuery)
-        }
+        })
     }
 
     private func targetProfiles(for snippet: TerminalCommandTemplate) -> [ConnectionProfile] {
@@ -559,18 +598,38 @@ struct TerminalSnippetsLibraryView: View {
 
     private func presentEditor(
         _ snippet: TerminalCommandTemplate?,
-        preferredGroup: String? = nil
+        preferredGroupID: UUID? = nil
     ) {
-        if store.snippetGroups().isEmpty {
-            _ = store.createSnippetGroup(
-                name: TerminalCommandHistoryStore.defaultSnippetGroupName,
-                profileID: TerminalCommandHistoryStore.globalSnippetLibraryID
-            )
-        }
         editorRequest = TerminalSnippetEditorRequest(
             snippet: snippet,
-            preferredGroup: preferredGroup
+            preferredGroupID: preferredGroupID
         )
+    }
+
+    private var sortedGroups: [TerminalSnippetGroup] {
+        let groups = store.snippetGroups()
+        return groups.sorted {
+            let result = $0.name.localizedStandardCompare($1.name)
+            return sortAscending ? result == .orderedAscending : result == .orderedDescending
+        }
+    }
+
+    private var ungroupedSnippets: [TerminalCommandTemplate] {
+        store.templates().filter { $0.groupID == TerminalCommandTemplate.legacyUnassignedGroupID }
+    }
+
+    private func sortedSnippets(_ snippets: [TerminalCommandTemplate]) -> [TerminalCommandTemplate] {
+        snippets.sorted { lhs, rhs in
+            let comparison: ComparisonResult
+            if SnippetLibrarySort(rawValue: sortRaw) == .modified {
+                comparison = lhs.updatedAt == rhs.updatedAt
+                    ? lhs.title.localizedStandardCompare(rhs.title)
+                    : (lhs.updatedAt < rhs.updatedAt ? .orderedAscending : .orderedDescending)
+            } else {
+                comparison = lhs.title.localizedStandardCompare(rhs.title)
+            }
+            return sortAscending ? comparison == .orderedAscending : comparison == .orderedDescending
+        }
     }
 
     private func openRoot() {
@@ -675,7 +734,7 @@ struct TerminalSnippetsLibraryView: View {
 private struct TerminalSnippetEditorRequest: Identifiable {
     let id = UUID()
     let snippet: TerminalCommandTemplate?
-    let preferredGroup: String?
+    let preferredGroupID: UUID?
 }
 
 private struct TerminalSnippetDraft {
@@ -684,13 +743,13 @@ private struct TerminalSnippetDraft {
     let command: String
     let category: String
     let groupID: UUID
-    let targetProfileIDs: [UUID]
+    let targets: [TerminalSnippetTarget]
 }
 
 private struct TerminalSnippetEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let snippet: TerminalCommandTemplate?
-    let preferredGroup: String?
+    let preferredGroupID: UUID?
     let groups: [TerminalSnippetGroup]
     let profiles: [ConnectionProfile]
     let onSave: (TerminalSnippetDraft) -> Bool
@@ -698,31 +757,29 @@ private struct TerminalSnippetEditorView: View {
     @State private var title: String
     @State private var command: String
     @State private var groupID: UUID
-    @State private var targetIDs: Set<UUID>
+    @State private var targets: Set<TerminalSnippetTarget>
     @State private var saveError = ""
 
     init(
         snippet: TerminalCommandTemplate?,
-        preferredGroup: String?,
+        preferredGroupID: UUID?,
         groups: [TerminalSnippetGroup],
         profiles: [ConnectionProfile],
         onSave: @escaping (TerminalSnippetDraft) -> Bool
     ) {
         self.snippet = snippet
-        self.preferredGroup = preferredGroup
+        self.preferredGroupID = preferredGroupID
         self.groups = groups
         self.profiles = profiles
         self.onSave = onSave
         _title = State(initialValue: snippet?.title ?? "")
         _command = State(initialValue: snippet?.command ?? "")
-        let preferredGroupID = groups.first(where: { $0.name == preferredGroup })?.id
         _groupID = State(
             initialValue: snippet?.groupID
                 ?? preferredGroupID
-                ?? groups.first?.id
                 ?? TerminalCommandTemplate.legacyUnassignedGroupID
         )
-        _targetIDs = State(initialValue: Set(snippet?.targetProfileIDs ?? profiles.first.map { [$0.id] } ?? []))
+        _targets = State(initialValue: Set(snippet?.targets ?? []))
     }
 
     var body: some View {
@@ -730,6 +787,7 @@ private struct TerminalSnippetEditorView: View {
             Form {
                 TextField("Название", text: $title)
                 Picker("Группа", selection: $groupID) {
+                    Text("Без группы").tag(TerminalCommandTemplate.legacyUnassignedGroupID)
                     ForEach(groups) { group in Text(group.name).tag(group.id) }
                 }
                 Section("Команда или скрипт") {
@@ -748,9 +806,13 @@ private struct TerminalSnippetEditorView: View {
                     }
                 }
 
-                Section("Targets · до 8 SSH-профилей") {
+                Section("Targets · до 8 целей") {
+                    Toggle(isOn: targetBinding(.localTerminal)) {
+                        Label("Локальный терминал", systemImage: "terminal")
+                    }
+                    .disabled(!targets.contains(.localTerminal) && targets.count >= 8)
                     ForEach(profiles) { profile in
-                        Toggle(isOn: targetBinding(profile.id)) {
+                        Toggle(isOn: targetBinding(.sshProfile(profile.id))) {
                             VStack(alignment: .leading) {
                                 Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
                                 Text(profile.host)
@@ -758,7 +820,7 @@ private struct TerminalSnippetEditorView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        .disabled(!targetIDs.contains(profile.id) && targetIDs.count >= 8)
+                        .disabled(!targets.contains(.sshProfile(profile.id)) && targets.count >= 8)
                     }
                 }
 
@@ -780,10 +842,10 @@ private struct TerminalSnippetEditorView: View {
                             id: snippet?.id,
                             title: title,
                             command: command,
-                            category: groups.first(where: { $0.id == groupID })?.name
-                                ?? TerminalCommandHistoryStore.defaultSnippetGroupName,
+                            category: groups.first(where: { $0.id == groupID })?.name ?? "",
                             groupID: groupID,
-                            targetProfileIDs: profiles.map(\.id).filter(targetIDs.contains)
+                            targets: [.localTerminal].filter(targets.contains)
+                                + profiles.map { TerminalSnippetTarget.sshProfile($0.id) }.filter(targets.contains)
                         )
                         if onSave(draft) {
                             dismiss()
@@ -794,7 +856,7 @@ private struct TerminalSnippetEditorView: View {
                     .disabled(
                         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             || command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                            || targetIDs.isEmpty
+                            || targets.isEmpty
                     )
                 }
             }
@@ -802,11 +864,11 @@ private struct TerminalSnippetEditorView: View {
         .frame(width: 620, height: 650)
     }
 
-    private func targetBinding(_ id: UUID) -> Binding<Bool> {
+    private func targetBinding(_ target: TerminalSnippetTarget) -> Binding<Bool> {
         Binding(
-            get: { targetIDs.contains(id) },
+            get: { targets.contains(target) },
             set: { selected in
-                if selected { targetIDs.insert(id) } else { targetIDs.remove(id) }
+                if selected { targets.insert(target) } else { targets.remove(target) }
             }
         )
     }
