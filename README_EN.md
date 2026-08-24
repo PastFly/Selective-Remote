@@ -8,7 +8,7 @@
 [![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
 [![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
 
-**Selective Remote** is a free, open-source RDP, SSH, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
+**Selective Remote** is a free, open-source RDP, SSH, Telnet, Serial, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
 
 The project targets Apple Silicon and macOS 14+. The interface is available in English and Russian.
 
@@ -20,7 +20,7 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 
 ### Profiles and tags
 
-Saved RDP and SSH connections support groups, favorites, and multiple custom tags per profile. Users create their own tags, can rename or delete them across every profile, and can use them in search and combined filtering. The connection catalog switches between list and grid presentation.
+Saved RDP, SSH, Telnet, and Serial connections support groups, favorites, and multiple custom tags per profile. Users create their own tags, can rename or delete them across every profile, and can use them in search and combined filtering. The connection catalog switches between list and grid presentation.
 
 ### Connection Center
 
@@ -56,6 +56,14 @@ The built-in SSH terminal uses the system `/usr/bin/ssh` and supports:
 - configurable terminal themes, fonts, text size, and cursor.
 
 In split/grid layouts, history, common commands, server commands, favorites, and Snippets share one full-size Inspector for the active pane.
+
+### Telnet and Serial
+
+Telnet and Serial connections are created in the shared **Connections** catalog and open in the same Terminal Workspace with tabs, split/grid panes, themes, and Session Logs.
+
+- Telnet supports a hostname/IP and custom port; the app explicitly warns that traffic and passwords are not encrypted.
+- Serial discovers `/dev/cu.*` devices and saves baud rate, data bits, parity, stop bits, and flow control.
+- Telnet usernames and passwords are entered directly in the terminal and are not stored in the profile.
 
 ### Local Terminal
 

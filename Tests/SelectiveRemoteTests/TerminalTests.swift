@@ -333,7 +333,7 @@ func terminalReloadReplaysActiveSession() throws {
     #expect(sessionSource.contains("observer(replayBuffer)"))
 }
 
-@Test("Каждая вкладка SSH может использовать собственное подключение")
+@Test("Каждая вкладка Terminal может использовать собственное подключение")
 func terminalTabsExposeIndependentConnectionEditor() throws {
     let projectRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -354,7 +354,9 @@ func terminalTabsExposeIndependentConnectionEditor() throws {
 
     #expect(source.contains("TerminalConnectionEditor"))
     #expect(workspace.contains("Из сохранённых"))
-    #expect(workspace.contains("Другой сервер"))
+    #expect(workspace.contains("case .custom: \"SSH\""))
+    #expect(workspace.contains("case .telnet: \"Telnet\""))
+    #expect(workspace.contains("case .serial: \"Serial\""))
     #expect(workspace.contains("var connection: TerminalTabConnection"))
     #expect(workspace.contains("isValidCustomConnection"))
     #expect(source.contains("if let tab = workspace.addTab"))

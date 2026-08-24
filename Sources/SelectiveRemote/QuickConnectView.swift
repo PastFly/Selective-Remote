@@ -295,7 +295,7 @@ struct QuickConnectView: View {
                 HStack(spacing: 12) {
                     Image(systemName: profile.connectionType.systemImage)
                         .frame(width: 28, height: 28)
-                        .foregroundStyle(profile.connectionType == .ssh ? Color.purple : Color.blue)
+                        .foregroundStyle(profile.connectionType == .rdp ? Color.blue : Color.purple)
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 5) {
                             Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
@@ -309,11 +309,13 @@ struct QuickConnectView: View {
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    if profile.connectionType == .ssh {
+                    if profile.connectionType != .rdp {
                         Button("Terminal") { open(profile.id, .terminal) }
                             .buttonStyle(.bordered)
-                        Button("SFTP") { open(profile.id, .sftp) }
-                            .buttonStyle(.bordered)
+                        if profile.connectionType == .ssh {
+                            Button("SFTP") { open(profile.id, .sftp) }
+                                .buttonStyle(.bordered)
+                        }
                     } else {
                         Button("RDP") { open(profile.id, .connect) }
                             .buttonStyle(.borderedProminent)
@@ -322,7 +324,7 @@ struct QuickConnectView: View {
                 .padding(.vertical, 5)
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) {
-                    open(profile.id, profile.connectionType == .ssh ? .terminal : .connect)
+                    open(profile.id, profile.connectionType == .rdp ? .connect : .terminal)
                 }
             }
         }
@@ -341,7 +343,13 @@ struct QuickConnectView: View {
                             .font(.caption.monospaced())
                             .foregroundStyle(.secondary)
                         if let proxyJump = host.proxyJump, !proxyJump.isEmpty {
-                            Label("через \(proxyJump)", systemImage: "arrow.triangle.branch")
+                            Label(
+                                UpdateLocalization.text(
+                                    ru: "через \(proxyJump)",
+                                    en: "via \(proxyJump)"
+                                ),
+                                systemImage: "arrow.triangle.branch"
+                            )
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                         }

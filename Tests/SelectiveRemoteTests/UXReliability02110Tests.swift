@@ -122,7 +122,8 @@ struct UXReliability02110Tests {
         let content = try source("Sources/SelectiveRemote/ContentView.swift")
 
         #expect(content.contains("Text(AppBrand.name)"))
-        #expect(content.contains("Text(\"Обновление \\(manifest.version)\")"))
+        #expect(content.contains("ru: \"Обновление \\(manifest.version)\""))
+        #expect(content.contains("en: \"Update \\(manifest.version)\""))
         #expect(content.contains(".minimumScaleFactor(0.85)"))
         #expect(content.contains(".fixedSize(horizontal: true, vertical: false)"))
         #expect(content.contains("if model.availableUpdateManifest != nil ||\n"

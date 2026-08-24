@@ -289,6 +289,7 @@ private final class ManagedRDPSession {
 final class AppModel: NSObject, ObservableObject {
     let sftpWorkspace = SFTPWorkspaceModel()
     let connectionActivity = ConnectionActivityStore()
+    let terminalSessionLogs = TerminalSessionLogStore()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -450,6 +451,8 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
     private var terminalStartedAt: [UUID: Date] = [:]
+    private var terminalLogObserverIDs: [UUID: UUID] = [:]
+    private var terminalLogRecordIDs: [UUID: UUID] = [:]
     private var rdpActivityIDs: [UUID: UUID] = [:]
     private var sshActivityIDs: [UUID: UUID] = [:]
     private var terminalReconnectTasks: [UUID: Task<Void, Never>] = [:]
@@ -629,6 +632,12 @@ final class AppModel: NSObject, ObservableObject {
                 && !isSessionRunning(profileID: selectedProfile.id)
         case .ssh:
             return hostPresent && (1...65_535).contains(selectedProfile.sshPort)
+        case .telnet:
+            return hostPresent && (1...65_535).contains(selectedProfile.sshPort)
+        case .serial:
+            return !selectedProfile.serialDevicePath
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
         }
     }
 
@@ -811,7 +820,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func globalTerminalWorkspace() -> TerminalWorkspaceModel {
-        let initialConnection = profiles.first(where: { $0.connectionType == .ssh })
+        let initialConnection = profiles.first(where: { $0.connectionType != .rdp })
             .map { TerminalTabConnection.savedProfile($0.id) }
             ?? .custom(host: "", username: "")
         return terminalWorkspace(
@@ -1371,6 +1380,30 @@ final class AppModel: NSObject, ObservableObject {
                 route: route.summary,
                 jumpHost: route.jumpHost,
                 proxy: route.proxy
+            )
+        case .telnet:
+            return ConnectionCenterTerminalFields(
+                profileName: tab.title,
+                host: tab.connection.normalizedHost,
+                username: "",
+                port: tab.connection.port,
+                authentication: "Без шифрования",
+                identityName: nil,
+                route: "Telnet",
+                jumpHost: nil,
+                proxy: nil
+            )
+        case .serial:
+            return ConnectionCenterTerminalFields(
+                profileName: tab.title,
+                host: tab.connection.serialDevicePath ?? "Serial",
+                username: "",
+                port: 0,
+                authentication: "Serial",
+                identityName: nil,
+                route: tab.connection.serialBaudRate.map { "\($0) baud" },
+                jumpHost: nil,
+                proxy: nil
             )
         case .local:
             return nil
@@ -2979,7 +3012,7 @@ final class AppModel: NSObject, ObservableObject {
                     profileID: item.id,
                     kind: .forwarding
                 )
-            case .local:
+            case .telnet, .serial, .local:
                 credential = nil
             }
             let effectiveCredential = (settings.authenticationMode == .automatic || settings.authenticationMode == .password)
@@ -3322,10 +3355,10 @@ final class AppModel: NSObject, ObservableObject {
                 typedGatewayPassword: gatewayPassword,
                 automatic: false
             )
-        case .ssh:
+        case .ssh, .telnet, .serial:
             let workspace = terminalWorkspace(profileID: selectedProfile.id)
             let tab = workspace.tabs.first(where: \.isPrimary) ?? workspace.selectedTab
-            connectSSHTerminal(
+            connectTerminal(
                 connection: tab.connection,
                 tabID: tab.id,
                 session: tab.session
@@ -3383,9 +3416,134 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage = error.localizedDescription
                 return nil
             }
-        case .local:
-            errorMessage = "Для локального терминала SSH-настройки не требуются"
+        case .telnet, .serial, .local:
+            errorMessage = "Для выбранного Terminal-транспорта SSH-настройки не используются"
             return nil
+        }
+    }
+
+    func connectTerminal(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel,
+        temporaryPassword: String? = nil
+    ) {
+        if connection.kind == .savedProfile,
+           let profileID = connection.profileID,
+           let profile = profiles.first(where: { $0.id == profileID }) {
+            switch profile.connectionType {
+            case .telnet, .serial:
+                connectTerminalTransport(
+                    connection: terminalTransportConnection(for: profile),
+                    tabID: tabID,
+                    session: session,
+                    sourceProfile: profile
+                )
+                return
+            case .rdp, .ssh:
+                break
+            }
+        }
+        switch connection.kind {
+        case .telnet, .serial:
+            connectTerminalTransport(connection: connection, tabID: tabID, session: session)
+        case .savedProfile, .custom:
+            connectSSHTerminal(
+                connection: connection,
+                tabID: tabID,
+                session: session,
+                temporaryPassword: temporaryPassword
+            )
+        case .local:
+            connectLocalTerminal(connection: connection, tabID: tabID, session: session)
+        }
+    }
+
+    private func terminalTransportConnection(for profile: ConnectionProfile) -> TerminalTabConnection {
+        switch profile.connectionType {
+        case .telnet:
+            return .telnet(host: profile.host, port: profile.sshPort)
+        case .serial:
+            return .serial(
+                devicePath: profile.serialDevicePath,
+                baudRate: profile.serialBaudRate,
+                dataBits: profile.serialDataBits,
+                parity: profile.serialParity,
+                stopBits: profile.serialStopBits,
+                flowControl: profile.serialFlowControl
+            )
+        case .rdp, .ssh:
+            return .savedProfile(profile.id)
+        }
+    }
+
+    private func connectTerminalTransport(
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel,
+        sourceProfile: ConnectionProfile? = nil
+    ) {
+        cancelTerminalSmartReconnect(tabID: tabID, session: session)
+        guard !session.isRunning else {
+            statusMessage = "Эта вкладка Terminal уже подключена"
+            return
+        }
+        do {
+            let launch = try TerminalTransportService.launchConfiguration(connection: connection)
+            try session.start(
+                executable: launch.executable,
+                arguments: launch.arguments,
+                title: launch.title
+            ) { [weak self, weak session] exitCode in
+                guard let self, let session else { return }
+                finishTerminalSessionLog(tabID: tabID, session: session, exitCode: exitCode)
+                let output = session.recentOutputText()
+                let failure = TerminalTransportService.userFacingFailure(
+                    output: output,
+                    connection: connection,
+                    exitCode: exitCode
+                )
+                session.setFailureMessage(failure)
+                let requested = session.lastTerminationWasRequested
+                if let activityID = sshActivityIDs.removeValue(forKey: tabID) {
+                    connectionActivity.finish(
+                        activityID,
+                        outcome: requested || exitCode == 0 ? .completed : .failed,
+                        errorMessage: failure
+                    )
+                }
+                statusMessage = requested || exitCode == 0
+                    ? "\(connection.kind.title)-сессия завершена"
+                    : (failure ?? "\(connection.kind.title)-сессия завершилась с кодом \(exitCode)")
+                objectWillChange.send()
+            }
+            beginTerminalSessionLog(
+                tabID: tabID,
+                session: session,
+                kind: launch.logKind,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? launch.title,
+                target: launch.target
+            )
+            sshActivityIDs[tabID] = connectionActivity.begin(
+                kind: launch.activityKind,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? launch.title,
+                target: launch.target
+            )
+            terminalStartedAt[tabID] = Date()
+            statusMessage = "\(connection.kind.title) подключается: \(launch.target)"
+            errorMessage = nil
+        } catch {
+            connectionActivity.recordFailure(
+                kind: connection.kind == .serial ? .serial : .telnet,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? connection.kind.title,
+                target: connection.displayLabel(profiles: profiles),
+                errorMessage: error.localizedDescription
+            )
+            errorMessage = error.localizedDescription
+            statusMessage = "\(connection.kind.title) не запущен"
         }
     }
 
@@ -3404,7 +3562,7 @@ final class AppModel: NSObject, ObservableObject {
             tabID: tabID
         ) else { return }
         guard !session.isRunning else {
-            statusMessage = "Эта вкладка SSH уже подключена"
+            statusMessage = "Эта вкладка Terminal уже подключена"
             return
         }
         do {
@@ -3438,30 +3596,58 @@ final class AppModel: NSObject, ObservableObject {
                     credential = temporaryPassword?.isEmpty == false
                         ? KeychainService.credentialReference(profileID: tabID, kind: .ssh)
                         : nil
-                case .local:
+                case .telnet, .serial, .local:
                     credential = nil
                 }
             } else {
                 credential = nil
             }
-            try session.start(
-                executable: "/usr/bin/ssh",
-                arguments: SSHService.interactiveSSHArguments(settings: settings),
-                title: "SSH · \(settings.profileName)",
-                environment: try SSHKeyService.backgroundAuthenticationEnvironment(
-                    passwordCredential: credential,
-                    proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
-                        profileID: settings.profileID,
-                        kind: .proxy
-                    ),
-                    jumpHostPasswordCredential: settings.jumpHostProfileID.map {
-                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
-                    },
-                    jumpHostPromptTokens: settings.jumpHostPromptTokens
+            let launchConfiguration: (executable: String, arguments: [String])
+            switch settings.terminalProtocol {
+            case .ssh:
+                launchConfiguration = (
+                    executable: SSHService.sshPath,
+                    arguments: SSHService.interactiveSSHArguments(settings: settings)
                 )
+            case .mosh:
+                let mosh = try MoshService.launchConfiguration(settings: settings)
+                launchConfiguration = (executable: mosh.executable, arguments: mosh.arguments)
+            }
+            let terminalProtocolTitle = settings.terminalProtocol.title
+            let logKind: TerminalSessionLogKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
+            let activityKind: ConnectionActivityKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
+            var authenticationEnvironment = try SSHKeyService.backgroundAuthenticationEnvironment(
+                passwordCredential: credential,
+                proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                    profileID: settings.profileID,
+                    kind: .proxy
+                ),
+                jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                    KeychainService.credentialReference(profileID: $0, kind: .ssh)
+                },
+                jumpHostPromptTokens: settings.jumpHostPromptTokens
+            )
+            if settings.terminalProtocol == .mosh {
+                authenticationEnvironment["LANG"] = authenticationEnvironment["LANG"] ?? "en_US.UTF-8"
+                authenticationEnvironment["LC_CTYPE"] = authenticationEnvironment["LC_CTYPE"] ?? "en_US.UTF-8"
+            }
+            try session.start(
+                executable: launchConfiguration.executable,
+                arguments: launchConfiguration.arguments,
+                title: "\(terminalProtocolTitle) · \(settings.profileName)",
+                environment: authenticationEnvironment
             ) { [weak self, weak session] exitCode in
                 guard let self, let session else { return }
+                finishTerminalSessionLog(
+                    tabID: tabID,
+                    session: session,
+                    exitCode: exitCode
+                )
                 let recentOutput = session.recentOutputText()
+                let moshFailure = settings.terminalProtocol == .mosh
+                    ? MoshService.userFacingFailure(output: recentOutput, exitCode: exitCode)
+                    : nil
+                session.setFailureMessage(moshFailure)
                 let terminationRequested = session.lastTerminationWasRequested
                 terminalRuntimeSettings.removeValue(forKey: tabID)
                 terminalStartedAt.removeValue(forKey: tabID)
@@ -3471,6 +3657,7 @@ final class AppModel: NSObject, ObservableObject {
 
                 let nextAttempt = (smartReconnectAttempt ?? 0) + 1
                 let shouldReconnect = !terminationRequested
+                    && settings.terminalProtocol == .ssh
                     && canAutomaticallyReconnectSSH(
                        settings: settings,
                        connection: connection,
@@ -3493,7 +3680,7 @@ final class AppModel: NSObject, ObservableObject {
                         activityID,
                         outcome: outcome,
                         errorMessage: outcome == .failed
-                            ? SmartReconnectClassifier.sshReason(output: recentOutput)
+                            ? (moshFailure ?? SmartReconnectClassifier.sshReason(output: recentOutput))
                             : nil
                     )
                 }
@@ -3508,11 +3695,19 @@ final class AppModel: NSObject, ObservableObject {
                 } else {
                     cancelTerminalSmartReconnect(tabID: tabID, session: session)
                     statusMessage = terminationRequested || exitCode == 0
-                        ? "SSH-сессия завершена"
-                        : "SSH-сессия завершилась с кодом \(exitCode)"
+                        ? "\(terminalProtocolTitle)-сессия завершена"
+                        : (moshFailure ?? "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)")
                 }
                 objectWillChange.send()
             }
+            beginTerminalSessionLog(
+                tabID: tabID,
+                session: session,
+                kind: logKind,
+                profileID: connection.kind == .savedProfile ? connection.profileID : nil,
+                profileName: settings.profileName,
+                target: "\(settings.host):\(settings.port)"
+            )
             let activityProfileID: UUID? = connection.kind == .savedProfile
                 ? connection.profileID
                 : nil
@@ -3521,7 +3716,7 @@ final class AppModel: NSObject, ObservableObject {
                     ? nil
                     : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
             sshActivityIDs[tabID] = connectionActivity.begin(
-                kind: .ssh,
+                kind: activityKind,
                 profileID: activityProfileID,
                 profileName: settings.profileName,
                 target: "\(settings.host):\(settings.port)",
@@ -3551,7 +3746,7 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 statusMessage = "SSH: проверяем reconnect \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
             } else {
-                statusMessage = "SSH подключается к \(settings.host)"
+                statusMessage = "\(terminalProtocolTitle) подключается к \(settings.host)"
             }
             if connection.kind == .savedProfile,
                let profileID = connection.profileID,
@@ -3569,7 +3764,7 @@ final class AppModel: NSObject, ObservableObject {
                     ? nil
                     : "\(settings.proxyMode.title) · \(settings.proxyHost):\(settings.proxyPort)")
             connectionActivity.recordFailure(
-                kind: .ssh,
+                kind: settings.terminalProtocol == .mosh ? .mosh : .ssh,
                 profileID: connection.kind == .savedProfile ? connection.profileID : nil,
                 profileName: settings.profileName,
                 target: "\(settings.host):\(settings.port)",
@@ -3577,7 +3772,7 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage: error.localizedDescription
             )
             errorMessage = error.localizedDescription
-            statusMessage = "SSH не запущен"
+            statusMessage = "\(settings.terminalProtocol.title) не запущен"
         }
     }
 
@@ -3608,12 +3803,25 @@ final class AppModel: NSObject, ObservableObject {
                 environment: environment,
                 workingDirectory: directory
             ) { [weak self] exitCode in
+                self?.finishTerminalSessionLog(
+                    tabID: tabID,
+                    session: session,
+                    exitCode: exitCode
+                )
                 self?.terminalStartedAt.removeValue(forKey: tabID)
                 self?.statusMessage = exitCode == 0
                     ? "Локальный терминал завершён"
                     : "Локальный терминал завершился с кодом \(exitCode)"
                 self?.objectWillChange.send()
             }
+            beginTerminalSessionLog(
+                tabID: tabID,
+                session: session,
+                kind: .local,
+                profileID: nil,
+                profileName: "Локальный терминал",
+                target: directory
+            )
             terminalStartedAt[tabID] = Date()
             statusMessage = "Локальный терминал запущен"
             errorMessage = nil
@@ -3621,6 +3829,46 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = error.localizedDescription
             statusMessage = "Локальный терминал не запущен"
         }
+    }
+
+    private func beginTerminalSessionLog(
+        tabID: UUID,
+        session: TerminalSessionModel,
+        kind: TerminalSessionLogKind,
+        profileID: UUID?,
+        profileName: String,
+        target: String
+    ) {
+        if let observerID = terminalLogObserverIDs.removeValue(forKey: tabID) {
+            session.removeOutputObserver(observerID)
+        }
+        terminalLogRecordIDs.removeValue(forKey: tabID)
+        guard let recordID = terminalSessionLogs.begin(
+            kind: kind,
+            profileID: profileID,
+            profileName: profileName,
+            target: target
+        ) else { return }
+        terminalLogRecordIDs[tabID] = recordID
+        terminalLogObserverIDs[tabID] = session.addOutputObserver { [weak self] data in
+            self?.terminalSessionLogs.append(data, to: recordID)
+        }
+    }
+
+    private func finishTerminalSessionLog(
+        tabID: UUID,
+        session: TerminalSessionModel,
+        exitCode: Int32
+    ) {
+        if let observerID = terminalLogObserverIDs.removeValue(forKey: tabID) {
+            session.removeOutputObserver(observerID)
+        }
+        guard let recordID = terminalLogRecordIDs.removeValue(forKey: tabID) else { return }
+        terminalSessionLogs.finish(
+            recordID,
+            exitCode: exitCode,
+            requested: session.lastTerminationWasRequested
+        )
     }
 
     @discardableResult
@@ -4095,7 +4343,7 @@ final class AppModel: NSObject, ObservableObject {
                     profileID: tabID,
                     kind: .ssh
                 )
-            case .local:
+            case .telnet, .serial, .local:
                 passwordCredential = nil
             }
         } else {
@@ -5066,7 +5314,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
             case .custom:
                 if forwardingPasswordUserPresenceIDs.contains(summary.id.uuidString) { return false }
-            case .local:
+            case .telnet, .serial, .local:
                 return false
             }
             return true

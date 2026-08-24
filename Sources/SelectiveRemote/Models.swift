@@ -450,6 +450,8 @@ enum CertificatePolicy: String, Codable, CaseIterable, Identifiable {
 enum ConnectionType: String, Codable, CaseIterable, Identifiable, Sendable {
     case rdp
     case ssh
+    case telnet
+    case serial
 
     var id: String { rawValue }
 
@@ -457,6 +459,8 @@ enum ConnectionType: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .rdp: "RDP"
         case .ssh: "SSH"
+        case .telnet: "Telnet"
+        case .serial: "Serial"
         }
     }
 
@@ -464,6 +468,29 @@ enum ConnectionType: String, Codable, CaseIterable, Identifiable, Sendable {
         switch self {
         case .rdp: "desktopcomputer"
         case .ssh: "terminal"
+        case .telnet: "network"
+        case .serial: "cable.connector"
+        }
+    }
+}
+
+enum SSHTerminalProtocol: String, Codable, CaseIterable, Identifiable, Sendable {
+    case ssh
+    case mosh
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .ssh: "SSH"
+        case .mosh: "Mosh"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .ssh: "terminal"
+        case .mosh: "antenna.radiowaves.left.and.right"
         }
     }
 }
@@ -746,6 +773,15 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var host: String
     var username: String
     var sshPort: Int
+    var sshTerminalProtocol: SSHTerminalProtocol
+    var moshUDPPort: Int
+    var moshServerPath: String
+    var serialDevicePath: String
+    var serialBaudRate: Int
+    var serialDataBits: Int
+    var serialParity: SerialParity
+    var serialStopBits: Int
+    var serialFlowControl: SerialFlowControl
     var sshAuthenticationMode: SSHAuthenticationMode
     var sshIdentityID: UUID?
     var sshProxyMode: SSHProxyMode
@@ -802,7 +838,16 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     init(connectionType: ConnectionType = .rdp) {
         id = UUID()
         self.connectionType = connectionType
-        friendlyName = connectionType == .rdp ? "Новое подключение" : "Новое SSH-подключение"
+        switch connectionType {
+        case .rdp:
+            friendlyName = UpdateLocalization.text(ru: "Новое подключение", en: "New Connection")
+        case .ssh:
+            friendlyName = UpdateLocalization.text(ru: "Новое SSH-подключение", en: "New SSH Connection")
+        case .telnet:
+            friendlyName = UpdateLocalization.text(ru: "Новое Telnet-подключение", en: "New Telnet Connection")
+        case .serial:
+            friendlyName = UpdateLocalization.text(ru: "Новое Serial-подключение", en: "New Serial Connection")
+        }
         group = ""
         tags = []
         profileDescription = ""
@@ -812,7 +857,16 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         operatingSystemDetectedAt = nil
         host = ""
         username = ""
-        sshPort = 22
+        sshPort = connectionType == .telnet ? 23 : 22
+        sshTerminalProtocol = .ssh
+        moshUDPPort = 0
+        moshServerPath = ""
+        serialDevicePath = ""
+        serialBaudRate = 9_600
+        serialDataBits = 8
+        serialParity = .none
+        serialStopBits = 1
+        serialFlowControl = .none
         sshAuthenticationMode = .automatic
         sshIdentityID = nil
         sshProxyMode = .none
@@ -872,7 +926,10 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
-        case sshPort, sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
+        case sshPort, sshTerminalProtocol, moshUDPPort, moshServerPath
+        case serialDevicePath, serialBaudRate, serialDataBits
+        case serialParity, serialStopBits, serialFlowControl
+        case sshAuthenticationMode, sshIdentityID, sshProxyMode, sshProxyHost, sshProxyPort, sshProxyUsername, sshJumpHostProfileID, sshHostKeyPolicy, sshInitialDirectory
         case sshCompression, sshKeepAliveSeconds, sshAgentForwarding
         case sshStartupSnippetID, sshStartupSnippetMode, sshStartupSnippetAfterReconnect
         case terminalVariables, sshGroupInheritance, portForwards
@@ -923,6 +980,26 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         host = try container.decodeIfPresent(String.self, forKey: .host) ?? defaults.host
         username = try container.decodeIfPresent(String.self, forKey: .username) ?? defaults.username
         sshPort = try container.decodeIfPresent(Int.self, forKey: .sshPort) ?? defaults.sshPort
+        sshTerminalProtocol = try container.decodeIfPresent(
+            SSHTerminalProtocol.self,
+            forKey: .sshTerminalProtocol
+        ) ?? defaults.sshTerminalProtocol
+        moshUDPPort = try container.decodeIfPresent(Int.self, forKey: .moshUDPPort)
+            ?? defaults.moshUDPPort
+        moshServerPath = try container.decodeIfPresent(String.self, forKey: .moshServerPath)
+            ?? defaults.moshServerPath
+        serialDevicePath = try container.decodeIfPresent(String.self, forKey: .serialDevicePath)
+            ?? defaults.serialDevicePath
+        serialBaudRate = try container.decodeIfPresent(Int.self, forKey: .serialBaudRate)
+            ?? defaults.serialBaudRate
+        serialDataBits = try container.decodeIfPresent(Int.self, forKey: .serialDataBits)
+            ?? defaults.serialDataBits
+        serialParity = try container.decodeIfPresent(SerialParity.self, forKey: .serialParity)
+            ?? defaults.serialParity
+        serialStopBits = try container.decodeIfPresent(Int.self, forKey: .serialStopBits)
+            ?? defaults.serialStopBits
+        serialFlowControl = try container.decodeIfPresent(SerialFlowControl.self, forKey: .serialFlowControl)
+            ?? defaults.serialFlowControl
         sshAuthenticationMode = try container.decodeIfPresent(SSHAuthenticationMode.self, forKey: .sshAuthenticationMode) ?? defaults.sshAuthenticationMode
         sshIdentityID = try container.decodeIfPresent(UUID.self, forKey: .sshIdentityID)
         sshProxyMode = try container.decodeIfPresent(SSHProxyMode.self, forKey: .sshProxyMode) ?? defaults.sshProxyMode
@@ -1070,6 +1147,15 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(host, forKey: .host)
         try container.encode(username, forKey: .username)
         try container.encode(sshPort, forKey: .sshPort)
+        try container.encode(sshTerminalProtocol, forKey: .sshTerminalProtocol)
+        try container.encode(moshUDPPort, forKey: .moshUDPPort)
+        try container.encode(moshServerPath, forKey: .moshServerPath)
+        try container.encode(serialDevicePath, forKey: .serialDevicePath)
+        try container.encode(serialBaudRate, forKey: .serialBaudRate)
+        try container.encode(serialDataBits, forKey: .serialDataBits)
+        try container.encode(serialParity, forKey: .serialParity)
+        try container.encode(serialStopBits, forKey: .serialStopBits)
+        try container.encode(serialFlowControl, forKey: .serialFlowControl)
         try container.encode(sshAuthenticationMode, forKey: .sshAuthenticationMode)
         try container.encodeIfPresent(sshIdentityID, forKey: .sshIdentityID)
         try container.encode(sshProxyMode, forKey: .sshProxyMode)

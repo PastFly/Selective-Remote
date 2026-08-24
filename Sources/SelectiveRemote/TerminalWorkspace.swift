@@ -1,6 +1,36 @@
 import Combine
 import Foundation
 
+enum SerialParity: String, Codable, CaseIterable, Identifiable {
+    case none
+    case even
+    case odd
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: "Нет"
+        case .even: "Even"
+        case .odd: "Odd"
+        }
+    }
+}
+
+enum SerialFlowControl: String, Codable, CaseIterable, Identifiable {
+    case none
+    case hardware
+    case software
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .none: "Нет"
+        case .hardware: "Hardware"
+        case .software: "Software"
+        }
+    }
+}
+
 enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     case single
     case splitHorizontal
@@ -106,6 +136,8 @@ struct TerminalTabConnection: Codable, Equatable {
     enum Kind: String, Codable, CaseIterable, Identifiable {
         case savedProfile
         case custom
+        case telnet
+        case serial
         case local
 
         var id: String { rawValue }
@@ -113,7 +145,9 @@ struct TerminalTabConnection: Codable, Equatable {
         var title: String {
             switch self {
             case .savedProfile: "Из сохранённых"
-            case .custom: "Другой сервер"
+            case .custom: "SSH"
+            case .telnet: "Telnet"
+            case .serial: "Serial"
             case .local: "Этот Mac"
             }
         }
@@ -128,6 +162,12 @@ struct TerminalTabConnection: Codable, Equatable {
     var identityID: UUID?
     var jumpHostProfileID: UUID?
     var workingDirectory: String?
+    var serialDevicePath: String?
+    var serialBaudRate: Int?
+    var serialDataBits: Int?
+    var serialParity: SerialParity?
+    var serialStopBits: Int?
+    var serialFlowControl: SerialFlowControl?
 
     static func savedProfile(_ id: UUID) -> TerminalTabConnection {
         TerminalTabConnection(
@@ -139,7 +179,13 @@ struct TerminalTabConnection: Codable, Equatable {
             authenticationMode: nil,
             identityID: nil,
             jumpHostProfileID: nil,
-            workingDirectory: nil
+            workingDirectory: nil,
+            serialDevicePath: nil,
+            serialBaudRate: nil,
+            serialDataBits: nil,
+            serialParity: nil,
+            serialStopBits: nil,
+            serialFlowControl: nil
         )
     }
 
@@ -160,7 +206,60 @@ struct TerminalTabConnection: Codable, Equatable {
             authenticationMode: authenticationMode,
             identityID: identityID,
             jumpHostProfileID: jumpHostProfileID,
-            workingDirectory: nil
+            workingDirectory: nil,
+            serialDevicePath: nil,
+            serialBaudRate: nil,
+            serialDataBits: nil,
+            serialParity: nil,
+            serialStopBits: nil,
+            serialFlowControl: nil
+        )
+    }
+
+    static func telnet(host: String, port: Int = 23) -> TerminalTabConnection {
+        TerminalTabConnection(
+            kind: .telnet,
+            profileID: nil,
+            host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+            username: "",
+            port: port,
+            authenticationMode: nil,
+            identityID: nil,
+            jumpHostProfileID: nil,
+            workingDirectory: nil,
+            serialDevicePath: nil,
+            serialBaudRate: nil,
+            serialDataBits: nil,
+            serialParity: nil,
+            serialStopBits: nil,
+            serialFlowControl: nil
+        )
+    }
+
+    static func serial(
+        devicePath: String,
+        baudRate: Int = 9_600,
+        dataBits: Int = 8,
+        parity: SerialParity = .none,
+        stopBits: Int = 1,
+        flowControl: SerialFlowControl = .none
+    ) -> TerminalTabConnection {
+        TerminalTabConnection(
+            kind: .serial,
+            profileID: nil,
+            host: "",
+            username: "",
+            port: 0,
+            authenticationMode: nil,
+            identityID: nil,
+            jumpHostProfileID: nil,
+            workingDirectory: nil,
+            serialDevicePath: devicePath,
+            serialBaudRate: baudRate,
+            serialDataBits: dataBits,
+            serialParity: parity,
+            serialStopBits: stopBits,
+            serialFlowControl: flowControl
         )
     }
 
@@ -174,7 +273,13 @@ struct TerminalTabConnection: Codable, Equatable {
             authenticationMode: nil,
             identityID: nil,
             jumpHostProfileID: nil,
-            workingDirectory: workingDirectory
+            workingDirectory: workingDirectory,
+            serialDevicePath: nil,
+            serialBaudRate: nil,
+            serialDataBits: nil,
+            serialParity: nil,
+            serialStopBits: nil,
+            serialFlowControl: nil
         )
     }
 
@@ -193,6 +298,24 @@ struct TerminalTabConnection: Codable, Equatable {
             && !normalizedUsername.contains(where: { $0.isWhitespace || $0.isNewline })
     }
 
+    var isValidTelnetConnection: Bool {
+        kind == .telnet && !normalizedHost.isEmpty && (1...65_535).contains(port)
+    }
+
+    var isValidSerialConnection: Bool {
+        guard kind == .serial,
+              let path = serialDevicePath?.trimmingCharacters(in: .whitespacesAndNewlines),
+              path.hasPrefix("/dev/cu."),
+              let baudRate = serialBaudRate,
+              let dataBits = serialDataBits,
+              let stopBits = serialStopBits
+        else { return false }
+        return !path.contains(where: { $0.isNewline })
+            && TerminalTransportService.supportedBaudRates.contains(baudRate)
+            && (5...8).contains(dataBits)
+            && (1...2).contains(stopBits)
+    }
+
     func displayLabel(profiles: [ConnectionProfile]) -> String {
         switch kind {
         case .savedProfile:
@@ -207,6 +330,10 @@ struct TerminalTabConnection: Codable, Equatable {
                 ? normalizedHost
                 : "\(normalizedUsername)@\(normalizedHost)"
             return port == 22 ? destination : "\(destination):\(port)"
+        case .telnet:
+            return "telnet://\(normalizedHost):\(port)"
+        case .serial:
+            return serialDevicePath ?? "Serial device"
         case .local:
             return workingDirectory ?? FileManager.default.homeDirectoryForCurrentUser.path
         }

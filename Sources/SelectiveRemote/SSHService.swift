@@ -51,6 +51,9 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let host: String
     let username: String
     let port: Int
+    let terminalProtocol: SSHTerminalProtocol
+    let moshUDPPort: Int
+    let moshServerPath: String
     let authenticationMode: SSHAuthenticationMode
     let identity: SSHKeyRecord?
     let proxyMode: SSHProxyMode
@@ -94,6 +97,9 @@ struct SSHConnectionSettings: Equatable, Sendable {
         host = normalizedHost
         username = normalizedUser
         port = profile.sshPort
+        terminalProtocol = profile.sshTerminalProtocol
+        moshUDPPort = profile.moshUDPPort
+        moshServerPath = profile.moshServerPath
         authenticationMode = profile.sshAuthenticationMode
         self.identity = identity
         proxyMode = profile.sshProxyMode
