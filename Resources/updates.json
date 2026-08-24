@@ -1,8 +1,8 @@
 {
-  "version": "0.26.0",
-  "build": 139,
-  "downloadURL": "https://github.com/PastFly/Selective-Remote/releases/download/v0.26.0/SelectiveRemote-0.26.0-arm64.dmg",
-  "releaseNotesURL": "https://github.com/PastFly/Selective-Remote/releases/tag/v0.26.0",
+  "version": "0.27.0",
+  "build": 140,
+  "downloadURL": "https://github.com/PastFly/Selective-Remote/releases/download/v0.27.0/SelectiveRemote-0.27.0-arm64.dmg",
+  "releaseNotesURL": "https://github.com/PastFly/Selective-Remote/releases/tag/v0.27.0",
   "releaseNotesHistoryURL": "https://raw.githubusercontent.com/PastFly/Selective-Remote/main/CHANGELOG.md",
   "releaseNotesHistoryENURL": "https://raw.githubusercontent.com/PastFly/Selective-Remote/main/CHANGELOG_EN.md",
   "minimumMacOS": "14.0"
