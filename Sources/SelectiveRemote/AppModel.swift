@@ -1868,6 +1868,73 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     @discardableResult
+    func importCloudInstance(
+        _ instance: CloudInstance,
+        account: CloudAccount,
+        group: String
+    ) -> UUID {
+        if let index = profiles.firstIndex(where: {
+            $0.cloudAccountID == account.id && $0.cloudResourceID == instance.resourceID
+        }) {
+            // Cloud refresh owns only provider metadata. User-edited SSH settings,
+            // names, groups, keys, routes and snippets remain untouched.
+            profiles[index].cloudProvider = account.provider
+            profiles[index].cloudRegion = instance.region
+            profiles[index].cloudNetworkName = instance.networkName
+            profiles[index].cloudLastKnownState = instance.state
+            profiles[index].cloudTags = instance.tags
+            if profiles[index].detectedOperatingSystem.isEmpty {
+                profiles[index].detectedOperatingSystem = instance.operatingSystem
+            }
+            selectedProfileID = profiles[index].id
+            statusMessage = UpdateLocalization.text(
+                ru: "Облачные данные профиля «\(profiles[index].friendlyName)» обновлены",
+                en: "Cloud metadata for “\(profiles[index].friendlyName)” was updated"
+            )
+            return profiles[index].id
+        }
+
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.friendlyName = instance.name.isEmpty ? instance.resourceID : instance.name
+        profile.group = group
+        profile.tags = instance.sortedTags
+        profile.profileDescription = "\(account.provider.title) · \(instance.resourceID)"
+        profile.host = instance.preferredAddress
+        profile.username = account.defaultUsername
+        profile.detectedOperatingSystem = instance.operatingSystem
+        profile.cloudProvider = account.provider
+        profile.cloudAccountID = account.id
+        profile.cloudResourceID = instance.resourceID
+        profile.cloudRegion = instance.region
+        profile.cloudNetworkName = instance.networkName
+        profile.cloudLastKnownState = instance.state
+        profile.cloudTags = instance.tags
+        profiles.append(profile)
+        selectedProfileID = profile.id
+        statusMessage = UpdateLocalization.text(
+            ru: "Импортирован SSH-профиль «\(profile.friendlyName)» из \(account.provider.title)",
+            en: "Imported SSH profile “\(profile.friendlyName)” from \(account.provider.title)"
+        )
+        errorMessage = nil
+        return profile.id
+    }
+
+    func refreshCloudMetadata(_ instances: [CloudInstance], account: CloudAccount) {
+        let byResourceID = Dictionary(uniqueKeysWithValues: instances.map { ($0.resourceID, $0) })
+        for index in profiles.indices where profiles[index].cloudAccountID == account.id {
+            guard let instance = byResourceID[profiles[index].cloudResourceID] else { continue }
+            profiles[index].cloudProvider = account.provider
+            profiles[index].cloudRegion = instance.region
+            profiles[index].cloudNetworkName = instance.networkName
+            profiles[index].cloudLastKnownState = instance.state
+            profiles[index].cloudTags = instance.tags
+            if profiles[index].detectedOperatingSystem.isEmpty {
+                profiles[index].detectedOperatingSystem = instance.operatingSystem
+            }
+        }
+    }
+
+    @discardableResult
     func importSSHConfigHost(_ host: SSHConfigHost) -> UUID? {
         let alias = host.alias.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !alias.isEmpty else { return nil }
