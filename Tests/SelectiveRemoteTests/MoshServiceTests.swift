@@ -95,3 +95,15 @@ func moshLaunchValidation() throws {
         )
     }
 }
+
+@Test("Missing remote mosh-server gets an actionable message")
+func moshMissingServerFailureMessage() {
+    let output = """
+    bash: line 1: mosh-server: command not found
+    /opt/homebrew/bin/mosh: Did not find mosh server startup message.
+    """
+    let message = MoshService.userFacingFailure(output: output, exitCode: 10)
+    #expect(message?.contains("Установите пакет mosh на сервере") == true)
+    #expect(MoshService.userFacingFailure(output: output, exitCode: 0) == nil)
+    #expect(MoshService.userFacingFailure(output: "network error", exitCode: 1) == nil)
+}

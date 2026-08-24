@@ -78,6 +78,16 @@ enum MoshService {
         return MoshLaunchConfiguration(executable: resolvedExecutable, arguments: arguments)
     }
 
+    static func userFacingFailure(output: String, exitCode: Int32) -> String? {
+        guard exitCode != 0 else { return nil }
+        let normalized = output.lowercased()
+        if normalized.contains("mosh-server: command not found")
+            || normalized.contains("did not find mosh server startup message") {
+            return "На удалённом сервере не найден mosh-server. Установите пакет mosh на сервере и подключитесь снова."
+        }
+        return nil
+    }
+
     private static func shellEscaped(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }

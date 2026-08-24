@@ -298,6 +298,7 @@ final class TerminalSessionModel: ObservableObject {
     @Published private(set) var commandTitle = ""
     @Published private(set) var startedAt: Date?
     @Published private(set) var reconnectProgress: SmartReconnectProgress?
+    @Published private(set) var failureMessage: String?
     @Published private(set) var terminalColumns = 100
     @Published private(set) var terminalRows = 30
 
@@ -347,6 +348,7 @@ final class TerminalSessionModel: ObservableObject {
         processEnvironment["TERM_PROGRAM_VERSION"] = AppBuildInfo.version
 
         commandTitle = title
+        failureMessage = nil
         startedAt = nil
         stopRequested = false
         lastTerminationWasRequested = false
@@ -445,6 +447,10 @@ final class TerminalSessionModel: ObservableObject {
 
     func setReconnectProgress(_ progress: SmartReconnectProgress?) {
         reconnectProgress = progress
+    }
+
+    func setFailureMessage(_ message: String?) {
+        failureMessage = message
     }
 
     func recentOutputText(maximumBytes: Int = 16_384) -> String {

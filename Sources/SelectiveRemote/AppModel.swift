@@ -3489,6 +3489,10 @@ final class AppModel: NSObject, ObservableObject {
                     exitCode: exitCode
                 )
                 let recentOutput = session.recentOutputText()
+                let moshFailure = settings.terminalProtocol == .mosh
+                    ? MoshService.userFacingFailure(output: recentOutput, exitCode: exitCode)
+                    : nil
+                session.setFailureMessage(moshFailure)
                 let terminationRequested = session.lastTerminationWasRequested
                 terminalRuntimeSettings.removeValue(forKey: tabID)
                 terminalStartedAt.removeValue(forKey: tabID)
@@ -3521,7 +3525,7 @@ final class AppModel: NSObject, ObservableObject {
                         activityID,
                         outcome: outcome,
                         errorMessage: outcome == .failed
-                            ? SmartReconnectClassifier.sshReason(output: recentOutput)
+                            ? (moshFailure ?? SmartReconnectClassifier.sshReason(output: recentOutput))
                             : nil
                     )
                 }
@@ -3537,7 +3541,7 @@ final class AppModel: NSObject, ObservableObject {
                     cancelTerminalSmartReconnect(tabID: tabID, session: session)
                     statusMessage = terminationRequested || exitCode == 0
                         ? "\(terminalProtocolTitle)-сессия завершена"
-                        : "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)"
+                        : (moshFailure ?? "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)")
                 }
                 objectWillChange.send()
             }

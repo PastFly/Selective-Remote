@@ -1797,10 +1797,12 @@ struct SSHTerminalView: View {
                                 .font(.caption.monospaced())
                                 .foregroundStyle(.white.opacity(0.62))
                                 .lineLimit(1)
-                            if let detail = state.detail {
+                            if let detail = tab.session.failureMessage ?? state.detail {
                                 Text(detail)
-                                    .font(.caption2.monospaced())
+                                    .font(.caption2)
                                     .foregroundStyle(.red.opacity(0.9))
+                                    .multilineTextAlignment(.center)
+                                    .frame(maxWidth: 360)
                             }
                             Button("Подключиться", systemImage: "play.fill") {
                                 selectTabIfNeeded(tab.id)
