@@ -1,3 +1,17 @@
+## 0.29.0
+
+- Added local Session Logs for SSH and Local Terminal with search, filters, retention settings, safe redaction of known secrets, and readable wrapped output.
+- SSH profiles can explicitly use Mosh for interactive Terminal sessions while keeping OpenSSH for SFTP, tunnels, and diagnostics.
+- Mosh reuses the profile authentication method, keys, host-key policy, Jump Host, and proxy during SSH bootstrap; automatic or fixed UDP ports and a custom `mosh-server` path are supported.
+- The Mosh client is discovered in standard Homebrew and MacPorts locations and in `PATH`; when missing, the app shows installation guidance without modifying the system.
+- Existing profiles continue to use SSH, while Smart Reconnect does not duplicate Mosh's built-in recovery after network changes.
+- SSH Workspace can now create SSH, Mosh, Telnet, and Serial tabs with shared themes, History, Snippets, split/grid layouts, and Session Logs.
+- Telnet and Serial connections are regular saved profiles under Connections; the sidebar item remains named SSH, and the affected screens include complete English localization.
+- Telnet uses a bundled minimal protocol helper with IAC negotiation and an explicit warning that its traffic is not encrypted.
+- Serial automatically discovers `/dev/cu.*` devices and supports baud rate, data bits, parity, stop bits, and hardware or software flow control.
+- The Terminal Transport Helper is bundled in the DMG, validated as a portable binary, and signed with the app; existing saved workspaces remain backward compatible.
+- Automatic History command capture is disabled for Telnet and Serial so interactive authentication input cannot be mistaken for commands; Session Logs still capture transport output only.
+
 ## 0.28.0
 
 - Snippets now use typed Targets with Local Terminal support while preserving backward compatibility with existing SSH snippets.
