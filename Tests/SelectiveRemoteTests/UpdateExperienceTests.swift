@@ -64,10 +64,15 @@ struct UpdateExperienceTests {
         #expect(model.contains("let panel = NSSavePanel()"))
         #expect(model.contains("panel.allowedContentTypes = [.diskImage]"))
         #expect(model.contains("downloadedUpdateUsesCustomDestination = userSelectedDestination"))
+        #expect(model.contains("func chooseAutomaticUpdateDownloadDirectory()"))
+        #expect(model.contains("SelectiveRemote.update.autoDownloadDirectory.v1"))
+        #expect(model.contains("destinationURL != nil"))
         #expect(installer.contains("destinationURL requestedDestinationURL: URL? = nil"))
         #expect(installer.contains("requestedDestinationURL.standardizedFileURL"))
         #expect(view.contains("Button(\"Сохранить DMG…\")"))
         #expect(view.contains("не будет удалён автоматически"))
+        #expect(view.contains("Каталог автоматической загрузки"))
+        #expect(view.contains("Использовать внутренний каталог"))
         #expect(app.contains("preventsClosing: model.isUpdateOperationInProgress"))
     }
 }

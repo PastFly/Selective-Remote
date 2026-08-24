@@ -364,6 +364,19 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
     }
+    @Published var automaticUpdateDownloadDirectoryPath = UserDefaults.standard.string(
+        forKey: "SelectiveRemote.update.autoDownloadDirectory.v1"
+    ) {
+        didSet {
+            let key = "SelectiveRemote.update.autoDownloadDirectory.v1"
+            if let automaticUpdateDownloadDirectoryPath,
+               !automaticUpdateDownloadDirectoryPath.isEmpty {
+                UserDefaults.standard.set(automaticUpdateDownloadDirectoryPath, forKey: key)
+            } else {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+    }
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
@@ -4475,7 +4488,40 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func downloadAvailableUpdate() {
-        downloadAvailableUpdate(to: nil, userSelectedDestination: false)
+        guard let manifest = availableUpdateManifest else { return }
+        let destinationURL = automaticUpdateDownloadDirectoryPath.map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+                .appendingPathComponent(manifest.downloadURL.lastPathComponent)
+        }
+        downloadAvailableUpdate(
+            to: destinationURL,
+            userSelectedDestination: destinationURL != nil
+        )
+    }
+
+    func chooseAutomaticUpdateDownloadDirectory() {
+        let panel = NSOpenPanel()
+        panel.title = UpdateLocalization.text(
+            ru: "Выберите каталог для автоматических обновлений",
+            en: "Choose a Folder for Automatic Updates"
+        )
+        panel.prompt = UpdateLocalization.text(ru: "Выбрать", en: "Choose")
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        if let automaticUpdateDownloadDirectoryPath {
+            panel.directoryURL = URL(
+                fileURLWithPath: automaticUpdateDownloadDirectoryPath,
+                isDirectory: true
+            )
+        }
+        guard panel.runModal() == .OK, let directoryURL = panel.url else { return }
+        automaticUpdateDownloadDirectoryPath = directoryURL.standardizedFileURL.path
+    }
+
+    func resetAutomaticUpdateDownloadDirectory() {
+        automaticUpdateDownloadDirectoryPath = nil
     }
 
     func downloadAvailableUpdateChoosingDestination() {

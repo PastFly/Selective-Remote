@@ -68,6 +68,26 @@ private struct UpdateSettingsView: View {
                 Toggle("Проверять обновления при запуске и каждые 5 часов", isOn: $model.automaticallyCheckForUpdates)
                 Toggle("Автоматически загружать найденные обновления", isOn: $model.automaticallyDownloadUpdates)
                     .disabled(!model.automaticallyCheckForUpdates)
+                LabeledContent("Каталог автоматической загрузки") {
+                    Text(model.automaticUpdateDownloadDirectoryPath ?? "Внутренний каталог приложения")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                HStack {
+                    Button("Выбрать каталог…", systemImage: "folder") {
+                        model.chooseAutomaticUpdateDownloadDirectory()
+                    }
+                    Spacer()
+                    Button("Использовать внутренний каталог") {
+                        model.resetAutomaticUpdateDownloadDirectory()
+                    }
+                    .disabled(model.automaticUpdateDownloadDirectoryPath == nil)
+                }
+                Text("DMG в выбранном каталоге сохраняется после установки и не удаляется автоматически.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Действия") {
