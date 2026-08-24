@@ -632,6 +632,12 @@ final class AppModel: NSObject, ObservableObject {
                 && !isSessionRunning(profileID: selectedProfile.id)
         case .ssh:
             return hostPresent && (1...65_535).contains(selectedProfile.sshPort)
+        case .telnet:
+            return hostPresent && (1...65_535).contains(selectedProfile.sshPort)
+        case .serial:
+            return !selectedProfile.serialDevicePath
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .isEmpty
         }
     }
 
@@ -814,7 +820,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     func globalTerminalWorkspace() -> TerminalWorkspaceModel {
-        let initialConnection = profiles.first(where: { $0.connectionType == .ssh })
+        let initialConnection = profiles.first(where: { $0.connectionType != .rdp })
             .map { TerminalTabConnection.savedProfile($0.id) }
             ?? .custom(host: "", username: "")
         return terminalWorkspace(
@@ -3349,10 +3355,10 @@ final class AppModel: NSObject, ObservableObject {
                 typedGatewayPassword: gatewayPassword,
                 automatic: false
             )
-        case .ssh:
+        case .ssh, .telnet, .serial:
             let workspace = terminalWorkspace(profileID: selectedProfile.id)
             let tab = workspace.tabs.first(where: \.isPrimary) ?? workspace.selectedTab
-            connectSSHTerminal(
+            connectTerminal(
                 connection: tab.connection,
                 tabID: tab.id,
                 session: tab.session
@@ -3422,6 +3428,22 @@ final class AppModel: NSObject, ObservableObject {
         session: TerminalSessionModel,
         temporaryPassword: String? = nil
     ) {
+        if connection.kind == .savedProfile,
+           let profileID = connection.profileID,
+           let profile = profiles.first(where: { $0.id == profileID }) {
+            switch profile.connectionType {
+            case .telnet, .serial:
+                connectTerminalTransport(
+                    connection: terminalTransportConnection(for: profile),
+                    tabID: tabID,
+                    session: session,
+                    sourceProfile: profile
+                )
+                return
+            case .rdp, .ssh:
+                break
+            }
+        }
         switch connection.kind {
         case .telnet, .serial:
             connectTerminalTransport(connection: connection, tabID: tabID, session: session)
@@ -3437,10 +3459,29 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    private func terminalTransportConnection(for profile: ConnectionProfile) -> TerminalTabConnection {
+        switch profile.connectionType {
+        case .telnet:
+            return .telnet(host: profile.host, port: profile.sshPort)
+        case .serial:
+            return .serial(
+                devicePath: profile.serialDevicePath,
+                baudRate: profile.serialBaudRate,
+                dataBits: profile.serialDataBits,
+                parity: profile.serialParity,
+                stopBits: profile.serialStopBits,
+                flowControl: profile.serialFlowControl
+            )
+        case .rdp, .ssh:
+            return .savedProfile(profile.id)
+        }
+    }
+
     private func connectTerminalTransport(
         connection: TerminalTabConnection,
         tabID: UUID,
-        session: TerminalSessionModel
+        session: TerminalSessionModel,
+        sourceProfile: ConnectionProfile? = nil
     ) {
         cancelTerminalSmartReconnect(tabID: tabID, session: session)
         guard !session.isRunning else {
@@ -3480,14 +3521,14 @@ final class AppModel: NSObject, ObservableObject {
                 tabID: tabID,
                 session: session,
                 kind: launch.logKind,
-                profileID: nil,
-                profileName: launch.title,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? launch.title,
                 target: launch.target
             )
             sshActivityIDs[tabID] = connectionActivity.begin(
                 kind: launch.activityKind,
-                profileID: nil,
-                profileName: launch.title,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? launch.title,
                 target: launch.target
             )
             terminalStartedAt[tabID] = Date()
@@ -3496,8 +3537,8 @@ final class AppModel: NSObject, ObservableObject {
         } catch {
             connectionActivity.recordFailure(
                 kind: connection.kind == .serial ? .serial : .telnet,
-                profileID: nil,
-                profileName: connection.kind.title,
+                profileID: sourceProfile?.id,
+                profileName: sourceProfile?.friendlyName ?? connection.kind.title,
                 target: connection.displayLabel(profiles: profiles),
                 errorMessage: error.localizedDescription
             )

@@ -167,7 +167,7 @@ enum DiagnosticsReportBuilder {
         var lines = [
             "",
             "Profile: \(safe(profile.friendlyName))",
-            "Protocol: \(profile.connectionType == .rdp ? "RDP" : "SSH")",
+            "Protocol: \(profile.connectionType.title)",
             "Host: \(safe(profile.host))",
             "User: \(safe(profile.username.isEmpty ? "—" : profile.username))"
         ]
@@ -193,6 +193,16 @@ enum DiagnosticsReportBuilder {
             }
             lines.append("Proxy type: \(safe(profile.sshProxyMode.title))")
             lines.append("Host key policy: \(safe(profile.sshHostKeyPolicy.title))")
+        case .telnet:
+            lines.append("Port: \(profile.sshPort)")
+            lines.append("Encryption: disabled")
+        case .serial:
+            lines.append("Device: \(safe(profile.serialDevicePath))")
+            lines.append("Baud rate: \(profile.serialBaudRate)")
+            lines.append(
+                "Format: \(profile.serialDataBits)\(profile.serialParity.rawValue.prefix(1).uppercased())\(profile.serialStopBits)"
+            )
+            lines.append("Flow control: \(safe(profile.serialFlowControl.rawValue))")
         }
         return lines
     }

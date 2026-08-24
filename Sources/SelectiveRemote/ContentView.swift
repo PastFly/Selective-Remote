@@ -35,7 +35,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
-    case ssh = "Удалённый терминал"
+    case ssh = "SSH"
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
@@ -106,6 +106,8 @@ struct ContentView: View {
             [.general, .display, .devices, .folders, .security]
         case .ssh:
             [.general, .authentication, .route, .automation, .terminal, .sftp, .forwarding, .security]
+        case .telnet, .serial:
+            [.general, .terminal]
         }
     }
     private var cameraSelectionBinding: Binding<String> {
@@ -338,7 +340,12 @@ struct ContentView: View {
                                 showsUpdatePopover.toggle()
                             } label: {
                                 Label {
-                                    Text("Обновление \(manifest.version)")
+                                    Text(
+                                        UpdateLocalization.text(
+                                            ru: "Обновление \(manifest.version)",
+                                            en: "Update \(manifest.version)"
+                                        )
+                                    )
                                         .lineLimit(1)
                                         .minimumScaleFactor(0.85)
                                 } icon: {
@@ -350,7 +357,12 @@ struct ContentView: View {
                             .buttonStyle(.borderless)
                             .focusable(false)
                             .layoutPriority(1)
-                            .help("Доступно обновление \(manifest.version)")
+                            .help(
+                                UpdateLocalization.text(
+                                    ru: "Доступно обновление \(manifest.version)",
+                                    en: "Update \(manifest.version) is available"
+                                )
+                            )
                             .popover(isPresented: $showsUpdatePopover, arrowEdge: .top) {
                                 UpdateExperiencePopover(model: model)
                             }
@@ -369,7 +381,12 @@ struct ContentView: View {
                                 .padding(.vertical, 5)
                                 .background(Color.green.opacity(0.12), in: Capsule())
                                 .fixedSize(horizontal: true, vertical: false)
-                                .help("Активных RDP-сессий: \(model.runningSessionCount)")
+                                .help(
+                                    UpdateLocalization.text(
+                                        ru: "Активных RDP-сессий: \(model.runningSessionCount)",
+                                        en: "Active RDP sessions: \(model.runningSessionCount)"
+                                    )
+                                )
                         }
                         if model.runningSSHTunnelCount > 0 {
                             Label(
@@ -382,7 +399,12 @@ struct ContentView: View {
                             .padding(.vertical, 5)
                             .background(Color.orange.opacity(0.12), in: Capsule())
                             .fixedSize(horizontal: true, vertical: false)
-                            .help("Активных SSH-туннелей: \(model.runningSSHTunnelCount)")
+                            .help(
+                                UpdateLocalization.text(
+                                    ru: "Активных SSH-туннелей: \(model.runningSSHTunnelCount)",
+                                    en: "Active SSH tunnels: \(model.runningSSHTunnelCount)"
+                                )
+                            )
                         }
                     }
                 }
@@ -473,6 +495,12 @@ struct ContentView: View {
                     Button("Новое SSH", systemImage: "terminal") {
                         model.addProfile(connectionType: .ssh)
                     }
+                    Button("Новое Telnet", systemImage: "network") {
+                        model.addProfile(connectionType: .telnet)
+                    }
+                    Button("Новое Serial", systemImage: "cable.connector") {
+                        model.addProfile(connectionType: .serial)
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -502,7 +530,13 @@ struct ContentView: View {
                         model.importProfiles()
                     }
                     Divider()
-                    Button("Все профили \(AppBrand.name)…", systemImage: "archivebox") {
+                    Button(
+                        UpdateLocalization.text(
+                            ru: "Все профили \(AppBrand.name)…",
+                            en: "All \(AppBrand.name) profiles…"
+                        ),
+                        systemImage: "archivebox"
+                    ) {
                         model.exportAllProfiles()
                     }
                     Button("Выбранный профиль как .rdp…", systemImage: "doc") {
@@ -673,24 +707,29 @@ struct ContentView: View {
             }
         } else {
             Button(
-                item.connectionType == .ssh ? "Подключить SSH" : "Подключить RDP",
-                systemImage: item.connectionType == .ssh ? "terminal" : "play.fill"
+                item.connectionType == .rdp
+                    ? "Подключить RDP"
+                    : "Подключить \(item.connectionType.title)",
+                systemImage: item.connectionType == .rdp ? "play.fill" : "terminal"
             ) {
                 model.selectProfile(item.id)
                 setMainArea(.connections)
-                if item.connectionType == .ssh {
+                if item.connectionType != .rdp {
                     selectedTab = .terminal
                 }
                 model.connect()
             }
         }
 
-        if item.connectionType == .ssh {
+        if item.connectionType != .rdp {
             Button("Открыть терминал", systemImage: "terminal") {
                 model.selectProfile(item.id)
                 setMainArea(.connections)
                 selectedTab = .terminal
             }
+        }
+
+        if item.connectionType == .ssh {
             Button("Открыть SFTP", systemImage: "folder.badge.gearshape") {
                 model.selectProfile(item.id)
                 setMainArea(.connections)
@@ -820,10 +859,91 @@ struct ContentView: View {
         Group {
             if profile.connectionType == .rdp {
                 rdpProfileWorkspace
-            } else {
+            } else if profile.connectionType == .ssh {
                 sshProfileWorkspace
+            } else {
+                terminalTransportProfileWorkspace
             }
         }
+    }
+
+    private var terminalTransportProfileWorkspace: some View {
+        VStack(spacing: 0) {
+            if selectedTab == .terminal {
+                VStack(spacing: 0) {
+                    HStack {
+                        Button(
+                            UpdateLocalization.text(
+                                ru: "Настройки подключения",
+                                en: "Connection Settings"
+                            ),
+                            systemImage: "chevron.left"
+                        ) {
+                            selectedTab = .general
+                        }
+                        .buttonStyle(.bordered)
+                        Spacer()
+                        Text(profile.friendlyName)
+                            .font(.headline)
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.top, 14)
+
+                    terminalPanel
+                        .id(profile.id)
+                        .padding(18)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack(spacing: 14) {
+                            Image(systemName: profile.connectionType.systemImage)
+                                .font(.system(size: 26, weight: .semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .frame(width: 48, height: 48)
+                                .background(
+                                    Color.accentColor.opacity(0.12),
+                                    in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+                                )
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(profile.friendlyName)
+                                    .font(.title2.bold())
+                                Text(
+                                    profile.connectionType == .telnet
+                                        ? UpdateLocalization.text(
+                                            ru: "Telnet-подключение без шифрования",
+                                            en: "Unencrypted Telnet connection"
+                                        )
+                                        : UpdateLocalization.text(
+                                            ru: "Последовательное подключение к устройству",
+                                            en: "Serial device connection"
+                                        )
+                                )
+                                .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button(
+                                UpdateLocalization.text(ru: "Открыть терминал", en: "Open Terminal"),
+                                systemImage: "terminal"
+                            ) {
+                                selectedTab = .terminal
+                                model.connect()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!model.canConnect)
+                        }
+
+                        generalSettings
+                    }
+                    .frame(maxWidth: 1100, alignment: .leading)
+                    .padding(24)
+                }
+                connectionBar
+            }
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
     }
 
     private var sshProfileWorkspace: some View {
@@ -1990,7 +2110,7 @@ struct ContentView: View {
             if !terminalFocusMode {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Удалённый терминал")
+                        Text("SSH")
                             .font(.system(size: 30, weight: .bold, design: .rounded))
                         Text("SSH, Mosh, Telnet и Serial · вкладки и разделённые панели")
                             .foregroundStyle(.secondary)
@@ -2095,6 +2215,15 @@ struct ContentView: View {
             }
     }
 
+    private var sortedRemoteTerminalProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType != .rdp }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+    }
+
     @ViewBuilder
     private var selectedSettingsContent: some View {
         switch selectedTab {
@@ -2124,13 +2253,9 @@ struct ContentView: View {
             workspaceTitle: profile.friendlyName,
             defaultProfileID: profile.id,
             locksPrimaryConnection: true,
-            sshProfiles: model.profiles
-                .filter { $0.connectionType == .ssh }
-                .sorted {
-                    $0.friendlyName.localizedStandardCompare($1.friendlyName)
-                        == .orderedAscending
-                },
-            hasInstallableKey: model.selectedSSHKey?.publicKeyPath != nil,
+            sshProfiles: sortedRemoteTerminalProfiles,
+            hasInstallableKey: profile.connectionType == .ssh
+                && model.selectedSSHKey?.publicKeyPath != nil,
             isFocusMode: terminalFocusMode,
             connect: { tab, temporaryPassword in
                 model.connectTerminal(
@@ -2172,17 +2297,12 @@ struct ContentView: View {
     }
 
     private var globalTerminalPanel: some View {
-        let profiles = model.profiles
-            .filter { $0.connectionType == .ssh }
-            .sorted {
-                $0.friendlyName.localizedStandardCompare($1.friendlyName)
-                    == .orderedAscending
-            }
+        let profiles = sortedRemoteTerminalProfiles
         return SSHTerminalView(
             workspace: model.globalTerminalWorkspace(),
             appearance: terminalAppearance,
             appAppearance: appAppearance,
-            workspaceTitle: "Удалённый терминал",
+            workspaceTitle: "SSH",
             defaultProfileID: profiles.first?.id,
             locksPrimaryConnection: false,
             sshProfiles: profiles,
@@ -2367,9 +2487,9 @@ struct ContentView: View {
 
     private var generalSettings: some View {
         VStack(alignment: .leading, spacing: 18) {
-            GroupBox("Тип подключения") {
+            GroupBox(UpdateLocalization.text(ru: "Тип подключения", en: "Connection Type")) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Picker("Протокол", selection: profileBinding.connectionType) {
+                    Picker(UpdateLocalization.text(ru: "Протокол", en: "Protocol"), selection: profileBinding.connectionType) {
                         ForEach(ConnectionType.allCases) { type in
                             Label(type.title, systemImage: type.systemImage).tag(type)
                         }
@@ -2378,36 +2498,30 @@ struct ContentView: View {
                     .disabled(
                         model.isSelectedSessionRunning || model.selectedProfileHasActiveTunnels
                     )
-                    Text(
-                        profile.connectionType == .rdp
-                            ? "Удалённый рабочий стол через встроенный FreeRDP."
-                            : "Terminal, SFTP и туннели используют системный OpenSSH macOS."
-                    )
+                    Text(connectionTypeDescription)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
                 .padding(8)
             }
 
-            GroupBox(profile.connectionType == .rdp ? "Компьютер" : "SSH-сервер") {
+            GroupBox(endpointGroupTitle) {
                 Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
                     GridRow {
-                        Text("Название")
+                        Text(UpdateLocalization.text(ru: "Название", en: "Name"))
+                        TextField(profileNamePlaceholder, text: profileBinding.friendlyName)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        Text(UpdateLocalization.text(ru: "Группа", en: "Group"))
                         TextField(
-                            profile.connectionType == .rdp
-                                ? "Рабочий компьютер"
-                                : "SSH-сервер",
-                            text: profileBinding.friendlyName
+                            UpdateLocalization.text(ru: "Например: Работа", en: "For example: Work"),
+                            text: profileBinding.group
                         )
                             .textFieldStyle(.roundedBorder)
                     }
-                    GridRow {
-                        Text("Группа")
-                        TextField("Например: Работа", text: profileBinding.group)
-                            .textFieldStyle(.roundedBorder)
-                    }
                     GridRow(alignment: .top) {
-                        Text("Теги")
+                        Text(UpdateLocalization.text(ru: "Теги", en: "Tags"))
                             .padding(.top, 7)
                         ProfileTagsEditor(
                             model: model,
@@ -2415,116 +2529,17 @@ struct ContentView: View {
                         )
                     }
                     GridRow {
-                        Text("Описание")
+                        Text(UpdateLocalization.text(ru: "Описание", en: "Description"))
                         TextField(
-                            "Например: назначение или заметка",
+                            UpdateLocalization.text(
+                                ru: "Например: назначение или заметка",
+                                en: "For example: purpose or note"
+                            ),
                             text: profileBinding.profileDescription
                         )
                             .textFieldStyle(.roundedBorder)
                     }
-                    GridRow {
-                        Text("Hostname")
-                        TextField(
-                            profile.connectionType == .rdp
-                                ? "server.example.local"
-                                : "server.example.com или Host из ~/.ssh/config",
-                            text: profileBinding.host
-                        )
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    GridRow {
-                        Text("Пользователь")
-                        TextField(
-                            profile.connectionType == .rdp ? "DOMAIN\\username" : "username",
-                            text: profileBinding.username
-                        )
-                            .textFieldStyle(.roundedBorder)
-                    }
-
-                    if profile.connectionType == .rdp {
-                        GridRow {
-                            Text("Пароль")
-                            credentialEditor(
-                                value: $model.password,
-                                hasSavedValue: model.selectedProfileHasSavedPassword,
-                                placeholder: "Введите пароль RDP",
-                                savedText: "RDP-пароль сохранён в Keychain",
-                                onSave: model.savePassword,
-                                onDelete: model.deleteSavedPassword
-                            )
-                        }
-                    } else {
-                        GridRow {
-                            Text("Порт")
-                            TextField("22", value: profileBinding.sshPort, format: .number)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 130, alignment: .leading)
-                        }
-                        GridRow(alignment: .top) {
-                            Text("Terminal")
-                                .padding(.top, 7)
-                            VStack(alignment: .leading, spacing: 9) {
-                                Picker("Протокол Terminal", selection: profileBinding.sshTerminalProtocol) {
-                                    ForEach(SSHTerminalProtocol.allCases) { terminalProtocol in
-                                        Label(terminalProtocol.title, systemImage: terminalProtocol.systemImage)
-                                            .tag(terminalProtocol)
-                                    }
-                                }
-                                .labelsHidden()
-                                .pickerStyle(.segmented)
-                                .frame(maxWidth: 320)
-
-                                if profileBinding.wrappedValue.sshTerminalProtocol == .mosh {
-                                    HStack(spacing: 10) {
-                                        TextField(
-                                            "UDP-порт: 0 — автоматически",
-                                            value: profileBinding.moshUDPPort,
-                                            format: .number.grouping(.never)
-                                        )
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 210)
-                                        TextField(
-                                            "Путь к mosh-server (необязательно)",
-                                            text: profileBinding.moshServerPath
-                                        )
-                                        .textFieldStyle(.roundedBorder)
-                                    }
-                                    Text(
-                                        "Mosh использует SSH для входа, затем UDP для устойчивой Terminal-сессии. "
-                                            + "На Mac и сервере должен быть установлен Mosh; SFTP и туннели остаются на SSH."
-                                    )
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        GridRow {
-                            Text("Операционная система")
-                            HStack(spacing: 9) {
-                                let style = ProfileOperatingSystemStyle.resolve(for: profile)
-                                Image(systemName: style.systemImage)
-                                    .foregroundStyle(style.colors.first ?? Color.secondary)
-                                    .frame(width: 20)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(
-                                        profile.detectedOperatingSystem.isEmpty
-                                            ? "Определится после первого SSH-подключения"
-                                            : profile.detectedOperatingSystem
-                                    )
-                                    .foregroundStyle(
-                                        profile.detectedOperatingSystem.isEmpty
-                                            ? Color.secondary
-                                            : Color.primary
-                                    )
-                                    if let date = profile.operatingSystemDetectedAt {
-                                        Text("Обновлено \(date.formatted(date: .abbreviated, time: .shortened))")
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    endpointSpecificSettings
                 }
                 .padding(8)
             }
@@ -2555,6 +2570,214 @@ struct ContentView: View {
                         }
                     }
                     .padding(8)
+                }
+            }
+        }
+    }
+
+    private var connectionTypeDescription: String {
+        switch profile.connectionType {
+        case .rdp:
+            UpdateLocalization.text(
+                ru: "Удалённый рабочий стол через встроенный FreeRDP.",
+                en: "Remote desktop through the bundled FreeRDP client."
+            )
+        case .ssh:
+            UpdateLocalization.text(
+                ru: "Terminal, SFTP и туннели используют системный OpenSSH macOS.",
+                en: "Terminal, SFTP, and forwarding use the macOS OpenSSH client."
+            )
+        case .telnet:
+            UpdateLocalization.text(
+                ru: "Telnet передаёт весь трафик без шифрования. Используйте только в доверенной сети.",
+                en: "Telnet sends all traffic without encryption. Use it only on a trusted network."
+            )
+        case .serial:
+            UpdateLocalization.text(
+                ru: "Serial подключается напрямую к локальному устройству /dev/cu.*.",
+                en: "Serial connects directly to a local /dev/cu.* device."
+            )
+        }
+    }
+
+    private var endpointGroupTitle: String {
+        switch profile.connectionType {
+        case .rdp: UpdateLocalization.text(ru: "Компьютер", en: "Computer")
+        case .ssh: UpdateLocalization.text(ru: "SSH-сервер", en: "SSH Server")
+        case .telnet: UpdateLocalization.text(ru: "Telnet-сервер", en: "Telnet Server")
+        case .serial: UpdateLocalization.text(ru: "Serial-устройство", en: "Serial Device")
+        }
+    }
+
+    private var profileNamePlaceholder: String {
+        switch profile.connectionType {
+        case .rdp: UpdateLocalization.text(ru: "Рабочий компьютер", en: "Work Computer")
+        case .ssh: UpdateLocalization.text(ru: "SSH-сервер", en: "SSH Server")
+        case .telnet: UpdateLocalization.text(ru: "Telnet-сервер", en: "Telnet Server")
+        case .serial: UpdateLocalization.text(ru: "Serial-консоль", en: "Serial Console")
+        }
+    }
+
+    private var serialDevicePaths: [String] {
+        let discovered = TerminalTransportService.availableSerialDevices()
+        guard !profile.serialDevicePath.isEmpty,
+              !discovered.contains(profile.serialDevicePath) else {
+            return discovered
+        }
+        return [profile.serialDevicePath] + discovered
+    }
+
+    @ViewBuilder
+    private var endpointSpecificSettings: some View {
+        switch profile.connectionType {
+        case .rdp:
+            GridRow {
+                Text("Hostname")
+                TextField("server.example.local", text: profileBinding.host)
+                    .textFieldStyle(.roundedBorder)
+            }
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Пользователь", en: "Username"))
+                TextField("DOMAIN\\username", text: profileBinding.username)
+                    .textFieldStyle(.roundedBorder)
+            }
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Пароль", en: "Password"))
+                credentialEditor(
+                    value: $model.password,
+                    hasSavedValue: model.selectedProfileHasSavedPassword,
+                    placeholder: "Введите пароль RDP",
+                    savedText: "RDP-пароль сохранён в Keychain",
+                    onSave: model.savePassword,
+                    onDelete: model.deleteSavedPassword
+                )
+            }
+        case .ssh:
+            sshEndpointSettings
+        case .telnet:
+            GridRow {
+                Text("Hostname")
+                TextField("router.example.local", text: profileBinding.host)
+                    .textFieldStyle(.roundedBorder)
+            }
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Порт", en: "Port"))
+                TextField("23", value: profileBinding.sshPort, format: .number)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 130, alignment: .leading)
+            }
+            GridRow {
+                Text("")
+                Label(
+                    UpdateLocalization.text(
+                        ru: "Логин и пароль вводятся непосредственно в терминале и не сохраняются.",
+                        en: "Enter the username and password directly in the terminal; they are not saved."
+                    ),
+                    systemImage: "exclamationmark.shield"
+                )
+                .font(.caption)
+                .foregroundStyle(.orange)
+            }
+        case .serial:
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Устройство", en: "Device"))
+                if serialDevicePaths.isEmpty {
+                    TextField("/dev/cu.usbserial…", text: profileBinding.serialDevicePath)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    Picker("", selection: profileBinding.serialDevicePath) {
+                        Text(UpdateLocalization.text(ru: "Выберите устройство", en: "Select a device"))
+                            .tag("")
+                        ForEach(serialDevicePaths, id: \.self) { path in
+                            Text(path).tag(path)
+                        }
+                    }
+                    .labelsHidden()
+                }
+            }
+            GridRow {
+                Text("Baud rate")
+                Picker("", selection: profileBinding.serialBaudRate) {
+                    ForEach([300, 1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200], id: \.self) {
+                        Text("\($0)").tag($0)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 160)
+            }
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Формат", en: "Format"))
+                HStack(spacing: 10) {
+                    Picker(UpdateLocalization.text(ru: "Биты данных", en: "Data bits"), selection: profileBinding.serialDataBits) {
+                        ForEach([5, 6, 7, 8], id: \.self) { Text("\($0)").tag($0) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Чётность", en: "Parity"), selection: profileBinding.serialParity) {
+                        ForEach(SerialParity.allCases) { Text($0.title).tag($0) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Стоп-биты", en: "Stop bits"), selection: profileBinding.serialStopBits) {
+                        ForEach([1, 2], id: \.self) { Text("\($0)").tag($0) }
+                    }
+                }
+            }
+            GridRow {
+                Text(UpdateLocalization.text(ru: "Управление потоком", en: "Flow control"))
+                Picker("", selection: profileBinding.serialFlowControl) {
+                    ForEach(SerialFlowControl.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var sshEndpointSettings: some View {
+        GridRow {
+            Text("Hostname")
+            TextField("server.example.com или Host из ~/.ssh/config", text: profileBinding.host)
+                .textFieldStyle(.roundedBorder)
+        }
+        GridRow {
+            Text(UpdateLocalization.text(ru: "Пользователь", en: "Username"))
+            TextField("username", text: profileBinding.username)
+                .textFieldStyle(.roundedBorder)
+        }
+        GridRow {
+            Text(UpdateLocalization.text(ru: "Порт", en: "Port"))
+            TextField("22", value: profileBinding.sshPort, format: .number)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 130, alignment: .leading)
+        }
+        GridRow(alignment: .top) {
+            Text("Terminal").padding(.top, 7)
+            VStack(alignment: .leading, spacing: 9) {
+                Picker("Terminal protocol", selection: profileBinding.sshTerminalProtocol) {
+                    ForEach(SSHTerminalProtocol.allCases) { terminalProtocol in
+                        Label(terminalProtocol.title, systemImage: terminalProtocol.systemImage)
+                            .tag(terminalProtocol)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 320)
+
+                if profileBinding.wrappedValue.sshTerminalProtocol == .mosh {
+                    HStack(spacing: 10) {
+                        TextField(
+                            "UDP-порт: 0 — автоматически",
+                            value: profileBinding.moshUDPPort,
+                            format: .number.grouping(.never)
+                        )
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 210)
+                        TextField("Путь к mosh-server (необязательно)", text: profileBinding.moshServerPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    Text(
+                        "Mosh использует SSH для входа, затем UDP для устойчивой Terminal-сессии. "
+                            + "На Mac и сервере должен быть установлен Mosh; SFTP и туннели остаются на SSH."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
             }
         }
@@ -3569,7 +3792,7 @@ struct ContentView: View {
                     model.isSelectedSessionRunning
                         ? "Сессия активна"
                         : model.isSelectedSSHTerminalRunning
-                            ? "SSH-терминал активен"
+                            ? "\(profile.connectionType.title)-терминал активен"
                         : profile.connectionType == .ssh
                             ? model.selectedProfileHasActiveTunnels
                                 ? "SSH-туннель активен"
@@ -3588,7 +3811,12 @@ struct ContentView: View {
                     .buttonStyle(.link)
             }
             if model.runningSessionCount > 1 {
-                Text("\(model.runningSessionCount) активных")
+                Text(
+                    UpdateLocalization.text(
+                        ru: "\(model.runningSessionCount) активных",
+                        en: "\(model.runningSessionCount) active"
+                    )
+                )
                     .font(.caption.bold())
                     .foregroundStyle(Color.green)
                     .padding(.horizontal, 8)
@@ -3608,14 +3836,16 @@ struct ContentView: View {
                     .buttonStyle(.borderedProminent)
             } else {
                 Button {
-                    if profile.connectionType == .ssh {
+                    if profile.connectionType != .rdp {
                         selectedTab = .terminal
                     }
                     model.connect()
                 } label: {
                     Label(
-                        profile.connectionType == .ssh ? "Открыть SSH" : "Подключиться",
-                        systemImage: profile.connectionType == .ssh
+                        profile.connectionType == .rdp
+                            ? "Подключиться"
+                            : "Открыть \(profile.connectionType.title)",
+                        systemImage: profile.connectionType != .rdp
                             ? "terminal"
                             : "arrow.right.circle.fill"
                     )
@@ -3889,6 +4119,11 @@ private struct ProfileRow: View {
     }
 
     private var inactiveProfileSubtitle: String {
+        if profile.connectionType == .serial {
+            return profile.serialDevicePath.isEmpty
+                ? UpdateLocalization.text(ru: "Устройство не выбрано", en: "No device selected")
+                : profile.serialDevicePath
+        }
         guard !profile.host.isEmpty else { return "Hostname не указан" }
         guard profile.connectionType == .ssh,
               !profile.detectedOperatingSystem.isEmpty
@@ -3924,7 +4159,11 @@ private struct ProfileGridCard: View {
             Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(2)
-            Text(profile.host.isEmpty ? "Hostname не указан" : profile.host)
+            Text(
+                profile.connectionType == .serial
+                    ? (profile.serialDevicePath.isEmpty ? "Устройство не выбрано" : profile.serialDevicePath)
+                    : (profile.host.isEmpty ? "Hostname не указан" : profile.host)
+            )
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

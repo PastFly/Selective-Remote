@@ -765,7 +765,12 @@ struct SSHTerminalView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Удалённый терминал \(workspaceTitle)")
+        .accessibilityLabel(
+            UpdateLocalization.text(
+                ru: "Удалённый терминал \(workspaceTitle)",
+                en: "Remote Terminal \(workspaceTitle)"
+            )
+        )
         .alert("Переименовать вкладку", isPresented: Binding(
             get: { renameTabID != nil },
             set: { if !$0 { renameTabID = nil } }
@@ -854,11 +859,18 @@ struct SSHTerminalView: View {
 
     private var terminalPrivacyNote: some View {
         Text(
-            "SSH и Mosh используют системные клиенты; Telnet и Serial — изолированный helper внутри \(AppBrand.name). "
-                + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
-                + "Telnet не шифрует трафик. "
-                + "Несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
-                + "строки с пробелом в начале и распространёнными признаками секретов автоматически пропускаются."
+            UpdateLocalization.text(
+                ru: "SSH и Mosh используют системные клиенты; Telnet и Serial — изолированный helper внутри \(AppBrand.name). "
+                    + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
+                    + "Telnet не шифрует трафик. "
+                    + "Несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
+                    + "строки с пробелом в начале и распространёнными признаками секретов автоматически пропускаются.",
+                en: "SSH and Mosh use system clients; Telnet and Serial use an isolated helper inside \(AppBrand.name). "
+                    + "A saved SSH password is supplied to OpenSSH through protected AskPass after the selected verification; "
+                    + "Telnet traffic is not encrypted. "
+                    + "Unsaved secrets can be entered directly in the terminal. Command history is stored only on this Mac; "
+                    + "lines beginning with a space or containing common secret markers are skipped automatically."
+            )
         )
         .font(.caption)
         .foregroundStyle(.secondary)
@@ -879,7 +891,12 @@ struct SSHTerminalView: View {
                 Text("BROADCAST · ГРУППОВОЙ ВВОД")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.orange)
-                Text("Каждая клавиша отправляется во все активные Terminal-панели · \(workspace.runningSessionCount) активных")
+                Text(
+                    UpdateLocalization.text(
+                        ru: "Каждая клавиша отправляется во все активные Terminal-панели · \(workspace.runningSessionCount) активных",
+                        en: "Every keystroke is sent to all active Terminal panes · \(workspace.runningSessionCount) active"
+                    )
+                )
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.primary)
             }
@@ -1731,13 +1748,15 @@ struct SSHTerminalView: View {
                 historyContext: supportsSSHFeatures(tab.connection)
                     ? TerminalHistoryContext(
                         profileID: historyContextID(for: tab),
-                        snippetTargets: sshProfiles.map { profile in
-                            TerminalSnippetTargetOption(
-                                id: profile.id,
-                                title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
-                                subtitle: profile.host
-                            )
-                        },
+                        snippetTargets: sshProfiles
+                            .filter { $0.connectionType == .ssh }
+                            .map { profile in
+                                TerminalSnippetTargetOption(
+                                    id: profile.id,
+                                    title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
+                                    subtitle: profile.host
+                                )
+                            },
                         variables: terminalVariables(for: tab)
                     )
                     : nil,
@@ -2091,7 +2110,7 @@ struct SSHTerminalView: View {
         case .savedProfile:
             guard let profileID = connection.profileID else { return false }
             return sshProfiles.contains { profile in
-                profile.id == profileID && profile.connectionType == .ssh
+                profile.id == profileID && profile.connectionType != .rdp
             }
         case .custom:
             return connection.isValidCustomConnection
@@ -2105,7 +2124,14 @@ struct SSHTerminalView: View {
     }
 
     private func supportsSSHFeatures(_ connection: TerminalTabConnection) -> Bool {
-        connection.kind == .savedProfile || connection.kind == .custom
+        if connection.kind == .custom { return true }
+        guard connection.kind == .savedProfile,
+              let profileID = connection.profileID else {
+            return false
+        }
+        return sshProfiles.contains {
+            $0.id == profileID && $0.connectionType == .ssh
+        }
     }
 
     private func reorderTabs(_ items: [String], to targetID: UUID) -> Bool {
@@ -2271,7 +2297,7 @@ struct TerminalConnectionEditor: View {
         allowsTemporaryPassword: Bool = true,
         actionTitle: String = "Подключить",
         heading: String = "Подключение вкладки",
-        message: String = "Выберите сохранённый SSH-профиль или создайте временное SSH, Telnet либо Serial-подключение.",
+        message: String = "Выберите сохранённое подключение или создайте временное SSH, Telnet либо Serial-подключение.",
         customAuthenticationMessage: String? = nil,
         onSave: @escaping (TerminalTabConnection, String, String?) -> Void
     ) {
@@ -2323,7 +2349,7 @@ struct TerminalConnectionEditor: View {
             .pickerStyle(.segmented)
 
             if kind == .savedProfile {
-                Picker("SSH-профиль", selection: $selectedProfileID) {
+                Picker("Подключение", selection: $selectedProfileID) {
                     ForEach(profiles) { profile in
                         VStack(alignment: .leading) {
                             Text(profile.friendlyName)

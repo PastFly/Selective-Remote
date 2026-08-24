@@ -5,7 +5,8 @@
 - Mosh повторно использует способ аутентификации, ключи, host-key policy, Jump Host и Proxy профиля для SSH-bootstrap; поддерживаются автоматический или фиксированный UDP-порт и пользовательский путь к `mosh-server`.
 - Клиент Mosh обнаруживается в стандартных каталогах Homebrew/MacPorts и `PATH`; если он отсутствует, приложение показывает понятную инструкцию установки вместо изменения системы.
 - Старые профили продолжают использовать SSH, а Smart Reconnect не дублирует встроенное восстановление Mosh при смене сети.
-- «Удалённый терминал» теперь создаёт SSH, Mosh, Telnet и Serial-вкладки в одном Terminal Workspace с общими темами, History, Snippets, split/grid и Session Logs.
+- SSH Workspace теперь создаёт SSH, Mosh, Telnet и Serial-вкладки с общими темами, History, Snippets, split/grid и Session Logs.
+- Telnet и Serial теперь также создаются как обычные сохраняемые профили в разделе «Подключения»; пункт sidebar снова называется «SSH», а затронутые экраны получили полный английский перевод.
 - Telnet использует встроенный минимальный protocol helper с обработкой IAC negotiation и явным предупреждением об отсутствии шифрования.
 - Serial автоматически показывает устройства `/dev/cu.*` и поддерживает baud rate, data bits, parity, stop bits и hardware/software flow control.
 - Terminal Transport Helper включается в DMG, проходит portable-binary проверку и подписывается вместе с приложением; существующие сохранённые workspace остаются обратно совместимыми.

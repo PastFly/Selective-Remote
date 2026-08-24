@@ -6,12 +6,18 @@ struct ProfileOperatingSystemStyle {
     let colors: [Color]
 
     static func resolve(for profile: ConnectionProfile) -> ProfileOperatingSystemStyle {
-        guard profile.connectionType == .ssh else {
+        if profile.connectionType == .rdp {
             return ProfileOperatingSystemStyle(
                 title: "Windows / RDP",
                 systemImage: "desktopcomputer",
                 colors: [.blue, .indigo]
             )
+        }
+        if profile.connectionType == .telnet {
+            return .init(title: "Telnet", systemImage: "network", colors: [.orange, .red])
+        }
+        if profile.connectionType == .serial {
+            return .init(title: "Serial", systemImage: "cable.connector", colors: [.teal, .blue])
         }
 
         let identity = [
