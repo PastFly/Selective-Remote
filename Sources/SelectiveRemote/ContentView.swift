@@ -40,6 +40,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     case sftp = "SFTP"
     case forwarding = "Forwarding"
     case snippets = "Сниппеты"
+    case sessionLogs = "Session Logs"
     case activity = "Журнал"
     case diagnostics = "Диагностика"
     case keychain = "Keychain"
@@ -51,6 +52,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
         case .snippets: "curlybraces"
+        case .sessionLogs: "doc.text.magnifyingglass"
         case .activity: "clock.arrow.circlepath"
         case .ssh: "network"
         case .terminal: "terminal"
@@ -781,6 +783,8 @@ struct ContentView: View {
                 )
             case .activity:
                 ConnectionActivityView(store: model.connectionActivity)
+            case .sessionLogs:
+                TerminalSessionLogsView(store: model.terminalSessionLogs)
             case .ssh:
                 globalTerminalDetail
             case .terminal:

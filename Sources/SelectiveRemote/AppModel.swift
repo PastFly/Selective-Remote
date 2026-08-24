@@ -289,6 +289,7 @@ private final class ManagedRDPSession {
 final class AppModel: NSObject, ObservableObject {
     let sftpWorkspace = SFTPWorkspaceModel()
     let connectionActivity = ConnectionActivityStore()
+    let terminalSessionLogs = TerminalSessionLogStore()
     @Published private(set) var displays: [DisplayDescriptor] = []
     @Published private(set) var cameras: [CameraDeviceDescriptor] = []
     @Published var profiles: [ConnectionProfile] {
@@ -450,6 +451,8 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
     private var terminalStartedAt: [UUID: Date] = [:]
+    private var terminalLogObserverIDs: [UUID: UUID] = [:]
+    private var terminalLogRecordIDs: [UUID: UUID] = [:]
     private var rdpActivityIDs: [UUID: UUID] = [:]
     private var sshActivityIDs: [UUID: UUID] = [:]
     private var terminalReconnectTasks: [UUID: Task<Void, Never>] = [:]
@@ -3461,6 +3464,11 @@ final class AppModel: NSObject, ObservableObject {
                 )
             ) { [weak self, weak session] exitCode in
                 guard let self, let session else { return }
+                finishTerminalSessionLog(
+                    tabID: tabID,
+                    session: session,
+                    exitCode: exitCode
+                )
                 let recentOutput = session.recentOutputText()
                 let terminationRequested = session.lastTerminationWasRequested
                 terminalRuntimeSettings.removeValue(forKey: tabID)
@@ -3513,6 +3521,14 @@ final class AppModel: NSObject, ObservableObject {
                 }
                 objectWillChange.send()
             }
+            beginTerminalSessionLog(
+                tabID: tabID,
+                session: session,
+                kind: .ssh,
+                profileID: connection.kind == .savedProfile ? connection.profileID : nil,
+                profileName: settings.profileName,
+                target: "\(settings.host):\(settings.port)"
+            )
             let activityProfileID: UUID? = connection.kind == .savedProfile
                 ? connection.profileID
                 : nil
@@ -3608,12 +3624,25 @@ final class AppModel: NSObject, ObservableObject {
                 environment: environment,
                 workingDirectory: directory
             ) { [weak self] exitCode in
+                self?.finishTerminalSessionLog(
+                    tabID: tabID,
+                    session: session,
+                    exitCode: exitCode
+                )
                 self?.terminalStartedAt.removeValue(forKey: tabID)
                 self?.statusMessage = exitCode == 0
                     ? "Локальный терминал завершён"
                     : "Локальный терминал завершился с кодом \(exitCode)"
                 self?.objectWillChange.send()
             }
+            beginTerminalSessionLog(
+                tabID: tabID,
+                session: session,
+                kind: .local,
+                profileID: nil,
+                profileName: "Локальный терминал",
+                target: directory
+            )
             terminalStartedAt[tabID] = Date()
             statusMessage = "Локальный терминал запущен"
             errorMessage = nil
@@ -3621,6 +3650,46 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = error.localizedDescription
             statusMessage = "Локальный терминал не запущен"
         }
+    }
+
+    private func beginTerminalSessionLog(
+        tabID: UUID,
+        session: TerminalSessionModel,
+        kind: TerminalSessionLogKind,
+        profileID: UUID?,
+        profileName: String,
+        target: String
+    ) {
+        if let observerID = terminalLogObserverIDs.removeValue(forKey: tabID) {
+            session.removeOutputObserver(observerID)
+        }
+        terminalLogRecordIDs.removeValue(forKey: tabID)
+        guard let recordID = terminalSessionLogs.begin(
+            kind: kind,
+            profileID: profileID,
+            profileName: profileName,
+            target: target
+        ) else { return }
+        terminalLogRecordIDs[tabID] = recordID
+        terminalLogObserverIDs[tabID] = session.addOutputObserver { [weak self] data in
+            self?.terminalSessionLogs.append(data, to: recordID)
+        }
+    }
+
+    private func finishTerminalSessionLog(
+        tabID: UUID,
+        session: TerminalSessionModel,
+        exitCode: Int32
+    ) {
+        if let observerID = terminalLogObserverIDs.removeValue(forKey: tabID) {
+            session.removeOutputObserver(observerID)
+        }
+        guard let recordID = terminalLogRecordIDs.removeValue(forKey: tabID) else { return }
+        terminalSessionLogs.finish(
+            recordID,
+            exitCode: exitCode,
+            requested: session.lastTerminationWasRequested
+        )
     }
 
     @discardableResult
