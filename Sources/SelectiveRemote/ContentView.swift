@@ -35,7 +35,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
-    case ssh = "SSH"
+    case ssh = "Удалённый терминал"
     case terminal = "Терминал"
     case sftp = "SFTP"
     case forwarding = "Forwarding"
@@ -1990,9 +1990,9 @@ struct ContentView: View {
             if !terminalFocusMode {
                 HStack {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("SSH")
+                        Text("Удалённый терминал")
                             .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("Независимые SSH-сессии, вкладки и разделённые панели")
+                        Text("SSH, Mosh, Telnet и Serial · вкладки и разделённые панели")
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -2133,7 +2133,7 @@ struct ContentView: View {
             hasInstallableKey: model.selectedSSHKey?.publicKeyPath != nil,
             isFocusMode: terminalFocusMode,
             connect: { tab, temporaryPassword in
-                model.connectSSHTerminal(
+                model.connectTerminal(
                     connection: tab.connection,
                     tabID: tab.id,
                     session: tab.session,
@@ -2182,14 +2182,14 @@ struct ContentView: View {
             workspace: model.globalTerminalWorkspace(),
             appearance: terminalAppearance,
             appAppearance: appAppearance,
-            workspaceTitle: "SSH",
+            workspaceTitle: "Удалённый терминал",
             defaultProfileID: profiles.first?.id,
             locksPrimaryConnection: false,
             sshProfiles: profiles,
             hasInstallableKey: false,
             isFocusMode: terminalFocusMode,
             connect: { tab, temporaryPassword in
-                model.connectSSHTerminal(
+                model.connectTerminal(
                     connection: tab.connection,
                     tabID: tab.id,
                     session: tab.session,

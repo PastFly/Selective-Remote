@@ -6,6 +6,8 @@ import SwiftUI
 enum TerminalSessionLogKind: String, Codable, CaseIterable, Identifiable {
     case ssh = "SSH"
     case mosh = "Mosh"
+    case telnet = "Telnet"
+    case serial = "Serial"
     case local = "Local"
 
     var id: String { rawValue }
@@ -14,6 +16,8 @@ enum TerminalSessionLogKind: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .ssh: "SSH"
         case .mosh: "Mosh"
+        case .telnet: "Telnet"
+        case .serial: "Serial"
         case .local: "Локальный"
         }
     }
@@ -22,6 +26,8 @@ enum TerminalSessionLogKind: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .ssh: "network"
         case .mosh: "antenna.radiowaves.left.and.right"
+        case .telnet: "network"
+        case .serial: "cable.connector"
         case .local: "terminal"
         }
     }

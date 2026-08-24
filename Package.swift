@@ -6,7 +6,11 @@ let package = Package(
     name: "SelectiveRemote",
     platforms: [.macOS(.v14)],
     products: [
-        .executable(name: "SelectiveRemote", targets: ["SelectiveRemote"])
+        .executable(name: "SelectiveRemote", targets: ["SelectiveRemote"]),
+        .executable(
+            name: "SelectiveRemoteTerminalBridge",
+            targets: ["SelectiveRemoteTerminalBridge"]
+        )
     ],
     targets: [
         .target(
@@ -19,6 +23,10 @@ let package = Package(
             dependencies: ["PTYBridge"],
             path: "Sources/SelectiveRemote",
             exclude: ["TerminalResources"]
+        ),
+        .executableTarget(
+            name: "SelectiveRemoteTerminalBridge",
+            path: "Sources/SelectiveRemoteTerminalBridge"
         ),
         .testTarget(
             name: "SelectiveRemoteTests",

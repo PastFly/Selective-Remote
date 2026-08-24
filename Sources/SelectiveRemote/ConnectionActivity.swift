@@ -6,6 +6,8 @@ enum ConnectionActivityKind: String, Codable, CaseIterable, Identifiable {
     case rdp = "RDP"
     case ssh = "SSH"
     case mosh = "Mosh"
+    case telnet = "Telnet"
+    case serial = "Serial"
 
     var id: String { rawValue }
 
@@ -14,6 +16,8 @@ enum ConnectionActivityKind: String, Codable, CaseIterable, Identifiable {
         case .rdp: "desktopcomputer"
         case .ssh: "terminal"
         case .mosh: "antenna.radiowaves.left.and.right"
+        case .telnet: "network"
+        case .serial: "cable.connector"
         }
     }
 }
@@ -244,7 +248,7 @@ struct ConnectionActivityView: View {
                 } description: {
                     Text(
                         store.records.isEmpty
-                            ? "Здесь появятся безопасные метаданные RDP-, SSH- и Mosh-подключений."
+                            ? "Здесь появятся безопасные метаданные RDP-, SSH-, Mosh-, Telnet- и Serial-подключений."
                             : "Измените поиск или фильтры."
                     )
                 }

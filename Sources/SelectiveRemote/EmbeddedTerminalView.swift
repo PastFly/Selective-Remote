@@ -762,8 +762,9 @@ struct SSHTerminalView: View {
                 }
 
             Text(
-                "Соединение выполняет системный /usr/bin/ssh внутри \(AppBrand.name). "
+                "SSH и Mosh используют системные клиенты; Telnet и Serial — изолированный helper внутри \(AppBrand.name). "
                     + "Сохранённый SSH-пароль передаётся OpenSSH через защищённый AskPass после выбранной проверки; "
+                    + "Telnet не шифрует трафик. "
                     + "несохранённые секреты можно ввести непосредственно в терминале. История команд хранится только на этом Mac; "
                     + "строки с пробелом в начале и распространёнными признаками секретов "
                     + "автоматически пропускаются."
@@ -773,7 +774,7 @@ struct SSHTerminalView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("SSH-терминал \(workspaceTitle)")
+        .accessibilityLabel("Удалённый терминал \(workspaceTitle)")
         .alert("Переименовать вкладку", isPresented: Binding(
             get: { renameTabID != nil },
             set: { if !$0 { renameTabID = nil } }
@@ -840,6 +841,10 @@ struct SSHTerminalView: View {
                 invalidateRemoteContext(for: tab.id)
                 return
             }
+            guard supportsSSHFeatures(tab.connection) else {
+                invalidateRemoteContext(for: tab.id)
+                return
+            }
             guard workspace.remoteContext(for: tab.id)?.refreshedAt == nil else { return }
             do {
                 try await Task.sleep(for: .seconds(1))
@@ -871,7 +876,7 @@ struct SSHTerminalView: View {
                 Text("BROADCAST · ГРУППОВОЙ ВВОД")
                     .font(.headline.weight(.bold))
                     .foregroundStyle(.orange)
-                Text("Каждая клавиша отправляется во все активные SSH-панели · \(workspace.runningSessionCount) активных")
+                Text("Каждая клавиша отправляется во все активные Terminal-панели · \(workspace.runningSessionCount) активных")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.primary)
             }
@@ -987,7 +992,7 @@ struct SSHTerminalView: View {
                     .font(.title3)
             }
             .buttonStyle(.bordered)
-            .disabled(!tab.session.isRunning)
+            .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
             .help("Команды сервера")
 
             Button {
@@ -1019,7 +1024,7 @@ struct SSHTerminalView: View {
             .buttonStyle(.bordered)
             .help(locale.identifier.lowercased().hasPrefix("en")
                 ? "Appearance for this terminal"
-                : "Индивидуальное оформление этой SSH-вкладки")
+                : "Индивидуальное оформление этой Terminal-вкладки")
             .popover(isPresented: $showsPaneAppearance, arrowEdge: .bottom) {
                 TerminalAppearanceView(
                     store: tab.appearance,
@@ -1058,11 +1063,15 @@ struct SSHTerminalView: View {
                         refreshRemoteContext(for: tab.id)
                     }
                 }
-                .disabled(!tab.session.isRunning)
+                .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
                 Button("Обновить контекст сервера", systemImage: "arrow.clockwise") { refreshRemoteContext() }
-                    .disabled(!tab.session.isRunning || refreshingContextTabIDs.contains(workspace.selectedTabID))
+                    .disabled(
+                        !tab.session.isRunning
+                            || !supportsSSHFeatures(tab.connection)
+                            || refreshingContextTabIDs.contains(workspace.selectedTabID)
+                    )
                 Button("Открыть в SFTP", systemImage: "folder.badge.gearshape") { openSFTP(tab) }
-                    .disabled(workspace.isEmptyState)
+                    .disabled(workspace.isEmptyState || !supportsSSHFeatures(tab.connection))
                 Divider()
                 Button(
                     broadcastsInput ? "Выключить групповой ввод" : "Включить групповой ввод",
@@ -1344,7 +1353,7 @@ struct SSHTerminalView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Действия терминала")
                 .font(.title2.weight(.semibold))
-            Button("Новое SSH-подключение", systemImage: "plus") {
+            Button("Новое подключение", systemImage: "plus") {
                 showsCommandPalette = false
                 connectionEditorRequest = TerminalConnectionEditorRequest(
                     tabID: nil,
@@ -1361,7 +1370,7 @@ struct SSHTerminalView: View {
                 showsCommandPalette = false
                 openSFTP(workspace.selectedTab)
             }
-            .disabled(workspace.isEmptyState)
+            .disabled(workspace.isEmptyState || !supportsSSHFeatures(workspace.selectedTab.connection))
             Button("Команды сервера", systemImage: "server.rack") {
                 showsCommandPalette = false
                 showsServerCommands = true
@@ -1369,7 +1378,10 @@ struct SSHTerminalView: View {
                     refreshRemoteContext()
                 }
             }
-            .disabled(!workspace.selectedTab.session.isRunning)
+            .disabled(
+                !workspace.selectedTab.session.isRunning
+                    || !supportsSSHFeatures(workspace.selectedTab.connection)
+            )
             Button("Рабочие пространства", systemImage: "rectangle.3.group") {
                 showsCommandPalette = false
                 showsNamedWorkspaces = true
@@ -1571,7 +1583,7 @@ struct SSHTerminalView: View {
         VStack(spacing: 9) {
             Image(systemName: "rectangle.dashed")
                 .font(.system(size: 22, weight: .medium))
-            Text("Свободная SSH-панель")
+            Text("Свободная Terminal-панель")
                 .font(.caption.weight(.semibold))
         }
         .foregroundStyle(.white.opacity(0.34))
@@ -1713,17 +1725,19 @@ struct SSHTerminalView: View {
             EmbeddedTerminalWebView(
                 session: tab.session,
                 appearance: paneAppearance,
-                historyContext: TerminalHistoryContext(
-                    profileID: historyContextID(for: tab),
-                    snippetTargets: sshProfiles.map { profile in
-                        TerminalSnippetTargetOption(
-                            id: profile.id,
-                            title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
-                            subtitle: profile.host
-                        )
-                    },
-                    variables: terminalVariables(for: tab)
-                ),
+                historyContext: supportsSSHFeatures(tab.connection)
+                    ? TerminalHistoryContext(
+                        profileID: historyContextID(for: tab),
+                        snippetTargets: sshProfiles.map { profile in
+                            TerminalSnippetTargetOption(
+                                id: profile.id,
+                                title: profile.friendlyName.isEmpty ? profile.host : profile.friendlyName,
+                                subtitle: profile.host
+                            )
+                        },
+                        variables: terminalVariables(for: tab)
+                    )
+                    : nil,
                 remoteContext: workspace.remoteContext(for: tab.id) ?? .empty,
                 snippetRevision: snippetStore.snippetRevision,
                 onRemoteContextRetry: {
@@ -1960,6 +1974,13 @@ struct SSHTerminalView: View {
         case .custom:
             let host = tab.connection.normalizedHost
             return host.isEmpty ? "—" : host
+        case .telnet:
+            let host = tab.connection.normalizedHost
+            return host.isEmpty ? "Telnet" : host
+        case .serial:
+            return tab.connection.serialDevicePath.map {
+                URL(fileURLWithPath: $0).lastPathComponent
+            } ?? "Serial"
         case .local:
             return "Этот Mac"
         }
@@ -2071,9 +2092,17 @@ struct SSHTerminalView: View {
             }
         case .custom:
             return connection.isValidCustomConnection
+        case .telnet:
+            return connection.isValidTelnetConnection
+        case .serial:
+            return connection.isValidSerialConnection
         case .local:
             return true
         }
+    }
+
+    private func supportsSSHFeatures(_ connection: TerminalTabConnection) -> Bool {
+        connection.kind == .savedProfile || connection.kind == .custom
     }
 
     private func reorderTabs(_ items: [String], to targetID: UUID) -> Bool {
@@ -2092,6 +2121,9 @@ struct SSHTerminalView: View {
 
     private func refreshRemoteContext(for tabID: UUID? = nil) {
         let resolvedTabID = tabID ?? workspace.selectedTabID
+        guard let tab = workspace.tabs.first(where: { $0.id == resolvedTabID }),
+              supportsSSHFeatures(tab.connection)
+        else { return }
         invalidateRemoteContext(for: resolvedTabID)
         Task { await loadRemoteContext(forTabID: resolvedTabID) }
     }
@@ -2222,6 +2254,12 @@ struct TerminalConnectionEditor: View {
     @State private var password: String
     @State private var saveAsProfile: Bool
     @State private var profileName: String
+    @State private var serialDevicePath: String
+    @State private var serialBaudRate: Int
+    @State private var serialDataBits: Int
+    @State private var serialParity: SerialParity
+    @State private var serialStopBits: Int
+    @State private var serialFlowControl: SerialFlowControl
 
     init(
         profiles: [ConnectionProfile],
@@ -2230,7 +2268,7 @@ struct TerminalConnectionEditor: View {
         allowsTemporaryPassword: Bool = true,
         actionTitle: String = "Подключить",
         heading: String = "Подключение вкладки",
-        message: String = "Выберите сохранённый профиль или укажите временный SSH-адрес.",
+        message: String = "Выберите сохранённый SSH-профиль или создайте временное SSH, Telnet либо Serial-подключение.",
         customAuthenticationMessage: String? = nil,
         onSave: @escaping (TerminalTabConnection, String, String?) -> Void
     ) {
@@ -2252,6 +2290,12 @@ struct TerminalConnectionEditor: View {
         _password = State(initialValue: "")
         _saveAsProfile = State(initialValue: false)
         _profileName = State(initialValue: initialConnection.host)
+        _serialDevicePath = State(initialValue: initialConnection.serialDevicePath ?? "")
+        _serialBaudRate = State(initialValue: initialConnection.serialBaudRate ?? 9_600)
+        _serialDataBits = State(initialValue: initialConnection.serialDataBits ?? 8)
+        _serialParity = State(initialValue: initialConnection.serialParity ?? .none)
+        _serialStopBits = State(initialValue: initialConnection.serialStopBits ?? 1)
+        _serialFlowControl = State(initialValue: initialConnection.serialFlowControl ?? .none)
     }
 
     var body: some View {
@@ -2264,7 +2308,12 @@ struct TerminalConnectionEditor: View {
             }
 
             Picker("Источник", selection: $kind) {
-                ForEach([TerminalTabConnection.Kind.savedProfile, .custom]) { item in
+                ForEach([
+                    TerminalTabConnection.Kind.savedProfile,
+                    .custom,
+                    .telnet,
+                    .serial
+                ]) { item in
                     Text(LocalizedStringKey(item.title)).tag(item)
                 }
             }
@@ -2281,7 +2330,7 @@ struct TerminalConnectionEditor: View {
                     }
                 }
                 .pickerStyle(.menu)
-            } else {
+            } else if kind == .custom {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {
                         TextField("Hostname или IP", text: $host)
@@ -2341,6 +2390,90 @@ struct TerminalConnectionEditor: View {
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            } else if kind == .telnet {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        TextField("Hostname или IP", text: $host)
+                        TextField("Порт", value: $port, format: .number.grouping(.never))
+                            .frame(width: 120)
+                        Label(
+                            "Telnet передаёт весь трафик, включая пароль, без шифрования. Используйте только в доверенной сети.",
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Label("Telnet", systemImage: "network")
+                }
+            } else if kind == .serial {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 12) {
+                        let devices = TerminalTransportService.availableSerialDevices()
+                        if devices.isEmpty {
+                            TextField("/dev/cu.usbserial…", text: $serialDevicePath)
+                            Label(
+                                "Serial-устройства /dev/cu.* не найдены. Подключите адаптер и откройте окно снова.",
+                                systemImage: "cable.connector.slash"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        } else {
+                            Picker("Устройство", selection: $serialDevicePath) {
+                                Text("Выберите устройство…").tag("")
+                                ForEach(devices, id: \.self) { device in
+                                    Text(device).tag(device)
+                                }
+                            }
+                            .pickerStyle(.menu)
+                        }
+
+                        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
+                            GridRow {
+                                Text("Baud rate")
+                                Picker("Baud rate", selection: $serialBaudRate) {
+                                    ForEach(TerminalTransportService.supportedBaudRates, id: \.self) {
+                                        Text($0.formatted(.number.grouping(.never))).tag($0)
+                                    }
+                                }
+                                .labelsHidden()
+                            }
+                            GridRow {
+                                Text("Data bits")
+                                Picker("Data bits", selection: $serialDataBits) {
+                                    ForEach(5...8, id: \.self) { Text(String($0)).tag($0) }
+                                }
+                                .labelsHidden()
+                            }
+                            GridRow {
+                                Text("Parity")
+                                Picker("Parity", selection: $serialParity) {
+                                    ForEach(SerialParity.allCases) { Text($0.title).tag($0) }
+                                }
+                                .labelsHidden()
+                            }
+                            GridRow {
+                                Text("Stop bits")
+                                Picker("Stop bits", selection: $serialStopBits) {
+                                    Text("1").tag(1)
+                                    Text("2").tag(2)
+                                }
+                                .labelsHidden()
+                            }
+                            GridRow {
+                                Text("Flow control")
+                                Picker("Flow control", selection: $serialFlowControl) {
+                                    ForEach(SerialFlowControl.allCases) { Text($0.title).tag($0) }
+                                }
+                                .labelsHidden()
+                            }
+                        }
+                    }
+                    .padding(.top, 4)
+                } label: {
+                    Label("Serial", systemImage: "cable.connector")
+                }
             }
 
             HStack {
@@ -2358,6 +2491,10 @@ struct TerminalConnectionEditor: View {
                 profileName = value
             }
         }
+        .onChange(of: kind) { _, value in
+            if value == .telnet, port == 22 { port = 23 }
+            if value == .custom, port == 23 { port = 22 }
+        }
     }
 
     private var canSave: Bool {
@@ -2371,6 +2508,17 @@ struct TerminalConnectionEditor: View {
                 username: username,
                 port: port
             ).isValidCustomConnection
+        case .telnet:
+            return TerminalTabConnection.telnet(host: host, port: port).isValidTelnetConnection
+        case .serial:
+            return TerminalTabConnection.serial(
+                devicePath: serialDevicePath,
+                baudRate: serialBaudRate,
+                dataBits: serialDataBits,
+                parity: serialParity,
+                stopBits: serialStopBits,
+                flowControl: serialFlowControl
+            ).isValidSerialConnection
         case .local:
             return false
         }
@@ -2410,6 +2558,25 @@ struct TerminalConnectionEditor: View {
                 let title = "\(effectiveUsername)@\(connection.normalizedHost)"
                 onSave(connection, title, password.isEmpty ? nil : password)
             }
+        case .telnet:
+            let connection = TerminalTabConnection.telnet(host: host, port: port)
+            guard connection.isValidTelnetConnection else { return }
+            onSave(connection, "Telnet · \(connection.normalizedHost)", nil)
+        case .serial:
+            let connection = TerminalTabConnection.serial(
+                devicePath: serialDevicePath,
+                baudRate: serialBaudRate,
+                dataBits: serialDataBits,
+                parity: serialParity,
+                stopBits: serialStopBits,
+                flowControl: serialFlowControl
+            )
+            guard connection.isValidSerialConnection else { return }
+            onSave(
+                connection,
+                "Serial · \(URL(fileURLWithPath: serialDevicePath).lastPathComponent)",
+                nil
+            )
         case .local:
             return
         }

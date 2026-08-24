@@ -26,6 +26,7 @@ RES_DIR="$APP/Contents/Resources"
 HELPERS_DIR="$APP/Contents/Helpers"
 SSH_ASKPASS_HELPER="$HELPERS_DIR/SelectiveRemoteSSHAskPass"
 SSH_PROXY_HELPER="$HELPERS_DIR/SelectiveRemoteSSHProxy"
+TERMINAL_BRIDGE_HELPER="$HELPERS_DIR/SelectiveRemoteTerminalBridge"
 SESSION_APP="$HELPERS_DIR/Selective Remote Session.app"
 SESSION_BIN_DIR="$SESSION_APP/Contents/MacOS"
 SESSION_RES_DIR="$SESSION_APP/Contents/Resources"
@@ -203,6 +204,7 @@ mkdir -p \
     "$DMG_STAGE/.background"
 
 cp "$ROOT/.build/release/$EXECUTABLE_NAME" "$BIN_DIR/$EXECUTABLE_NAME"
+cp "$ROOT/.build/release/SelectiveRemoteTerminalBridge" "$TERMINAL_BRIDGE_HELPER"
 xcrun swiftc \
     -O \
     -parse-as-library \
@@ -1174,6 +1176,7 @@ minimum_macos_for_binary "$BIN_DIR/$EXECUTABLE_NAME" >>"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$SESSION_BIN" >>"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$SSH_ASKPASS_HELPER" >>"$MINIMUM_MACOS_VALUES"
 minimum_macos_for_binary "$SSH_PROXY_HELPER" >>"$MINIMUM_MACOS_VALUES"
+minimum_macos_for_binary "$TERMINAL_BRIDGE_HELPER" >>"$MINIMUM_MACOS_VALUES"
 while IFS= read -r framework_binary; do
     minimum_macos_for_binary "$framework_binary" >>"$MINIMUM_MACOS_VALUES"
 done < <(/usr/bin/find "$FRAMEWORKS_DIR" -type f -print | /usr/bin/sort)
@@ -1246,6 +1249,7 @@ verify_portable_binary "$PRIVACY_PREFLIGHT"
 verify_portable_binary "$BIN_DIR/$EXECUTABLE_NAME"
 verify_portable_binary "$SSH_ASKPASS_HELPER"
 verify_portable_binary "$SSH_PROXY_HELPER"
+verify_portable_binary "$TERMINAL_BRIDGE_HELPER"
 if [[ ! -f "$OPENSSL_LEGACY_MODULE" ]]; then
     echo "Ошибка: portable-пакет не содержит OpenSSL legacy provider" >&2
     exit 1
@@ -1262,6 +1266,7 @@ done < <(/usr/bin/find "$FRAMEWORKS_DIR" -type f -print | /usr/bin/sort)
 sign_code "$SESSION_APP" --entitlements "$SESSION_ENTITLEMENTS"
 sign_code "$SSH_ASKPASS_HELPER"
 sign_code "$SSH_PROXY_HELPER"
+sign_code "$TERMINAL_BRIDGE_HELPER"
 sign_code "$APP" --entitlements "$APP_ENTITLEMENTS"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
