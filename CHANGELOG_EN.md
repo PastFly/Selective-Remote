@@ -1,3 +1,15 @@
+## 0.30.0
+
+- Saved RDP, RD Gateway, SSH, and proxy passwords can now be temporarily revealed directly in profile settings.
+- Revealing a saved secret always requires macOS system authentication through Touch ID or the current user's password.
+- Revealed passwords are concealed after 30 seconds, profile changes, screen dismissal, or app deactivation; a copied password is conditionally cleared from the clipboard after the same interval.
+- Connection Center and the SSH tunnel manager now use adaptive navigation: narrow windows no longer force the list and full detail view to compete for height, and details open as a dedicated screen with a back action.
+- SFTP Workspace automatically changes its two file panes from horizontal to vertical when width is constrained and restores the classic side-by-side layout on wide windows.
+- RDP and SSH connection editors use compact, horizontally scrollable section navigation instead of a fixed side rail on narrow windows.
+- A shared adaptive breakpoint policy uses the actual workspace width and is covered for compact, regular, wide, and 8K sizes.
+- Root Snippets groups correctly sort by the latest modification of the group or any child snippet; legacy records without `updatedAt` migrate without data loss.
+- Added regression coverage for protected secret disclosure, clipboard clearing, adaptive layouts, 8K width, group sorting, and backward-compatible decoding.
+
 ## 0.29.0
 
 - Added local Session Logs for SSH and Local Terminal with search, filters, retention settings, safe redaction of known secrets, and readable wrapped output.
