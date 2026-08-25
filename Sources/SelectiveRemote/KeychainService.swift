@@ -59,7 +59,7 @@ enum KeychainError: LocalizedError {
     }
 }
 
-enum KeychainCredentialKind: String {
+enum KeychainCredentialKind: String, Sendable {
     case rdp
     case gateway
     case ssh
@@ -188,6 +188,62 @@ enum KeychainService {
             } ?? outcome.error?.localizedDescription ?? "Touch ID не подтвердил доступ."
             throw KeychainError.biometricAuthenticationFailed(message)
         }
+    }
+
+    static func revealPassword(
+        profileID: UUID,
+        kind: KeychainCredentialKind,
+        reason: String
+    ) async throws -> String? {
+        let context = LAContext()
+        context.localizedCancelTitle = UpdateLocalization.text(ru: "Отмена", en: "Cancel")
+        var availabilityError: NSError?
+        guard context.canEvaluatePolicy(
+            .deviceOwnerAuthentication,
+            error: &availabilityError
+        ) else {
+            throw KeychainError.touchIDUnavailable(
+                availabilityError?.localizedDescription
+                    ?? UpdateLocalization.text(
+                        ru: "Системная аутентификация macOS недоступна.",
+                        en: "macOS system authentication is unavailable."
+                    )
+            )
+        }
+
+        do {
+            let succeeded = try await context.evaluatePolicy(
+                .deviceOwnerAuthentication,
+                localizedReason: reason
+            )
+            guard succeeded else {
+                throw KeychainError.biometricAuthenticationFailed(
+                    UpdateLocalization.text(
+                        ru: "Системная аутентификация не подтверждена. Пароль не раскрыт.",
+                        en: "System authentication was not confirmed. The password was not revealed."
+                    )
+                )
+            }
+        } catch let error as LAError {
+            let message: String
+            switch error.code {
+            case .userCancel, .appCancel, .systemCancel:
+                message = UpdateLocalization.text(
+                    ru: "Системная аутентификация отменена. Пароль не раскрыт.",
+                    en: "System authentication was cancelled. The password was not revealed."
+                )
+            case .biometryLockout:
+                message = UpdateLocalization.text(
+                    ru: "Touch ID временно заблокирован. Используйте пароль macOS или повторите позже.",
+                    en: "Touch ID is temporarily locked. Use your macOS password or try again later."
+                )
+            default:
+                message = error.localizedDescription
+            }
+            throw KeychainError.biometricAuthenticationFailed(message)
+        }
+
+        return try readPassword(profileID: profileID, kind: kind)
     }
 
     static func passwordExists(reference: KeychainCredentialReference) -> Bool {

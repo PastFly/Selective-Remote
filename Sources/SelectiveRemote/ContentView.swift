@@ -2561,6 +2561,7 @@ struct ContentView: View {
                             Text("Пароль")
                             credentialEditor(
                                 value: $model.gatewayPassword,
+                                kind: .gateway,
                                 hasSavedValue: model.selectedProfileHasSavedGatewayPassword,
                                 placeholder: "Отдельный пароль RD Gateway",
                                 savedText: "Пароль RD Gateway сохранён отдельно в Keychain",
@@ -2645,6 +2646,7 @@ struct ContentView: View {
                 Text(UpdateLocalization.text(ru: "Пароль", en: "Password"))
                 credentialEditor(
                     value: $model.password,
+                    kind: .rdp,
                     hasSavedValue: model.selectedProfileHasSavedPassword,
                     placeholder: "Введите пароль RDP",
                     savedText: "RDP-пароль сохранён в Keychain",
@@ -2877,13 +2879,14 @@ struct ContentView: View {
                             }
                         }
                         HStack(spacing: 8) {
-                            SecureField(
-                                model.selectedProfileHasSavedSSHPassword
-                                    ? "Сохранён — введите новый для замены"
-                                    : "Пароль SSH-сервера",
-                                text: $model.sshPassword
+                            CredentialDisclosureField(
+                                draftValue: $model.sshPassword,
+                                hasSavedValue: model.selectedProfileHasSavedSSHPassword,
+                                placeholder: "Пароль SSH-сервера",
+                                savedPlaceholder: "Сохранён — введите новый для замены",
+                                identity: "\(profile.id.uuidString):ssh",
+                                reveal: { await model.revealSelectedCredential(kind: .ssh) }
                             )
-                            .textFieldStyle(.roundedBorder)
                             Button("Сохранить") { model.saveSSHPassword() }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(model.sshPassword.isEmpty)
@@ -3114,13 +3117,14 @@ struct ContentView: View {
                     TextField("Имя пользователя прокси (необязательно)", text: profileBinding.sshProxyUsername)
                         .textFieldStyle(.roundedBorder)
                     HStack(spacing: 10) {
-                        SecureField(
-                            model.selectedProfileHasSavedProxyPassword
-                                ? "Сохранён в Keychain — введите новый для замены"
-                                : "Пароль прокси (необязательно)",
-                            text: $model.proxyPassword
+                        CredentialDisclosureField(
+                            draftValue: $model.proxyPassword,
+                            hasSavedValue: model.selectedProfileHasSavedProxyPassword,
+                            placeholder: "Пароль прокси (необязательно)",
+                            savedPlaceholder: "Сохранён в Keychain — введите новый для замены",
+                            identity: "\(profile.id.uuidString):proxy",
+                            reveal: { await model.revealSelectedCredential(kind: .proxy) }
                         )
-                        .textFieldStyle(.roundedBorder)
                         Button("Сохранить") { model.saveProxyPassword() }
                             .disabled(model.proxyPassword.isEmpty)
                         if model.selectedProfileHasSavedProxyPassword {
@@ -3208,6 +3212,7 @@ struct ContentView: View {
 
     private func credentialEditor(
         value: Binding<String>,
+        kind: KeychainCredentialKind,
         hasSavedValue: Bool,
         placeholder: String,
         savedText: String,
@@ -3216,11 +3221,14 @@ struct ContentView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                SecureField(
-                    hasSavedValue ? "Пустое поле использует сохранённый пароль" : placeholder,
-                    text: value
+                CredentialDisclosureField(
+                    draftValue: value,
+                    hasSavedValue: hasSavedValue,
+                    placeholder: placeholder,
+                    savedPlaceholder: "Пустое поле использует сохранённый пароль",
+                    identity: "\(profile.id.uuidString):\(kind.rawValue)",
+                    reveal: { await model.revealSelectedCredential(kind: kind) }
                 )
-                .textFieldStyle(.roundedBorder)
                 Button("Сохранить", action: onSave)
                     .disabled(value.wrappedValue.isEmpty)
                 Button("Удалить", role: .destructive, action: onDelete)
