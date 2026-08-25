@@ -2225,6 +2225,40 @@ final class AppModel: NSObject, ObservableObject {
         deleteCredential(kind: .gateway)
     }
 
+    @MainActor
+    func revealSelectedCredential(kind: KeychainCredentialKind) async -> String? {
+        let profileID = selectedProfile.id
+        let profileName = selectedProfile.friendlyName
+        do {
+            let value = try await KeychainService.revealPassword(
+                profileID: profileID,
+                kind: kind,
+                reason: UpdateLocalization.text(
+                    ru: "Показать сохранённый пароль для «\(profileName)»",
+                    en: "Reveal the saved password for “\(profileName)”"
+                )
+            )
+            guard selectedProfile.id == profileID else { return nil }
+            guard let value, !value.isEmpty else {
+                errorMessage = UpdateLocalization.text(
+                    ru: "Сохранённый пароль не найден в Keychain.",
+                    en: "The saved password was not found in Keychain."
+                )
+                return nil
+            }
+            statusMessage = UpdateLocalization.text(
+                ru: "Пароль показан на 30 секунд",
+                en: "Password revealed for 30 seconds"
+            )
+            errorMessage = nil
+            return value
+        } catch {
+            guard selectedProfile.id == profileID else { return nil }
+            errorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
     func saveSSHPassword() {
         saveCredential(
             sshPassword,

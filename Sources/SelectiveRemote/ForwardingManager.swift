@@ -311,6 +311,7 @@ struct ForwardingManagerView: View {
     @State private var filter = ForwardingManagerFilter.all
     @State private var searchText = ""
     @State private var inspectorTab = ForwardingInspectorTab.overview
+    @State private var compactDetailPresented = false
     @State private var connectionRequest: ForwardingConnectionRequest?
     @State private var passwordInputs: [UUID: String] = [:]
     @State private var logText = ""
@@ -327,25 +328,44 @@ struct ForwardingManagerView: View {
         TimelineView(.periodic(from: .now, by: 3)) { timeline in
             let snapshot = makeSnapshot()
             let items = filteredItems(snapshot.items)
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 16) {
-                    header
-                    summary(snapshot)
-                    toolbar(items: items)
-                    tunnelTable(items: items, now: timeline.date)
-                    footer(items: items)
+            GeometryReader { proxy in
+                let compact = AdaptiveWorkspaceLayout.usesDetailNavigation(
+                    width: proxy.size.width
+                )
+                if compact {
+                    if compactDetailPresented {
+                        compactInspector(
+                            item: selectedItem(from: items),
+                            now: timeline.date
+                        )
+                        .id(selectedItemID)
+                    } else {
+                        managerContent(
+                            snapshot: snapshot,
+                            items: items,
+                            now: timeline.date,
+                            compact: true
+                        )
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        managerContent(
+                            snapshot: snapshot,
+                            items: items,
+                            now: timeline.date,
+                            compact: false
+                        )
+
+                        Divider()
+
+                        inspector(item: selectedItem(from: items), now: timeline.date)
+                            .frame(minWidth: 340, idealWidth: 400, maxWidth: 460)
+                            .id(selectedItemID)
+                    }
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                Divider()
-
-                inspector(item: selectedItem(from: items), now: timeline.date)
-                    .frame(minWidth: 380, idealWidth: 430, maxWidth: 500)
-                    .id(selectedItemID)
-                    .transition(.opacity)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             }
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             .onAppear {
                 normalizeSelection(items: items)
                 refreshLog(for: selectedItem(from: items))
@@ -381,6 +401,52 @@ struct ForwardingManagerView: View {
         }
     }
 
+    private func compactInspector(
+        item: ForwardingManagerItem?,
+        now: Date
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Назад к туннелям", systemImage: "chevron.left") {
+                    compactDetailPresented = false
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+            inspector(item: item, now: now)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func managerContent(
+        snapshot: ForwardingManagerSnapshot,
+        items: [ForwardingManagerItem],
+        now: Date,
+        compact: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
+            header
+            summary(snapshot, compact: compact)
+            if compact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    toolbar(items: items)
+                        .frame(minWidth: 760)
+                }
+                compactTunnelList(items: items, now: now)
+            } else {
+                toolbar(items: items)
+                tunnelTable(items: items, now: now)
+            }
+            footer(items: items)
+        }
+        .padding(compact ? 16 : 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -388,6 +454,8 @@ struct ForwardingManagerView: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("Менеджер SSH-туннелей · Local / Remote / Dynamic")
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             newTunnelMenu
@@ -441,9 +509,12 @@ struct ForwardingManagerView: View {
         .buttonStyle(.borderedProminent)
     }
 
-    private func summary(_ snapshot: ForwardingManagerSnapshot) -> some View {
+    private func summary(
+        _ snapshot: ForwardingManagerSnapshot,
+        compact: Bool
+    ) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 155), spacing: 12)],
+            columns: [GridItem(.adaptive(minimum: compact ? 125 : 155), spacing: 12)],
             alignment: .leading,
             spacing: 12
         ) {
@@ -611,6 +682,71 @@ struct ForwardingManagerView: View {
             .frame(width: 230)
         }
         .controlSize(.small)
+    }
+
+    private func compactTunnelList(
+        items: [ForwardingManagerItem],
+        now: Date
+    ) -> some View {
+        List(items, selection: $selectedItemID) { item in
+            HStack(spacing: 10) {
+                Image(systemName: item.rule.kind.systemImage)
+                    .foregroundStyle(item.ownership.color)
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.rule.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(item.localAddress + " → " + item.destination)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(item.state.color)
+                            .frame(width: 7, height: 7)
+                        Text(LocalizedStringKey(item.state.title))
+                            .font(.caption)
+                    }
+                    Text(item.uptimeText(now: now))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .tag(item.id)
+            .onTapGesture {
+                selectForAction(item)
+                compactDetailPresented = true
+            }
+            .simultaneousGesture(
+                TapGesture(count: 2).onEnded {
+                    selectForAction(item)
+                    compactDetailPresented = true
+                    if item.state.canStart {
+                        start(item)
+                    }
+                }
+            )
+            .contextMenu {
+                forwardingContextMenu(item)
+            }
+        }
+        .listStyle(.inset)
+        .frame(minHeight: 220)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
+                .allowsHitTesting(false)
+        }
     }
 
     private func tunnelTable(items: [ForwardingManagerItem], now: Date) -> some View {

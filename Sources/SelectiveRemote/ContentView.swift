@@ -955,27 +955,45 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         sshWorkspaceHeader
 
-                        HStack(alignment: .top, spacing: 16) {
-                            sshSectionRail
-                                .frame(width: 205)
-
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 18) {
-                                    sshSectionHeading
-                                    sshQuickFacts
-                                    selectedSettingsContent
+                        if AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(
+                            width: proxy.size.width
+                        ) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                compactProfileSectionPicker
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        sshSectionHeading
+                                        sshQuickFacts
+                                        selectedSettingsContent
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.bottom, 20)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.bottom, 20)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                            if proxy.size.width >= 1120 {
-                                sshProfileInspector
-                                    .frame(width: 270)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        } else {
+                            HStack(alignment: .top, spacing: 16) {
+                                sshSectionRail
+                                    .frame(width: 205)
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        sshSectionHeading
+                                        sshQuickFacts
+                                        selectedSettingsContent
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.bottom, 20)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                if AdaptiveWorkspaceLayout.showsProfileInspector(
+                                    width: proxy.size.width
+                                ) {
+                                    sshProfileInspector
+                                        .frame(width: 270)
+                                }
                             }
+                            .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                         }
-                        .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
@@ -1506,33 +1524,78 @@ struct ContentView: View {
     }
 
 
+    private var compactProfileSectionPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(availableTabs) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(
+                                selectedTab == tab ? Color.accentColor : Color.primary
+                            )
+                            .background(
+                                selectedTab == tab
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var rdpProfileWorkspace: some View {
         VStack(spacing: 0) {
             GeometryReader { proxy in
                 VStack(alignment: .leading, spacing: 18) {
                     rdpWorkspaceHeader
 
-                    HStack(alignment: .top, spacing: 16) {
-                        rdpSectionRail
-                            .frame(width: 205)
-
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 18) {
-                                rdpSectionHeading
-                                rdpQuickFacts
-                                selectedSettingsContent
+                    if AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(
+                        width: proxy.size.width
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            compactProfileSectionPicker
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.bottom, 20)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        if proxy.size.width >= 1120 {
-                            rdpProfileInspector
-                                .frame(width: 270)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        HStack(alignment: .top, spacing: 16) {
+                            rdpSectionRail
+                                .frame(width: 205)
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if AdaptiveWorkspaceLayout.showsProfileInspector(
+                                width: proxy.size.width
+                            ) {
+                                rdpProfileInspector
+                                    .frame(width: 270)
+                            }
                         }
+                        .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                     }
-                    .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 24)
@@ -2561,6 +2624,7 @@ struct ContentView: View {
                             Text("Пароль")
                             credentialEditor(
                                 value: $model.gatewayPassword,
+                                kind: .gateway,
                                 hasSavedValue: model.selectedProfileHasSavedGatewayPassword,
                                 placeholder: "Отдельный пароль RD Gateway",
                                 savedText: "Пароль RD Gateway сохранён отдельно в Keychain",
@@ -2645,6 +2709,7 @@ struct ContentView: View {
                 Text(UpdateLocalization.text(ru: "Пароль", en: "Password"))
                 credentialEditor(
                     value: $model.password,
+                    kind: .rdp,
                     hasSavedValue: model.selectedProfileHasSavedPassword,
                     placeholder: "Введите пароль RDP",
                     savedText: "RDP-пароль сохранён в Keychain",
@@ -2877,13 +2942,14 @@ struct ContentView: View {
                             }
                         }
                         HStack(spacing: 8) {
-                            SecureField(
-                                model.selectedProfileHasSavedSSHPassword
-                                    ? "Сохранён — введите новый для замены"
-                                    : "Пароль SSH-сервера",
-                                text: $model.sshPassword
+                            CredentialDisclosureField(
+                                draftValue: $model.sshPassword,
+                                hasSavedValue: model.selectedProfileHasSavedSSHPassword,
+                                placeholder: "Пароль SSH-сервера",
+                                savedPlaceholder: "Сохранён — введите новый для замены",
+                                identity: "\(profile.id.uuidString):ssh",
+                                reveal: { await model.revealSelectedCredential(kind: .ssh) }
                             )
-                            .textFieldStyle(.roundedBorder)
                             Button("Сохранить") { model.saveSSHPassword() }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(model.sshPassword.isEmpty)
@@ -3114,13 +3180,14 @@ struct ContentView: View {
                     TextField("Имя пользователя прокси (необязательно)", text: profileBinding.sshProxyUsername)
                         .textFieldStyle(.roundedBorder)
                     HStack(spacing: 10) {
-                        SecureField(
-                            model.selectedProfileHasSavedProxyPassword
-                                ? "Сохранён в Keychain — введите новый для замены"
-                                : "Пароль прокси (необязательно)",
-                            text: $model.proxyPassword
+                        CredentialDisclosureField(
+                            draftValue: $model.proxyPassword,
+                            hasSavedValue: model.selectedProfileHasSavedProxyPassword,
+                            placeholder: "Пароль прокси (необязательно)",
+                            savedPlaceholder: "Сохранён в Keychain — введите новый для замены",
+                            identity: "\(profile.id.uuidString):proxy",
+                            reveal: { await model.revealSelectedCredential(kind: .proxy) }
                         )
-                        .textFieldStyle(.roundedBorder)
                         Button("Сохранить") { model.saveProxyPassword() }
                             .disabled(model.proxyPassword.isEmpty)
                         if model.selectedProfileHasSavedProxyPassword {
@@ -3208,6 +3275,7 @@ struct ContentView: View {
 
     private func credentialEditor(
         value: Binding<String>,
+        kind: KeychainCredentialKind,
         hasSavedValue: Bool,
         placeholder: String,
         savedText: String,
@@ -3216,11 +3284,14 @@ struct ContentView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
-                SecureField(
-                    hasSavedValue ? "Пустое поле использует сохранённый пароль" : placeholder,
-                    text: value
+                CredentialDisclosureField(
+                    draftValue: value,
+                    hasSavedValue: hasSavedValue,
+                    placeholder: placeholder,
+                    savedPlaceholder: "Пустое поле использует сохранённый пароль",
+                    identity: "\(profile.id.uuidString):\(kind.rawValue)",
+                    reveal: { await model.revealSelectedCredential(kind: kind) }
                 )
-                .textFieldStyle(.roundedBorder)
                 Button("Сохранить", action: onSave)
                     .disabled(value.wrappedValue.isEmpty)
                 Button("Удалить", role: .destructive, action: onDelete)

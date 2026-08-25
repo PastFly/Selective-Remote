@@ -15,6 +15,44 @@ private enum SnippetLibrarySort: String, CaseIterable, Identifiable {
     var title: String { self == .name ? "Имя" : "Последнее изменение" }
 }
 
+enum TerminalSnippetRootGroupSorter {
+    static func sorted(
+        _ groups: [TerminalSnippetGroup],
+        templates: [TerminalCommandTemplate],
+        byModifiedDate: Bool,
+        ascending: Bool
+    ) -> [TerminalSnippetGroup] {
+        let templatesByGroup = Dictionary(grouping: templates, by: \.groupID)
+        return groups.sorted { lhs, rhs in
+            let comparison: ComparisonResult
+            if byModifiedDate {
+                let lhsDate = modifiedAt(lhs, templates: templatesByGroup[lhs.id] ?? [])
+                let rhsDate = modifiedAt(rhs, templates: templatesByGroup[rhs.id] ?? [])
+                comparison = lhsDate == rhsDate
+                    ? lhs.name.localizedStandardCompare(rhs.name)
+                    : (lhsDate < rhsDate ? .orderedAscending : .orderedDescending)
+            } else {
+                comparison = lhs.name.localizedStandardCompare(rhs.name)
+            }
+            if comparison == .orderedSame {
+                return ascending
+                    ? lhs.id.uuidString < rhs.id.uuidString
+                    : lhs.id.uuidString > rhs.id.uuidString
+            }
+            return ascending
+                ? comparison == .orderedAscending
+                : comparison == .orderedDescending
+        }
+    }
+
+    static func modifiedAt(
+        _ group: TerminalSnippetGroup,
+        templates: [TerminalCommandTemplate]
+    ) -> Date {
+        max(group.updatedAt, templates.map(\.updatedAt).max() ?? group.updatedAt)
+    }
+}
+
 struct TerminalSnippetsLibraryView: View {
     @ObservedObject var store: TerminalCommandHistoryStore
     @ObservedObject var model: AppModel
@@ -605,11 +643,12 @@ struct TerminalSnippetsLibraryView: View {
     }
 
     private var sortedGroups: [TerminalSnippetGroup] {
-        let groups = store.snippetGroups()
-        return groups.sorted {
-            let result = $0.name.localizedStandardCompare($1.name)
-            return sortAscending ? result == .orderedAscending : result == .orderedDescending
-        }
+        TerminalSnippetRootGroupSorter.sorted(
+            store.snippetGroups(),
+            templates: store.templates(),
+            byModifiedDate: SnippetLibrarySort(rawValue: sortRaw) == .modified,
+            ascending: sortAscending
+        )
     }
 
     private var ungroupedSnippets: [TerminalCommandTemplate] {
