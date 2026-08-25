@@ -334,6 +334,7 @@ struct ConnectionCenterView: View {
     @State private var filter = ConnectionCenterPreferences.restoredTypeFilter()
     @State private var stateFilter = ConnectionCenterPreferences.restoredStateFilter()
     @State private var searchText = ""
+    @State private var compactDetailPresented = false
     @State private var sortOrder = ConnectionCenterPreferences.restoredSortOrder()
     @SceneStorage("SelectiveRemote.connectionCenter.columns.v1")
     private var columnCustomization: TableColumnCustomization<ConnectionCenterItem>
@@ -344,23 +345,23 @@ struct ConnectionCenterView: View {
             let items = sortedItems(filteredItems(snapshot.items))
 
             GeometryReader { proxy in
-                let compact = proxy.size.width < 900
+                let compact = AdaptiveWorkspaceLayout.usesDetailNavigation(
+                    width: proxy.size.width
+                )
                 if compact {
-                    VSplitView {
+                    if compactDetailPresented {
+                        compactInspector(
+                            item: selectedItem(from: items),
+                            now: timeline.date
+                        )
+                        .id(selectedItemID)
+                    } else {
                         centerContent(
                             snapshot: snapshot,
                             items: items,
                             now: timeline.date,
                             compact: true
                         )
-                        .frame(minHeight: 360)
-
-                        inspector(
-                            item: selectedItem(from: items),
-                            now: timeline.date
-                        )
-                        .frame(minHeight: 220, idealHeight: 300)
-                        .id(selectedItemID)
                     }
                 } else {
                     HStack(spacing: 0) {
@@ -406,6 +407,27 @@ struct ConnectionCenterView: View {
                 ConnectionCenterPreferences.persistSortOrder(sortOrder)
             }
         }
+    }
+
+    private func compactInspector(
+        item: ConnectionCenterItem?,
+        now: Date
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Назад к подключениям", systemImage: "chevron.left") {
+                    compactDetailPresented = false
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+            inspector(item: item, now: now)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func centerContent(
@@ -696,6 +718,7 @@ struct ConnectionCenterView: View {
             .tag(item.id)
             .onTapGesture {
                 selectedItemID = item.id
+                compactDetailPresented = true
             }
             .contextMenu {
                 connectionContextMenu(item)

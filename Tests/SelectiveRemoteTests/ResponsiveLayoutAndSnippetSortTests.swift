@@ -86,10 +86,24 @@ func narrowManagerLayoutsAreAdaptive() throws {
         encoding: .utf8
     )
 
-    #expect(center.contains("proxy.size.width < 900"))
-    #expect(center.contains("VSplitView"))
+    #expect(center.contains("AdaptiveWorkspaceLayout.usesDetailNavigation"))
+    #expect(center.contains("compactInspector("))
     #expect(center.contains("compactConnectionList"))
-    #expect(forwarding.contains("proxy.size.width < 940"))
-    #expect(forwarding.contains("VSplitView"))
+    #expect(!center.contains("VSplitView"))
+    #expect(forwarding.contains("AdaptiveWorkspaceLayout.usesDetailNavigation"))
+    #expect(forwarding.contains("compactInspector("))
     #expect(forwarding.contains("compactTunnelList"))
+    #expect(!forwarding.contains("VSplitView"))
+}
+
+
+@Test("Adaptive workspace breakpoints cover compact, regular, and 8K widths")
+func adaptiveWorkspaceBreakpoints() {
+    #expect(AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(width: 720))
+    #expect(!AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(width: 1_200))
+    #expect(AdaptiveWorkspaceLayout.usesStackedSFTPPanes(width: 900))
+    #expect(!AdaptiveWorkspaceLayout.usesStackedSFTPPanes(width: 1_400))
+    #expect(AdaptiveWorkspaceLayout.usesDetailNavigation(width: 900))
+    #expect(!AdaptiveWorkspaceLayout.usesDetailNavigation(width: 1_400))
+    #expect(AdaptiveWorkspaceLayout.showsProfileInspector(width: 7_680))
 }

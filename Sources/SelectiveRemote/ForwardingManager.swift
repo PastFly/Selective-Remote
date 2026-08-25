@@ -311,6 +311,7 @@ struct ForwardingManagerView: View {
     @State private var filter = ForwardingManagerFilter.all
     @State private var searchText = ""
     @State private var inspectorTab = ForwardingInspectorTab.overview
+    @State private var compactDetailPresented = false
     @State private var connectionRequest: ForwardingConnectionRequest?
     @State private var passwordInputs: [UUID: String] = [:]
     @State private var logText = ""
@@ -328,20 +329,23 @@ struct ForwardingManagerView: View {
             let snapshot = makeSnapshot()
             let items = filteredItems(snapshot.items)
             GeometryReader { proxy in
-                let compact = proxy.size.width < 940
+                let compact = AdaptiveWorkspaceLayout.usesDetailNavigation(
+                    width: proxy.size.width
+                )
                 if compact {
-                    VSplitView {
+                    if compactDetailPresented {
+                        compactInspector(
+                            item: selectedItem(from: items),
+                            now: timeline.date
+                        )
+                        .id(selectedItemID)
+                    } else {
                         managerContent(
                             snapshot: snapshot,
                             items: items,
                             now: timeline.date,
                             compact: true
                         )
-                        .frame(minHeight: 360)
-
-                        inspector(item: selectedItem(from: items), now: timeline.date)
-                            .frame(minHeight: 240, idealHeight: 320)
-                            .id(selectedItemID)
                     }
                 } else {
                     HStack(spacing: 0) {
@@ -395,6 +399,27 @@ struct ForwardingManagerView: View {
                 }
             )
         }
+    }
+
+    private func compactInspector(
+        item: ForwardingManagerItem?,
+        now: Date
+    ) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Назад к туннелям", systemImage: "chevron.left") {
+                    compactDetailPresented = false
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+            inspector(item: item, now: now)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private func managerContent(
@@ -699,10 +724,12 @@ struct ForwardingManagerView: View {
             .tag(item.id)
             .onTapGesture {
                 selectForAction(item)
+                compactDetailPresented = true
             }
             .simultaneousGesture(
                 TapGesture(count: 2).onEnded {
                     selectForAction(item)
+                    compactDetailPresented = true
                     if item.state.canStart {
                         start(item)
                     }

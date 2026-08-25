@@ -298,58 +298,13 @@ struct SFTPWorkspaceView: View {
             workspaceTabBar
 
             let tab = workspace.selectedTab
-            HSplitView {
-                SFTPWorkspacePaneView(
-                    pane: tab.left,
-                    opposite: tab.right,
-                    profiles: sshProfiles,
-                    selectLocal: { tab.left.setLocal() },
-                    selectSavedProfile: { profileID in
-                        connect(
-                            pane: tab.left,
-                            connection: .savedProfile(profileID),
-                            path: nil
-                        )
-                    },
-                    selectCustom: {
-                        connectionRequest = SFTPWorkspaceConnectionRequest(
-                            paneID: tab.left.id,
-                            initialConnection: tab.left.connection
-                                ?? sshProfiles.first.map { .savedProfile($0.id) }
-                                ?? .custom(host: "", username: ""),
-                            path: nil
-                        )
-                    },
-                    disconnect: { tab.left.clear() },
-                    copyToOpposite: { copy(from: tab.left, to: tab.right) }
+            GeometryReader { proxy in
+                workspacePanes(
+                    tab,
+                    stacked: AdaptiveWorkspaceLayout.usesStackedSFTPPanes(
+                        width: proxy.size.width
+                    )
                 )
-                .frame(minWidth: 390)
-
-                SFTPWorkspacePaneView(
-                    pane: tab.right,
-                    opposite: tab.left,
-                    profiles: sshProfiles,
-                    selectLocal: { tab.right.setLocal() },
-                    selectSavedProfile: { profileID in
-                        connect(
-                            pane: tab.right,
-                            connection: .savedProfile(profileID),
-                            path: nil
-                        )
-                    },
-                    selectCustom: {
-                        connectionRequest = SFTPWorkspaceConnectionRequest(
-                            paneID: tab.right.id,
-                            initialConnection: tab.right.connection
-                                ?? sshProfiles.first.map { .savedProfile($0.id) }
-                                ?? .custom(host: "", username: ""),
-                            path: nil
-                        )
-                    },
-                    disconnect: { tab.right.clear() },
-                    copyToOpposite: { copy(from: tab.right, to: tab.left) }
-                )
-                .frame(minWidth: 390)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
@@ -411,16 +366,90 @@ struct SFTPWorkspaceView: View {
         }
     }
 
-    private var workspaceToolbar: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("SFTP Workspace")
-                    .font(.headline)
-                Text("Каждая панель может быть этим Mac или отдельным SSH/SFTP-сервером")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+    @ViewBuilder
+    private func workspacePanes(
+        _ tab: SFTPWorkspaceTab,
+        stacked: Bool
+    ) -> some View {
+        if stacked {
+            VSplitView {
+                workspacePane(tab.left, opposite: tab.right)
+                    .frame(minHeight: 280)
+                workspacePane(tab.right, opposite: tab.left)
+                    .frame(minHeight: 280)
             }
-            Spacer()
+        } else {
+            HSplitView {
+                workspacePane(tab.left, opposite: tab.right)
+                    .frame(minWidth: 420)
+                workspacePane(tab.right, opposite: tab.left)
+                    .frame(minWidth: 420)
+            }
+        }
+    }
+
+    private func workspacePane(
+        _ pane: SFTPWorkspacePane,
+        opposite: SFTPWorkspacePane
+    ) -> some View {
+        SFTPWorkspacePaneView(
+            pane: pane,
+            opposite: opposite,
+            profiles: sshProfiles,
+            selectLocal: { pane.setLocal() },
+            selectSavedProfile: { profileID in
+                connect(
+                    pane: pane,
+                    connection: .savedProfile(profileID),
+                    path: nil
+                )
+            },
+            selectCustom: {
+                connectionRequest = SFTPWorkspaceConnectionRequest(
+                    paneID: pane.id,
+                    initialConnection: pane.connection
+                        ?? sshProfiles.first.map { .savedProfile($0.id) }
+                        ?? .custom(host: "", username: ""),
+                    path: nil
+                )
+            },
+            disconnect: { pane.clear() },
+            copyToOpposite: { copy(from: pane, to: opposite) }
+        )
+    }
+
+    private var workspaceToolbar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                workspaceToolbarTitle
+                Spacer()
+                workspaceToolbarActions
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                workspaceToolbarTitle
+                HStack {
+                    Spacer()
+                    workspaceToolbarActions
+                }
+            }
+        }
+    }
+
+    private var workspaceToolbarTitle: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("SFTP Workspace")
+                .font(.headline)
+            Text("Каждая панель может быть этим Mac или отдельным SSH/SFTP-сервером")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var workspaceToolbarActions: some View {
+        HStack(spacing: 10) {
             if workspace.activeRemoteCount > 0 {
                 Label(
                     "Серверов: \(workspace.activeRemoteCount)",

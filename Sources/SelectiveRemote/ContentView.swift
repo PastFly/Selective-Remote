@@ -955,27 +955,45 @@ struct ContentView: View {
                     VStack(alignment: .leading, spacing: 18) {
                         sshWorkspaceHeader
 
-                        HStack(alignment: .top, spacing: 16) {
-                            sshSectionRail
-                                .frame(width: 205)
-
-                            ScrollView {
-                                VStack(alignment: .leading, spacing: 18) {
-                                    sshSectionHeading
-                                    sshQuickFacts
-                                    selectedSettingsContent
+                        if AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(
+                            width: proxy.size.width
+                        ) {
+                            VStack(alignment: .leading, spacing: 12) {
+                                compactProfileSectionPicker
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        sshSectionHeading
+                                        sshQuickFacts
+                                        selectedSettingsContent
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.bottom, 20)
                                 }
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.bottom, 20)
                             }
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                            if proxy.size.width >= 1120 {
-                                sshProfileInspector
-                                    .frame(width: 270)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        } else {
+                            HStack(alignment: .top, spacing: 16) {
+                                sshSectionRail
+                                    .frame(width: 205)
+                                ScrollView {
+                                    VStack(alignment: .leading, spacing: 18) {
+                                        sshSectionHeading
+                                        sshQuickFacts
+                                        selectedSettingsContent
+                                    }
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.bottom, 20)
+                                }
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                if AdaptiveWorkspaceLayout.showsProfileInspector(
+                                    width: proxy.size.width
+                                ) {
+                                    sshProfileInspector
+                                        .frame(width: 270)
+                                }
                             }
+                            .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                         }
-                        .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                     }
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
@@ -1506,33 +1524,78 @@ struct ContentView: View {
     }
 
 
+    private var compactProfileSectionPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(availableTabs) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(
+                                selectedTab == tab ? Color.accentColor : Color.primary
+                            )
+                            .background(
+                                selectedTab == tab
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
     private var rdpProfileWorkspace: some View {
         VStack(spacing: 0) {
             GeometryReader { proxy in
                 VStack(alignment: .leading, spacing: 18) {
                     rdpWorkspaceHeader
 
-                    HStack(alignment: .top, spacing: 16) {
-                        rdpSectionRail
-                            .frame(width: 205)
-
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 18) {
-                                rdpSectionHeading
-                                rdpQuickFacts
-                                selectedSettingsContent
+                    if AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(
+                        width: proxy.size.width
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            compactProfileSectionPicker
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
                             }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.bottom, 20)
                         }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                        if proxy.size.width >= 1120 {
-                            rdpProfileInspector
-                                .frame(width: 270)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        HStack(alignment: .top, spacing: 16) {
+                            rdpSectionRail
+                                .frame(width: 205)
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if AdaptiveWorkspaceLayout.showsProfileInspector(
+                                width: proxy.size.width
+                            ) {
+                                rdpProfileInspector
+                                    .frame(width: 270)
+                            }
                         }
+                        .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                     }
-                    .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 24)
