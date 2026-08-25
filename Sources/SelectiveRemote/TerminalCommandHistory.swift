@@ -154,6 +154,34 @@ struct TerminalSnippetGroup: Codable, Equatable, Identifiable {
     let profileID: UUID
     var name: String
     var createdAt: Date
+    var updatedAt: Date
+
+    init(
+        id: UUID,
+        profileID: UUID,
+        name: String,
+        createdAt: Date,
+        updatedAt: Date? = nil
+    ) {
+        self.id = id
+        self.profileID = profileID
+        self.name = name
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt ?? createdAt
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, profileID, name, createdAt, updatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        profileID = try container.decode(UUID.self, forKey: .profileID)
+        name = try container.decode(String.self, forKey: .name)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decodeIfPresent(Date.self, forKey: .updatedAt) ?? createdAt
+    }
 }
 
 private struct TerminalHistoryWebEntry: Encodable {
@@ -409,7 +437,8 @@ final class TerminalCommandHistoryStore: ObservableObject {
     func renameSnippetGroup(
         id: UUID,
         name rawName: String,
-        profileID: UUID
+        profileID: UUID,
+        now: Date = Date()
     ) -> Bool {
         guard let name = normalizedSnippetGroupName(rawName),
               let index = storedSnippetGroups.firstIndex(where: {
@@ -425,9 +454,11 @@ final class TerminalCommandHistoryStore: ObservableObject {
             return false
         }
         storedSnippetGroups[index].name = name
+        storedSnippetGroups[index].updatedAt = now
         for templateIndex in storedTemplates.indices where
             storedTemplates[templateIndex].groupID == id {
             storedTemplates[templateIndex].category = name
+            storedTemplates[templateIndex].updatedAt = now
         }
         persistSnippetGroups()
         persistTemplates()
@@ -473,6 +504,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         targetProfileIDs: [UUID]? = nil,
         targets: [TerminalSnippetTarget]? = nil
     ) -> Bool {
+        let now = Date()
         let title = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
         let category = rawCategory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty,
@@ -503,7 +535,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
             storedTemplates[index].groupID = group?.id ?? TerminalCommandTemplate.legacyUnassignedGroupID
             storedTemplates[index].isExplicitlyUngrouped = group == nil
             storedTemplates[index].targets = resolvedTargets
-            storedTemplates[index].updatedAt = Date()
+            storedTemplates[index].updatedAt = now
         } else {
             storedTemplates.append(
                 TerminalCommandTemplate(
@@ -516,9 +548,13 @@ final class TerminalCommandHistoryStore: ObservableObject {
                     targetProfileIDs: normalizedTargetIDs(targetProfileIDs ?? [profileID]),
                     targets: resolvedTargets,
                     isExplicitlyUngrouped: group == nil,
-                    updatedAt: Date()
+                    updatedAt: now
                 )
             )
+        }
+        if let groupID = group?.id,
+           let groupIndex = storedSnippetGroups.firstIndex(where: { $0.id == groupID }) {
+            storedSnippetGroups[groupIndex].updatedAt = now
         }
         persistSnippetGroups()
         if storedTemplates.count > 500 {

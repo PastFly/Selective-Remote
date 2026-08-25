@@ -343,28 +343,47 @@ struct ConnectionCenterView: View {
             let snapshot = model.connectionCenterSnapshot(now: timeline.date)
             let items = sortedItems(filteredItems(snapshot.items))
 
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 16) {
-                    header(snapshot: snapshot)
-                    summary(snapshot: snapshot)
-                    toolbar
-                    connectionTable(items: items, now: timeline.date)
-                    footer(items: items)
+            GeometryReader { proxy in
+                let compact = proxy.size.width < 900
+                if compact {
+                    VSplitView {
+                        centerContent(
+                            snapshot: snapshot,
+                            items: items,
+                            now: timeline.date,
+                            compact: true
+                        )
+                        .frame(minHeight: 360)
+
+                        inspector(
+                            item: selectedItem(from: items),
+                            now: timeline.date
+                        )
+                        .frame(minHeight: 220, idealHeight: 300)
+                        .id(selectedItemID)
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        centerContent(
+                            snapshot: snapshot,
+                            items: items,
+                            now: timeline.date,
+                            compact: false
+                        )
+
+                        Divider()
+
+                        inspector(
+                            item: selectedItem(from: items),
+                            now: timeline.date
+                        )
+                        .frame(minWidth: 300, idealWidth: 330, maxWidth: 360)
+                        .id(selectedItemID)
+                    }
                 }
-                .padding(24)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-                Divider()
-
-                inspector(
-                    item: selectedItem(from: items),
-                    now: timeline.date
-                )
-                .frame(width: 340)
-                .id(selectedItemID)
-                .transition(.opacity)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             }
+            .transition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: selectedItemID)
             .onAppear {
                 normalizeSelection(items: items)
             }
@@ -389,6 +408,34 @@ struct ConnectionCenterView: View {
         }
     }
 
+    private func centerContent(
+        snapshot: ConnectionCenterSnapshot,
+        items: [ConnectionCenterItem],
+        now: Date,
+        compact: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 12 : 16) {
+            header(snapshot: snapshot)
+            summary(snapshot: snapshot, compact: compact)
+            if compact {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    toolbar
+                        .frame(minWidth: 720)
+                }
+            } else {
+                toolbar
+            }
+            if compact {
+                compactConnectionList(items: items, now: now)
+            } else {
+                connectionTable(items: items, now: now)
+            }
+            footer(items: items)
+        }
+        .padding(compact ? 16 : 24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     private func header(snapshot: ConnectionCenterSnapshot) -> some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
@@ -396,6 +443,8 @@ struct ConnectionCenterView: View {
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("Единое состояние активных RDP, SSH, SFTP и Forwarding-подключений")
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             Button(action: onRefresh) {
@@ -405,9 +454,9 @@ struct ConnectionCenterView: View {
         }
     }
 
-    private func summary(snapshot: ConnectionCenterSnapshot) -> some View {
+    private func summary(snapshot: ConnectionCenterSnapshot, compact: Bool) -> some View {
         LazyVGrid(
-            columns: [GridItem(.adaptive(minimum: 150), spacing: 12)],
+            columns: [GridItem(.adaptive(minimum: compact ? 120 : 150), spacing: 12)],
             alignment: .leading,
             spacing: 12
         ) {
@@ -604,6 +653,61 @@ struct ConnectionCenterView: View {
                     columnCustomization = TableColumnCustomization<ConnectionCenterItem>()
                 }
             }
+        }
+    }
+
+    private func compactConnectionList(
+        items: [ConnectionCenterItem],
+        now: Date
+    ) -> some View {
+        List(items, selection: $selectedItemID) { item in
+            HStack(spacing: 10) {
+                Image(systemName: item.kind.systemImage)
+                    .foregroundStyle(kindColor(item.kind))
+                    .frame(width: 20)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.profileName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(item.userHost)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 8)
+
+                VStack(alignment: .trailing, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Circle()
+                            .fill(item.state.color)
+                            .frame(width: 7, height: 7)
+                        Text(LocalizedStringKey(item.state.title))
+                            .font(.caption)
+                    }
+                    Text(item.uptimeText(now: now))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .tag(item.id)
+            .onTapGesture {
+                selectedItemID = item.id
+            }
+            .contextMenu {
+                connectionContextMenu(item)
+            }
+        }
+        .listStyle(.inset)
+        .frame(minHeight: 220)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.07))
+                .allowsHitTesting(false)
         }
     }
 
