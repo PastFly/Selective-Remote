@@ -44,5 +44,11 @@ jobs:
       - name: Test terminal web interactions
         run: node --test Tests/TerminalResourcesTests/*.test.js
 
+      - name: Test Selective Remote Cloud
+        working-directory: cloud
+        run: |
+          npm ci
+          npm test
+
       - name: Release build
         run: swift build -c release

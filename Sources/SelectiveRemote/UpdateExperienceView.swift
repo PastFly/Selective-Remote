@@ -22,6 +22,9 @@ struct AppSettingsView: View {
             AppLockSettingsView(store: appLock)
                 .tabItem { Label("Безопасность", systemImage: "lock.shield") }
 
+            CloudSettingsView()
+                .tabItem { Label("Cloud", systemImage: "cloud") }
+
             BackupSettingsView(model: model)
                 .tabItem { Label("Резервная копия", systemImage: "externaldrive.badge.timemachine") }
         }
