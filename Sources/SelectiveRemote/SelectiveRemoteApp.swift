@@ -10,6 +10,7 @@ extension Notification.Name {
 @MainActor
 final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate {
     private var helpWindow: NSWindow?
+    private var aboutWindow: NSWindow?
 
     func applicationWillTerminate(_ notification: Notification) {
         SSHKeyService.stopManagedAgent()
@@ -22,18 +23,53 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
             return
         }
         let controller = NSHostingController(
-            rootView: AppAppearanceRoot(store: .shared) { AppHelpView() }
+            rootView: AppAuxiliaryWindowRoot(store: .shared) { AppHelpView() }
         )
         let window = NSWindow(contentViewController: controller)
-        window.title = "Справка Selective Remote"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        configureAuxiliaryWindow(window)
+        window.title = UpdateLocalization.text(
+            ru: "Справка Selective Remote",
+            en: "Selective Remote Help"
+        )
         window.setContentSize(NSSize(width: 860, height: 700))
         window.minSize = NSSize(width: 720, height: 560)
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         window.isReleasedWhenClosed = false
         window.center()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         helpWindow = window
+    }
+
+    func showAboutWindow() {
+        if let aboutWindow {
+            aboutWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+        let controller = NSHostingController(
+            rootView: AppAuxiliaryWindowRoot(store: .shared) { AppAboutView() }
+        )
+        let window = NSWindow(contentViewController: controller)
+        window.styleMask = [.titled, .closable, .miniaturizable]
+        configureAuxiliaryWindow(window)
+        window.title = UpdateLocalization.text(
+            ru: "О Selective Remote",
+            en: "About Selective Remote"
+        )
+        window.setContentSize(NSSize(width: 520, height: 500))
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        aboutWindow = window
+    }
+
+    private func configureAuxiliaryWindow(_ window: NSWindow) {
+        window.isOpaque = true
+        window.backgroundColor = .windowBackgroundColor
+        window.titlebarAppearsTransparent = false
+        window.hasShadow = true
     }
 }
 
@@ -98,6 +134,14 @@ struct SelectiveRemoteApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands {
+            CommandGroup(replacing: .appInfo) {
+                Button(UpdateLocalization.text(
+                    ru: "О Selective Remote",
+                    en: "About Selective Remote"
+                )) {
+                    appDelegate.showAboutWindow()
+                }
+            }
             CommandGroup(replacing: .newItem) {
                 Button("Новая вкладка терминала", systemImage: "terminal") {
                     NotificationCenter.default.post(

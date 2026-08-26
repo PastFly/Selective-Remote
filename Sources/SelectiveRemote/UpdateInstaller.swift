@@ -3,7 +3,7 @@ import CryptoKit
 import Foundation
 
 enum UpdateLocalization {
-    private static var usesEnglish: Bool {
+    static var usesEnglish: Bool {
         switch UserDefaults.standard.string(forKey: "SelectiveRemote.applicationLanguage.v1") {
         case "english": true
         case "russian": false
@@ -14,6 +14,44 @@ enum UpdateLocalization {
 
     static func text(ru: String, en: String) -> String {
         usesEnglish ? en : ru
+    }
+
+    static var locale: Locale {
+        Locale(identifier: usesEnglish ? "en_US" : "ru_RU")
+    }
+
+    static func dateTime(_ date: Date) -> String {
+        date.formatted(
+            .dateTime
+                .day()
+                .month(.abbreviated)
+                .year()
+                .hour()
+                .minute()
+                .second()
+                .locale(locale)
+        )
+    }
+
+    static func dateTimeShort(_ date: Date) -> String {
+        date.formatted(
+            .dateTime
+                .day()
+                .month(.abbreviated)
+                .year()
+                .hour()
+                .minute()
+                .locale(locale)
+        )
+    }
+
+    static func timeShort(_ date: Date) -> String {
+        date.formatted(
+            .dateTime
+                .hour()
+                .minute()
+                .locale(locale)
+        )
     }
 }
 

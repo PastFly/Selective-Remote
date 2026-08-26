@@ -1530,7 +1530,7 @@ final class AppModel: NSObject, ObservableObject {
     }
 
     private func connectionCenterDate(_ date: Date) -> String {
-        date.formatted(date: .abbreviated, time: .standard)
+        UpdateLocalization.dateTime(date)
     }
 
     private func connectionCenterAuthenticationRows(
@@ -1650,20 +1650,36 @@ final class AppModel: NSObject, ObservableObject {
         switch selectedProfile.cameraSelectionMode {
         case .builtIn:
             if let camera = cameras.first(where: { $0.kind == .builtIn }) {
-                return "\(camera.name) · встроенная"
+                return UpdateLocalization.text(
+                    ru: "\(camera.name) · встроенная",
+                    en: "\(camera.name) · built-in"
+                )
             }
-            return "Встроенная камера не обнаружена · будет выбрана доступная"
+            return UpdateLocalization.text(
+                ru: "Встроенная камера не обнаружена · будет выбрана доступная",
+                en: "Built-in camera not found · an available camera will be selected"
+            )
         case .automatic:
-            return "macOS выберет системную камеру"
+            return UpdateLocalization.text(
+                ru: "macOS выберет системную камеру",
+                en: "macOS will select the system camera"
+            )
         case .specific:
             guard let id = selectedProfile.cameraDeviceID else {
-                return "Устройство не выбрано · будет использована встроенная камера"
+                return UpdateLocalization.text(
+                    ru: "Устройство не выбрано · будет использована встроенная камера",
+                    en: "No device selected · the built-in camera will be used"
+                )
             }
             if let camera = cameras.first(where: { $0.id == id }) {
                 return camera.displayName
             }
-            let savedName = selectedProfile.cameraDeviceName ?? "Сохранённая камера"
-            return "\(savedName) · сейчас недоступна, будет использована встроенная"
+            let savedName = selectedProfile.cameraDeviceName
+                ?? UpdateLocalization.text(ru: "Сохранённая камера", en: "Saved camera")
+            return UpdateLocalization.text(
+                ru: "\(savedName) · сейчас недоступна, будет использована встроенная",
+                en: "\(savedName) · currently unavailable; the built-in camera will be used"
+            )
         }
     }
 

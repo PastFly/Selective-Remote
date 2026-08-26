@@ -253,8 +253,13 @@ struct TerminalWorkspaceInspector: View {
                         .lineLimit(3)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text(
-                        "\(entry.lastUsedAt.formatted(date: .abbreviated, time: .shortened))"
-                            + (entry.useCount > 1 ? " · запусков: \(entry.useCount)" : "")
+                        UpdateLocalization.dateTimeShort(entry.lastUsedAt)
+                            + (entry.useCount > 1
+                                ? UpdateLocalization.text(
+                                    ru: " · запусков: \(entry.useCount)",
+                                    en: " · runs: \(entry.useCount)"
+                                )
+                                : "")
                     )
                     .font(.caption2)
                     .foregroundStyle(.secondary)

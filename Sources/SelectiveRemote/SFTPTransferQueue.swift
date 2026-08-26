@@ -9,9 +9,9 @@ enum SFTPTransferDirection: String, Sendable {
 
     var title: String {
         switch self {
-        case .upload: "На сервер"
-        case .download: "На этот Mac"
-        case .serverToServer: "Между серверами"
+        case .upload: UpdateLocalization.text(ru: "На сервер", en: "To server")
+        case .download: UpdateLocalization.text(ru: "На этот Mac", en: "To this Mac")
+        case .serverToServer: UpdateLocalization.text(ru: "Между серверами", en: "Server to server")
         }
     }
 
@@ -34,12 +34,12 @@ enum SFTPTransferPhase: String, Sendable {
 
     var title: String {
         switch self {
-        case .queued: "В очереди"
-        case .running: "Передаётся"
-        case .paused: "Приостановлено"
-        case .completed: "Готово"
-        case .failed: "Ошибка"
-        case .cancelled: "Отменено"
+        case .queued: UpdateLocalization.text(ru: "В очереди", en: "Queued")
+        case .running: UpdateLocalization.text(ru: "Передаётся", en: "Transferring")
+        case .paused: UpdateLocalization.text(ru: "Приостановлено", en: "Paused")
+        case .completed: UpdateLocalization.text(ru: "Готово", en: "Completed")
+        case .failed: UpdateLocalization.text(ru: "Ошибка", en: "Failed")
+        case .cancelled: UpdateLocalization.text(ru: "Отменено", en: "Cancelled")
         }
     }
 
@@ -79,9 +79,9 @@ enum SFTPConflictPolicy: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .rename: "Сохранить оба"
-        case .replace: "Заменять"
-        case .skip: "Пропускать"
+        case .rename: UpdateLocalization.text(ru: "Сохранить оба", en: "Keep both")
+        case .replace: UpdateLocalization.text(ru: "Заменять", en: "Replace")
+        case .skip: UpdateLocalization.text(ru: "Пропускать", en: "Skip")
         }
     }
 }
@@ -108,11 +108,11 @@ struct SFTPTransferItem: Identifiable, Sendable {
         if let totalBytes {
             let done = ByteCountFormatter.string(fromByteCount: transferredBytes, countStyle: .file)
             let total = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)
-            return "\(done) из \(total)"
+            return UpdateLocalization.text(ru: "\(done) из \(total)", en: "\(done) of \(total)")
         }
         if transferredBytes > 0 {
             let done = ByteCountFormatter.string(fromByteCount: transferredBytes, countStyle: .file)
-            return "\(done) передано"
+            return UpdateLocalization.text(ru: "\(done) передано", en: "\(done) transferred")
         }
         return phase.title
     }
@@ -122,7 +122,7 @@ struct SFTPTransferItem: Identifiable, Sendable {
         return ByteCountFormatter.string(
             fromByteCount: Int64(bytesPerSecond.rounded()),
             countStyle: .file
-        ) + "/с"
+        ) + UpdateLocalization.text(ru: "/с", en: "/s")
     }
 
     var etaText: String? {
@@ -133,11 +133,11 @@ struct SFTPTransferItem: Identifiable, Sendable {
         let remaining = Double(totalBytes - transferredBytes) / bytesPerSecond
         guard remaining.isFinite, remaining > 0 else { return nil }
         let seconds = Int(remaining.rounded(.up))
-        if seconds < 60 { return "\(seconds) с" }
+        if seconds < 60 { return UpdateLocalization.text(ru: "\(seconds) с", en: "\(seconds) sec") }
         if seconds < 3_600 {
-            return "\(seconds / 60) мин \(seconds % 60) с"
+            return UpdateLocalization.text(ru: "\(seconds / 60) мин \(seconds % 60) с", en: "\(seconds / 60) min \(seconds % 60) sec")
         }
-        return "\(seconds / 3_600) ч \((seconds % 3_600) / 60) мин"
+        return UpdateLocalization.text(ru: "\(seconds / 3_600) ч \((seconds % 3_600) / 60) мин", en: "\(seconds / 3_600) hr \((seconds % 3_600) / 60) min")
     }
 }
 

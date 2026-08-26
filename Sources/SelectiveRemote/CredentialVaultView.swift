@@ -441,7 +441,10 @@ struct CredentialVaultView: View {
                     }
                     .buttonStyle(.bordered)
                     .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
-                    Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
+                    Text(UpdateLocalization.text(
+                        ru: "Единый Vault: \(KeychainService.unifiedVaultEntryCount)",
+                        en: "Unified Vault: \(KeychainService.unifiedVaultEntryCount)"
+                    ))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -506,7 +509,11 @@ struct CredentialVaultView: View {
                         filter = item
                         normalizeSelectionForFilter()
                     } label: {
-                        Label(item.title, systemImage: item.systemImage)
+                        Label {
+                            Text(LocalizedStringKey(item.title))
+                        } icon: {
+                            Image(systemName: item.systemImage)
+                        }
                             .font(.caption.weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1072,7 +1079,14 @@ struct CredentialVaultView: View {
             Image(systemName: agentCheckError == nil ? "memorychip" : "exclamationmark.triangle")
                 .foregroundStyle(agentCheckError == nil ? Color.accentColor : Color.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(checkingAgent ? "ssh-agent: проверка…" : "ssh-agent: \(agentLoadedKeyIDs.count) ключей")
+                Text(
+                    checkingAgent
+                        ? UpdateLocalization.text(ru: "ssh-agent: проверка…", en: "ssh-agent: checking…")
+                        : UpdateLocalization.text(
+                            ru: "ssh-agent: \(agentLoadedKeyIDs.count) ключей",
+                            en: "ssh-agent: \(agentLoadedKeyIDs.count) keys"
+                        )
+                )
                     .font(.caption.weight(.semibold))
                 if let agentCheckError {
                     Text(agentCheckError).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -1278,7 +1292,12 @@ struct CredentialVaultView: View {
         let loaded = agentLoadedKeyIDs.contains(key.id)
         return inspectorCard("ssh-agent", systemImage: "memorychip") {
             HStack {
-                Label(loaded ? "Ключ загружен" : "Ключ не загружен", systemImage: loaded ? "checkmark.circle.fill" : "circle")
+                Label(
+                    loaded
+                        ? UpdateLocalization.text(ru: "Ключ загружен", en: "Key is loaded")
+                        : UpdateLocalization.text(ru: "Ключ не загружен", en: "Key is not loaded"),
+                    systemImage: loaded ? "checkmark.circle.fill" : "circle"
+                )
                     .foregroundStyle(loaded ? Color.green : Color.secondary)
                 Spacer()
                 if loaded {
@@ -1453,7 +1472,17 @@ struct CredentialVaultView: View {
                 let profiles = profilesUsingKnownHost(entry)
                 inspectorCard("Используется", systemImage: "rectangle.stack") {
                     if profiles.isEmpty {
-                        Text(entry.isHashed ? "Связь с профилями для хешированной записи определить напрямую нельзя." : "Сохранённые SSH-профили с этим host не найдены.")
+                Text(
+                    entry.isHashed
+                        ? UpdateLocalization.text(
+                            ru: "Связь с профилями для хешированной записи определить напрямую нельзя.",
+                            en: "Profile relationships cannot be determined directly for a hashed entry."
+                        )
+                        : UpdateLocalization.text(
+                            ru: "Сохранённые SSH-профили с этим host не найдены.",
+                            en: "No saved SSH profiles use this host."
+                        )
+                )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -1494,10 +1523,16 @@ struct CredentialVaultView: View {
                 Label("Host key изменился", systemImage: "exclamationmark.triangle.fill")
                     .font(.headline)
                     .foregroundStyle(.orange)
-                Text("Сохранённый: \(entry.fingerprint)")
+                Text(UpdateLocalization.text(
+                    ru: "Сохранённый: \(entry.fingerprint)",
+                    en: "Saved: \(entry.fingerprint)"
+                ))
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
-                Text("Текущий: \(currentFingerprint)")
+                Text(UpdateLocalization.text(
+                    ru: "Текущий: \(currentFingerprint)",
+                    en: "Current: \(currentFingerprint)"
+                ))
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                 Text("Не заменяйте ключ автоматически, пока изменение не подтверждено администратором сервера.")
@@ -1520,7 +1555,7 @@ struct CredentialVaultView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: systemImage)
+            Label(LocalizedStringKey(title), systemImage: systemImage)
                 .font(.headline)
             content()
         }
@@ -1557,7 +1592,7 @@ struct CredentialVaultView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(label)
+                Text(LocalizedStringKey(label))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 metadataValue(value, monospaced: monospaced)
@@ -1575,7 +1610,7 @@ struct CredentialVaultView: View {
     }
 
     private func metadataLabel(_ value: String) -> some View {
-        Text(value)
+        Text(LocalizedStringKey(value))
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(width: 100, alignment: .leading)
@@ -1594,7 +1629,9 @@ struct CredentialVaultView: View {
 
     private func profileUsageText(_ key: SSHKeyRecord) -> String {
         let names = profilesUsing(key).map(\.friendlyName)
-        return names.isEmpty ? "Не назначен профилям" : names.joined(separator: ", ")
+        return names.isEmpty
+            ? UpdateLocalization.text(ru: "Не назначен профилям", en: "Not assigned to profiles")
+            : names.joined(separator: ", ")
     }
 
     private func normalizeSelectionForFilter() {

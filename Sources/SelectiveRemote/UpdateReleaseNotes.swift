@@ -463,7 +463,7 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
     private func show(_ presentation: UpdateReleaseNotesPresentation) {
         let language = UpdateReleaseNotesLanguage.preferred()
         let content = AnyView(
-            AppAppearanceRoot(store: .shared) {
+            AppAuxiliaryWindowRoot(store: .shared) {
                 UpdateReleaseNotesView(
                     presentation: presentation,
                     language: language,
@@ -483,9 +483,13 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
         } else {
             let hosting = NSHostingController(rootView: content)
             let created = NSWindow(contentViewController: hosting)
+            created.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            created.isOpaque = true
+            created.backgroundColor = .windowBackgroundColor
+            created.titlebarAppearsTransparent = false
+            created.hasShadow = true
             created.setContentSize(NSSize(width: 780, height: 700))
             created.minSize = NSSize(width: 640, height: 520)
-            created.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             created.isReleasedWhenClosed = false
             created.delegate = self
             created.center()

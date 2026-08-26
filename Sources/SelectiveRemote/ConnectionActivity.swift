@@ -32,10 +32,10 @@ enum ConnectionActivityOutcome: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .active: "Активно"
-        case .completed: "Завершено"
-        case .failed: "Ошибка"
-        case .interrupted: "Прервано"
+        case .active: UpdateLocalization.text(ru: "Активно", en: "Active")
+        case .completed: UpdateLocalization.text(ru: "Завершено", en: "Completed")
+        case .failed: UpdateLocalization.text(ru: "Ошибка", en: "Failed")
+        case .interrupted: UpdateLocalization.text(ru: "Прервано", en: "Interrupted")
         }
     }
 
@@ -322,7 +322,9 @@ struct ConnectionActivityView: View {
 
             VStack(alignment: .leading, spacing: 5) {
                 HStack {
-                    Text(record.profileName.isEmpty ? "Без названия" : record.profileName)
+                    Text(record.profileName.isEmpty
+                        ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                        : record.profileName)
                         .font(.headline)
                     Text(record.kind.rawValue)
                         .font(.caption2.bold())
@@ -330,7 +332,7 @@ struct ConnectionActivityView: View {
                         .padding(.vertical, 2)
                         .background(Color.secondary.opacity(0.1), in: Capsule())
                     Spacer()
-                    Text(record.startedAt.formatted(date: .abbreviated, time: .standard))
+                    Text(UpdateLocalization.dateTime(record.startedAt))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -347,7 +349,7 @@ struct ConnectionActivityView: View {
                 }
                 .font(.caption)
                 if let error = record.errorMessage, !error.isEmpty {
-                    Text(error)
+                    Text(localizedErrorMessage(error))
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .lineLimit(2)
@@ -355,5 +357,15 @@ struct ConnectionActivityView: View {
             }
         }
         .padding(.vertical, 6)
+    }
+
+    private func localizedErrorMessage(_ message: String) -> String {
+        guard message == "Приложение было завершено до закрытия записи." else {
+            return message
+        }
+        return UpdateLocalization.text(
+            ru: message,
+            en: "The application quit before the activity record was closed."
+        )
     }
 }

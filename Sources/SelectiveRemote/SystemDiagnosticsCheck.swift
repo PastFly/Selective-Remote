@@ -821,8 +821,8 @@ struct DiagnosticsSystemCheckView: View {
                 Spacer()
                 if let lastRunAt {
                     Text(UpdateLocalization.text(
-                        ru: "Последняя проверка: \(lastRunAt.formatted(date: .omitted, time: .shortened))",
-                        en: "Last checked: \(lastRunAt.formatted(date: .omitted, time: .shortened))"
+                        ru: "Последняя проверка: \(UpdateLocalization.timeShort(lastRunAt))",
+                        en: "Last checked: \(UpdateLocalization.timeShort(lastRunAt))"
                     ))
                         .font(.caption)
                         .foregroundStyle(.secondary)

@@ -290,3 +290,23 @@ struct AppAppearanceRoot<Content: View>: View {
             .controlSize(store.density.controlSize)
     }
 }
+
+/// Auxiliary document-style windows must keep a visible system frame even
+/// when transparency is enabled for the main workspace.
+struct AppAuxiliaryWindowRoot<Content: View>: View {
+    @ObservedObject var store: AppAppearanceStore
+    let content: Content
+
+    init(store: AppAppearanceStore, @ViewBuilder content: () -> Content) {
+        self.store = store
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
+            .preferredColorScheme(store.theme.colorScheme)
+            .appTextSize(store.textSize)
+            .controlSize(store.density.controlSize)
+    }
+}
