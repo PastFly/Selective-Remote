@@ -23,3 +23,7 @@ configured.
 The supplied Caddy configuration expects `cloud.pastfly.ru` to resolve to the
 Ubuntu host. Only Caddy publishes host ports; PostgreSQL is private to the
 Compose network.
+
+See [`DEPLOY-UBUNTU.md`](DEPLOY-UBUNTU.md) for the read-only preflight, required
+ports, secret generation, first launch and verification steps. Caddy uses the
+Let’s Encrypt production ACME endpoint and renews certificates automatically.
