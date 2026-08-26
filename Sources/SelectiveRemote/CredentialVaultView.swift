@@ -441,7 +441,10 @@ struct CredentialVaultView: View {
                     }
                     .buttonStyle(.bordered)
                     .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
-                    Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
+                    Text(UpdateLocalization.text(
+                        ru: "Единый Vault: \(KeychainService.unifiedVaultEntryCount)",
+                        en: "Unified Vault: \(KeychainService.unifiedVaultEntryCount)"
+                    ))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -1076,7 +1079,14 @@ struct CredentialVaultView: View {
             Image(systemName: agentCheckError == nil ? "memorychip" : "exclamationmark.triangle")
                 .foregroundStyle(agentCheckError == nil ? Color.accentColor : Color.orange)
             VStack(alignment: .leading, spacing: 1) {
-                Text(checkingAgent ? "ssh-agent: проверка…" : "ssh-agent: \(agentLoadedKeyIDs.count) ключей")
+                Text(
+                    checkingAgent
+                        ? UpdateLocalization.text(ru: "ssh-agent: проверка…", en: "ssh-agent: checking…")
+                        : UpdateLocalization.text(
+                            ru: "ssh-agent: \(agentLoadedKeyIDs.count) ключей",
+                            en: "ssh-agent: \(agentLoadedKeyIDs.count) keys"
+                        )
+                )
                     .font(.caption.weight(.semibold))
                 if let agentCheckError {
                     Text(agentCheckError).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
@@ -1462,7 +1472,17 @@ struct CredentialVaultView: View {
                 let profiles = profilesUsingKnownHost(entry)
                 inspectorCard("Используется", systemImage: "rectangle.stack") {
                     if profiles.isEmpty {
-                        Text(entry.isHashed ? "Связь с профилями для хешированной записи определить напрямую нельзя." : "Сохранённые SSH-профили с этим host не найдены.")
+                Text(
+                    entry.isHashed
+                        ? UpdateLocalization.text(
+                            ru: "Связь с профилями для хешированной записи определить напрямую нельзя.",
+                            en: "Profile relationships cannot be determined directly for a hashed entry."
+                        )
+                        : UpdateLocalization.text(
+                            ru: "Сохранённые SSH-профили с этим host не найдены.",
+                            en: "No saved SSH profiles use this host."
+                        )
+                )
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else {
@@ -1503,10 +1523,16 @@ struct CredentialVaultView: View {
                 Label("Host key изменился", systemImage: "exclamationmark.triangle.fill")
                     .font(.headline)
                     .foregroundStyle(.orange)
-                Text("Сохранённый: \(entry.fingerprint)")
+                Text(UpdateLocalization.text(
+                    ru: "Сохранённый: \(entry.fingerprint)",
+                    en: "Saved: \(entry.fingerprint)"
+                ))
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
-                Text("Текущий: \(currentFingerprint)")
+                Text(UpdateLocalization.text(
+                    ru: "Текущий: \(currentFingerprint)",
+                    en: "Current: \(currentFingerprint)"
+                ))
                     .font(.caption.monospaced())
                     .textSelection(.enabled)
                 Text("Не заменяйте ключ автоматически, пока изменение не подтверждено администратором сервера.")

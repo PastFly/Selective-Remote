@@ -39,6 +39,16 @@ final class SFTPWorkspacePane: ObservableObject, Identifiable {
     }
 
     var settings: SSHConnectionSettings? { session.settings }
+    var displayTitle: String {
+        switch kind {
+        case .local:
+            UpdateLocalization.text(ru: "Этот Mac", en: "This Mac")
+        case .empty:
+            UpdateLocalization.text(ru: "Подключить", en: "Connect")
+        case .remote:
+            title
+        }
+    }
     var isReady: Bool {
         switch kind {
         case .empty:
@@ -122,7 +132,7 @@ final class SFTPWorkspaceTab: ObservableObject, Identifiable {
     }
 
     var title: String {
-        "\(left.title) ↔ \(right.title)"
+        "\(left.displayTitle) ↔ \(right.displayTitle)"
     }
 
     var remoteConnectionCount: Int {
@@ -535,7 +545,7 @@ struct SFTPWorkspaceView: View {
                             let queue = pane.session.transfers
                             VStack(alignment: .leading, spacing: 7) {
                                 HStack(spacing: 8) {
-                                    Label(pane.title, systemImage: pane.systemImage)
+                                    Label(pane.displayTitle, systemImage: pane.systemImage)
                                         .font(.caption.weight(.semibold))
                                     Spacer()
                                     Picker("При совпадении имён", selection: Binding(
@@ -904,7 +914,7 @@ private struct SFTPWorkspacePaneView: View {
                     }
                 }
             } label: {
-                Label(pane.title, systemImage: pane.systemImage)
+                Label(pane.displayTitle, systemImage: pane.systemImage)
                     .font(.headline)
                     .lineLimit(1)
             }
@@ -1158,7 +1168,10 @@ private struct SFTPWorkspaceLocalPaneView: View {
             }
             Button("Отмена", role: .cancel) { deleteEntries = [] }
         } message: {
-            Text("Объектов: \(deleteEntries.count). Они будут перемещены в Корзину.")
+            Text(UpdateLocalization.text(
+                ru: "Объектов: \(deleteEntries.count). Они будут перемещены в Корзину.",
+                en: "Items: \(deleteEntries.count). They will be moved to the Trash."
+            ))
         }
         .sheet(item: $propertiesTarget) { target in
             SFTPPropertiesView(target: target) { mode, ownerID, groupID in
@@ -1690,7 +1703,10 @@ private struct SFTPWorkspaceRemotePaneView: View {
             }
             Button("Отмена", role: .cancel) { deleteEntries = [] }
         } message: {
-            Text("Объектов на сервере: \(deleteEntries.count). Отменить удаление будет нельзя.")
+            Text(UpdateLocalization.text(
+                ru: "Объектов на сервере: \(deleteEntries.count). Отменить удаление будет нельзя.",
+                en: "Server items: \(deleteEntries.count). This deletion cannot be undone."
+            ))
         }
         .sheet(item: $propertiesTarget) { target in
             SFTPPropertiesView(target: target) { mode, ownerID, groupID in

@@ -137,7 +137,7 @@ struct PortForwardingView: View {
 
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    Text(rule.name)
+                    Text(rule.displayName)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     if running {

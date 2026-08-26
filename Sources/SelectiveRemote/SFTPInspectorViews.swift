@@ -98,8 +98,8 @@ enum SFTPPropertiesTarget: Identifiable, Equatable {
 
     var locationTitle: String {
         switch self {
-        case .local: "Этот Mac"
-        case .remote: "Удалённый сервер"
+        case .local: UpdateLocalization.text(ru: "Этот Mac", en: "This Mac")
+        case .remote: UpdateLocalization.text(ru: "Удалённый сервер", en: "Remote server")
         }
     }
 }
@@ -225,11 +225,10 @@ struct SFTPPropertiesView: View {
                         }
                     }
 
-                    Text(
-                        "Галочки и восьмеричный режим синхронизированы. UID/GID меняются "
-                            + "только если у текущего пользователя есть соответствующие права. "
-                            + "Пустое поле оставляет значение без изменения."
-                    )
+                    Text(UpdateLocalization.text(
+                        ru: "Галочки и восьмеричный режим синхронизированы. UID/GID меняются только если у текущего пользователя есть соответствующие права. Пустое поле оставляет значение без изменения.",
+                        en: "The checkboxes and octal mode stay synchronized. UID/GID change only when the current user has sufficient permission. An empty field leaves the value unchanged."
+                    ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }

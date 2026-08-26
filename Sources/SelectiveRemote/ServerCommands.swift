@@ -487,7 +487,10 @@ struct ServerCommandsView: View {
         var parts: [String] = []
         if !context.hostLabel.isEmpty { parts.append(context.hostLabel) }
         if let refreshedAt = context.refreshedAt {
-            parts.append("обновлено \(refreshedAt.formatted(date: .omitted, time: .shortened))")
+            parts.append(UpdateLocalization.text(
+                ru: "обновлено \(UpdateLocalization.timeShort(refreshedAt))",
+                en: "updated \(UpdateLocalization.timeShort(refreshedAt))"
+            ))
         }
         return parts.joined(separator: " · ")
     }

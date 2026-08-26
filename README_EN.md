@@ -8,7 +8,7 @@
 [![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
 [![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
 
-**Selective Remote** is a free, open-source RDP, SSH, Telnet, Serial, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, and SSH credential management in one app.
+**Selective Remote** is a free, open-source RDP, SSH, Telnet, Serial, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, SSH credential management, and encrypted backups in one app.
 
 The project targets Apple Silicon and macOS 14+. The interface is available in English and Russian.
 
@@ -151,6 +151,22 @@ The report intentionally does not read passwords, passphrases, Keychain values, 
 
 The local activity history stores the time, duration, profile, address, route, and outcome of RDP and SSH connections. Errors are passed through the same secret redaction used by Diagnostics Center. Passwords, keys, commands, and terminal contents are never recorded. The history can be filtered, searched, and completely cleared.
 
+### Session Logs
+
+Selective Remote can optionally record readable output from SSH and Local Terminal sessions. Records stay local and support search plus configurable retention. Passwords entered through protected system mechanisms are not added to Session Logs.
+
+### Encrypted Backup & Restore
+
+**Settings → Backup** creates a portable encrypted archive of local configuration. By default it includes profiles, groups, Snippets, settings, Selective Remote entries from macOS Keychain, private SSH/CA keys, Session Logs, and Connection Activity.
+
+- the archive uses a separate password of at least 12 characters;
+- the archive password is never stored in the app or Keychain;
+- password, format, and attachment integrity are verified before restore;
+- a rollback archive of the current state is created before data is replaced;
+- secrets, private keys, and logs can each be excluded from the archive.
+
+Regular profile export still excludes passwords and private keys. Use an encrypted backup for a complete transfer between Macs, and share its password through a separate channel.
+
 ### Appearance, language, and updates
 
 - system, light, and dark application themes;
@@ -173,7 +189,8 @@ Selective Remote prefers native macOS and OpenSSH mechanisms:
 - new SSH host keys are not accepted automatically;
 - proxy passwords are not passed in OpenSSH command-line arguments;
 - Diagnostics Center redacts potential secrets before Copy/Export;
-- private SSH keys remain user-owned files and are not copied into application profiles.
+- private SSH keys remain user-owned files and are not copied into application profiles;
+- full backups are encrypted before they are written to disk and never contain the decryption password.
 
 Verify trust in Jump Hosts, proxies, certificate authorities, and changed host keys before using them.
 

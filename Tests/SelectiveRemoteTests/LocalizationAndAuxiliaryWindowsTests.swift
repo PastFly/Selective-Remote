@@ -69,3 +69,71 @@ func englishLocalizationCoversReportedViews() throws {
     #expect(vault.contains("Label(LocalizedStringKey(title)"))
     #expect(vault.contains("Text(LocalizedStringKey(value))"))
 }
+
+@Test("English localization covers SFTP, RDP settings, Keychain, and dynamic values")
+func englishLocalizationCoversWorkspaceDetails() throws {
+    let strings = try repositorySource("Resources/en.lproj/Localizable.strings")
+    let localization = try repositorySource("Sources/SelectiveRemote/UpdateInstaller.swift")
+    let models = try repositorySource("Sources/SelectiveRemote/Models.swift")
+    let sftp = try repositorySource("Sources/SelectiveRemote/SFTPWorkspace.swift")
+    let sftpModels = try repositorySource("Sources/SelectiveRemote/SFTPBrowserModels.swift")
+    let forwarding = try repositorySource("Sources/SelectiveRemote/ForwardingManager.swift")
+    let appModel = try repositorySource("Sources/SelectiveRemote/AppModel.swift")
+
+    for key in [
+        "Этот Mac",
+        "Выберите источник",
+        "Новый файл…",
+        "Удалить безвозвратно",
+        "Сортировать",
+        "Одиночное нажатие Fn отправляет Win+Space. Fn в сочетании с другими клавишами не переключает язык.",
+        "Пароль сохранён",
+        "Доступ защищён Touch ID",
+        "Объединить пароли"
+    ] {
+        #expect(strings.contains("\"\(key)\" ="))
+    }
+
+    #expect(localization.contains("static var locale: Locale"))
+    #expect(localization.contains("static func dateTime(_ date: Date)"))
+    #expect(models.contains("case .automatic: UpdateLocalization.text(ru: \"Автоматически\", en: \"Automatic\")"))
+    #expect(models.contains("var displayName: String"))
+    #expect(sftp.contains("var displayTitle: String"))
+    #expect(sftpModels.contains("UpdateLocalization.dateTimeShort(modificationDate)"))
+    #expect(forwarding.contains("en: \"Waiting for first connection\""))
+    #expect(forwarding.contains("en: \"The OpenSSH log is empty.\""))
+    #expect(appModel.contains("UpdateLocalization.dateTime(date)"))
+}
+
+@Test("Russian strings in audited workspace views have English resources or explicit localization")
+func auditedWorkspaceStringsHaveEnglishFallbacks() throws {
+    let strings = try repositorySource("Resources/en.lproj/Localizable.strings")
+    let keys = Set(
+        strings.split(separator: "\n").compactMap { line -> String? in
+            let value = line.trimmingCharacters(in: .whitespaces)
+            guard value.hasPrefix("\"") else { return nil }
+            return value.dropFirst().split(separator: "\"", maxSplits: 1).first.map(String.init)
+        }
+    )
+
+    for path in [
+        "Sources/SelectiveRemote/SFTPWorkspace.swift",
+        "Sources/SelectiveRemote/SFTPInspectorViews.swift",
+        "Sources/SelectiveRemote/CredentialVaultView.swift"
+    ] {
+        let source = try repositorySource(path)
+        let literalPattern = #"\"([^\"\\]*(?:\\.[^\"\\]*)*[А-Яа-яЁё][^\"\\]*(?:\\.[^\"\\]*)*)\""#
+        let regex = try NSRegularExpression(pattern: literalPattern)
+        let range = NSRange(source.startIndex..., in: source)
+
+        for match in regex.matches(in: source, range: range) {
+            guard let literalRange = Range(match.range(at: 1), in: source) else { continue }
+            let literal = String(source[literalRange])
+            if literal.contains("\\(") || literal.contains(" + ") { continue }
+            let contextStart = source.index(literalRange.lowerBound, offsetBy: -min(120, source.distance(from: source.startIndex, to: literalRange.lowerBound)))
+            let context = source[contextStart..<literalRange.lowerBound]
+            if context.contains("ru:") { continue }
+            #expect(keys.contains(literal), "Missing English localization for \(path): \(literal)")
+        }
+    }
+}

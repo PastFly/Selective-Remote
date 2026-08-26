@@ -105,8 +105,8 @@ enum DisplayLayoutMode: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .automatic: "Автоматически"
-        case .custom: "Вручную"
+        case .automatic: UpdateLocalization.text(ru: "Автоматически", en: "Automatic")
+        case .custom: UpdateLocalization.text(ru: "Вручную", en: "Manual")
         }
     }
 }
@@ -291,9 +291,9 @@ enum AudioMode: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .local: "На этом Mac"
-        case .remote: "На удалённом компьютере"
-        case .muted: "Выключен"
+        case .local: UpdateLocalization.text(ru: "На этом Mac", en: "On this Mac")
+        case .remote: UpdateLocalization.text(ru: "На удалённом компьютере", en: "On the remote computer")
+        case .muted: UpdateLocalization.text(ru: "Выключен", en: "Muted")
         }
     }
 }
@@ -314,19 +314,19 @@ enum CameraQualityPreset: String, Codable, CaseIterable, Identifiable, Sendable 
 
     var title: String {
         switch self {
-        case .economy: "Экономия"
-        case .balanced: "Сбалансированное"
-        case .high: "Высокое"
-        case .automatic: "Автоматически"
+        case .economy: UpdateLocalization.text(ru: "Экономия", en: "Economy")
+        case .balanced: UpdateLocalization.text(ru: "Сбалансированное", en: "Balanced")
+        case .high: UpdateLocalization.text(ru: "Высокое", en: "High")
+        case .automatic: UpdateLocalization.text(ru: "Автоматически", en: "Automatic")
         }
     }
 
     var details: String {
         switch self {
-        case .economy: "640 × 480 · 15 FPS · цель 0,7 Мбит/с"
-        case .balanced: "1280 × 720 · 30 FPS · цель 1,25 Мбит/с"
-        case .high: "1920 × 1080 · 30 FPS · цель 2,7 Мбит/с"
-        case .automatic: "До 1920 × 1080 · удалённая сторона выбирает формат"
+        case .economy: UpdateLocalization.text(ru: "640 × 480 · 15 FPS · цель 0,7 Мбит/с", en: "640 × 480 · 15 FPS · 0.7 Mbps target")
+        case .balanced: UpdateLocalization.text(ru: "1280 × 720 · 30 FPS · цель 1,25 Мбит/с", en: "1280 × 720 · 30 FPS · 1.25 Mbps target")
+        case .high: UpdateLocalization.text(ru: "1920 × 1080 · 30 FPS · цель 2,7 Мбит/с", en: "1920 × 1080 · 30 FPS · 2.7 Mbps target")
+        case .automatic: UpdateLocalization.text(ru: "До 1920 × 1080 · удалённая сторона выбирает формат", en: "Up to 1920 × 1080 · the remote side selects the format")
         }
     }
 
@@ -378,10 +378,10 @@ enum ClipboardMode: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .bidirectional: "В обе стороны"
-        case .macToWindows: "Только Mac → Windows"
-        case .windowsToMac: "Только Windows → Mac"
-        case .disabled: "Отключён"
+        case .bidirectional: UpdateLocalization.text(ru: "В обе стороны", en: "Both directions")
+        case .macToWindows: UpdateLocalization.text(ru: "Только Mac → Windows", en: "Mac → Windows only")
+        case .windowsToMac: UpdateLocalization.text(ru: "Только Windows → Mac", en: "Windows → Mac only")
+        case .disabled: UpdateLocalization.text(ru: "Отключён", en: "Disabled")
         }
     }
 }
@@ -405,23 +405,23 @@ enum RDPQualityPreset: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .automatic: "Автоматически"
-        case .high: "Макс. качество"
-        case .balanced: "Сбалансировано"
-        case .economy: "Экономия"
+        case .automatic: UpdateLocalization.text(ru: "Автоматически", en: "Automatic")
+        case .high: UpdateLocalization.text(ru: "Макс. качество", en: "Maximum quality")
+        case .balanced: UpdateLocalization.text(ru: "Сбалансировано", en: "Balanced")
+        case .economy: UpdateLocalization.text(ru: "Экономия", en: "Economy")
         }
     }
 
     var details: String {
         switch self {
         case .automatic:
-            "Без принудительного сетевого профиля — поведение совместимо с предыдущими версиями."
+            UpdateLocalization.text(ru: "Без принудительного сетевого профиля — поведение совместимо с предыдущими версиями.", en: "No forced network profile; behavior remains compatible with earlier versions.")
         case .high:
-            "Профиль LAN для быстрой стабильной сети: максимум визуальных эффектов."
+            UpdateLocalization.text(ru: "Профиль LAN для быстрой стабильной сети: максимум визуальных эффектов.", en: "LAN profile for a fast, stable network with maximum visual effects.")
         case .balanced:
-            "Профиль быстрого интернета: баланс качества изображения, отклика и трафика."
+            UpdateLocalization.text(ru: "Профиль быстрого интернета: баланс качества изображения, отклика и трафика.", en: "Fast-internet profile balancing image quality, responsiveness, and traffic.")
         case .economy:
-            "Профиль медленного интернета: меньше визуальных эффектов и сетевого трафика."
+            UpdateLocalization.text(ru: "Профиль медленного интернета: меньше визуальных эффектов и сетевого трафика.", en: "Slow-internet profile with fewer visual effects and less network traffic.")
         }
     }
 
@@ -444,9 +444,9 @@ enum CertificatePolicy: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .trustOnFirstUse: "Доверять при первом подключении"
-        case .strict: "Только доверенный сертификат"
-        case .ignore: "Не проверять сертификат"
+        case .trustOnFirstUse: UpdateLocalization.text(ru: "Доверять при первом подключении", en: "Trust on first use")
+        case .strict: UpdateLocalization.text(ru: "Только доверенный сертификат", en: "Trusted certificate only")
+        case .ignore: UpdateLocalization.text(ru: "Не проверять сертификат", en: "Do not verify certificate")
         }
     }
 }
@@ -511,9 +511,9 @@ enum SSHAuthenticationMode: String, Codable, CaseIterable, Identifiable, Sendabl
 
     var title: String {
         switch self {
-        case .automatic: "Автоматически"
-        case .password: "Пароль"
-        case .key: "SSH-ключ"
+        case .automatic: UpdateLocalization.text(ru: "Автоматически", en: "Automatic")
+        case .password: UpdateLocalization.text(ru: "Пароль", en: "Password")
+        case .key: UpdateLocalization.text(ru: "SSH-ключ", en: "SSH key")
         case .touchIDKey: "Touch ID Key"
         case .agent: "ssh-agent / ~/.ssh/config"
         }
@@ -539,7 +539,7 @@ enum SSHProxyMode: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .none: "Без прокси"
+        case .none: UpdateLocalization.text(ru: "Без прокси", en: "No proxy")
         case .http: "HTTP CONNECT"
         case .socks5: "SOCKS5"
         }
@@ -554,8 +554,8 @@ enum SSHHostKeyPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .acceptNew: "Принимать только новые ключи"
-        case .strict: "Только уже известные ключи"
+        case .acceptNew: UpdateLocalization.text(ru: "Принимать только новые ключи", en: "Accept new keys only")
+        case .strict: UpdateLocalization.text(ru: "Только уже известные ключи", en: "Known keys only")
         }
     }
 
@@ -576,8 +576,8 @@ enum PortForwardKind: String, Codable, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .local: "Локальный"
-        case .remote: "Удалённый"
+        case .local: UpdateLocalization.text(ru: "Локальный", en: "Local")
+        case .remote: UpdateLocalization.text(ru: "Удалённый", en: "Remote")
         case .dynamic: "SOCKS"
         }
     }
@@ -599,6 +599,19 @@ struct PortForwardRule: Codable, Equatable, Identifiable, Sendable {
     var sourcePort: Int
     var destinationHost: String
     var destinationPort: Int
+
+    var displayName: String {
+        switch name {
+        case "Локальный туннель":
+            UpdateLocalization.text(ru: name, en: "Local tunnel")
+        case "Удалённый туннель":
+            UpdateLocalization.text(ru: name, en: "Remote tunnel")
+        case "SOCKS-прокси":
+            UpdateLocalization.text(ru: name, en: "SOCKS proxy")
+        default:
+            name
+        }
+    }
 
     init(kind: PortForwardKind = .local) {
         self.kind = kind
@@ -706,9 +719,9 @@ enum RDPWindowMode: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .fullScreen: "Полный экран"
-        case .dynamicWindow: "Окно · менять разрешение"
-        case .fixedWindow: "Окно · фиксированный размер"
+        case .fullScreen: UpdateLocalization.text(ru: "Полный экран", en: "Full screen")
+        case .dynamicWindow: UpdateLocalization.text(ru: "Окно · менять разрешение", en: "Window · resize resolution")
+        case .fixedWindow: UpdateLocalization.text(ru: "Окно · фиксированный размер", en: "Window · fixed size")
         }
     }
 }

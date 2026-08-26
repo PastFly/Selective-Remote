@@ -332,7 +332,7 @@ struct ConnectionActivityView: View {
                         .padding(.vertical, 2)
                         .background(Color.secondary.opacity(0.1), in: Capsule())
                     Spacer()
-                    Text(record.startedAt.formatted(date: .abbreviated, time: .standard))
+                    Text(UpdateLocalization.dateTime(record.startedAt))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

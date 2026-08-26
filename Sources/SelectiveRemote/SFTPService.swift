@@ -68,11 +68,11 @@ enum SFTPFileSortField: String, CaseIterable, Identifiable, Sendable {
 
     var title: String {
         switch self {
-        case .name: "Имя"
-        case .size: "Размер"
-        case .modified: "Изменён"
-        case .owner: "Владелец"
-        case .permissions: "Доступ"
+        case .name: UpdateLocalization.text(ru: "Имя", en: "Name")
+        case .size: UpdateLocalization.text(ru: "Размер", en: "Size")
+        case .modified: UpdateLocalization.text(ru: "Изменён", en: "Modified")
+        case .owner: UpdateLocalization.text(ru: "Владелец", en: "Owner")
+        case .permissions: UpdateLocalization.text(ru: "Доступ", en: "Permissions")
         }
     }
 }
@@ -82,7 +82,11 @@ enum SFTPSortDirection: String, CaseIterable, Identifiable, Sendable {
     case descending
 
     var id: String { rawValue }
-    var title: String { self == .ascending ? "По возрастанию" : "По убыванию" }
+    var title: String {
+        self == .ascending
+            ? UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")
+            : UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+    }
     var systemImage: String {
         self == .ascending ? "arrow.up" : "arrow.down"
     }

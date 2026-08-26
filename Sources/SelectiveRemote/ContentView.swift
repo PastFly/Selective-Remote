@@ -2853,10 +2853,10 @@ struct ContentView: View {
                         TextField("Путь к mosh-server (необязательно)", text: profileBinding.moshServerPath)
                             .textFieldStyle(.roundedBorder)
                     }
-                    Text(
-                        "Mosh использует SSH для входа, затем UDP для устойчивой Terminal-сессии. "
-                            + "На Mac и сервере должен быть установлен Mosh; SFTP и туннели остаются на SSH."
-                    )
+                        Text(UpdateLocalization.text(
+                            ru: "Mosh использует SSH для входа, затем UDP для устойчивой Terminal-сессии. На Mac и сервере должен быть установлен Mosh; SFTP и туннели остаются на SSH.",
+                            en: "Mosh uses SSH to sign in and then UDP for a resilient Terminal session. Mosh must be installed on both the Mac and server; SFTP and forwarding continue to use SSH."
+                        ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
@@ -3109,7 +3109,11 @@ struct ContentView: View {
                     Label("Маршрут SSH", systemImage: "point.3.connected.trianglepath.dotted")
                         .font(.headline)
                     Spacer()
-                    Text(profileBinding.wrappedValue.sshJumpHostProfileID == nil ? "Прямое подключение" : "Jump Host")
+                    Text(
+                        profileBinding.wrappedValue.sshJumpHostProfileID == nil
+                            ? UpdateLocalization.text(ru: "Прямое подключение", en: "Direct Connection")
+                            : "Jump Host"
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -3270,10 +3274,10 @@ struct ContentView: View {
                         "Разрешить Terminal перенаправлять локальный ssh-agent",
                         isOn: profileBinding.sshAgentForwarding
                     )
-                    Text(
-                        "Позволяет подключаться с этого сервера дальше по SSH или к Git, "
-                            + "используя ключи из ssh-agent на Mac без копирования приватного ключа на сервер."
-                    )
+                    Text(UpdateLocalization.text(
+                        ru: "Позволяет подключаться с этого сервера дальше по SSH или к Git, используя ключи из ssh-agent на Mac без копирования приватного ключа на сервер.",
+                        en: "Allows onward SSH or Git connections from this server using keys from the Mac ssh-agent without copying a private key to the server."
+                    ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     Label(
@@ -3393,8 +3397,14 @@ struct ContentView: View {
                         .frame(height: 285)
                         Text(
                             profile.displayLayoutMode == .custom
-                                ? "Перетаскивайте мониторы. Координаты привязываются к сетке 20 px; основной экран всегда нормализуется к x:0, y:0."
-                                : "Автоматический режим удаляет промежутки между выбранными физическими дисплеями."
+                                ? UpdateLocalization.text(
+                                    ru: "Перетаскивайте мониторы. Координаты привязываются к сетке 20 px; основной экран всегда нормализуется к x:0, y:0.",
+                                    en: "Drag displays to arrange them. Coordinates snap to a 20 px grid; the primary display is always normalized to x:0, y:0."
+                                )
+                                : UpdateLocalization.text(
+                                    ru: "Автоматический режим удаляет промежутки между выбранными физическими дисплеями.",
+                                    en: "Automatic mode removes gaps between the selected physical displays."
+                                )
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -3458,8 +3468,14 @@ struct ContentView: View {
                         }
                         Text(
                             profile.rdpWindowMode == .dynamicWindow
-                                ? "При изменении размера окна Windows получает новое разрешение, а не растягивается."
-                                : "Разрешение остаётся фиксированным; изображение масштабируется внутри окна."
+                                ? UpdateLocalization.text(
+                                    ru: "При изменении размера окна Windows получает новое разрешение, а не растягивается.",
+                                    en: "Resizing the window changes the Windows resolution instead of stretching the image."
+                                )
+                                : UpdateLocalization.text(
+                                    ru: "Разрешение остаётся фиксированным; изображение масштабируется внутри окна.",
+                                    en: "The resolution stays fixed; the image scales inside the window."
+                                )
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -3579,10 +3595,10 @@ struct ContentView: View {
                         "Fn переключает язык Windows",
                         isOn: profileBinding.fnSwitchesWindowsLanguage
                     )
-                    Text(
-                        "Одиночное нажатие Fn отправляет Win+Space. "
-                            + "Fn в сочетании с другими клавишами не переключает язык."
-                    )
+                    Text(UpdateLocalization.text(
+                        ru: "Одиночное нажатие Fn отправляет Win+Space. Fn в сочетании с другими клавишами не переключает язык.",
+                        en: "Pressing Fn alone sends Win+Space. Fn used with other keys does not switch the language."
+                    ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -3668,7 +3684,10 @@ struct ContentView: View {
                         }
                         if model.selectedCameraUnavailable,
                            let id = profile.cameraDeviceID {
-                            Text("\(profile.cameraDeviceName ?? "Сохранённая камера") · недоступна")
+                            Text(
+                                "\(profile.cameraDeviceName ?? UpdateLocalization.text(ru: "Сохранённая камера", en: "Saved camera")) · "
+                                    + UpdateLocalization.text(ru: "недоступна", en: "unavailable")
+                            )
                                 .tag(CameraSelectionToken.device(id))
                         }
                     }
@@ -3798,10 +3817,10 @@ struct ContentView: View {
                             systemImage: "checkmark.shield"
                         )
                         .font(.caption)
-                        Text(
-                            "Режим «принимать новые» добавляет только ранее неизвестный ключ, "
-                                + "но всегда отклоняет изменившийся ключ сервера."
-                        )
+                        Text(UpdateLocalization.text(
+                            ru: "Режим «принимать новые» добавляет только ранее неизвестный ключ, но всегда отклоняет изменившийся ключ сервера.",
+                            en: "Accept-new mode adds only previously unknown keys and always rejects a changed server key."
+                        ))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
@@ -4158,7 +4177,11 @@ private struct ProfileRow: View {
             )
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
+                    Text(
+                        profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                            : profile.friendlyName
+                    )
                         .lineLimit(1)
                     if profile.isFavorite {
                         Image(systemName: "star.fill")
@@ -4243,7 +4266,11 @@ private struct ProfileGridCard: View {
                         .foregroundStyle(.yellow)
                 }
             }
-            Text(profile.friendlyName.isEmpty ? "Без названия" : profile.friendlyName)
+            Text(
+                profile.friendlyName.isEmpty
+                    ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                    : profile.friendlyName
+            )
                 .font(.subheadline.weight(.semibold))
                 .lineLimit(2)
             Text(

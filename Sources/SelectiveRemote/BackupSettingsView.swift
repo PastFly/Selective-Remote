@@ -336,7 +336,7 @@ private struct BackupSummaryView: View {
     var body: some View {
         GroupBox("Содержимое архива") {
             Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 7) {
-                row("Создан", summary.createdAt.formatted(date: .abbreviated, time: .shortened))
+                row("Создан", UpdateLocalization.dateTimeShort(summary.createdAt))
                 row("Версия", summary.appVersion)
                 row("Профили", String(summary.profileCount))
                 row("Snippets", String(summary.snippetCount))

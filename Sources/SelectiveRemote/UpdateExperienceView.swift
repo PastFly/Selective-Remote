@@ -117,7 +117,7 @@ private struct UpdateSettingsView: View {
 
     private var lastCheckText: String {
         guard let date = model.lastSuccessfulUpdateCheckDate else { return "Ещё не выполнялась" }
-        return date.formatted(date: .abbreviated, time: .shortened)
+        return UpdateLocalization.dateTimeShort(date)
     }
 }
 
@@ -414,9 +414,9 @@ struct UpdateExperiencePopover: View {
         }
         let formatted: String
         if Calendar.current.isDateInToday(date) {
-            formatted = date.formatted(date: .omitted, time: .shortened)
+            formatted = UpdateLocalization.timeShort(date)
         } else {
-            formatted = date.formatted(date: .abbreviated, time: .shortened)
+            formatted = UpdateLocalization.dateTimeShort(date)
         }
         return UpdateLocalization.text(
             ru: "Последняя проверка: \(formatted)",

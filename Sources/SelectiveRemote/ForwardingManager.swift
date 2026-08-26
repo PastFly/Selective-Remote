@@ -50,11 +50,11 @@ enum ForwardingManagerState: String, Hashable {
 
     var title: String {
         switch self {
-        case .running: "Работает"
-        case .reconnecting: "Переподключается"
-        case .stopping: "Останавливается"
-        case .stopped: "Остановлен"
-        case .error: "Ошибка"
+        case .running: UpdateLocalization.text(ru: "Работает", en: "Running")
+        case .reconnecting: UpdateLocalization.text(ru: "Переподключается", en: "Reconnecting")
+        case .stopping: UpdateLocalization.text(ru: "Останавливается", en: "Stopping")
+        case .stopped: UpdateLocalization.text(ru: "Остановлен", en: "Stopped")
+        case .error: UpdateLocalization.text(ru: "Ошибка", en: "Error")
         }
     }
 
@@ -695,7 +695,7 @@ struct ForwardingManagerView: View {
                     .frame(width: 20)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(item.rule.name)
+                    Text(item.rule.displayName)
                         .font(.subheadline.weight(.semibold))
                         .lineLimit(1)
                     Text(item.localAddress + " → " + item.destination)
@@ -769,9 +769,9 @@ struct ForwardingManagerView: View {
                     HStack(spacing: 6) {
                         Image(systemName: item.rule.kind.systemImage)
                             .foregroundStyle(item.ownership.color)
-                        Text(item.rule.name)
+                        Text(item.rule.displayName)
                             .lineLimit(1)
-                            .help(item.rule.name)
+                            .help(item.rule.displayName)
                     }
                 }
             }
@@ -936,7 +936,10 @@ struct ForwardingManagerView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("\(items.count) туннелей")
+            Text(UpdateLocalization.text(
+                ru: "\(items.count) туннелей",
+                en: "\(items.count) tunnels"
+            ))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
@@ -993,7 +996,7 @@ struct ForwardingManagerView: View {
             .frame(width: 42, height: 42)
 
             VStack(alignment: .leading, spacing: 5) {
-                Text(item.rule.name)
+                Text(item.rule.displayName)
                     .font(.headline)
                     .lineLimit(2)
                 HStack(spacing: 6) {
@@ -1615,7 +1618,10 @@ struct ForwardingManagerView: View {
                 authentication = runtime.authenticationMode.title
             } else if tunnel.connection.kind == .custom,
                       model.hasSavedForwardingPassword(tunnel.id) {
-                authentication = "Автоматически + Keychain"
+                authentication = UpdateLocalization.text(
+                    ru: "Автоматически + Keychain",
+                    en: "Automatic + Keychain"
+                )
             } else {
                 authentication = resolved.authentication.title
             }
@@ -1892,29 +1898,53 @@ struct ForwardingManagerView: View {
     }
 
     private func destinationEvidenceText(_ evidence: ForwardingTunnelLogEvidence) -> String {
-        if evidence.destinationReachable { return "Подтверждено трафиком" }
-        if evidence.destinationFailure != nil { return "Ошибка подключения" }
-        if evidence.trafficObserved { return "Проверяется" }
-        return "Ожидает первого обращения"
+        if evidence.destinationReachable {
+            return UpdateLocalization.text(ru: "Подтверждено трафиком", en: "Confirmed by traffic")
+        }
+        if evidence.destinationFailure != nil {
+            return UpdateLocalization.text(ru: "Ошибка подключения", en: "Connection failed")
+        }
+        if evidence.trafficObserved {
+            return UpdateLocalization.text(ru: "Проверяется", en: "Checking")
+        }
+        return UpdateLocalization.text(ru: "Ожидает первого обращения", en: "Waiting for first connection")
     }
 
     private func routeEvidenceDescription(_ item: ForwardingManagerItem) -> String {
         guard item.state == .running else {
-            return "Схема отражает фактическое runtime-состояние процесса OpenSSH."
+            return UpdateLocalization.text(
+                ru: "Схема отражает фактическое runtime-состояние процесса OpenSSH.",
+                en: "The diagram reflects the actual runtime state of the OpenSSH process."
+            )
         }
         guard item.rule.kind == .local else {
             return item.rule.kind == .dynamic
-                ? "Dynamic/SOCKS не имеет фиксированного Destination: конечный адрес выбирает SOCKS-клиент."
-                : "Для Remote forwarding точка Destination остаётся неизвестной, пока OpenSSH не даст подтверждаемое событие канала."
+                ? UpdateLocalization.text(
+                    ru: "Dynamic/SOCKS не имеет фиксированного Destination: конечный адрес выбирает SOCKS-клиент.",
+                    en: "Dynamic/SOCKS has no fixed destination; the SOCKS client selects the final address."
+                )
+                : UpdateLocalization.text(
+                    ru: "Для Remote forwarding точка Destination остаётся неизвестной, пока OpenSSH не даст подтверждаемое событие канала.",
+                    en: "For remote forwarding, the destination remains unknown until OpenSSH reports a verifiable channel event."
+                )
         }
         let evidence = runtimeEvidence(for: item)
         if evidence.destinationReachable {
-            return "Destination подтверждён фактическим обращением через этот Local tunnel в журнале OpenSSH."
+            return UpdateLocalization.text(
+                ru: "Destination подтверждён фактическим обращением через этот Local tunnel в журнале OpenSSH.",
+                en: "The destination was confirmed by actual traffic through this local tunnel in the OpenSSH log."
+            )
         }
         if let failure = evidence.destinationFailure {
-            return "Последняя попытка пройти через tunnel завершилась ошибкой: \(failure)"
+            return UpdateLocalization.text(
+                ru: "Последняя попытка пройти через tunnel завершилась ошибкой: \(failure)",
+                en: "The latest attempt through the tunnel failed: \(failure)"
+            )
         }
-        return "Local bind и SSH-сессия активны. Destination станет зелёным после первого фактического подключения через локальный порт."
+        return UpdateLocalization.text(
+            ru: "Local bind и SSH-сессия активны. Destination станет зелёным после первого фактического подключения через локальный порт.",
+            en: "The local bind and SSH session are active. The destination turns green after the first real connection through the local port."
+        )
     }
 
     private func formattedTunnelLog(
@@ -1948,7 +1978,11 @@ struct ForwardingManagerView: View {
 
         lines.append("")
         lines.append("--- OpenSSH DEBUG1 ---")
-        lines.append(rawLog.isEmpty ? "Журнал OpenSSH пока пуст." : rawLog)
+        lines.append(
+            rawLog.isEmpty
+                ? UpdateLocalization.text(ru: "Журнал OpenSSH пока пуст.", en: "The OpenSSH log is empty.")
+                : rawLog
+        )
         return lines.joined(separator: "\n")
     }
 
@@ -1964,24 +1998,37 @@ struct ForwardingManagerView: View {
         case .telnet, .serial, .local:
             seconds = 0
         }
-        return seconds > 0 ? "Каждые \(seconds) sec" : "Отключён"
+        return seconds > 0
+            ? UpdateLocalization.text(ru: "Каждые \(seconds) сек.", en: "Every \(seconds) sec")
+            : UpdateLocalization.text(ru: "Отключён", en: "Disabled")
     }
 
     private func hopCountText(_ item: ForwardingManagerItem) -> String {
         var count = 1
         if item.proxy != nil { count += 1 }
         if item.jumpHost != nil { count += 1 }
-        return count == 1 ? "Direct" : "\(count) узла"
+        return count == 1
+            ? "Direct"
+            : UpdateLocalization.text(ru: "\(count) узла", en: "\(count) hops")
     }
 
     private func routeExplanation(_ kind: PortForwardKind) -> String {
         switch kind {
         case .local:
-            "Local открывает порт на Mac и передаёт TCP через SSH к фиксированному назначению."
+            UpdateLocalization.text(
+                ru: "Local открывает порт на Mac и передаёт TCP через SSH к фиксированному назначению.",
+                en: "Local opens a port on the Mac and forwards TCP through SSH to a fixed destination."
+            )
         case .remote:
-            "Remote открывает порт на SSH-сервере и ведёт входящий поток обратно через SSH к назначению."
+            UpdateLocalization.text(
+                ru: "Remote открывает порт на SSH-сервере и ведёт входящий поток обратно через SSH к назначению.",
+                en: "Remote opens a port on the SSH server and sends incoming traffic back through SSH to the destination."
+            )
         case .dynamic:
-            "Dynamic открывает локальный SOCKS-порт; фиксированного Destination у него нет."
+            UpdateLocalization.text(
+                ru: "Dynamic открывает локальный SOCKS-порт; фиксированного Destination у него нет.",
+                en: "Dynamic opens a local SOCKS port and has no fixed destination."
+            )
         }
     }
 

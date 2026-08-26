@@ -115,14 +115,7 @@ struct SFTPLocalEntry: Identifiable, Equatable, Sendable {
 
     var modifiedText: String {
         guard let modificationDate else { return "—" }
-        return modificationDate.formatted(
-            .dateTime
-                .day()
-                .month(.abbreviated)
-                .year()
-                .hour()
-                .minute()
-        )
+        return UpdateLocalization.dateTimeShort(modificationDate)
     }
 }
 

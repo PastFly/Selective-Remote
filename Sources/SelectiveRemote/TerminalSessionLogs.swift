@@ -548,7 +548,7 @@ struct TerminalSessionLogsView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                Text(record.startedAt.formatted(date: .abbreviated, time: .standard))
+                Text(UpdateLocalization.dateTime(record.startedAt))
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
             }
@@ -590,7 +590,7 @@ struct TerminalSessionLogsView: View {
 
             HStack(spacing: 14) {
                 Label(
-                    record.startedAt.formatted(date: .abbreviated, time: .standard),
+                    UpdateLocalization.dateTime(record.startedAt),
                     systemImage: "calendar"
                 )
                 Label(durationText(record.duration), systemImage: "timer")
