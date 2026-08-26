@@ -112,6 +112,7 @@ struct CredentialVaultView: View {
     @State private var knownHostPendingDeletion: SSHKnownHostEntry?
     @State private var knownHostProfileCreationEntry: SSHKnownHostEntry?
     @State private var unifiedVaultMessage: String?
+    @State private var compactDetailPresented = false
 
     init(
         presentation: CredentialVaultPresentation = .sheet,
@@ -230,22 +231,54 @@ struct CredentialVaultView: View {
     }
 
     private var baseLayout: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
+        GeometryReader { proxy in
+            let compact = AdaptiveWorkspaceLayout.usesDetailNavigation(
+                width: proxy.size.width
+            )
 
-            HSplitView {
-                vaultList
-                    .frame(minWidth: 330, idealWidth: 390, maxWidth: 480)
+            VStack(spacing: 0) {
+                header(compact: compact)
+                Divider()
 
-                inspector
-                    .frame(minWidth: 520)
+                if compact {
+                    if compactDetailPresented {
+                        compactInspector
+                    } else {
+                        vaultList(compact: true)
+                    }
+                } else {
+                    HSplitView {
+                        vaultList(compact: false)
+                            .frame(minWidth: 330, idealWidth: 390, maxWidth: 480)
+
+                        inspector
+                            .frame(minWidth: 420)
+                    }
+                }
             }
         }
         .frame(
-            minWidth: presentation == .sheet ? 980 : nil,
+            minWidth: presentation == .sheet ? 680 : nil,
             minHeight: presentation == .sheet ? 660 : nil
         )
+    }
+
+    private var compactInspector: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Назад к Связке ключей", systemImage: "chevron.left") {
+                    compactDetailPresented = false
+                }
+                .buttonStyle(.bordered)
+                Spacer()
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+
+            Divider()
+            inspector
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var bodyWithLifecycle: some View {
@@ -359,7 +392,7 @@ struct CredentialVaultView: View {
         refreshCertificateInfo()
     }
 
-    private var header: some View {
+    private func header(compact: Bool) -> some View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -368,41 +401,62 @@ struct CredentialVaultView: View {
                     .font(.system(size: 24, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
             }
-            .frame(width: 48, height: 48)
+            .frame(width: compact ? 40 : 48, height: compact ? 40 : 48)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text("Связка ключей")
-                    .font(.system(size: presentation == .embedded ? 30 : 24, weight: .bold, design: .rounded))
+                    .font(.system(size: compact ? 24 : (presentation == .embedded ? 30 : 24), weight: .bold, design: .rounded))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.75)
                 Text("SSH ID, Touch ID, OpenSSH-сертификаты и сохранённые реквизиты")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .lineLimit(compact ? 2 : 1)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
-                Button {
-                    migrateCredentialVault()
+            if compact {
+                Menu {
+                    Button("Объединить пароли", systemImage: "lock.square.stack") {
+                        migrateCredentialVault()
+                    }
+                    if presentation == .sheet {
+                        Divider()
+                        Button("Готово") { dismiss() }
+                    }
                 } label: {
-                    Label("Объединить пароли", systemImage: "lock.square.stack")
+                    Image(systemName: "ellipsis.circle")
+                        .font(.title3)
                 }
-                .buttonStyle(.bordered)
-                .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
-                Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
+                .menuStyle(.borderlessButton)
+                .help("Действия Связки ключей")
+            } else {
+                VStack(alignment: .trailing, spacing: 3) {
+                    Button {
+                        migrateCredentialVault()
+                    } label: {
+                        Label("Объединить пароли", systemImage: "lock.square.stack")
+                    }
+                    .buttonStyle(.bordered)
+                    .help("Однократно переносит старые сохранённые пароли в единый Keychain Vault. При первой миграции macOS ещё может запросить доступ к отдельным старым записям; после переноса будущие сборки используют одну Vault-запись.")
+                    Text("Единый Vault: \(KeychainService.unifiedVaultEntryCount)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
 
-            if presentation == .sheet {
-                Button("Готово") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
+                if presentation == .sheet {
+                    Button("Готово") { dismiss() }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
         }
-        .padding(.horizontal, 22)
-        .padding(.vertical, 16)
+        .padding(.horizontal, compact ? 16 : 22)
+        .padding(.vertical, compact ? 12 : 16)
     }
 
-    private var vaultList: some View {
+    private func vaultList(compact: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Menu {
@@ -443,11 +497,7 @@ struct CredentialVaultView: View {
             Divider()
 
             LazyVGrid(
-                columns: [
-                    GridItem(.flexible(minimum: 92), spacing: 8),
-                    GridItem(.flexible(minimum: 92), spacing: 8),
-                    GridItem(.flexible(minimum: 92), spacing: 8)
-                ],
+                columns: [GridItem(.adaptive(minimum: compact ? 116 : 92), spacing: 8)],
                 alignment: .leading,
                 spacing: 8
             ) {
@@ -474,6 +524,7 @@ struct CredentialVaultView: View {
                         ForEach(visibleKeys) { key in
                             keyRow(key)
                                 .tag(VaultSelection.key(key.id))
+                                .simultaneousGesture(compactSelectionGesture(.key(key.id), enabled: compact))
                         }
                     }
                 }
@@ -483,6 +534,7 @@ struct CredentialVaultView: View {
                         ForEach(visibleCredentials) { profile in
                             credentialRow(profile)
                                 .tag(VaultSelection.credential(profile.id))
+                                .simultaneousGesture(compactSelectionGesture(.credential(profile.id), enabled: compact))
                         }
                     }
                 }
@@ -492,6 +544,7 @@ struct CredentialVaultView: View {
                         ForEach(visibleAuthorities) { authority in
                             authorityRow(authority)
                                 .tag(VaultSelection.authority(authority.id))
+                                .simultaneousGesture(compactSelectionGesture(.authority(authority.id), enabled: compact))
                         }
                     }
                 }
@@ -501,6 +554,7 @@ struct CredentialVaultView: View {
                         ForEach(visibleKnownHosts) { entry in
                             knownHostRow(entry)
                                 .tag(VaultSelection.knownHost(entry.id))
+                                .simultaneousGesture(compactSelectionGesture(.knownHost(entry.id), enabled: compact))
                         }
                     }
                 }
@@ -944,10 +998,10 @@ struct CredentialVaultView: View {
                 }
 
                 GroupBox("Параметры CA") {
-                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 10) {
-                        GridRow { metadataLabel("Fingerprint"); Text(authority.fingerprint).font(.caption.monospaced()).textSelection(.enabled) }
-                        GridRow { metadataLabel("Public key"); Text(authority.publicKeyPath).font(.caption.monospaced()).textSelection(.enabled) }
-                        GridRow { metadataLabel("Private key"); Text(authority.privateKeyPath).font(.caption.monospaced()).textSelection(.enabled) }
+                    VStack(alignment: .leading, spacing: 10) {
+                        adaptiveMetadataRow("Fingerprint", value: authority.fingerprint, monospaced: true)
+                        adaptiveMetadataRow("Public key", value: authority.publicKeyPath, monospaced: true)
+                        adaptiveMetadataRow("Private key", value: authority.privateKeyPath, monospaced: true)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -1116,23 +1170,11 @@ struct CredentialVaultView: View {
 
     private func detailsCard(_ key: SSHKeyRecord) -> some View {
         inspectorCard("Параметры", systemImage: "info.circle") {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
-                GridRow { metadataLabel("Тип"); Text(key.algorithm) }
-                GridRow {
-                    metadataLabel("Fingerprint")
-                    Text(key.fingerprint).font(.caption.monospaced()).textSelection(.enabled)
-                }
-                GridRow {
-                    metadataLabel("Private key")
-                    Text(key.privateKeyPath)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                }
-                GridRow {
-                    metadataLabel("Используется")
-                    Text(profileUsageText(key)).font(.caption)
-                }
+            VStack(alignment: .leading, spacing: 10) {
+                adaptiveMetadataRow("Тип", value: key.algorithm)
+                adaptiveMetadataRow("Fingerprint", value: key.fingerprint, monospaced: true)
+                adaptiveMetadataRow("Private key", value: key.privateKeyPath, monospaced: true)
+                adaptiveMetadataRow("Используется", value: profileUsageText(key))
             }
         }
     }
@@ -1168,19 +1210,16 @@ struct CredentialVaultView: View {
                             .foregroundStyle(status.color)
                             .font(.subheadline.weight(.semibold))
                     }
-                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 8) {
-                        if let value = certificateInfo.type { GridRow { metadataLabel("Type"); Text(value) } }
-                        if let value = certificateInfo.keyID { GridRow { metadataLabel("Key ID"); Text(value) } }
-                        if let value = certificateInfo.serial { GridRow { metadataLabel("Serial"); Text(value) } }
-                        if let value = certificateInfo.validFrom { GridRow { metadataLabel("Valid from"); Text(value) } }
-                        if let value = certificateInfo.validTo { GridRow { metadataLabel("Valid to"); Text(value) } }
+                    VStack(alignment: .leading, spacing: 8) {
+                        if let value = certificateInfo.type { adaptiveMetadataRow("Type", value: value) }
+                        if let value = certificateInfo.keyID { adaptiveMetadataRow("Key ID", value: value) }
+                        if let value = certificateInfo.serial { adaptiveMetadataRow("Serial", value: value) }
+                        if let value = certificateInfo.validFrom { adaptiveMetadataRow("Valid from", value: value) }
+                        if let value = certificateInfo.validTo { adaptiveMetadataRow("Valid to", value: value) }
                         if !certificateInfo.principals.isEmpty {
-                            GridRow { metadataLabel("Principals"); Text(certificateInfo.principals.joined(separator: ", ")) }
+                            adaptiveMetadataRow("Principals", value: certificateInfo.principals.joined(separator: ", "))
                         }
-                        GridRow {
-                            metadataLabel("Файл")
-                            Text(certificateInfo.path).font(.caption.monospaced()).textSelection(.enabled)
-                        }
+                        adaptiveMetadataRow("Файл", value: certificateInfo.path, monospaced: true)
                     }
                     if let signingCA = certificateInfo.signingCA {
                         Divider()
@@ -1358,12 +1397,12 @@ struct CredentialVaultView: View {
                 }
 
                 inspectorCard("Host key", systemImage: "key.horizontal") {
-                    Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
-                        GridRow { metadataLabel("Host"); Text(entry.hosts).font(.caption.monospaced()).textSelection(.enabled) }
-                        GridRow { metadataLabel("Тип"); Text(entry.algorithm) }
-                        GridRow { metadataLabel("Fingerprint"); Text(entry.fingerprint).font(.caption.monospaced()).textSelection(.enabled) }
-                        GridRow { metadataLabel("Строка"); Text(String(entry.lineNumber)) }
-                        if let marker = entry.marker { GridRow { metadataLabel("Marker"); Text(marker) } }
+                    VStack(alignment: .leading, spacing: 10) {
+                        adaptiveMetadataRow("Host", value: entry.hosts, monospaced: true)
+                        adaptiveMetadataRow("Тип", value: entry.algorithm)
+                        adaptiveMetadataRow("Fingerprint", value: entry.fingerprint, monospaced: true)
+                        adaptiveMetadataRow("Строка", value: String(entry.lineNumber))
+                        if let marker = entry.marker { adaptiveMetadataRow("Marker", value: marker) }
                     }
                     HStack {
                         Button("Копировать fingerprint", systemImage: "doc.on.doc") {
@@ -1492,6 +1531,47 @@ struct CredentialVaultView: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.07))
         }
+    }
+
+    private func compactSelectionGesture(
+        _ item: VaultSelection,
+        enabled: Bool
+    ) -> some Gesture {
+        TapGesture().onEnded {
+            guard enabled else { return }
+            selection = item
+            compactDetailPresented = true
+        }
+    }
+
+    private func adaptiveMetadataRow(
+        _ label: String,
+        value: String,
+        monospaced: Bool = false
+    ) -> some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 16) {
+                metadataLabel(label)
+                metadataValue(value, monospaced: monospaced)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                metadataValue(value, monospaced: monospaced)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func metadataValue(_ value: String, monospaced: Bool) -> some View {
+        Text(value)
+            .font(monospaced ? .caption.monospaced() : .caption)
+            .textSelection(.enabled)
     }
 
     private func metadataLabel(_ value: String) -> some View {

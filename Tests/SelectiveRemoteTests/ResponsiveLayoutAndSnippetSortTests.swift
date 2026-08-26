@@ -96,6 +96,28 @@ func narrowManagerLayoutsAreAdaptive() throws {
     #expect(!forwarding.contains("VSplitView"))
 }
 
+@Test("Credential Vault uses compact navigation and wrapping metadata")
+func credentialVaultLayoutIsAdaptive() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let vault = try String(
+        contentsOf: root.appendingPathComponent(
+            "Sources/SelectiveRemote/CredentialVaultView.swift"
+        ),
+        encoding: .utf8
+    )
+
+    #expect(vault.contains("GeometryReader"))
+    #expect(vault.contains("AdaptiveWorkspaceLayout.usesDetailNavigation"))
+    #expect(vault.contains("compactDetailPresented"))
+    #expect(vault.contains("compactInspector"))
+    #expect(vault.contains("ViewThatFits(in: .horizontal)"))
+    #expect(vault.contains("GridItem(.adaptive"))
+    #expect(!vault.contains("inspector\n                    .frame(minWidth: 520)"))
+}
+
 
 @Test("Adaptive workspace breakpoints cover compact, regular, and 8K widths")
 func adaptiveWorkspaceBreakpoints() {
