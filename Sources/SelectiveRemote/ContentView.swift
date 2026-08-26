@@ -47,6 +47,22 @@ private enum MainArea: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var title: String {
+        switch self {
+        case .connectionCenter: "Connection Center"
+        case .connections: UpdateLocalization.text(ru: "Подключения", en: "Connections")
+        case .ssh: "SSH"
+        case .terminal: UpdateLocalization.text(ru: "Терминал", en: "Terminal")
+        case .sftp: "SFTP"
+        case .forwarding: "Forwarding"
+        case .snippets: UpdateLocalization.text(ru: "Сниппеты", en: "Snippets")
+        case .sessionLogs: "Session Logs"
+        case .activity: UpdateLocalization.text(ru: "Журнал", en: "Activity")
+        case .diagnostics: UpdateLocalization.text(ru: "Диагностика", en: "Diagnostics")
+        case .keychain: "Keychain"
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
@@ -444,7 +460,7 @@ struct ContentView: View {
                         HStack(spacing: 10) {
                             Image(systemName: area.systemImage)
                                 .frame(width: 22)
-                            Text(LocalizedStringKey(area.rawValue))
+                            Text(area.title)
                             Spacer()
                             if area == .ssh,
                                model.globalTerminalWorkspace().runningSessionCount > 0 {

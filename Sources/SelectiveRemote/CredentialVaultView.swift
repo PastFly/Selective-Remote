@@ -506,7 +506,11 @@ struct CredentialVaultView: View {
                         filter = item
                         normalizeSelectionForFilter()
                     } label: {
-                        Label(item.title, systemImage: item.systemImage)
+                        Label {
+                            Text(LocalizedStringKey(item.title))
+                        } icon: {
+                            Image(systemName: item.systemImage)
+                        }
                             .font(.caption.weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
@@ -1278,7 +1282,12 @@ struct CredentialVaultView: View {
         let loaded = agentLoadedKeyIDs.contains(key.id)
         return inspectorCard("ssh-agent", systemImage: "memorychip") {
             HStack {
-                Label(loaded ? "Ключ загружен" : "Ключ не загружен", systemImage: loaded ? "checkmark.circle.fill" : "circle")
+                Label(
+                    loaded
+                        ? UpdateLocalization.text(ru: "Ключ загружен", en: "Key is loaded")
+                        : UpdateLocalization.text(ru: "Ключ не загружен", en: "Key is not loaded"),
+                    systemImage: loaded ? "checkmark.circle.fill" : "circle"
+                )
                     .foregroundStyle(loaded ? Color.green : Color.secondary)
                 Spacer()
                 if loaded {
@@ -1520,7 +1529,7 @@ struct CredentialVaultView: View {
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(title, systemImage: systemImage)
+            Label(LocalizedStringKey(title), systemImage: systemImage)
                 .font(.headline)
             content()
         }
@@ -1557,7 +1566,7 @@ struct CredentialVaultView: View {
             }
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(label)
+                Text(LocalizedStringKey(label))
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 metadataValue(value, monospaced: monospaced)
@@ -1575,7 +1584,7 @@ struct CredentialVaultView: View {
     }
 
     private func metadataLabel(_ value: String) -> some View {
-        Text(value)
+        Text(LocalizedStringKey(value))
             .font(.caption.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(width: 100, alignment: .leading)
@@ -1594,7 +1603,9 @@ struct CredentialVaultView: View {
 
     private func profileUsageText(_ key: SSHKeyRecord) -> String {
         let names = profilesUsing(key).map(\.friendlyName)
-        return names.isEmpty ? "Не назначен профилям" : names.joined(separator: ", ")
+        return names.isEmpty
+            ? UpdateLocalization.text(ru: "Не назначен профилям", en: "Not assigned to profiles")
+            : names.joined(separator: ", ")
     }
 
     private func normalizeSelectionForFilter() {

@@ -254,7 +254,7 @@ struct TerminalSnippetsLibraryView: View {
                 Menu {
                     Picker("Сортировка", selection: $sortRaw) {
                         ForEach(SnippetLibrarySort.allCases) { option in
-                            Text(option.title).tag(option.rawValue)
+                            Text(LocalizedStringKey(option.title)).tag(option.rawValue)
                         }
                     }
                     Divider()

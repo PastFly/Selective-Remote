@@ -18,7 +18,7 @@ enum TerminalSessionLogKind: String, Codable, CaseIterable, Identifiable {
         case .mosh: "Mosh"
         case .telnet: "Telnet"
         case .serial: "Serial"
-        case .local: "Локальный"
+        case .local: UpdateLocalization.text(ru: "Локальный", en: "Local")
         }
     }
 
@@ -644,10 +644,10 @@ struct TerminalSessionLogsView: View {
 
     private func stateTitle(_ state: TerminalSessionLogState) -> String {
         switch state {
-        case .active: "Запись"
-        case .completed: "Завершено"
-        case .failed: "Ошибка"
-        case .interrupted: "Прервано"
+        case .active: UpdateLocalization.text(ru: "Запись", en: "Recording")
+        case .completed: UpdateLocalization.text(ru: "Завершено", en: "Completed")
+        case .failed: UpdateLocalization.text(ru: "Ошибка", en: "Failed")
+        case .interrupted: UpdateLocalization.text(ru: "Прервано", en: "Interrupted")
         }
     }
 
@@ -671,10 +671,20 @@ struct TerminalSessionLogsView: View {
 
     private func durationText(_ duration: TimeInterval) -> String {
         let seconds = max(0, Int(duration))
-        if seconds < 60 { return "\(seconds) сек." }
+        if seconds < 60 {
+            return UpdateLocalization.text(ru: "\(seconds) сек.", en: "\(seconds) sec")
+        }
         let minutes = seconds / 60
-        if minutes < 60 { return "\(minutes) мин. \(seconds % 60) сек." }
-        return "\(minutes / 60) ч. \(minutes % 60) мин."
+        if minutes < 60 {
+            return UpdateLocalization.text(
+                ru: "\(minutes) мин. \(seconds % 60) сек.",
+                en: "\(minutes) min \(seconds % 60) sec"
+            )
+        }
+        return UpdateLocalization.text(
+            ru: "\(minutes / 60) ч. \(minutes % 60) мин.",
+            en: "\(minutes / 60) hr \(minutes % 60) min"
+        )
     }
 
     private func byteCountText(_ record: TerminalSessionLogRecord) -> String {

@@ -2,6 +2,8 @@ import Foundation
 import SwiftUI
 
 enum ProjectSupport {
+    static let githubURL = URL(string: "https://github.com/PastFly/Selective-Remote")!
+    static let websiteURL = URL(string: "https://pastfly.github.io/Selective-Remote/")!
     static let yoomoneyURL = URL(
         string: "https://yoomoney.ru/to/4100119600001192"
     )!
@@ -23,38 +25,56 @@ struct AppHelpView: View {
         let text: String
     }
 
-    private let sections: [HelpSection] = [
+    private var sections: [HelpSection] { [
         .init(
-            title: "Подключения",
+            title: UpdateLocalization.text(ru: "Подключения", en: "Connections"),
             systemImage: "rectangle.connected.to.line.below",
-            text: "Создавайте RDP и SSH-профили в левом меню. Для SSH доступны Terminal, SFTP, Forwarding, SSH-ключи, Touch ID и диагностика. Правый клик по профилю открывает быстрые действия."
+            text: UpdateLocalization.text(
+                ru: "Создавайте RDP и SSH-профили в левом меню. Для SSH доступны Terminal, SFTP, Forwarding, SSH-ключи, Touch ID и диагностика. Правый клик по профилю открывает быстрые действия.",
+                en: "Create RDP and SSH profiles from the sidebar. SSH profiles provide Terminal, SFTP, Forwarding, SSH keys, Touch ID, and diagnostics. Right-click a profile for quick actions."
+            )
         ),
         .init(
             title: "Terminal Workspace",
             systemImage: "terminal",
-            text: "Терминал поддерживает независимые вкладки и несколько панелей. ⌘K открывает палитру действий. Групповой ввод включайте только когда нужно отправлять одну команду в несколько активных панелей."
+            text: UpdateLocalization.text(
+                ru: "Терминал поддерживает независимые вкладки и несколько панелей. ⌘K открывает палитру действий. Групповой ввод включайте только когда нужно отправлять одну команду в несколько активных панелей.",
+                en: "The terminal supports independent tabs and multiple panes. ⌘K opens the command palette. Enable broadcast input only when the same command must be sent to several active panes."
+            )
         ),
         .init(
             title: "SFTP",
             systemImage: "folder.badge.gearshape",
-            text: "Двухпанельный SFTP поддерживает Drag & Drop, множественный выбор, очередь передач, паузу и продолжение, редактирование файлов и историю навигации."
+            text: UpdateLocalization.text(
+                ru: "Двухпанельный SFTP поддерживает Drag & Drop, множественный выбор, очередь передач, паузу и продолжение, редактирование файлов и историю навигации.",
+                en: "The dual-pane SFTP workspace supports drag and drop, multiple selection, transfer queues, pause and resume, file editing, and navigation history."
+            )
         ),
         .init(
             title: "Keychain",
             systemImage: "key.viewfinder",
-            text: "Приватные SSH-ключи остаются файлами в ~/.ssh. Keychain используется для паролей и passphrase. В разделе Keychain можно управлять SSH ID, Touch ID Key, OpenSSH certificates и Known Hosts."
+            text: UpdateLocalization.text(
+                ru: "Приватные SSH-ключи остаются файлами в ~/.ssh. Keychain используется для паролей и passphrase. В разделе Keychain можно управлять SSH ID, Touch ID Key, OpenSSH certificates и Known Hosts.",
+                en: "Private SSH keys remain files in ~/.ssh. Keychain stores passwords and passphrases. The Keychain section manages SSH IDs, Touch ID keys, OpenSSH certificates, and known hosts."
+            )
         ),
         .init(
             title: "Forwarding",
             systemImage: "arrow.left.arrow.right",
-            text: "Поддерживаются Local, Remote и Dynamic/SOCKS туннели. Двойной клик запускает туннель, а контекстное меню позволяет остановить, перезапустить, скопировать или удалить его."
+            text: UpdateLocalization.text(
+                ru: "Поддерживаются Local, Remote и Dynamic/SOCKS туннели. Двойной клик запускает туннель, а контекстное меню позволяет остановить, перезапустить, скопировать или удалить его.",
+                en: "Local, Remote, and Dynamic/SOCKS tunnels are supported. Double-click to start a tunnel; use the context menu to stop, restart, copy, or delete it."
+            )
         ),
         .init(
-            title: "Безопасность",
+            title: UpdateLocalization.text(ru: "Безопасность", en: "Security"),
             systemImage: "lock.shield",
-            text: "Изменение SSH host key не принимается автоматически. Пароли не экспортируются вместе с профилями. Для Touch ID Key используются отдельные ECDSA-ключи."
+            text: UpdateLocalization.text(
+                ru: "Изменение SSH host key не принимается автоматически. Пароли не экспортируются вместе с профилями. Для Touch ID Key используются отдельные ECDSA-ключи.",
+                en: "SSH host key changes are never accepted automatically. Passwords are not included in profile exports. Touch ID keys use separate ECDSA identities."
+            )
         )
-    ]
+    ] }
 
     var body: some View {
         ScrollView {
@@ -81,7 +101,7 @@ struct AppHelpView: View {
                     }
                 }
 
-                Text("Краткая справка")
+                Text(UpdateLocalization.text(ru: "Краткая справка", en: "Quick Help"))
                     .font(.title2.bold())
 
                 LazyVGrid(
