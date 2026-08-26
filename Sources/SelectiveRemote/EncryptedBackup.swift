@@ -595,6 +595,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
     private static func deriveKey(password: String, salt: Data, iterations: UInt32) throws -> SymmetricKey {
         let passwordData = Data(password.utf8)
         var derived = Data(count: 32)
+        let derivedLength = derived.count
         let status = derived.withUnsafeMutableBytes { derivedBytes in
             passwordData.withUnsafeBytes { passwordBytes in
                 salt.withUnsafeBytes { saltBytes in
@@ -607,7 +608,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
                         iterations,
                         derivedBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
-                        derived.count
+                        derivedLength
                     )
                 }
             }
