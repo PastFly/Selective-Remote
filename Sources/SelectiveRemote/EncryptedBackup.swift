@@ -599,7 +599,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
             passwordData.withUnsafeBytes { passwordBytes in
                 salt.withUnsafeBytes { saltBytes in
                     CCKeyDerivationPBKDF(
-                        CCPBKDF(kCCPBKDF2),
+                        CCPBKDFAlgorithm(kCCPBKDF2),
                         passwordBytes.baseAddress?.assumingMemoryBound(to: Int8.self),
                         passwordData.count,
                         saltBytes.baseAddress?.assumingMemoryBound(to: UInt8.self),
