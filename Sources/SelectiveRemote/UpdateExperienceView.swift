@@ -21,6 +21,9 @@ struct AppSettingsView: View {
 
             AppLockSettingsView(store: appLock)
                 .tabItem { Label("Безопасность", systemImage: "lock.shield") }
+
+            BackupSettingsView(model: model)
+                .tabItem { Label("Резервная копия", systemImage: "externaldrive.badge.timemachine") }
         }
         .frame(width: 610, height: 520)
         .background {

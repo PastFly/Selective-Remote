@@ -195,6 +195,11 @@ enum KeychainService {
         kind: KeychainCredentialKind,
         reason: String
     ) async throws -> String? {
+        try await authenticateDeviceOwner(reason: reason)
+        return try readPassword(profileID: profileID, kind: kind)
+    }
+
+    static func authenticateDeviceOwner(reason: String) async throws {
         let context = LAContext()
         context.localizedCancelTitle = UpdateLocalization.text(ru: "Отмена", en: "Cancel")
         var availabilityError: NSError?
@@ -243,7 +248,6 @@ enum KeychainService {
             throw KeychainError.biometricAuthenticationFailed(message)
         }
 
-        return try readPassword(profileID: profileID, kind: kind)
     }
 
     static func passwordExists(reference: KeychainCredentialReference) -> Bool {

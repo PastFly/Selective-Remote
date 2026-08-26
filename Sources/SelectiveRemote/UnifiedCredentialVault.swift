@@ -98,6 +98,21 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         _ = try loadIfNeeded()
     }
 
+    func exportedSecrets() throws -> [String: String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return try loadIfNeeded()
+    }
+
+    func replaceSecrets(_ secrets: [String: String]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        try persist(secrets)
+        cachedSecrets = secrets
+        index = Set(secrets.keys)
+        suppressedLegacy = []
+    }
+
     /// One-time migration for existing per-profile Keychain records.
     ///
     /// Security.framework does not allow `kSecReturnData` together with
