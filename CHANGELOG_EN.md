@@ -1,3 +1,17 @@
+## 0.31.0
+
+- Added full encrypted Selective Remote backups in the `.srbackup` format, including connections, groups, Snippets, settings, and local workspace data.
+- Passwords and other macOS Keychain records, along with private SSH and CA keys, can be included only after explicit confirmation and macOS system authentication.
+- Session Logs and connection activity are included in a full backup by default; every sensitive category can be disabled before export.
+- Archives use AES-256-GCM with a key derived through PBKDF2-HMAC-SHA256 at 600,000 iterations, plus independent integrity authentication for the manifest and every file.
+- Restore validates the complete archive first, is blocked while terminal sessions are active, and runs transactionally with rollback of local data and Keychain records on failure.
+- Keychain now uses an adaptive layout in narrow windows without clipping its list, actions, or inspector.
+- Fixed transparent Help and What's New windows so their content is again shown on an opaque frame regardless of the transparency preference.
+- The About Selective Remote window now includes the version, build, app purpose, supported protocols, and project links.
+- Completed English localization across SFTP, profile tabs, dates, Devices, Display, Keychain, Connection Center, Forwarding, and dynamic labels, with regression coverage for Russian text leaks in the English UI.
+- The Russian and English README files now document full encrypted backup, its security model, and account-free local operation.
+- Added regression and security coverage for backup, restore, authentication, rollback, adaptive layout, and localization.
+
 ## 0.30.0
 
 - Saved RDP, RD Gateway, SSH, and proxy passwords can now be temporarily revealed directly in profile settings.
