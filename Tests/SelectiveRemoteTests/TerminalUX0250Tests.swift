@@ -36,9 +36,18 @@ struct TerminalUX0250Tests {
     @Test("Local toolbar uses SSH-sized icon controls")
     func localToolbarUsesTitle3Icons() throws {
         let local = try source("Sources/SelectiveRemote/LocalTerminalView.swift")
+        let content = try source("Sources/SelectiveRemote/ContentView.swift")
         #expect(local.contains("Image(systemName: \"clock.arrow.circlepath\")\n                    .font(.title3)"))
         #expect(local.contains("Image(systemName: \"curlybraces\")\n                    .font(.title3)"))
         #expect(local.contains("Image(systemName: \"paintpalette.fill\")\n                    .font(.title3)"))
+
+        let localDetailStart = try #require(content.range(of: "private var localTerminalDetail"))
+        let nextDetailStart = try #require(content.range(
+            of: "private var globalSFTPDetail",
+            range: localDetailStart.upperBound..<content.endIndex
+        ))
+        let localDetail = content[localDetailStart.lowerBound..<nextDetailStart.lowerBound]
+        #expect(localDetail.contains(".controlSize(.large)"))
     }
 
     @Test("Individual terminal appearance persists every setting independently")

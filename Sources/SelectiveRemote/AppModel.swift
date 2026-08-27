@@ -378,6 +378,14 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
     }
+    var automaticUpdateDownloadDirectoryDisplayPath: String {
+        if let automaticUpdateDownloadDirectoryPath,
+           !automaticUpdateDownloadDirectoryPath.isEmpty {
+            return automaticUpdateDownloadDirectoryPath
+        }
+        return (try? UpdateInstaller.defaultDownloadDirectoryURL().path)
+            ?? "~/Library/Application Support/Selective Remote/Updates"
+    }
     @Published private(set) var sessions: [UUID: RDPSessionSummary] = [:]
     @Published private(set) var passwordStoredProfileIDs: Set<String> = []
     @Published private(set) var gatewayPasswordStoredProfileIDs: Set<String> = []
@@ -4875,7 +4883,12 @@ final class AppModel: NSObject, ObservableObject {
         updateDownloadStage = .installing
         do {
             let mounted = try UpdateInstaller.mountValidatedDMG(downloadedUpdateDMGURL)
-            try UpdateInstaller.installAndRestart(mounted)
+            try UpdateInstaller.installAndRestart(
+                mounted,
+                retention: downloadedUpdateUsesCustomDestination
+                    ? .keepAfterInstallation
+                    : .removeAfterInstallation
+            )
         } catch {
             updateDownloadStage = .ready
             updateInstallError = error.localizedDescription
