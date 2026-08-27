@@ -64,6 +64,10 @@ func englishLocalizationCoversReportedViews() throws {
     }
 
     #expect(content.contains("case .snippets: UpdateLocalization.text"))
+    #expect(content.contains("ru: \"Центр подключений\""))
+    #expect(content.contains("case .forwarding: UpdateLocalization.text(ru: \"Туннели\""))
+    #expect(content.contains("ru: \"Журналы сессий\""))
+    #expect(content.contains("case .keychain: UpdateLocalization.text(ru: \"Связка ключей\""))
     #expect(activity.contains("en: \"Interrupted\""))
     #expect(activity.contains("localizedErrorMessage"))
     #expect(vault.contains("Label(LocalizedStringKey(title)"))
