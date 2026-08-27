@@ -18,6 +18,10 @@ Registration is intentionally disabled in the example configuration. It must
 stay disabled on a public host until email verification and SMTP delivery are
 configured.
 
+The Cloud container applies numbered SQL migrations before starting the API.
+Applied filenames and SHA-256 checksums are recorded in `schema_migrations`.
+Never edit an applied migration; add the next numbered file instead.
+
 ## Production host
 
 The supplied Caddy configuration expects `cloud.pastfly.ru` to resolve to the
