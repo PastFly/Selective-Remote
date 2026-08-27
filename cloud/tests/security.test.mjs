@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hashPassword, hashSessionToken, normalizeEmail, validateVaultEnvelope, verifyPassword } from "../src/security.mjs";
+import {
+  createEmailVerificationToken,
+  hashEmailVerificationToken,
+  hashPassword,
+  hashSessionToken,
+  normalizeEmail,
+  validateVaultEnvelope,
+  verifyPassword,
+} from "../src/security.mjs";
 
 test("email normalization is deterministic", () => {
   assert.equal(normalizeEmail("  User@Example.COM "), "user@example.com");
@@ -18,6 +26,17 @@ test("password hashes are salted and verifiable", async () => {
 
 test("session token hashes are pepper-bound", () => {
   assert.notEqual(hashSessionToken("token", "a".repeat(32)), hashSessionToken("token", "b".repeat(32)));
+});
+
+test("email verification tokens are opaque and HMAC-bound", () => {
+  const first = createEmailVerificationToken();
+  const second = createEmailVerificationToken();
+  assert.notEqual(first, second);
+  assert.ok(first.length >= 40);
+  const hash = hashEmailVerificationToken(first, "a".repeat(32));
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.notEqual(hash, hashEmailVerificationToken(first, "b".repeat(32)));
+  assert.throws(() => hashEmailVerificationToken("", "a".repeat(32)), /invalid_verification_token/);
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {

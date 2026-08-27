@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback);
@@ -52,6 +52,15 @@ export function createSessionToken() {
 
 export function hashSessionToken(token, pepper) {
   return createHash("sha256").update(pepper).update("\0").update(token).digest("base64url");
+}
+
+export function createEmailVerificationToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashEmailVerificationToken(token, pepper) {
+  if (!token || token.length > 256) throw new Error("invalid_verification_token");
+  return createHmac("sha256", pepper).update(token).digest("hex");
 }
 
 export function isUUID(value) {
