@@ -9,8 +9,20 @@ test("numbered migrations have stable checksums", async () => {
   const migrations = await loadMigrations(migrationsDirectory);
   assert.deepEqual(migrations.map(({ version, name }) => ({ version, name })), [
     { version: 1, name: "001_initial.sql" },
+    { version: 2, name: "002_email_verification.sql" },
   ]);
-  assert.match(migrations[0].checksum, /^[0-9a-f]{64}$/);
+  for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("email verification migration stores only hashed expiring tokens", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const verification = migrations.find(({ version }) => version === 2);
+
+  assert.match(verification.sql, /token_hash text NOT NULL UNIQUE/);
+  assert.match(verification.sql, /token_hash ~ '\^\[0-9a-f\]\{64\}\$'/);
+  assert.match(verification.sql, /expires_at timestamptz NOT NULL/);
+  assert.match(verification.sql, /ON DELETE CASCADE/);
+  assert.doesNotMatch(verification.sql, /\btoken\s+text\b/);
 });
 
 test("an edited applied migration is rejected", async () => {
