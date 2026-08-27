@@ -56,7 +56,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .connections: UpdateLocalization.text(ru: "Подключения", en: "Connections")
         case .ssh: "SSH"
         case .terminal: UpdateLocalization.text(ru: "Терминал", en: "Terminal")
-        case .sftp: "SFTP"
+        case .sftp: UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP")
         case .forwarding: UpdateLocalization.text(ru: "Туннели", en: "Forwarding")
         case .snippets: UpdateLocalization.text(ru: "Сниппеты", en: "Snippets")
         case .sessionLogs: UpdateLocalization.text(
@@ -2261,7 +2261,7 @@ struct ContentView: View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("SFTP")
+                    Text(UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP"))
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                     Text("Несколько SFTP-вкладок · Local ↔ Server · Server ↔ Server")
                         .foregroundStyle(.secondary)

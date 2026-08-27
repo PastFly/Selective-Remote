@@ -49,6 +49,9 @@ func englishLocalizationCoversReportedViews() throws {
     let content = try repositorySource("Sources/SelectiveRemote/ContentView.swift")
     let activity = try repositorySource("Sources/SelectiveRemote/ConnectionActivity.swift")
     let vault = try repositorySource("Sources/SelectiveRemote/CredentialVaultView.swift")
+    let connectionCenter = try repositorySource("Sources/SelectiveRemote/ConnectionCenter.swift")
+    let forwarding = try repositorySource("Sources/SelectiveRemote/ForwardingManager.swift")
+    let sessionLogs = try repositorySource("Sources/SelectiveRemote/TerminalSessionLogs.swift")
 
     for key in [
         "Сниппеты",
@@ -68,6 +71,10 @@ func englishLocalizationCoversReportedViews() throws {
     #expect(content.contains("case .forwarding: UpdateLocalization.text(ru: \"Туннели\""))
     #expect(content.contains("ru: \"Журналы сессий\""))
     #expect(content.contains("case .keychain: UpdateLocalization.text(ru: \"Связка ключей\""))
+    #expect(content.contains("case .sftp: UpdateLocalization.text(ru: \"Файлы SFTP\""))
+    #expect(connectionCenter.contains("ru: \"Центр подключений\""))
+    #expect(forwarding.contains("Text(UpdateLocalization.text(ru: \"Туннели\""))
+    #expect(sessionLogs.contains("ru: \"Журналы сессий\""))
     #expect(activity.contains("en: \"Interrupted\""))
     #expect(activity.contains("localizedErrorMessage"))
     #expect(vault.contains("Label(LocalizedStringKey(title)"))

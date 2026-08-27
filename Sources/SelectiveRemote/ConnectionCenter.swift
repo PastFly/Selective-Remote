@@ -461,7 +461,10 @@ struct ConnectionCenterView: View {
     private func header(snapshot: ConnectionCenterSnapshot) -> some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Connection Center")
+                Text(UpdateLocalization.text(
+                    ru: "Центр подключений",
+                    en: "Connection Center"
+                ))
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("Единое состояние активных RDP, SSH, SFTP и Forwarding-подключений")
                     .foregroundStyle(.secondary)

@@ -450,7 +450,7 @@ struct ForwardingManagerView: View {
     private var header: some View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Forwarding")
+                Text(UpdateLocalization.text(ru: "Туннели", en: "Forwarding"))
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("Менеджер SSH-туннелей · Local / Remote / Dynamic")
                     .foregroundStyle(.secondary)
