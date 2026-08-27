@@ -1,4 +1,14 @@
-import { createSessionToken, hashPassword, hashSessionToken, isUUID, normalizeEmail, validatePassword, validateVaultEnvelope, verifyPassword } from "./security.mjs";
+import {
+  createSessionToken,
+  hashEmailVerificationToken,
+  hashPassword,
+  hashSessionToken,
+  isUUID,
+  normalizeEmail,
+  validatePassword,
+  validateVaultEnvelope,
+  verifyPassword,
+} from "./security.mjs";
 
 export class CloudService {
   constructor(store, config) {
@@ -60,6 +70,16 @@ export class CloudService {
       expiresAt: this.sessionExpiry(),
     });
     return { token, user: publicUser(identity), deviceID: device.id };
+  }
+
+  async verifyEmail(input) {
+    const tokenHash = hashEmailVerificationToken(
+      input?.token,
+      this.config.emailVerificationPepper,
+    );
+    const user = await this.store.consumeEmailVerificationToken(tokenHash);
+    if (!user) throw new Error("invalid_verification_token");
+    return { verified: true };
   }
 
   async authenticate(token) {

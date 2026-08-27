@@ -41,6 +41,9 @@ async function route(request, response) {
   if (method === "POST" && url.pathname === "/v1/auth/login") {
     return handleOperation(response, async () => service.login(await readJSON(request)));
   }
+  if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
+    return handleOperation(response, async () => service.verifyEmail(await readJSON(request)));
+  }
 
   if (url.pathname.startsWith("/v1/")) {
     const session = await service.authenticate(bearerToken(request));
@@ -88,6 +91,7 @@ async function handleOperation(response, operation, successStatus = 200) {
       registration_disabled: 403,
       email_exists: 409,
       invalid_credentials: 401,
+      invalid_verification_token: 400,
       invalid_email: 400,
       invalid_password: 400,
       invalid_device: 400,
