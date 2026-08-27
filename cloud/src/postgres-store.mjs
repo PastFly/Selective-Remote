@@ -3,8 +3,8 @@ import pg from "pg";
 const { Pool } = pg;
 
 export class PostgresStore {
-  constructor(databaseURL) {
-    this.pool = new Pool({ connectionString: databaseURL, max: 10 });
+  constructor(databaseURL, pool = null) {
+    this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
   }
 
   async close() { await this.pool.end(); }
@@ -51,6 +51,66 @@ export class PostgresStore {
       [email],
     );
     return result.rows[0] ?? null;
+  }
+
+  async replaceEmailVerificationToken({ userID, tokenHash, expiresAt }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userID]);
+      await client.query(
+        `UPDATE email_verification_tokens SET invalidated_at = now()
+         WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        [userID],
+      );
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [userID, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumeEmailVerificationToken(tokenHash) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const token = await client.query(
+        `UPDATE email_verification_tokens AS token SET consumed_at = now()
+         FROM users AS owner
+         WHERE token.token_hash = $1
+           AND token.user_id = owner.id
+           AND owner.disabled_at IS NULL
+           AND token.consumed_at IS NULL
+           AND token.invalidated_at IS NULL
+           AND token.expires_at > now()
+         RETURNING token.user_id`,
+        [tokenHash],
+      );
+      if (!token.rows[0]) {
+        await client.query("COMMIT");
+        return null;
+      }
+      const user = await client.query(
+        `UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()), updated_at = now()
+         WHERE id = $1
+         RETURNING id, email, display_name, email_verified_at, created_at`,
+        [token.rows[0].user_id],
+      );
+      await client.query("COMMIT");
+      return user.rows[0] ?? null;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createSession({ userID, device, sessionHash, expiresAt }) {
