@@ -2255,6 +2255,7 @@ struct ContentView: View {
             .padding(.bottom, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .controlSize(.large)
     }
 
     private var globalSFTPDetail: some View {
