@@ -64,6 +64,13 @@ enum UpdateDownloadStage: Equatable, Sendable {
     case installing
 }
 
+enum UpdateDMGRetention: Equatable, Sendable {
+    case removeAfterInstallation
+    case keepAfterInstallation
+
+    var removesDMG: Bool { self == .removeAfterInstallation }
+}
+
 struct UpdateNotificationPolicy {
     static let minimumRepeatInterval: TimeInterval = 24 * 60 * 60
 
@@ -226,14 +233,7 @@ enum UpdateInstaller {
             }
             destinationURL = requestedDestinationURL.standardizedFileURL
         } else {
-            let cacheRoot = try FileManager.default.url(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask,
-                appropriateFor: nil,
-                create: true
-            )
-            .appendingPathComponent("Selective Remote", isDirectory: true)
-            .appendingPathComponent("Updates", isDirectory: true)
+            let cacheRoot = try defaultDownloadDirectoryURL()
             destinationURL = cacheRoot.appendingPathComponent(sourceURL.lastPathComponent)
         }
         let operation = UpdateDownloadOperation(sourceURL: sourceURL, destinationURL: destinationURL)
@@ -308,7 +308,23 @@ enum UpdateInstaller {
         return MountedSelectiveRemoteUpdate(dmgURL: dmgURL, mountURL: mountURL, appURL: appURL)
     }
 
-    static func installAndRestart(_ mounted: MountedSelectiveRemoteUpdate) throws {
+    static func defaultDownloadDirectoryURL(
+        fileManager: FileManager = .default
+    ) throws -> URL {
+        try fileManager.url(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask,
+            appropriateFor: nil,
+            create: true
+        )
+        .appendingPathComponent("Selective Remote", isDirectory: true)
+        .appendingPathComponent("Updates", isDirectory: true)
+    }
+
+    static func installAndRestart(
+        _ mounted: MountedSelectiveRemoteUpdate,
+        retention: UpdateDMGRetention
+    ) throws {
         let destination = Bundle.main.bundleURL.standardizedFileURL
         guard destination.pathExtension.lowercased() == "app" else {
             try? detach(mounted.mountURL)
@@ -334,6 +350,7 @@ SRC="$2"
 DST="$3"
 MOUNT="$4"
 DMG="$5"
+CLEANUP_DMG="$6"
 while /bin/kill -0 "$PID" 2>/dev/null; do
     /bin/sleep 0.2
 done
@@ -354,7 +371,10 @@ else
     exit 1
 fi
 /usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-/bin/rm -f "$DMG" "$0"
+if [ "$CLEANUP_DMG" = "1" ]; then
+    /bin/rm -f "$DMG"
+fi
+/bin/rm -f "$0"
 """#
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
@@ -370,7 +390,8 @@ fi
                 mounted.appURL.path,
                 destination.path,
                 mounted.mountURL.path,
-                mounted.dmgURL.path
+                mounted.dmgURL.path,
+                retention.removesDMG ? "1" : "0"
             ]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice

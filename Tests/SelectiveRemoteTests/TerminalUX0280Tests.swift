@@ -65,6 +65,7 @@ func snippetGroupAndToolbarSourceRegression() throws {
     let content = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"))
     let local = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/LocalTerminalView.swift"))
     let ssh = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/EmbeddedTerminalView.swift"))
+    let toolbar = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/TerminalToolbarStyle.swift"))
 
     #expect(snippets.contains("preferredGroupID: selectedGroupID"))
     #expect(snippets.contains("Text(\"Без группы\")"))
@@ -72,6 +73,7 @@ func snippetGroupAndToolbarSourceRegression() throws {
     #expect(content.contains("case .snippets: \"curlybraces\""))
     #expect(local.contains(".terminalToolbarContainer()"))
     #expect(ssh.contains(".terminalToolbarContainer()"))
+    #expect(!toolbar.contains(".controlSize("))
     #expect(local.contains("Image(systemName: \"curlybraces\")"))
     #expect(ssh.contains("Image(systemName: \"curlybraces\")"))
     #expect(local.contains("Button(\"Развернуть терминал\""))

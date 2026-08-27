@@ -74,26 +74,31 @@ private struct UpdateSettingsView: View {
                 Toggle("Проверять обновления при запуске и каждые 5 часов", isOn: $model.automaticallyCheckForUpdates)
                 Toggle("Автоматически загружать найденные обновления", isOn: $model.automaticallyDownloadUpdates)
                     .disabled(!model.automaticallyCheckForUpdates)
-                LabeledContent("Каталог автоматической загрузки") {
-                    Text(model.automaticUpdateDownloadDirectoryPath ?? "Внутренний каталог приложения")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .truncationMode(.middle)
+                LabeledContent("Место автоматической загрузки") {
+                    VStack(alignment: .trailing, spacing: 3) {
+                        Text(automaticDownloadModeTitle)
+                            .font(.caption.weight(.semibold))
+                        Text(model.automaticUpdateDownloadDirectoryDisplayPath)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .truncationMode(.middle)
+                    }
                 }
                 HStack {
-                    Button("Выбрать каталог…", systemImage: "folder") {
+                    Button("Выбрать пользовательский каталог…", systemImage: "folder") {
                         model.chooseAutomaticUpdateDownloadDirectory()
                     }
                     Spacer()
-                    Button("Использовать внутренний каталог") {
+                    Button("Использовать системный каталог") {
                         model.resetAutomaticUpdateDownloadDirectory()
                     }
                     .disabled(model.automaticUpdateDownloadDirectoryPath == nil)
                 }
-                Text("DMG в выбранном каталоге сохраняется после установки и не удаляется автоматически.")
+                Text(automaticDownloadRetentionDescription)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Действия") {
@@ -122,6 +127,25 @@ private struct UpdateSettingsView: View {
         guard let date = model.lastSuccessfulUpdateCheckDate else { return "Ещё не выполнялась" }
         return UpdateLocalization.dateTimeShort(date)
     }
+
+    private var automaticDownloadModeTitle: String {
+        model.automaticUpdateDownloadDirectoryPath == nil
+            ? UpdateLocalization.text(ru: "Системный каталог", en: "System folder")
+            : UpdateLocalization.text(ru: "Пользовательский каталог", en: "Custom folder")
+    }
+
+    private var automaticDownloadRetentionDescription: String {
+        if model.automaticUpdateDownloadDirectoryPath == nil {
+            return UpdateLocalization.text(
+                ru: "Системный каталог используется по умолчанию. После успешной установки загруженный DMG удаляется автоматически.",
+                en: "The system folder is used by default. After a successful installation, the downloaded DMG is removed automatically."
+            )
+        }
+        return UpdateLocalization.text(
+            ru: "В пользовательском каталоге DMG сохраняется после установки. Чтобы вернуться к автоматическому удалению, выберите «Использовать системный каталог».",
+            en: "A DMG in a custom folder is kept after installation. To restore automatic removal, choose “Use System Folder”."
+        )
+    }
 }
 
 struct UpdateExperiencePopover: View {
@@ -143,11 +167,17 @@ struct UpdateExperiencePopover: View {
                         .background(Color.red.opacity(0.07), in: RoundedRectangle(cornerRadius: 10))
                 }
 
-                Toggle(
-                    "Автоматически загружать обновления",
-                    isOn: $model.automaticallyDownloadUpdates
-                )
-                .disabled(model.isDownloadingUpdate || model.updateDownloadStage == .installing)
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle(
+                        "Автоматически загружать обновления",
+                        isOn: $model.automaticallyDownloadUpdates
+                    )
+                    .disabled(model.isDownloadingUpdate || model.updateDownloadStage == .installing)
+                    Label(automaticDownloadModeSummary, systemImage: "folder")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Divider()
 
@@ -424,6 +454,19 @@ struct UpdateExperiencePopover: View {
         return UpdateLocalization.text(
             ru: "Последняя проверка: \(formatted)",
             en: "Last checked: \(formatted)"
+        )
+    }
+
+    private var automaticDownloadModeSummary: String {
+        if model.automaticUpdateDownloadDirectoryPath == nil {
+            return UpdateLocalization.text(
+                ru: "Системный каталог · DMG удаляется после успешной установки",
+                en: "System folder · the DMG is removed after a successful installation"
+            )
+        }
+        return UpdateLocalization.text(
+            ru: "Пользовательский каталог · DMG сохраняется после установки",
+            en: "Custom folder · the DMG is kept after installation"
         )
     }
 }

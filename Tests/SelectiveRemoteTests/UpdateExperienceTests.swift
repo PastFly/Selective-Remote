@@ -59,6 +59,7 @@ struct UpdateExperienceTests {
         let installer = try repositorySource("Sources/SelectiveRemote/UpdateInstaller.swift")
         let view = try repositorySource("Sources/SelectiveRemote/UpdateExperienceView.swift")
         let app = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+        let strings = try repositorySource("Resources/en.lproj/Localizable.strings")
 
         #expect(model.contains("func downloadAvailableUpdateChoosingDestination()"))
         #expect(model.contains("let panel = NSSavePanel()"))
@@ -70,9 +71,25 @@ struct UpdateExperienceTests {
         #expect(installer.contains("destinationURL requestedDestinationURL: URL? = nil"))
         #expect(installer.contains("requestedDestinationURL.standardizedFileURL"))
         #expect(view.contains("Button(\"Сохранить DMG…\")"))
-        #expect(view.contains("не будет удалён автоматически"))
-        #expect(view.contains("Каталог автоматической загрузки"))
-        #expect(view.contains("Использовать внутренний каталог"))
+        #expect(view.contains("Пользовательский каталог · DMG сохраняется после установки"))
+        #expect(view.contains("Место автоматической загрузки"))
+        #expect(view.contains("Использовать системный каталог"))
+        #expect(model.contains("retention: downloadedUpdateUsesCustomDestination"))
+        #expect(installer.contains("if [ \"$CLEANUP_DMG\" = \"1\" ]; then"))
         #expect(app.contains("preventsClosing: model.isUpdateOperationInProgress"))
+        for key in [
+            "Автоматически загружать найденные обновления",
+            "Место автоматической загрузки",
+            "Выбрать пользовательский каталог…",
+            "Использовать системный каталог"
+        ] {
+            #expect(strings.contains("\"\(key)\" ="))
+        }
+    }
+
+    @Test("Only updater-managed DMGs are removed after installation")
+    func updateDMGRetentionPolicy() {
+        #expect(UpdateDMGRetention.removeAfterInstallation.removesDMG)
+        #expect(!UpdateDMGRetention.keepAfterInstallation.removesDMG)
     }
 }
