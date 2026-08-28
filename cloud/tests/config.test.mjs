@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { loadConfig, validateProxySecret, validateSecret } from "../src/config.mjs";
 
 const baseEnv = {
@@ -102,6 +104,15 @@ test("registration stays usable only with complete secure mail configuration", (
     password: "m".repeat(24),
     from: "no-reply@example.com",
   });
+});
+
+test("example environment leaves optional SMTP disabled for closed staging", async () => {
+  const example = await readFile(fileURLToPath(new URL("../.env.example", import.meta.url)), "utf8");
+  for (const name of ["SMTP_HOST", "SMTP_PORT", "SMTP_SECURE", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"]) {
+    assert.doesNotMatch(example, new RegExp(`^${name}=`, "m"));
+    assert.match(example, new RegExp(`^# ${name}=`, "m"));
+  }
+  assert.match(example, /^ALLOW_REGISTRATION=false$/m);
 });
 
 test("verification pepper remains mandatory while registration is disabled", () => {
