@@ -3,12 +3,14 @@ import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
+import { createVerificationMailer } from "./mailer.mjs";
 import { PostgresStore } from "./postgres-store.mjs";
 import { CloudService } from "./service.mjs";
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
-const service = new CloudService(store, config);
+const mailer = config.smtp ? createVerificationMailer(config) : null;
+const service = new CloudService(store, config, mailer);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
 
@@ -91,6 +93,9 @@ async function handleOperation(response, operation, successStatus = 200) {
       registration_disabled: 403,
       email_exists: 409,
       invalid_credentials: 401,
+      email_not_verified: 403,
+      email_delivery_failed: 502,
+      smtp_not_configured: 503,
       invalid_verification_token: 400,
       invalid_email: 400,
       invalid_password: 400,
@@ -149,9 +154,22 @@ function sendJSON(response, status, value) {
 function sendError(response, status, code) { sendJSON(response, status, { error: code }); }
 function empty(response, status) { response.writeHead(status); response.end(); }
 
-server.listen(config.port, config.host, () => {
-  console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
-});
+async function start() {
+  if (config.allowRegistration) {
+    try {
+      await mailer.verifyConnection();
+    } catch {
+      console.error(JSON.stringify({ level: "error", message: "SMTP preflight failed" }));
+      await store.close();
+      process.exit(1);
+    }
+  }
+  server.listen(config.port, config.host, () => {
+    console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
+  });
+}
+
+await start();
 
 async function shutdown(signal) {
   console.log(JSON.stringify({ level: "info", message: "Shutting down", signal }));

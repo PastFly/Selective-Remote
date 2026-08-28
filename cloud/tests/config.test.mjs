@@ -5,6 +5,7 @@ import { loadConfig, validateSecret } from "../src/config.mjs";
 const baseEnv = {
   DATABASE_URL: "postgres://example.invalid/selective_remote",
   SESSION_TOKEN_PEPPER: "s".repeat(32),
+  EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
 };
 
 test("runtime secrets reject placeholders and short values", () => {
@@ -20,14 +21,13 @@ test("runtime secrets reject placeholders and short values", () => {
 test("registration stays usable only with complete secure mail configuration", () => {
   assert.equal(loadConfig(baseEnv).smtp, null);
   assert.throws(
-    () => loadConfig({ ...baseEnv, ALLOW_REGISTRATION: "true", EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32) }),
+    () => loadConfig({ ...baseEnv, ALLOW_REGISTRATION: "true" }),
     /SMTP_HOST is required/,
   );
 
   const config = loadConfig({
     ...baseEnv,
     ALLOW_REGISTRATION: "true",
-    EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
     SMTP_HOST: "smtp.example.com",
     SMTP_PORT: "587",
     SMTP_SECURE: "false",
@@ -43,6 +43,11 @@ test("registration stays usable only with complete secure mail configuration", (
     password: "m".repeat(24),
     from: "no-reply@example.com",
   });
+});
+
+test("verification pepper remains mandatory while registration is disabled", () => {
+  const { EMAIL_VERIFICATION_TOKEN_PEPPER: _removed, ...missingPepper } = baseEnv;
+  assert.throws(() => loadConfig(missingPepper), /EMAIL_VERIFICATION_TOKEN_PEPPER/);
 });
 
 test("mail configuration rejects placeholders and insecurely short credentials", () => {

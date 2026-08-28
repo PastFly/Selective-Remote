@@ -63,7 +63,6 @@ export function loadConfig(env = process.env) {
   const emailVerificationPepper = validateSecret(
     "EMAIL_VERIFICATION_TOKEN_PEPPER",
     env.EMAIL_VERIFICATION_TOKEN_PEPPER,
-    allowRegistration,
   );
   if (!databaseURL) throw new Error("DATABASE_URL is required");
   const origin = new URL(publicOrigin);

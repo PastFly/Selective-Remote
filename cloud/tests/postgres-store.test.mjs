@@ -12,13 +12,51 @@ function recordingStore(respond = () => ({ rows: [] })) {
     },
     release() { released = true; },
   };
-  const pool = { async connect() { return client; } };
+  const pool = {
+    async connect() { return client; },
+    async query(sql, parameters = []) {
+      queries.push({ sql, parameters });
+      return respond(sql, parameters);
+    },
+  };
   return {
     store: new PostgresStore("unused-for-injected-pool", pool),
     queries,
     released: () => released,
   };
 }
+
+test("creating an unverified account stores a verification hash but no session", async () => {
+  const user = { id: "user-1", email: "user@example.com", display_name: "User", created_at: new Date() };
+  const fixture = recordingStore((sql) => sql.includes("INSERT INTO users") ? { rows: [user] } : { rows: [] });
+  const verificationHash = "e".repeat(64);
+  const verificationExpiresAt = new Date("2030-01-02T00:00:00.000Z");
+
+  assert.equal(await fixture.store.createUser({
+    email: "user@example.com",
+    displayName: "User",
+    passwordHash: "password-hash",
+    device: { id: "device-1", name: "Mac", platform: "macOS", appVersion: "0.32.0", publicKey: null },
+    verificationHash,
+    verificationExpiresAt,
+  }), user);
+
+  const tokenInsert = fixture.queries.find(({ sql }) => sql.includes("INSERT INTO email_verification_tokens"));
+  assert.deepEqual(tokenInsert.parameters, ["user-1", verificationHash, verificationExpiresAt]);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes("INSERT INTO sessions")), false);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes(verificationHash)), false);
+  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
+  assert.equal(fixture.released(), true);
+});
+
+test("session lookup rejects accounts without a verified email", async () => {
+  const fixture = recordingStore();
+  assert.equal(await fixture.store.session("session-hash"), null);
+
+  const lookup = fixture.queries[0];
+  assert.deepEqual(lookup.parameters, ["session-hash"]);
+  assert.match(lookup.sql, /u\.email_verified_at IS NOT NULL/);
+});
 
 test("replacing an email verification token invalidates the previous active hash", async () => {
   const fixture = recordingStore();

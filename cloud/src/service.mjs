@@ -1,4 +1,5 @@
 import {
+  createEmailVerificationToken,
   createSessionToken,
   hashEmailVerificationToken,
   hashPassword,
@@ -11,13 +12,18 @@ import {
 } from "./security.mjs";
 
 export class CloudService {
-  constructor(store, config) {
+  constructor(store, config, mailer = null) {
     this.store = store;
     this.config = config;
+    this.mailer = mailer;
   }
 
   sessionExpiry() {
     return new Date(Date.now() + this.config.sessionTTLDays * 86_400_000);
+  }
+
+  emailVerificationExpiry() {
+    return new Date(Date.now() + this.config.emailVerificationTTLHours * 3_600_000);
   }
 
   validateDevice(value) {
@@ -37,21 +43,30 @@ export class CloudService {
 
   async register(input) {
     if (!this.config.allowRegistration) throw new Error("registration_disabled");
+    if (!this.mailer) throw new Error("smtp_not_configured");
     const email = normalizeEmail(input.email);
     const password = validatePassword(input.password);
     const displayName = String(input.displayName ?? "").trim().slice(0, 120);
     const device = this.validateDevice(input.device);
-    const token = createSessionToken();
+    const verificationToken = createEmailVerificationToken();
     const passwordHash = await hashPassword(password);
     const user = await this.store.createUser({
       email,
       displayName,
       passwordHash,
       device,
-      sessionHash: hashSessionToken(token, this.config.sessionPepper),
-      expiresAt: this.sessionExpiry(),
+      verificationHash: hashEmailVerificationToken(
+        verificationToken,
+        this.config.emailVerificationPepper,
+      ),
+      verificationExpiresAt: this.emailVerificationExpiry(),
     });
-    return { token, user: publicUser(user), deviceID: device.id };
+    try {
+      await this.mailer.sendEmailVerification({ recipient: email, token: verificationToken });
+    } catch {
+      throw new Error("email_delivery_failed");
+    }
+    return { verificationRequired: true, user: publicUser(user) };
   }
 
   async login(input) {
@@ -61,6 +76,7 @@ export class CloudService {
     if (!identity || identity.disabled_at || !(await verifyPassword(password, identity.password_hash))) {
       throw new Error("invalid_credentials");
     }
+    if (!identity.email_verified_at) throw new Error("email_not_verified");
     const device = this.validateDevice(input.device);
     const token = createSessionToken();
     await this.store.createSession({

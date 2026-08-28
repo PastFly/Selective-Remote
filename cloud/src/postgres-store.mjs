@@ -10,7 +10,7 @@ export class PostgresStore {
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
 
-  async createUser({ email, displayName, passwordHash, device, sessionHash, expiresAt }) {
+  async createUser({ email, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -27,11 +27,12 @@ export class PostgresStore {
         "INSERT INTO devices (id, user_id, name, platform, app_version, public_key) VALUES ($1, $2, $3, $4, $5, $6)",
         [device.id, user.id, device.name, device.platform, device.appVersion, device.publicKey],
       );
-      await client.query(
-        "INSERT INTO sessions (user_id, device_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
-        [user.id, device.id, sessionHash, expiresAt],
-      );
       await client.query("INSERT INTO personal_vaults (user_id) VALUES ($1)", [user.id]);
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [user.id, verificationHash, verificationExpiresAt],
+      );
       await client.query("COMMIT");
       return user;
     } catch (error) {
@@ -45,7 +46,7 @@ export class PostgresStore {
 
   async passwordIdentity(email) {
     const result = await this.pool.query(
-      `SELECT u.id, u.email, u.display_name, u.disabled_at, i.password_hash
+      `SELECT u.id, u.email, u.display_name, u.disabled_at, u.email_verified_at, i.password_hash
        FROM users u JOIN account_identities i ON i.user_id = u.id
        WHERE i.provider = 'password' AND i.subject = $1`,
       [email],
@@ -145,7 +146,7 @@ export class PostgresStore {
       `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.display_name
        FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
-         AND u.disabled_at IS NULL AND d.revoked_at IS NULL`,
+         AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND d.revoked_at IS NULL`,
       [tokenHash],
     );
     if (!result.rows[0]) return null;
