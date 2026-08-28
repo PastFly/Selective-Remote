@@ -50,15 +50,19 @@ chmod 600 .env
 openssl rand -base64 48
 openssl rand -base64 48
 openssl rand -base64 48
+openssl rand -base64 48
+openssl rand -hex 32
 ```
 
 The first random value can be used for `POSTGRES_PASSWORD`, and the second for
 `SESSION_TOKEN_PEPPER`. Use the third, independent value for
-`EMAIL_VERIFICATION_TOKEN_PEPPER`. Set `ACME_EMAIL` to the certificate contact
-address. Configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` and
-`SMTP_FROM` using a dedicated mail account. Use `SMTP_SECURE=true` for implicit
-TLS, or `false` only when the provider supports STARTTLS; the application
-requires encryption and validates the server certificate in both modes.
+`EMAIL_VERIFICATION_TOKEN_PEPPER`, the fourth for `ABUSE_TOKEN_PEPPER`, and the
+64-character hexadecimal value for `PROXY_SHARED_SECRET`. Set `ACME_EMAIL` to
+the certificate contact address. Configure `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM` using a dedicated mail account. Use
+`SMTP_SECURE=true` for implicit TLS, or `false` only when the provider supports
+STARTTLS; the application requires encryption and validates the server
+certificate in both modes.
 
 Keep `ALLOW_REGISTRATION=false` until email verification, password reset,
 request rate limiting and abuse protection are implemented and the complete
@@ -70,7 +74,7 @@ This section is blocked on the current host until the 443 coexistence design is
 approved. Do not run the commands below while Xray owns TCP 443.
 
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose build --pull
 docker compose up -d
 docker compose ps

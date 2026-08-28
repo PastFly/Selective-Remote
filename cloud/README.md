@@ -28,6 +28,12 @@ until the token is consumed. SMTP connectivity is verified before the service
 starts whenever registration is enabled. A resend/recovery flow for delivery
 failures is not implemented yet, so registration must remain disabled.
 
+Authentication endpoints use persistent fixed-window limits keyed by HMACs of
+the client IP and, where applicable, the normalized email address. Raw IPs and
+emails are not stored in the rate-limit table. The bundled Caddy proxy
+overwrites the client-IP header and authenticates it with an independent shared
+secret; direct or spoofed headers fall back to the socket peer address.
+
 The Cloud container applies numbered SQL migrations before starting the API.
 Applied filenames and SHA-256 checksums are recorded in `schema_migrations`.
 Never edit an applied migration; add the next numbered file instead.

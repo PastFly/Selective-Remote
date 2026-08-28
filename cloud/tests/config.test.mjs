@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { loadConfig, validateSecret } from "../src/config.mjs";
+import { loadConfig, validateProxySecret, validateSecret } from "../src/config.mjs";
 
 const baseEnv = {
   DATABASE_URL: "postgres://example.invalid/selective_remote",
   SESSION_TOKEN_PEPPER: "s".repeat(32),
   EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
+  ABUSE_TOKEN_PEPPER: "a".repeat(32),
+  PROXY_SHARED_SECRET: "b".repeat(64),
 };
 
 test("runtime secrets reject placeholders and short values", () => {
@@ -16,6 +18,26 @@ test("runtime secrets reject placeholders and short values", () => {
   );
   assert.equal(validateSecret("TEST_SECRET", "x".repeat(32)), "x".repeat(32));
   assert.equal(validateSecret("OPTIONAL_SECRET", undefined, false), null);
+});
+
+test("proxy trust requires a header-safe independent hexadecimal secret", () => {
+  assert.equal(validateProxySecret("a".repeat(64)), "a".repeat(64));
+  assert.throws(() => validateProxySecret("A".repeat(64)), /64 lowercase hexadecimal/);
+  assert.throws(() => validateProxySecret("a".repeat(63)), /64 lowercase hexadecimal/);
+});
+
+test("rate-limit overrides reject partial and out-of-range numbers", () => {
+  assert.throws(() => loadConfig({ ...baseEnv, AUTH_LOGIN_IP_LIMIT: "30requests" }), /AUTH_LOGIN_IP_LIMIT/);
+  assert.throws(() => loadConfig({ ...baseEnv, AUTH_REGISTER_IP_LIMIT: "0" }), /AUTH_REGISTER_IP_LIMIT/);
+  const config = loadConfig({ ...baseEnv, AUTH_LOGIN_IP_LIMIT: "40" });
+  assert.deepEqual(config.authRateLimits.login_ip, { limit: 40, windowSeconds: 300 });
+});
+
+test("runtime security secrets cannot be reused across purposes", () => {
+  assert.throws(
+    () => loadConfig({ ...baseEnv, ABUSE_TOKEN_PEPPER: baseEnv.SESSION_TOKEN_PEPPER }),
+    /security secrets must be independent/,
+  );
 });
 
 test("registration stays usable only with complete secure mail configuration", () => {

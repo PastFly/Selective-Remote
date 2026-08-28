@@ -34,6 +34,7 @@ services:
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
+      PROXY_SHARED_SECRET: ${PROXY_SHARED_SECRET}
     depends_on:
       cloud:
         condition: service_healthy

@@ -5,12 +5,16 @@ import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { createVerificationMailer } from "./mailer.mjs";
 import { PostgresStore } from "./postgres-store.mjs";
+import { AuthRateLimiter } from "./rate-limiter.mjs";
+import { clientIPAddress } from "./request-security.mjs";
+import { normalizeEmail } from "./security.mjs";
 import { CloudService } from "./service.mjs";
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const service = new CloudService(store, config, mailer);
+const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
 
@@ -38,13 +42,13 @@ async function route(request, response) {
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "POST" && url.pathname === "/v1/auth/register") {
-    return handleOperation(response, async () => service.register(await readJSON(request)), 201);
+    return handleAuthOperation(request, response, "register_ip", "register_email", service.register.bind(service), 201);
   }
   if (method === "POST" && url.pathname === "/v1/auth/login") {
-    return handleOperation(response, async () => service.login(await readJSON(request)));
+    return handleAuthOperation(request, response, "login_ip", "login_email", service.login.bind(service));
   }
   if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
-    return handleOperation(response, async () => service.verifyEmail(await readJSON(request)));
+    return handleAuthOperation(request, response, "verify_email_ip", null, service.verifyEmail.bind(service));
   }
 
   if (url.pathname.startsWith("/v1/")) {
@@ -84,11 +88,27 @@ async function route(request, response) {
   return sendError(response, 404, "not_found");
 }
 
+async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200) {
+  return handleOperation(response, async () => {
+    await authRateLimiter.require(ipScope, clientIPAddress(request, config.proxySharedSecret));
+    const input = await readJSON(request);
+    if (emailScope) {
+      let email = null;
+      try { email = normalizeEmail(input.email); } catch {}
+      if (email) await authRateLimiter.require(emailScope, email);
+    }
+    return operation(input);
+  }, successStatus);
+}
+
 async function handleOperation(response, operation, successStatus = 200) {
   try {
     return sendJSON(response, successStatus, await operation());
   } catch (error) {
     const code = error?.message ?? "invalid_request";
+    if (code === "rate_limited" && Number.isInteger(error.retryAfterSeconds)) {
+      response.setHeader("Retry-After", String(Math.max(1, error.retryAfterSeconds)));
+    }
     const statuses = {
       registration_disabled: 403,
       email_exists: 409,
@@ -96,6 +116,7 @@ async function handleOperation(response, operation, successStatus = 200) {
       email_not_verified: 403,
       email_delivery_failed: 502,
       smtp_not_configured: 503,
+      rate_limited: 429,
       invalid_verification_token: 400,
       invalid_email: 400,
       invalid_password: 400,

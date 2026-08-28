@@ -1,6 +1,6 @@
 function integer(env, name, fallback, minimum, maximum) {
   const raw = env[name];
-  const value = raw === undefined ? fallback : Number.parseInt(raw, 10);
+  const value = raw === undefined ? fallback : Number(raw);
   if (!Number.isInteger(value) || value < minimum || value > maximum) {
     throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`);
   }
@@ -19,6 +19,13 @@ export function validateSecret(name, value, required = true) {
   if (!value && !required) return null;
   if (!value || Buffer.byteLength(value) < 32 || value.toLowerCase().includes("replace-with")) {
     throw new Error(`${name} must contain at least 32 random bytes`);
+  }
+  return value;
+}
+
+export function validateProxySecret(value) {
+  if (!/^[0-9a-f]{64}$/.test(String(value ?? ""))) {
+    throw new Error("PROXY_SHARED_SECRET must contain exactly 64 lowercase hexadecimal characters");
   }
   return value;
 }
@@ -60,10 +67,15 @@ export function loadConfig(env = process.env) {
   const databaseURL = env.DATABASE_URL;
   const allowRegistration = boolean(env, "ALLOW_REGISTRATION", false);
   const sessionPepper = validateSecret("SESSION_TOKEN_PEPPER", env.SESSION_TOKEN_PEPPER);
+  const abuseTokenPepper = validateSecret("ABUSE_TOKEN_PEPPER", env.ABUSE_TOKEN_PEPPER);
+  const proxySharedSecret = validateProxySecret(env.PROXY_SHARED_SECRET);
   const emailVerificationPepper = validateSecret(
     "EMAIL_VERIFICATION_TOKEN_PEPPER",
     env.EMAIL_VERIFICATION_TOKEN_PEPPER,
   );
+  if (new Set([sessionPepper, emailVerificationPepper, abuseTokenPepper, proxySharedSecret]).size !== 4) {
+    throw new Error("runtime security secrets must be independent");
+  }
   if (!databaseURL) throw new Error("DATABASE_URL is required");
   const origin = new URL(publicOrigin);
   if (env.NODE_ENV === "production" && origin.protocol !== "https:") {
@@ -76,10 +88,19 @@ export function loadConfig(env = process.env) {
     publicOrigin: origin.origin,
     databaseURL,
     sessionPepper,
+    abuseTokenPepper,
+    proxySharedSecret,
     emailVerificationPepper,
     smtp: loadSMTPConfig(env, allowRegistration),
     allowRegistration,
     sessionTTLDays: integer(env, "SESSION_TTL_DAYS", 30, 1, 365),
     emailVerificationTTLHours: integer(env, "EMAIL_VERIFICATION_TTL_HOURS", 24, 1, 168),
+    authRateLimits: Object.freeze({
+      register_ip: Object.freeze({ limit: integer(env, "AUTH_REGISTER_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
+      register_email: Object.freeze({ limit: integer(env, "AUTH_REGISTER_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 86_400 }),
+      login_ip: Object.freeze({ limit: integer(env, "AUTH_LOGIN_IP_LIMIT", 30, 1, 1_000), windowSeconds: 300 }),
+      login_email: Object.freeze({ limit: integer(env, "AUTH_LOGIN_EMAIL_LIMIT", 10, 1, 1_000), windowSeconds: 900 }),
+      verify_email_ip: Object.freeze({ limit: integer(env, "AUTH_VERIFY_IP_LIMIT", 30, 1, 1_000), windowSeconds: 300 }),
+    }),
   });
 }

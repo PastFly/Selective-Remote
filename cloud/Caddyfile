@@ -13,5 +13,8 @@ cloud.pastfly.ru {
         Permissions-Policy "camera=(), microphone=(), geolocation=()"
         -Server
     }
-    reverse_proxy cloud:8080
+    reverse_proxy cloud:8080 {
+        header_up X-Selective-Client-IP {remote_host}
+        header_up X-Selective-Proxy-Secret {$PROXY_SHARED_SECRET}
+    }
 }
