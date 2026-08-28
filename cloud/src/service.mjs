@@ -14,12 +14,17 @@ import {
   verifyPassword,
 } from "./security.mjs";
 
+// A valid, non-secret sentinel hash ensures unknown and disabled accounts still
+// perform the same scrypt verification work as known password identities.
+const invalidLoginPasswordHash = "scrypt$v=1$N=131072,r=8,p=1$wgJM3R9KmuNtdSv1aGVXpDpVUJ8I_6f4DxcynEIDpEo$WgskviN1ZrV101k3zjRqYtNnGRYBFxSIsF0OciYPXgs";
+
 export class CloudService {
-  constructor(store, config, mailer = null, logger = console) {
+  constructor(store, config, mailer = null, logger = console, passwordVerifier = verifyPassword) {
     this.store = store;
     this.config = config;
     this.mailer = mailer;
     this.logger = logger;
+    this.passwordVerifier = passwordVerifier;
     this.backgroundTasks = new Set();
   }
 
@@ -82,31 +87,37 @@ export class CloudService {
     const device = this.validateDevice(input.device);
     const verificationToken = createEmailVerificationToken();
     const passwordHash = await hashPassword(password);
-    const user = await this.store.createUser({
-      email,
-      displayName,
-      passwordHash,
-      device,
-      verificationHash: hashEmailVerificationToken(
-        verificationToken,
-        this.config.emailVerificationPepper,
-      ),
-      verificationExpiresAt: this.emailVerificationExpiry(),
-    });
     try {
-      await this.mailer.sendEmailVerification({ recipient: email, token: verificationToken });
-    } catch {
-      this.logger.warn(JSON.stringify({ level: "warn", message: "Verification email delivery failed" }));
-      throw new Error("email_delivery_failed");
+      await this.store.createUser({
+        email,
+        displayName,
+        passwordHash,
+        device,
+        verificationHash: hashEmailVerificationToken(
+          verificationToken,
+          this.config.emailVerificationPepper,
+        ),
+        verificationExpiresAt: this.emailVerificationExpiry(),
+      });
+      this.queueRecoveryEmail(
+        () => this.mailer.sendEmailVerification({ recipient: email, token: verificationToken }),
+        "Verification email delivery failed",
+      );
+    } catch (error) {
+      if (error?.message !== "email_exists") throw error;
     }
-    return { verificationRequired: true, user: publicUser(user) };
+    return { verificationRequired: true };
   }
 
   async login(input) {
     const email = normalizeEmail(input.email);
     const password = validatePassword(input.password);
     const identity = await this.store.passwordIdentity(email);
-    if (!identity || identity.disabled_at || !(await verifyPassword(password, identity.password_hash))) {
+    const passwordMatches = await this.passwordVerifier(
+      password,
+      identity?.password_hash ?? invalidLoginPasswordHash,
+    );
+    if (!identity || identity.disabled_at || !passwordMatches) {
       throw new Error("invalid_credentials");
     }
     if (!identity.email_verified_at) throw new Error("email_not_verified");

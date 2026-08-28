@@ -1,9 +1,7 @@
 const operationStatuses = Object.freeze({
   registration_disabled: 403,
-  email_exists: 409,
   invalid_credentials: 401,
   email_not_verified: 403,
-  email_delivery_failed: 502,
   smtp_not_configured: 503,
   rate_limited: 429,
   invalid_verification_token: 400,

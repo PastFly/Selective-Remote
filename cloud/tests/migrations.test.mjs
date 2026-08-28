@@ -66,7 +66,16 @@ test("an existing initial schema is baselined without replaying migration SQL", 
     async query(sql, parameters = []) {
       queries.push({ sql, parameters });
       if (sql.includes("FROM schema_migrations")) return { rows: [] };
-      if (sql.includes("to_regclass")) return { rows: [{ exists: true }] };
+      if (sql.includes("to_regclass")) return { rows: [{
+        users: true,
+        account_identities: true,
+        devices: true,
+        sessions: true,
+        personal_vaults: true,
+        vault_revisions: true,
+        users_email_verified_at: true,
+        personal_vaults_wrapped_key: true,
+      }] };
       return { rows: [] };
     },
     release() {},
@@ -78,4 +87,30 @@ test("an existing initial schema is baselined without replaying migration SQL", 
   assert.equal(queries.some(({ sql }) => sql === migrations[0].sql), false);
   const record = queries.find(({ sql }) => sql.startsWith("INSERT INTO schema_migrations"));
   assert.deepEqual(record.parameters, [1, "001_initial.sql", migrations[0].checksum]);
+});
+
+test("a partial initial schema is rejected instead of silently baselined", async () => {
+  const client = {
+    async query(sql) {
+      if (sql.includes("FROM schema_migrations")) return { rows: [] };
+      if (sql.includes("to_regclass")) return { rows: [{
+        users: true,
+        account_identities: false,
+        devices: false,
+        sessions: false,
+        personal_vaults: false,
+        vault_revisions: false,
+        users_email_verified_at: false,
+        personal_vaults_wrapped_key: false,
+      }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const pool = { async connect() { return client; } };
+
+  await assert.rejects(
+    applyMigrations(pool, migrationsDirectory, { info() {} }),
+    /incomplete_initial_schema/,
+  );
 });

@@ -89,9 +89,9 @@ test("registration sends an opaque verification token and issues no session", as
   const mailer = { async sendEmailVerification(value) { delivery = value; } };
   const service = new CloudService(store, config, mailer);
   const registered = await service.register({ email: "user@example.com", password: "correct horse battery", displayName: "User", device });
-  assert.equal(registered.user.email, "user@example.com");
-  assert.equal(registered.verificationRequired, true);
+  assert.deepEqual(registered, { verificationRequired: true });
   assert.equal("token" in registered, false);
+  await service.waitForBackgroundTasks();
   assert.equal(delivery.recipient, "user@example.com");
   assert.ok(delivery.token.length >= 40);
   assert.match(store.lastVerificationHash, /^[0-9a-f]{64}$/);
@@ -139,17 +139,59 @@ test("registration fails closed when SMTP delivery is unavailable", async () => 
   );
 });
 
-test("mail transport errors do not expose provider details", async () => {
+test("registration hides existing accounts and mail transport failures", async () => {
   const mailer = { async sendEmailVerification() { throw new Error("provider-secret-response"); } };
   const warnings = [];
   const service = new CloudService(new MemoryStore(), config, mailer, { warn(value) { warnings.push(value); } });
-  await assert.rejects(
-    service.register({ email: "user@example.com", password: "correct horse battery", device }),
-    (error) => error.message === "email_delivery_failed",
+  assert.deepEqual(
+    await service.register({ email: "user@example.com", password: "correct horse battery", device }),
+    { verificationRequired: true },
   );
+  await service.waitForBackgroundTasks();
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].includes("provider-secret-response"), false);
   assert.equal(warnings[0].includes("user@example.com"), false);
+
+  let duplicateDelivered = false;
+  const duplicateStore = new MemoryStore();
+  duplicateStore.createUser = async () => { throw new Error("email_exists"); };
+  const duplicateService = new CloudService(duplicateStore, config, {
+    async sendEmailVerification() { duplicateDelivered = true; },
+  });
+  assert.deepEqual(
+    await duplicateService.register({ email: "user@example.com", password: "correct horse battery", device }),
+    { verificationRequired: true },
+  );
+  await duplicateService.waitForBackgroundTasks();
+  assert.equal(duplicateDelivered, false);
+});
+
+test("login performs password verification for unknown and disabled identities", async () => {
+  const calls = [];
+  const verifier = async (password, encoded) => { calls.push({ password, encoded }); return false; };
+  const unknownService = new CloudService(new MemoryStore(), config, null, console, verifier);
+  await assert.rejects(
+    unknownService.login({ email: "unknown@example.com", password: "correct horse battery", device }),
+    /invalid_credentials/,
+  );
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].encoded, /^scrypt\$v=1\$/);
+
+  const disabledStore = new MemoryStore();
+  disabledStore.identity = {
+    id: "user-1",
+    email: "disabled@example.com",
+    password_hash: "stored-password-hash",
+    email_verified_at: new Date(),
+    disabled_at: new Date(),
+  };
+  const disabledService = new CloudService(disabledStore, config, null, console, verifier);
+  await assert.rejects(
+    disabledService.login({ email: "disabled@example.com", password: "correct horse battery", device }),
+    /invalid_credentials/,
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].encoded, "stored-password-hash");
 });
 
 test("verification resend rotates the hash and always returns an accepted response", async () => {
