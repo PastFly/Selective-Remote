@@ -7,10 +7,11 @@ test("known operation errors map to stable public responses", () => {
     status: 400,
     code: "invalid_wrapped_key",
   });
-  assert.deepEqual(publicOperationError(new Error("email_exists")), {
-    status: 409,
-    code: "email_exists",
+  assert.deepEqual(publicOperationError(new Error("rate_limited")), {
+    status: 429,
+    code: "rate_limited",
   });
+  assert.equal(publicOperationError(new Error("email_exists")), null);
 });
 
 test("internal database errors are never exposed as public codes", () => {

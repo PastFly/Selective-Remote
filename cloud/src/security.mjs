@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback);
@@ -54,6 +54,37 @@ export function createSessionToken() {
 
 export function hashSessionToken(token, pepper) {
   return createHash("sha256").update(pepper).update("\0").update(token).digest("base64url");
+}
+
+export function createEmailVerificationToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashEmailVerificationToken(token, pepper) {
+  if (!token || token.length > 256) throw new Error("invalid_verification_token");
+  return createHmac("sha256", pepper).update(token).digest("hex");
+}
+
+export function createPasswordResetToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashPasswordResetToken(token, pepper) {
+  if (!token || token.length > 256) throw new Error("invalid_password_reset_token");
+  return createHmac("sha256", pepper).update(token).digest("hex");
+}
+
+export function hashAbuseKey(scope, value, pepper) {
+  const normalizedScope = String(scope ?? "");
+  const normalizedValue = String(value ?? "");
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(normalizedScope) || !normalizedValue || normalizedValue.length > 512) {
+    throw new Error("invalid_abuse_key");
+  }
+  return createHmac("sha256", pepper)
+    .update(normalizedScope)
+    .update("\0")
+    .update(normalizedValue)
+    .digest("hex");
 }
 
 export function isUUID(value) {

@@ -3,6 +3,12 @@
 The production endpoint is `https://cloud.pastfly.ru`. Its public `A` record
 must resolve to the Ubuntu host before Caddy starts certificate issuance.
 
+> **Known host blocker:** TCP port 443 is currently owned by
+> `xray-linux-amd6`. Do not start the supplied Caddy Compose service, stop Xray,
+> or change either listener until an explicit 443 coexistence architecture is
+> reviewed and approved. The current Compose port mapping cannot coexist with
+> that listener.
+
 ## 1. Read-only preflight
 
 From a clean checkout of PR 28, run:
@@ -24,6 +30,10 @@ before any firewall change.
 | 443 | TCP | HTTPS API and portal |
 | 443 | UDP | Optional HTTP/3 |
 
+On the current host, TCP 443 is not available. This table describes the
+standalone Caddy design only; it is not authorization to replace or reconfigure
+the existing Xray listener.
+
 PostgreSQL port 5432 and application port 8080 must not be published on the
 host or opened in the firewall.
 
@@ -39,16 +49,34 @@ cp .env.example .env
 chmod 600 .env
 openssl rand -base64 48
 openssl rand -base64 48
+openssl rand -base64 48
+openssl rand -base64 48
+openssl rand -base64 48
+openssl rand -hex 32
 ```
 
 The first random value can be used for `POSTGRES_PASSWORD`, and the second for
-`SESSION_TOKEN_PEPPER`. Set `ACME_EMAIL` to the certificate contact address.
-Keep `ALLOW_REGISTRATION=false` until email verification is implemented.
+`SESSION_TOKEN_PEPPER`. Use the third, independent value for
+`EMAIL_VERIFICATION_TOKEN_PEPPER`, the fourth for
+`PASSWORD_RESET_TOKEN_PEPPER`, the fifth for `ABUSE_TOKEN_PEPPER`, and the
+64-character hexadecimal value for `PROXY_SHARED_SECRET`. Set `ACME_EMAIL` to
+the certificate contact address. Configure `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM` using a dedicated mail account. Use
+`SMTP_SECURE=true` for implicit TLS, or `false` only when the provider supports
+STARTTLS; the application requires encryption and validates the server
+certificate in both modes.
+
+Keep `ALLOW_REGISTRATION=false` until email verification, password reset,
+request rate limiting and abuse protection are implemented and the complete
+flow is manually approved.
 
 ## 4. Start and verify
 
+This section is blocked on the current host until the 443 coexistence design is
+approved. Do not run the commands below while Xray owns TCP 443.
+
 ```bash
-docker compose config
+docker compose config --quiet
 docker compose build --pull
 docker compose up -d
 docker compose ps

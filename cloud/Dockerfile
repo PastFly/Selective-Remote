@@ -11,7 +11,8 @@ COPY --from=dependencies /app/node_modules ./node_modules
 COPY package.json ./
 COPY migrations ./migrations
 COPY public ./public
+COPY scripts ./scripts
 COPY src ./src
 USER cloud
 EXPOSE 8080
-CMD ["node", "src/server.mjs"]
+CMD ["sh", "-c", "node scripts/migrate.mjs && exec node src/server.mjs"]

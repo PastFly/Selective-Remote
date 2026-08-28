@@ -3,14 +3,19 @@ import { readFile } from "node:fs/promises";
 import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
+import { createVerificationMailer } from "./mailer.mjs";
 import { PostgresStore } from "./postgres-store.mjs";
-import { isUUID } from "./security.mjs";
+import { AuthRateLimiter } from "./rate-limiter.mjs";
+import { clientIPAddress } from "./request-security.mjs";
+import { isUUID, normalizeEmail } from "./security.mjs";
 import { CloudService } from "./service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
-const service = new CloudService(store, config);
+const mailer = config.smtp ? createVerificationMailer(config) : null;
+const service = new CloudService(store, config, mailer);
+const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
 
@@ -41,10 +46,36 @@ async function route(request, response) {
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
   if (method === "POST" && url.pathname === "/v1/auth/register") {
-    return handleOperation(response, async () => service.register(await readJSON(request)), 201);
+    return handleAuthOperation(request, response, "register_ip", "register_email", service.register.bind(service), 201);
   }
   if (method === "POST" && url.pathname === "/v1/auth/login") {
-    return handleOperation(response, async () => service.login(await readJSON(request)));
+    return handleAuthOperation(request, response, "login_ip", "login_email", service.login.bind(service));
+  }
+  if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
+    return handleAuthOperation(request, response, "verify_email_ip", null, service.verifyEmail.bind(service));
+  }
+  if (method === "POST" && url.pathname === "/v1/auth/resend-verification") {
+    return handleAuthOperation(
+      request,
+      response,
+      "resend_verification_ip",
+      "resend_verification_email",
+      service.resendEmailVerification.bind(service),
+      202,
+    );
+  }
+  if (method === "POST" && url.pathname === "/v1/auth/request-password-reset") {
+    return handleAuthOperation(
+      request,
+      response,
+      "request_password_reset_ip",
+      "request_password_reset_email",
+      service.requestPasswordReset.bind(service),
+      202,
+    );
+  }
+  if (method === "POST" && url.pathname === "/v1/auth/reset-password") {
+    return handleAuthOperation(request, response, "reset_password_ip", null, service.resetPassword.bind(service));
   }
 
   if (url.pathname.startsWith("/v1/")) {
@@ -89,6 +120,19 @@ async function route(request, response) {
   return sendError(response, 404, "not_found");
 }
 
+async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200) {
+  return handleOperation(response, async () => {
+    await authRateLimiter.require(ipScope, clientIPAddress(request, config.proxySharedSecret));
+    const input = await readJSON(request);
+    if (emailScope) {
+      let email = null;
+      try { email = normalizeEmail(input.email); } catch {}
+      if (email) await authRateLimiter.require(emailScope, email);
+    }
+    return operation(input);
+  }, successStatus);
+}
+
 async function handleOperation(response, operation, successStatus = 200) {
   try {
     return sendJSON(response, successStatus, await operation());
@@ -100,6 +144,9 @@ async function handleOperation(response, operation, successStatus = 200) {
 function handleOperationError(response, error) {
   const publicError = publicOperationError(error);
   if (!publicError) throw error;
+  if (publicError.code === "rate_limited" && Number.isInteger(error.retryAfterSeconds)) {
+    response.setHeader("Retry-After", String(Math.max(1, error.retryAfterSeconds)));
+  }
   return sendError(response, publicError.status, publicError.code);
 }
 
@@ -148,13 +195,30 @@ function sendJSON(response, status, value) {
 function sendError(response, status, code) { sendJSON(response, status, { error: code }); }
 function empty(response, status) { response.writeHead(status); response.end(); }
 
-server.listen(config.port, config.host, () => {
-  console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
-});
+async function start() {
+  if (config.allowRegistration) {
+    try {
+      await mailer.verifyConnection();
+    } catch {
+      console.error(JSON.stringify({ level: "error", message: "SMTP preflight failed" }));
+      await store.close();
+      process.exit(1);
+    }
+  }
+  server.listen(config.port, config.host, () => {
+    console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
+  });
+}
+
+await start();
 
 async function shutdown(signal) {
   console.log(JSON.stringify({ level: "info", message: "Shutting down", signal }));
-  server.close(async () => { await store.close(); process.exit(0); });
+  server.close(async () => {
+    await service.waitForBackgroundTasks();
+    await store.close();
+    process.exit(0);
+  });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

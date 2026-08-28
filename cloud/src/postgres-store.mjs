@@ -3,14 +3,14 @@ import pg from "pg";
 const { Pool } = pg;
 
 export class PostgresStore {
-  constructor(databaseURL) {
-    this.pool = new Pool({ connectionString: databaseURL, max: 10 });
+  constructor(databaseURL, pool = null) {
+    this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
   }
 
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
 
-  async createUser({ email, displayName, passwordHash, device, sessionHash, expiresAt }) {
+  async createUser({ email, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
@@ -27,11 +27,12 @@ export class PostgresStore {
         "INSERT INTO devices (id, user_id, name, platform, app_version, public_key) VALUES ($1, $2, $3, $4, $5, $6)",
         [device.id, user.id, device.name, device.platform, device.appVersion, device.publicKey],
       );
-      await client.query(
-        "INSERT INTO sessions (user_id, device_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
-        [user.id, device.id, sessionHash, expiresAt],
-      );
       await client.query("INSERT INTO personal_vaults (user_id) VALUES ($1)", [user.id]);
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [user.id, verificationHash, verificationExpiresAt],
+      );
       await client.query("COMMIT");
       return user;
     } catch (error) {
@@ -45,12 +46,221 @@ export class PostgresStore {
 
   async passwordIdentity(email) {
     const result = await this.pool.query(
-      `SELECT u.id, u.email, u.display_name, u.disabled_at, i.password_hash
+      `SELECT u.id, u.email, u.display_name, u.disabled_at, u.email_verified_at, i.password_hash
        FROM users u JOIN account_identities i ON i.user_id = u.id
        WHERE i.provider = 'password' AND i.subject = $1`,
       [email],
     );
     return result.rows[0] ?? null;
+  }
+
+  async replaceEmailVerificationToken({ userID, tokenHash, expiresAt }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query(
+        `SELECT id FROM users
+         WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NULL
+         FOR UPDATE`,
+        [userID],
+      );
+      if (!owner.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      await client.query(
+        `UPDATE email_verification_tokens SET invalidated_at = now()
+         WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        [userID],
+      );
+      await client.query(
+        `INSERT INTO email_verification_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [userID, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumeEmailVerificationToken(tokenHash) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const token = await client.query(
+        `UPDATE email_verification_tokens AS token SET consumed_at = now()
+         FROM users AS owner
+         WHERE token.token_hash = $1
+           AND token.user_id = owner.id
+           AND owner.disabled_at IS NULL
+           AND token.consumed_at IS NULL
+           AND token.invalidated_at IS NULL
+           AND token.expires_at > now()
+         RETURNING token.user_id`,
+        [tokenHash],
+      );
+      if (!token.rows[0]) {
+        await client.query("COMMIT");
+        return null;
+      }
+      const user = await client.query(
+        `UPDATE users SET email_verified_at = COALESCE(email_verified_at, now()), updated_at = now()
+         WHERE id = $1
+         RETURNING id, email, display_name, email_verified_at, created_at`,
+        [token.rows[0].user_id],
+      );
+      await client.query("COMMIT");
+      return user.rows[0] ?? null;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async consumeRateLimit({ scope, keyHash, limit, windowSeconds }) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(scope)
+      || !/^[0-9a-f]{64}$/.test(keyHash)
+      || !Number.isInteger(limit) || limit < 1 || limit > 10_000
+      || !Number.isInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 86_400) {
+      throw new Error("invalid_rate_limit_policy");
+    }
+    const result = await this.pool.query(
+      `WITH pruned AS (
+         DELETE FROM auth_rate_limits
+         WHERE (scope, key_hash) IN (
+           SELECT scope, key_hash FROM auth_rate_limits
+           WHERE expires_at <= now()
+             AND (scope <> $1 OR key_hash <> $2)
+           ORDER BY expires_at
+           LIMIT 100
+         )
+       ), upserted AS (
+         INSERT INTO auth_rate_limits
+           (scope, key_hash, window_started_at, request_count, expires_at)
+         VALUES
+           ($1, $2, now(), 1, now() + ($4 * 2) * interval '1 second')
+         ON CONFLICT (scope, key_hash) DO UPDATE SET
+           window_started_at = CASE
+             WHEN auth_rate_limits.window_started_at + $4 * interval '1 second' <= now() THEN now()
+             ELSE auth_rate_limits.window_started_at
+           END,
+           request_count = CASE
+             WHEN auth_rate_limits.window_started_at + $4 * interval '1 second' <= now() THEN 1
+             ELSE LEAST(auth_rate_limits.request_count + 1, $3::bigint + 1)
+           END,
+           expires_at = now() + ($4 * 2) * interval '1 second'
+         RETURNING request_count, window_started_at
+       )
+       SELECT request_count <= $3 AS allowed,
+         GREATEST(1, CEIL(EXTRACT(EPOCH FROM
+           (window_started_at + $4 * interval '1 second' - now())
+         )))::integer AS retry_after_seconds
+       FROM upserted`,
+      [scope, keyHash, limit, windowSeconds],
+    );
+    const row = result.rows[0];
+    return {
+      allowed: row?.allowed === true,
+      retryAfterSeconds: Math.max(1, Number(row?.retry_after_seconds ?? windowSeconds)),
+    };
+  }
+
+  async replacePasswordResetToken({ userID, tokenHash, expiresAt }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query(
+        `SELECT id FROM users
+         WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NOT NULL
+         FOR UPDATE`,
+        [userID],
+      );
+      if (!owner.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      await client.query(
+        `UPDATE password_reset_tokens SET invalidated_at = now()
+         WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        [userID],
+      );
+      await client.query(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [userID, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async passwordResetIdentity(tokenHash) {
+    const result = await this.pool.query(
+      `SELECT token.user_id
+       FROM password_reset_tokens AS token
+       JOIN users AS owner ON owner.id = token.user_id
+       WHERE token.token_hash = $1
+         AND owner.disabled_at IS NULL
+         AND owner.email_verified_at IS NOT NULL
+         AND token.consumed_at IS NULL
+         AND token.invalidated_at IS NULL
+         AND token.expires_at > now()`,
+      [tokenHash],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async consumePasswordResetToken({ userID, tokenHash, passwordHash }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const consumed = await client.query(
+        `UPDATE password_reset_tokens AS token SET consumed_at = now()
+         FROM users AS owner
+         WHERE token.token_hash = $1 AND token.user_id = $2
+           AND token.user_id = owner.id
+           AND owner.disabled_at IS NULL AND owner.email_verified_at IS NOT NULL
+           AND token.consumed_at IS NULL AND token.invalidated_at IS NULL
+           AND token.expires_at > now()
+         RETURNING token.user_id`,
+        [tokenHash, userID],
+      );
+      if (!consumed.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      const password = await client.query(
+        `UPDATE account_identities SET password_hash = $2, last_used_at = NULL
+         WHERE user_id = $1 AND provider = 'password'
+         RETURNING id`,
+        [userID, passwordHash],
+      );
+      if (!password.rows[0]) throw new Error("password_identity_missing");
+      await client.query(
+        "UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1",
+        [userID],
+      );
+      await client.query("UPDATE users SET updated_at = now() WHERE id = $1", [userID]);
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async createSession({ userID, device, sessionHash, expiresAt }) {
@@ -85,7 +295,7 @@ export class PostgresStore {
       `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.display_name
        FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
-         AND u.disabled_at IS NULL AND d.revoked_at IS NULL`,
+         AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND d.revoked_at IS NULL`,
       [tokenHash],
     );
     if (!result.rows[0]) return null;

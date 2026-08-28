@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hashPassword, hashSessionToken, normalizeEmail, validateVaultEnvelope, verifyPassword } from "../src/security.mjs";
+import {
+  createEmailVerificationToken,
+  createPasswordResetToken,
+  hashAbuseKey,
+  hashPasswordResetToken,
+  hashEmailVerificationToken,
+  hashPassword,
+  hashSessionToken,
+  normalizeEmail,
+  validateVaultEnvelope,
+  verifyPassword,
+} from "../src/security.mjs";
 
 test("email normalization is deterministic", () => {
   assert.equal(normalizeEmail("  User@Example.COM "), "user@example.com");
@@ -18,6 +29,42 @@ test("password hashes are salted and verifiable", async () => {
 
 test("session token hashes are pepper-bound", () => {
   assert.notEqual(hashSessionToken("token", "a".repeat(32)), hashSessionToken("token", "b".repeat(32)));
+});
+
+test("email verification tokens are opaque and HMAC-bound", () => {
+  const first = createEmailVerificationToken();
+  const second = createEmailVerificationToken();
+  assert.notEqual(first, second);
+  assert.ok(first.length >= 40);
+  const hash = hashEmailVerificationToken(first, "a".repeat(32));
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.notEqual(hash, hashEmailVerificationToken(first, "b".repeat(32)));
+  assert.throws(() => hashEmailVerificationToken("", "a".repeat(32)), /invalid_verification_token/);
+});
+
+test("abuse-control keys are scope- and pepper-bound HMAC values", () => {
+  const value = "203.0.113.42";
+  const pepper = "r".repeat(32);
+  const loginHash = hashAbuseKey("login_ip", value, pepper);
+
+  assert.match(loginHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(loginHash, value);
+  assert.notEqual(loginHash, hashAbuseKey("register_ip", value, pepper));
+  assert.notEqual(loginHash, hashAbuseKey("login_ip", value, "s".repeat(32)));
+  assert.throws(() => hashAbuseKey("INVALID SCOPE", value, pepper), /invalid_abuse_key/);
+  assert.throws(() => hashAbuseKey("login_ip", "", pepper), /invalid_abuse_key/);
+});
+
+test("password reset tokens are opaque and use a dedicated HMAC", () => {
+  const token = createPasswordResetToken();
+  const pepper = "p".repeat(32);
+  const hash = hashPasswordResetToken(token, pepper);
+
+  assert.ok(token.length >= 40);
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.notEqual(hash, token);
+  assert.notEqual(hash, hashPasswordResetToken(token, "q".repeat(32)));
+  assert.throws(() => hashPasswordResetToken("", pepper), /invalid_password_reset_token/);
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {

@@ -7,10 +7,12 @@
     "node": ">=22"
   },
   "scripts": {
+    "migrate": "node scripts/migrate.mjs",
     "start": "node src/server.mjs",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {
+    "nodemailer": "9.0.6",
     "pg": "8.16.3"
   }
 }
