@@ -30,6 +30,18 @@ jobs:
           swift --version
           swift --version | grep -E 'Swift version 6\.'
 
+      - name: Select Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+
+      - name: Verify Node runtime
+        run: |
+          node --version
+          node --version | grep -E '^v22\.'
+
       - name: Validate shell scripts
         run: |
           bash -n scripts/build_app.sh
@@ -43,6 +55,12 @@ jobs:
 
       - name: Test terminal web interactions
         run: node --test Tests/TerminalResourcesTests/*.test.js
+
+      - name: Test Selective Remote Cloud
+        working-directory: cloud
+        run: |
+          npm ci
+          npm test
 
       - name: Release build
         run: swift build -c release
