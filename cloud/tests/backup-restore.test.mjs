@@ -25,7 +25,9 @@ test("backup is private, validated and does not read or print secrets", async ()
   const script = await readFile(backupPath, "utf8");
   assert.match(script, /umask 077/);
   assert.match(script, /backup_dir_mode/);
-  assert.match(script, /stat -c '%u'/);
+  assert.match(script, /stat_mode/);
+  assert.match(script, /stat_owner/);
+  assert.match(script, /stat -f '%Lp'/);
   assert.match(script, /mktemp/);
   assert.match(script, /pg_dump --format=custom/);
   assert.match(script, /pg_restore --list/);

@@ -14,6 +14,22 @@ the repository. Existing backups are never overwritten.
 USAGE
 }
 
+stat_mode() {
+    if stat -c '%a' -- "$1" >/dev/null 2>&1; then
+        stat -c '%a' -- "$1"
+    else
+        stat -f '%Lp' -- "$1"
+    fi
+}
+
+stat_owner() {
+    if stat -c '%u' -- "$1" >/dev/null 2>&1; then
+        stat -c '%u' -- "$1"
+    else
+        stat -f '%u' -- "$1"
+    fi
+}
+
 if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
     usage
     exit 0
@@ -33,12 +49,12 @@ if [[ ! -d "${backup_dir}" || -L "${backup_dir}" ]]; then
     echo "Backup destination must be an existing non-symlink directory." >&2
     exit 64
 fi
-backup_dir_mode="$(stat -c '%a' -- "${backup_dir}")"
+backup_dir_mode="$(stat_mode "${backup_dir}")"
 if (( (8#${backup_dir_mode} & 077) != 0 )); then
     echo "Backup directory must not grant group or other permissions." >&2
     exit 77
 fi
-if [[ "$(stat -c '%u' -- "${backup_dir}")" != "$(id -u)" ]]; then
+if [[ "$(stat_owner "${backup_dir}")" != "$(id -u)" ]]; then
     echo "Backup directory must be owned by the current user." >&2
     exit 77
 fi
