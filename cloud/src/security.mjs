@@ -63,6 +63,19 @@ export function hashEmailVerificationToken(token, pepper) {
   return createHmac("sha256", pepper).update(token).digest("hex");
 }
 
+export function hashAbuseKey(scope, value, pepper) {
+  const normalizedScope = String(scope ?? "");
+  const normalizedValue = String(value ?? "");
+  if (!/^[a-z][a-z0-9_-]{0,63}$/.test(normalizedScope) || !normalizedValue || normalizedValue.length > 512) {
+    throw new Error("invalid_abuse_key");
+  }
+  return createHmac("sha256", pepper)
+    .update(normalizedScope)
+    .update("\0")
+    .update(normalizedValue)
+    .digest("hex");
+}
+
 export function isUUID(value) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value));
 }

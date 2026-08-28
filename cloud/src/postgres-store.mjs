@@ -114,6 +114,54 @@ export class PostgresStore {
     }
   }
 
+  async consumeRateLimit({ scope, keyHash, limit, windowSeconds }) {
+    if (!/^[a-z][a-z0-9_-]{0,63}$/.test(scope)
+      || !/^[0-9a-f]{64}$/.test(keyHash)
+      || !Number.isInteger(limit) || limit < 1 || limit > 10_000
+      || !Number.isInteger(windowSeconds) || windowSeconds < 1 || windowSeconds > 86_400) {
+      throw new Error("invalid_rate_limit_policy");
+    }
+    const result = await this.pool.query(
+      `WITH pruned AS (
+         DELETE FROM auth_rate_limits
+         WHERE (scope, key_hash) IN (
+           SELECT scope, key_hash FROM auth_rate_limits
+           WHERE expires_at <= now()
+             AND (scope <> $1 OR key_hash <> $2)
+           ORDER BY expires_at
+           LIMIT 100
+         )
+       ), upserted AS (
+         INSERT INTO auth_rate_limits
+           (scope, key_hash, window_started_at, request_count, expires_at)
+         VALUES
+           ($1, $2, now(), 1, now() + ($4 * 2) * interval '1 second')
+         ON CONFLICT (scope, key_hash) DO UPDATE SET
+           window_started_at = CASE
+             WHEN auth_rate_limits.window_started_at + $4 * interval '1 second' <= now() THEN now()
+             ELSE auth_rate_limits.window_started_at
+           END,
+           request_count = CASE
+             WHEN auth_rate_limits.window_started_at + $4 * interval '1 second' <= now() THEN 1
+             ELSE LEAST(auth_rate_limits.request_count + 1, $3::bigint + 1)
+           END,
+           expires_at = now() + ($4 * 2) * interval '1 second'
+         RETURNING request_count, window_started_at
+       )
+       SELECT request_count <= $3 AS allowed,
+         GREATEST(1, CEIL(EXTRACT(EPOCH FROM
+           (window_started_at + $4 * interval '1 second' - now())
+         )))::integer AS retry_after_seconds
+       FROM upserted`,
+      [scope, keyHash, limit, windowSeconds],
+    );
+    const row = result.rows[0];
+    return {
+      allowed: row?.allowed === true,
+      retryAfterSeconds: Math.max(1, Number(row?.retry_after_seconds ?? windowSeconds)),
+    };
+  }
+
   async createSession({ userID, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
     try {

@@ -58,6 +58,41 @@ test("session lookup rejects accounts without a verified email", async () => {
   assert.match(lookup.sql, /u\.email_verified_at IS NOT NULL/);
 });
 
+test("rate limits use one atomic bounded counter and return retry timing", async () => {
+  const fixture = recordingStore((sql) => sql.includes("WITH pruned AS")
+    ? { rows: [{ allowed: false, retry_after_seconds: 47 }] }
+    : { rows: [] });
+  const keyHash = "f".repeat(64);
+
+  assert.deepEqual(await fixture.store.consumeRateLimit({
+    scope: "login_ip",
+    keyHash,
+    limit: 20,
+    windowSeconds: 300,
+  }), { allowed: false, retryAfterSeconds: 47 });
+
+  const query = fixture.queries[0];
+  assert.deepEqual(query.parameters, ["login_ip", keyHash, 20, 300]);
+  assert.match(query.sql, /ON CONFLICT \(scope, key_hash\) DO UPDATE/);
+  assert.match(query.sql, /LEAST\(auth_rate_limits\.request_count \+ 1, \$3::bigint \+ 1\)/);
+  assert.match(query.sql, /LIMIT 100/);
+  assert.equal(query.sql.includes(keyHash), false);
+});
+
+test("rate limits reject invalid policies before querying PostgreSQL", async () => {
+  const fixture = recordingStore();
+  await assert.rejects(
+    fixture.store.consumeRateLimit({
+      scope: "login_ip",
+      keyHash: "not-a-hash",
+      limit: 0,
+      windowSeconds: 0,
+    }),
+    /invalid_rate_limit_policy/,
+  );
+  assert.equal(fixture.queries.length, 0);
+});
+
 test("replacing an email verification token invalidates the previous active hash", async () => {
   const fixture = recordingStore();
   const expiresAt = new Date("2030-01-02T00:00:00.000Z");

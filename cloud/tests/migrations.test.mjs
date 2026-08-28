@@ -10,8 +10,20 @@ test("numbered migrations have stable checksums", async () => {
   assert.deepEqual(migrations.map(({ version, name }) => ({ version, name })), [
     { version: 1, name: "001_initial.sql" },
     { version: 2, name: "002_email_verification.sql" },
+    { version: 3, name: "003_auth_rate_limits.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("rate limit migration stores only bounded HMAC-keyed counters", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const rateLimits = migrations.find(({ version }) => version === 3);
+
+  assert.match(rateLimits.sql, /key_hash text NOT NULL/);
+  assert.match(rateLimits.sql, /key_hash ~ '\^\[0-9a-f\]\{64\}\$'/);
+  assert.match(rateLimits.sql, /request_count bigint NOT NULL/);
+  assert.match(rateLimits.sql, /PRIMARY KEY \(scope, key_hash\)/);
+  assert.doesNotMatch(rateLimits.sql, /ip_address|email text|raw_key/);
 });
 
 test("email verification migration stores only hashed expiring tokens", async () => {
