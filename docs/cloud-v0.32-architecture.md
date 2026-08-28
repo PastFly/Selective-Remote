@@ -2,10 +2,12 @@
 
 ## Scope
 
-Version 0.32 introduces an optional self-hosted account and personal Vault for
-Selective Remote. The macOS application remains fully usable without an
-account. Team Vaults, invitations, roles and FIDO2 are deliberately kept for
-the following milestones.
+Version 0.32 introduces optional self-hosted accounts, personal Vaults, Teams
+and shared Team Vaults for Selective Remote. The macOS application remains
+fully usable without an account. This foundation milestone implements account,
+device and opaque personal-Vault storage only; shared Vault data structures,
+membership, roles and key distribution are later milestones within the final
+0.32 scope. FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:
 
@@ -24,7 +26,7 @@ private keys, snippets, logs or the user's Vault key.
 ```mermaid
 flowchart TD
     A["macOS client"] -->|"TLS + opaque ciphertext"| B["Cloud API"]
-    W["Web portal"] -->|"TLS + account metadata"| B
+    W["Web portal"] -->|"TLS + opaque ciphertext"| B
     B --> C["PostgreSQL"]
     A --> K["macOS Keychain"]
     K -->|"device key + Vault key"| A
@@ -52,8 +54,13 @@ The personal Vault is an opaque, versioned document in v0.32:
 - `revision` is a monotonically increasing server revision;
 - `base_revision` makes writes conditional;
 - `ciphertext`, `nonce` and `tag` are produced by the client;
-- `content_hash` detects accidental duplicate uploads without revealing data;
+- `content_hash` is the base64url SHA-256 of the encrypted envelope bytes, never
+  a plaintext hash;
 - conflicting writes return HTTP `409` and never silently overwrite data.
+
+Envelope v1 uses unpadded base64url fields, a 12-byte AES-GCM nonce, a 16-byte
+authentication tag and a 32-byte content hash. Every uploaded revision includes
+the wrapped Vault key so a later write cannot accidentally erase recovery data.
 
 The client downloads the latest revision, decrypts it locally, performs a
 record-level merge by stable UUID and modification timestamp, then uploads a
@@ -62,6 +69,12 @@ that another device cannot resurrect removed records.
 
 The Cloud payload is separate from `.srbackup`. Backup archives remain manual,
 portable rollback artifacts; Cloud revisions are small synchronization units.
+
+Shared Vaults use independent random Vault keys. The final design must wrap a
+shared key separately for authorized members/devices, enforce roles in both
+the API and clients, and rotate the key (or use an equivalently reviewed
+revocation design) when access is removed. The exact invitation, role and key
+rotation protocol must be threat-modelled before those endpoints are added.
 
 ## API v1
 
@@ -80,9 +93,9 @@ portable rollback artifacts; Cloud revisions are small synchronization units.
 | `PUT` | `/v1/vault` | Conditionally upload a revision |
 
 Google, Apple and Microsoft/Azure sign-in are represented as account identity
-providers in the schema. Their redirect endpoints are enabled only when the
-corresponding client credentials are configured. Apple sign-in therefore does
-not block email, Google or Microsoft sign-in.
+providers in the schema for future compatibility. OAuth redirect and callback
+flows are not implemented by this foundation milestone and must not be exposed
+as available until provider-specific implementation and security review pass.
 
 ## Deployment boundary
 
@@ -95,7 +108,7 @@ Before public deployment:
 
 1. create an `A` record for `cloud.pastfly.ru` pointing to the server;
 2. restrict inbound traffic to SSH, HTTP and HTTPS;
-3. generate independent database, session-token and recovery-pepper secrets;
+3. generate independent database and session-token secrets;
 4. configure SMTP before allowing public email registration;
 5. back up the PostgreSQL volume and test restoration;
 6. run the API and migration test suites.

@@ -21,8 +21,21 @@ test("session token hashes are pepper-bound", () => {
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {
-  const valid = { baseRevision: 0, envelopeVersion: 1, ciphertext: "AA", nonce: "BB", authTag: "CC", contentHash: "DD" };
-  assert.equal(validateVaultEnvelope(valid), valid);
+  const valid = {
+    baseRevision: 0,
+    envelopeVersion: 1,
+    wrappedKey: { algorithm: "test", value: "EE" },
+    ciphertext: "AA",
+    nonce: "B".repeat(16),
+    authTag: "C".repeat(22),
+    contentHash: "D".repeat(43),
+  };
+  assert.deepEqual(validateVaultEnvelope(valid), valid);
   assert.throws(() => validateVaultEnvelope({ ...valid, baseRevision: -1 }), /invalid_base_revision/);
-  assert.throws(() => validateVaultEnvelope({ ...valid, nonce: "x".repeat(129) }), /invalid_vault_envelope/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, baseRevision: Number.MAX_SAFE_INTEGER + 1 }), /invalid_base_revision/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, wrappedKey: null }), /invalid_wrapped_key/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, wrappedKey: {} }), /invalid_wrapped_key/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, ciphertext: "not base64" }), /invalid_vault_envelope/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, nonce: "x".repeat(15) }), /invalid_vault_envelope/);
+  assert.throws(() => validateVaultEnvelope({ ...valid, envelopeVersion: 2 }), /invalid_envelope_version/);
 });

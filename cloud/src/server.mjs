@@ -4,7 +4,9 @@ import { extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.mjs";
 import { PostgresStore } from "./postgres-store.mjs";
+import { isUUID } from "./security.mjs";
 import { CloudService } from "./service.mjs";
+import { publicOperationError } from "./service-error.mjs";
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
@@ -16,10 +18,13 @@ const server = createServer(async (request, response) => {
   const requestID = crypto.randomUUID();
   response.setHeader("X-Request-ID", requestID);
   response.setHeader("Cache-Control", "no-store");
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("Referrer-Policy", "no-referrer");
   try {
     await route(request, response);
   } catch (error) {
-    console.error(JSON.stringify({ level: "error", requestID, message: error?.message ?? "unknown" }));
+    const errorCode = /^[A-Za-z0-9_-]{1,40}$/.test(String(error?.code ?? "")) ? error.code : undefined;
+    console.error(JSON.stringify({ level: "error", requestID, message: "Unhandled request error", errorCode }));
     sendError(response, 500, "internal_error");
   }
 });
@@ -60,8 +65,9 @@ async function route(request, response) {
     if (method === "GET" && url.pathname === "/v1/devices") {
       return sendJSON(response, 200, { devices: await store.listDevices(session.user_id) });
     }
-    const deviceMatch = url.pathname.match(/^\/v1\/devices\/([0-9a-f-]+)$/i);
+    const deviceMatch = url.pathname.match(/^\/v1\/devices\/([^/]+)$/i);
     if (method === "DELETE" && deviceMatch) {
+      if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
       const revoked = await store.revokeDevice(session.user_id, deviceMatch[1]);
       return revoked ? empty(response, 204) : sendError(response, 404, "device_not_found");
     }
@@ -69,8 +75,12 @@ async function route(request, response) {
       return sendJSON(response, 200, await service.getVault(session));
     }
     if (method === "PUT" && url.pathname === "/v1/vault") {
-      const result = await service.putVault(session, await readJSON(request));
-      return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
+      try {
+        const result = await service.putVault(session, await readJSON(request));
+        return result.conflict ? sendJSON(response, 409, result) : sendJSON(response, 200, result);
+      } catch (error) {
+        return handleOperationError(response, error);
+      }
     }
     return sendError(response, 404, "not_found");
   }
@@ -83,24 +93,14 @@ async function handleOperation(response, operation, successStatus = 200) {
   try {
     return sendJSON(response, successStatus, await operation());
   } catch (error) {
-    const code = error?.message ?? "invalid_request";
-    const statuses = {
-      registration_disabled: 403,
-      email_exists: 409,
-      invalid_credentials: 401,
-      invalid_email: 400,
-      invalid_password: 400,
-      invalid_device: 400,
-      invalid_content_type: 415,
-      invalid_json: 400,
-      request_too_large: 413,
-      invalid_vault_envelope: 400,
-      invalid_base_revision: 400,
-      invalid_envelope_version: 400,
-      vault_too_large: 413,
-    };
-    return sendError(response, statuses[code] ?? 400, code);
+    return handleOperationError(response, error);
   }
+}
+
+function handleOperationError(response, error) {
+  const publicError = publicOperationError(error);
+  if (!publicError) throw error;
+  return sendError(response, publicError.status, publicError.code);
 }
 
 function bearerToken(request) {
@@ -110,7 +110,10 @@ function bearerToken(request) {
 
 async function readJSON(request) {
   const contentType = request.headers["content-type"] ?? "";
-  if (!contentType.toLowerCase().startsWith("application/json")) throw new Error("invalid_content_type");
+  const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
+  if (mediaType !== "application/json" && !/^application\/[a-z0-9.+-]+\+json$/.test(mediaType)) {
+    throw new Error("invalid_content_type");
+  }
   const chunks = [];
   let total = 0;
   for await (const chunk of request) {

@@ -38,7 +38,15 @@ test("vault writes use optimistic revisions", async () => {
   const store = new MemoryStore();
   const service = new CloudService(store, config);
   const session = { user_id: "user-1", device_id: device.id };
-  const body = { baseRevision: 0, envelopeVersion: 1, ciphertext: "AA", nonce: "BB", authTag: "CC", contentHash: "DD" };
+  const body = {
+    baseRevision: 0,
+    envelopeVersion: 1,
+    wrappedKey: { algorithm: "test", value: "EE" },
+    ciphertext: "AA",
+    nonce: "B".repeat(16),
+    authTag: "C".repeat(22),
+    contentHash: "D".repeat(43),
+  };
   assert.deepEqual(await service.putVault(session, body), { conflict: false, revision: 1 });
   assert.deepEqual(await service.putVault(session, body), { conflict: true, revision: 1 });
 });
