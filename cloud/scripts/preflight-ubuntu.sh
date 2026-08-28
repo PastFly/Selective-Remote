@@ -33,6 +33,13 @@ fi
 echo "Listening TCP ports:"
 ss -lntp 2>/dev/null | sed -n '1,80p' || true
 
+if ss -H -lnt '( sport = :443 )' 2>/dev/null | grep -q .; then
+    echo "BLOCKER: TCP port 443 is already listening; do not start the supplied Caddy service."
+    ss -lntp '( sport = :443 )' 2>/dev/null || true
+else
+    echo "TCP port 443: available for the standalone Caddy design"
+fi
+
 if command -v ufw >/dev/null 2>&1; then
     echo "UFW:"
     ufw status verbose || true
