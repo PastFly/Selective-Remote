@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -43,6 +45,61 @@ test("restore fails closed around confirmation, integrity and active writes", as
   assert.match(script, /--clean --if-exists/);
   assert.match(script, /--exit-on-error --single-transaction/);
   assert.doesNotMatch(script, /POSTGRES_PASSWORD|DATABASE_URL|\.env\b/);
+});
+
+test("backup and restore complete through a controlled Compose boundary", async () => {
+  const root = await mkdtemp(join(tmpdir(), "selective-remote-backup-test-"));
+  const binDir = join(root, "bin");
+  const backupDir = join(root, "private-backups");
+  const dockerPath = join(binDir, "docker");
+  const dockerLog = join(root, "docker.log");
+  await mkdir(binDir);
+  await mkdir(backupDir, { mode: 0o700 });
+  await writeFile(dockerPath, `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DOCKER_LOG"
+case "$*" in
+  "compose version") exit 0 ;;
+  *"exec -T postgres pg_isready"*) exit 0 ;;
+  *"pg_dump --format=custom"*) printf 'PGDMP-controlled-test-archive' ;;
+  *"exec -T postgres pg_restore --list"*) cat >/dev/null ;;
+  *"ps --status running --services"*) printf 'postgres\\n' ;;
+  *"pg_restore --clean --if-exists"*) cat >/dev/null ;;
+  *) printf 'Unexpected docker call: %s\\n' "$*" >&2; exit 90 ;;
+esac
+`, { mode: 0o700 });
+  await chmod(dockerPath, 0o700);
+
+  const env = {
+    ...process.env,
+    PATH: `${binDir}:${process.env.PATH}`,
+    DOCKER_LOG: dockerLog,
+  };
+
+  try {
+    const backup = spawnSync("bash", [backupPath, backupDir], { encoding: "utf8", env });
+    assert.equal(backup.status, 0, backup.stderr);
+
+    const entries = await readdir(backupDir);
+    const dumpName = entries.find((name) => name.endsWith(".dump"));
+    assert.ok(dumpName, "backup dump was not created");
+    assert.ok(entries.includes(`${dumpName}.sha256`), "checksum was not created");
+    assert.equal((await stat(join(backupDir, dumpName))).mode & 0o777, 0o600);
+
+    const restore = spawnSync(
+      "bash",
+      [restorePath, "--confirm-restore", join(backupDir, dumpName)],
+      { encoding: "utf8", env },
+    );
+    assert.equal(restore.status, 0, restore.stderr);
+
+    const calls = await readFile(dockerLog, "utf8");
+    assert.match(calls, /pg_dump --format=custom/);
+    assert.match(calls, /pg_restore --list/);
+    assert.match(calls, /pg_restore --clean --if-exists/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test("deployment guide requires an off-host backup and restore drill", async () => {
