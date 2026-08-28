@@ -11,6 +11,10 @@ class MemoryStore {
     this.lastVerificationHash = null;
     this.lastVerificationExpiry = null;
     this.replacementVerificationHash = null;
+    this.passwordResetAvailable = true;
+    this.replacementPasswordResetHash = null;
+    this.lastPasswordResetExpiry = null;
+    this.lastPasswordHash = null;
   }
   async createUser(input) {
     this.lastVerificationHash = input.verificationHash;
@@ -40,6 +44,25 @@ class MemoryStore {
     this.lastVerificationExpiry = input.expiresAt;
     return true;
   }
+  async replacePasswordResetToken(input) {
+    this.replacementPasswordResetHash = input.tokenHash;
+    this.lastPasswordResetExpiry = input.expiresAt;
+    return Boolean(this.identity && !this.identity.disabled_at && this.identity.email_verified_at);
+  }
+  async passwordResetIdentity(tokenHash) {
+    if (!this.passwordResetAvailable || tokenHash !== this.replacementPasswordResetHash) return null;
+    return { user_id: this.identity.id };
+  }
+  async consumePasswordResetToken({ userID, tokenHash, passwordHash }) {
+    if (!this.passwordResetAvailable || userID !== this.identity?.id || tokenHash !== this.replacementPasswordResetHash) {
+      return false;
+    }
+    this.passwordResetAvailable = false;
+    this.lastPasswordHash = passwordHash;
+    this.identity.password_hash = passwordHash;
+    this.sessions.clear();
+    return true;
+  }
   async getVault() { return { id: "vault-1", revision: this.revision, envelope_version: 1, wrapped_key: null, ciphertext: null, nonce: null, auth_tag: null, content_hash: null, updated_at: new Date() }; }
   async putVault(_userID, _deviceID, envelope) {
     if (envelope.baseRevision !== this.revision) return { conflict: true, revision: this.revision };
@@ -52,8 +75,10 @@ const config = {
   allowRegistration: true,
   sessionPepper: "p".repeat(32),
   emailVerificationPepper: "v".repeat(32),
+  passwordResetTokenPepper: "r".repeat(32),
   sessionTTLDays: 30,
   emailVerificationTTLHours: 24,
+  passwordResetTTLHours: 1,
 };
 const device = { id: "84f6c860-0d26-4ef5-8652-27cb8b991b70", name: "Test Mac", platform: "macOS", appVersion: "0.32.0" };
 
@@ -188,4 +213,93 @@ test("email verification consumes an HMAC hash exactly once", async () => {
   assert.notEqual(store.lastVerificationHash, token);
   await assert.rejects(service.verifyEmail({ token }), /invalid_verification_token/);
   await assert.rejects(service.verifyEmail({ token: "" }), /invalid_verification_token/);
+});
+
+test("password reset request stores only a hash and returns one generic response", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "old-password-hash",
+    email_verified_at: new Date(),
+    disabled_at: null,
+  };
+  let delivery;
+  const service = new CloudService(store, config, {
+    async sendPasswordReset(value) { delivery = value; },
+  });
+
+  assert.deepEqual(await service.requestPasswordReset({ email: "USER@example.com" }), { accepted: true });
+  assert.equal(delivery.recipient, "user@example.com");
+  assert.ok(delivery.token.length >= 40);
+  assert.match(store.replacementPasswordResetHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(store.replacementPasswordResetHash, delivery.token);
+  assert.ok(store.lastPasswordResetExpiry > new Date());
+
+  const unknownStore = new MemoryStore();
+  let unknownDelivered = false;
+  const unknownService = new CloudService(unknownStore, config, {
+    async sendPasswordReset() { unknownDelivered = true; },
+  });
+  assert.deepEqual(await unknownService.requestPasswordReset({ email: "unknown@example.com" }), { accepted: true });
+  assert.equal(unknownDelivered, false);
+
+  unknownStore.identity = {
+    id: "user-2",
+    email: "pending@example.com",
+    password_hash: "unused",
+    email_verified_at: null,
+    disabled_at: null,
+  };
+  assert.deepEqual(await unknownService.requestPasswordReset({ email: "pending@example.com" }), { accepted: true });
+  assert.equal(unknownDelivered, false);
+});
+
+test("password reset request hides mail provider failures", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "old-password-hash",
+    email_verified_at: new Date(),
+    disabled_at: null,
+  };
+  const warnings = [];
+  const service = new CloudService(store, config, {
+    async sendPasswordReset() { throw new Error("private-provider-detail"); },
+  }, { warn(value) { warnings.push(value); } });
+
+  assert.deepEqual(await service.requestPasswordReset({ email: "user@example.com" }), { accepted: true });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].includes("private-provider-detail"), false);
+  assert.equal(warnings[0].includes("user@example.com"), false);
+});
+
+test("password reset consumes its token once and revokes existing sessions", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "old-password-hash",
+    email_verified_at: new Date(),
+    disabled_at: null,
+  };
+  store.sessions.set("old-session", { user_id: "user-1" });
+  let delivery;
+  const service = new CloudService(store, config, {
+    async sendPasswordReset(value) { delivery = value; },
+  });
+
+  await service.requestPasswordReset({ email: "user@example.com" });
+  assert.deepEqual(await service.resetPassword({ token: delivery.token, password: "a new secure password" }), { reset: true });
+  assert.match(store.lastPasswordHash, /^scrypt\$v=1\$/);
+  assert.equal(store.sessions.size, 0);
+  await assert.rejects(
+    service.resetPassword({ token: delivery.token, password: "another secure password" }),
+    /invalid_password_reset_token/,
+  );
+  await assert.rejects(
+    service.resetPassword({ token: "", password: "another secure password" }),
+    /invalid_password_reset_token/,
+  );
 });

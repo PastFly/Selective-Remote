@@ -5,6 +5,7 @@ import { createVerificationMailer } from "../src/mailer.mjs";
 const config = {
   publicOrigin: "https://cloud.example.com",
   emailVerificationTTLHours: 24,
+  passwordResetTTLHours: 1,
   smtp: {
     host: "smtp.example.com",
     port: 587,
@@ -52,4 +53,22 @@ test("verification mail requires TLS and keeps credentials out of the message", 
 
 test("mailer refuses to start without SMTP configuration", () => {
   assert.throws(() => createVerificationMailer({ ...config, smtp: null }), /smtp_not_configured/);
+});
+
+test("password reset mail keeps the opaque token in a fragment", async () => {
+  let message;
+  const mailer = createVerificationMailer(config, () => ({
+    async verify() {},
+    async sendMail(value) { message = value; return { messageId: "test" }; },
+  }));
+
+  await mailer.sendPasswordReset({ recipient: "person@example.com", token: "opaque-reset-token" });
+
+  assert.equal(message.to, "person@example.com");
+  assert.match(message.subject, /Сброс пароля/);
+  assert.match(message.text, /https:\/\/cloud\.example\.com\/#reset-password\?token=opaque-reset-token/);
+  assert.match(message.text, /1 ч\./);
+  assert.equal(message.disableFileAccess, true);
+  assert.equal(message.disableUrlAccess, true);
+  assert.doesNotMatch(JSON.stringify(message), /secret-secret-secret/);
 });

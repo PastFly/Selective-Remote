@@ -60,6 +60,19 @@ async function route(request, response) {
       202,
     );
   }
+  if (method === "POST" && url.pathname === "/v1/auth/request-password-reset") {
+    return handleAuthOperation(
+      request,
+      response,
+      "request_password_reset_ip",
+      "request_password_reset_email",
+      service.requestPasswordReset.bind(service),
+      202,
+    );
+  }
+  if (method === "POST" && url.pathname === "/v1/auth/reset-password") {
+    return handleAuthOperation(request, response, "reset_password_ip", null, service.resetPassword.bind(service));
+  }
 
   if (url.pathname.startsWith("/v1/")) {
     const session = await service.authenticate(bearerToken(request));
@@ -128,6 +141,7 @@ async function handleOperation(response, operation, successStatus = 200) {
       smtp_not_configured: 503,
       rate_limited: 429,
       invalid_verification_token: 400,
+      invalid_password_reset_token: 400,
       invalid_email: 400,
       invalid_password: 400,
       invalid_device: 400,

@@ -9,6 +9,10 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .verification { margin:32px 0 0; padding:30px; border:1px solid var(--line); border-radius:18px; background:#0c1714e8; }
 .verification h2 { margin:8px 0 10px; }.verification p:last-of-type { color:var(--muted); margin-bottom:20px; }
 .verification a { color:var(--accent2); font-weight:650; }.verification.success { border-color:#75e0b477; }.verification.error { border-color:#ff8f7a88; }
+.verification form { display:grid; gap:10px; max-width:520px; }.verification label { color:var(--muted); font-size:13px; margin-top:4px; }
+.verification input { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:#07100d; color:var(--ink); font:inherit; }
+.verification button { justify-self:start; margin:8px 0 16px; border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
+.verification button:disabled { opacity:.6; cursor:wait; }
 .hero { min-height:460px; display:grid; grid-template-columns:1.35fr .65fr; align-items:center; gap:60px; border-bottom:1px solid var(--line); }
 .kicker { color:var(--accent2); font-weight:650; }.hero h2 { font-size:clamp(42px,6vw,78px); line-height:.98; letter-spacing:-.055em; max-width:850px; margin:18px 0 24px; }
 .lead { max-width:660px; color:var(--muted); line-height:1.65; font-size:18px; }

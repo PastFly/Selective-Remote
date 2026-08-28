@@ -38,6 +38,13 @@ test("rate-limit overrides reject partial and out-of-range numbers", () => {
   const config = loadConfig({ ...baseEnv, AUTH_LOGIN_IP_LIMIT: "40" });
   assert.deepEqual(config.authRateLimits.login_ip, { limit: 40, windowSeconds: 300 });
   assert.deepEqual(config.authRateLimits.resend_verification_email, { limit: 3, windowSeconds: 3_600 });
+  assert.deepEqual(config.authRateLimits.request_password_reset_ip, { limit: 5, windowSeconds: 3_600 });
+  assert.deepEqual(config.authRateLimits.request_password_reset_email, { limit: 3, windowSeconds: 3_600 });
+  assert.deepEqual(config.authRateLimits.reset_password_ip, { limit: 10, windowSeconds: 900 });
+  assert.throws(
+    () => loadConfig({ ...baseEnv, AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT: "0" }),
+    /AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT/,
+  );
 });
 
 test("runtime security secrets cannot be reused across purposes", () => {

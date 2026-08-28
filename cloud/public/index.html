@@ -25,6 +25,20 @@
       <a href="/" id="verification-home" hidden>Вернуться на главную</a>
     </section>
 
+    <section class="verification" id="password-reset" aria-live="polite" hidden>
+      <p class="eyebrow">СБРОС ПАРОЛЯ</p>
+      <h2 id="password-reset-title">Задайте новый пароль</h2>
+      <p id="password-reset-message">Минимум 12 символов.</p>
+      <form id="password-reset-form" method="post" action="/v1/auth/reset-password">
+        <label for="new-password">Новый пароль</label>
+        <input id="new-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+        <label for="confirm-password">Повторите пароль</label>
+        <input id="confirm-password" name="confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+        <button type="submit">Сохранить пароль</button>
+      </form>
+      <a href="/" id="password-reset-home" hidden>Вернуться на главную</a>
+    </section>
+
     <section class="hero">
       <div>
         <p class="kicker">Ваши подключения — на ваших устройствах</p>

@@ -34,5 +34,23 @@ export function createVerificationMailer(config, createTransport = nodemailer.cr
         ].join("\n"),
       });
     },
+    async sendPasswordReset({ recipient, token }) {
+      const resetURL = new URL("/", config.publicOrigin);
+      resetURL.hash = `reset-password?${new URLSearchParams({ token })}`;
+      return transport.sendMail({
+        from: `Selective Remote <${config.smtp.from}>`,
+        to: recipient,
+        subject: "Сброс пароля Selective Remote",
+        disableFileAccess: true,
+        disableUrlAccess: true,
+        text: [
+          "Чтобы задать новый пароль Selective Remote, откройте ссылку:",
+          resetURL.toString(),
+          "",
+          `Ссылка действует ${config.passwordResetTTLHours} ч.`,
+          "Если вы не запрашивали сброс, проигнорируйте это письмо.",
+        ].join("\n"),
+      });
+    },
   });
 }

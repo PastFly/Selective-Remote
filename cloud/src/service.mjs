@@ -1,8 +1,10 @@
 import {
   createEmailVerificationToken,
+  createPasswordResetToken,
   createSessionToken,
   hashEmailVerificationToken,
   hashPassword,
+  hashPasswordResetToken,
   hashSessionToken,
   isUUID,
   normalizeEmail,
@@ -25,6 +27,10 @@ export class CloudService {
 
   emailVerificationExpiry() {
     return new Date(Date.now() + this.config.emailVerificationTTLHours * 3_600_000);
+  }
+
+  passwordResetExpiry() {
+    return new Date(Date.now() + this.config.passwordResetTTLHours * 3_600_000);
   }
 
   validateDevice(value) {
@@ -121,6 +127,44 @@ export class CloudService {
       this.logger.warn(JSON.stringify({ level: "warn", message: "Verification email delivery failed" }));
     }
     return { accepted: true };
+  }
+
+  async requestPasswordReset(input) {
+    if (!this.mailer) throw new Error("smtp_not_configured");
+    const email = normalizeEmail(input.email);
+    const identity = await this.store.passwordIdentity(email);
+    if (!identity || identity.disabled_at || !identity.email_verified_at) {
+      return { accepted: true };
+    }
+
+    const token = createPasswordResetToken();
+    const replaced = await this.store.replacePasswordResetToken({
+      userID: identity.id,
+      tokenHash: hashPasswordResetToken(token, this.config.passwordResetTokenPepper),
+      expiresAt: this.passwordResetExpiry(),
+    });
+    if (!replaced) return { accepted: true };
+    try {
+      await this.mailer.sendPasswordReset({ recipient: email, token });
+    } catch {
+      this.logger.warn(JSON.stringify({ level: "warn", message: "Password reset email delivery failed" }));
+    }
+    return { accepted: true };
+  }
+
+  async resetPassword(input) {
+    const password = validatePassword(input.password);
+    const tokenHash = hashPasswordResetToken(input.token, this.config.passwordResetTokenPepper);
+    const identity = await this.store.passwordResetIdentity(tokenHash);
+    if (!identity) throw new Error("invalid_password_reset_token");
+    const passwordHash = await hashPassword(password);
+    const consumed = await this.store.consumePasswordResetToken({
+      userID: identity.user_id,
+      tokenHash,
+      passwordHash,
+    });
+    if (!consumed) throw new Error("invalid_password_reset_token");
+    return { reset: true };
   }
 
   async authenticate(token) {

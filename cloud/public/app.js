@@ -1,14 +1,23 @@
 const verificationPrefix = "#verify-email?";
+const passwordResetPrefix = "#reset-password?";
 
-export function consumeVerificationFragment(locationValue, historyValue) {
+function consumeTokenFragment(prefix, locationValue, historyValue) {
   const hash = String(locationValue.hash ?? "");
-  if (!hash.startsWith(verificationPrefix)) return { present: false, token: null };
+  if (!hash.startsWith(prefix)) return { present: false, token: null };
   historyValue.replaceState(null, "", `${locationValue.pathname}${locationValue.search}`);
-  const token = new URLSearchParams(hash.slice(verificationPrefix.length)).get("token");
+  const token = new URLSearchParams(hash.slice(prefix.length)).get("token");
   return {
     present: true,
     token: token && token.length <= 256 ? token : null,
   };
+}
+
+export function consumeVerificationFragment(locationValue, historyValue) {
+  return consumeTokenFragment(verificationPrefix, locationValue, historyValue);
+}
+
+export function consumePasswordResetFragment(locationValue, historyValue) {
+  return consumeTokenFragment(passwordResetPrefix, locationValue, historyValue);
 }
 
 export async function submitEmailVerification(token, fetchValue = fetch) {
@@ -23,6 +32,20 @@ export async function submitEmailVerification(token, fetchValue = fetch) {
   if (!response.ok) throw new Error("invalid_verification_token");
   const result = await response.json();
   if (result?.verified !== true) throw new Error("invalid_verification_token");
+}
+
+export async function submitPasswordReset(token, password, fetchValue = fetch) {
+  const response = await fetchValue("/v1/auth/reset-password", {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
+    body: JSON.stringify({ token, password }),
+    cache: "no-store",
+    credentials: "omit",
+    referrerPolicy: "no-referrer",
+  });
+  if (!response.ok) throw new Error("password_reset_failed");
+  const result = await response.json();
+  if (result?.reset !== true) throw new Error("password_reset_failed");
 }
 
 async function updateServiceStatus(documentValue, fetchValue) {
@@ -48,6 +71,7 @@ export async function initializePortal({
   fetchValue = fetch,
 } = {}) {
   const verification = consumeVerificationFragment(locationValue, historyValue);
+  const passwordReset = consumePasswordResetFragment(locationValue, historyValue);
   if (verification.present) {
     const panel = documentValue.querySelector("#email-verification");
     const title = documentValue.querySelector("#verification-title");
@@ -66,6 +90,47 @@ export async function initializePortal({
       message.textContent = "Она могла истечь или уже была использована. Запросите новое письмо позже.";
     }
     home.hidden = false;
+  }
+  if (passwordReset.present) {
+    const panel = documentValue.querySelector("#password-reset");
+    const form = documentValue.querySelector("#password-reset-form");
+    const title = documentValue.querySelector("#password-reset-title");
+    const message = documentValue.querySelector("#password-reset-message");
+    const password = documentValue.querySelector("#new-password");
+    const confirmation = documentValue.querySelector("#confirm-password");
+    const home = documentValue.querySelector("#password-reset-home");
+    panel.hidden = false;
+    if (!passwordReset.token) {
+      panel.classList.add("error");
+      title.textContent = "Ссылка недействительна";
+      message.textContent = "Она могла истечь или уже была использована.";
+      form.hidden = true;
+      home.hidden = false;
+    } else {
+      form.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        if (password.value !== confirmation.value) {
+          message.textContent = "Пароли не совпадают.";
+          return;
+        }
+        const button = form.querySelector("button");
+        button.disabled = true;
+        try {
+          await submitPasswordReset(passwordReset.token, password.value, fetchValue);
+          password.value = "";
+          confirmation.value = "";
+          form.hidden = true;
+          panel.classList.add("success");
+          title.textContent = "Пароль изменён";
+          message.textContent = "Все прежние сессии отозваны. Теперь войдите с новым паролем.";
+          home.hidden = false;
+        } catch {
+          panel.classList.add("error");
+          message.textContent = "Не удалось изменить пароль. Ссылка могла истечь или уже была использована.";
+          button.disabled = false;
+        }
+      });
+    }
   }
   await updateServiceStatus(documentValue, fetchValue);
 }

@@ -26,13 +26,20 @@ Registration creates an unverified account and sends a one-time link; it does
 not return a bearer session. Password login and session lookup remain blocked
 until the token is consumed. SMTP connectivity is verified before the service
 starts whenever registration is enabled. The rate-limited resend flow can
-recover a pending account after a delivery failure; password reset is still
-incomplete, so registration must remain disabled.
+recover a pending account after a delivery failure. Password reset is
+implemented and covered by automated tests, but still requires manual
+end-to-end review, so registration must remain disabled.
 
 `POST /v1/auth/resend-verification` returns the same accepted response for
 unknown, disabled, verified and pending accounts. Pending accounts receive a
 replacement one-time link; provider failures are logged without the recipient
 or provider response and do not change the public response.
+
+`POST /v1/auth/request-password-reset` uses the same generic accepted response
+for unknown, disabled, unverified and eligible accounts. Reset links carry an
+opaque token in the URL fragment; the browser removes it from history before
+showing the password form. `POST /v1/auth/reset-password` consumes a valid token
+once, replaces the scrypt password hash and revokes every existing session.
 
 Authentication endpoints use persistent fixed-window limits keyed by HMACs of
 the client IP and, where applicable, the normalized email address. Raw IPs and

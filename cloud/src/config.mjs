@@ -112,6 +112,9 @@ export function loadConfig(env = process.env) {
       verify_email_ip: Object.freeze({ limit: integer(env, "AUTH_VERIFY_IP_LIMIT", 30, 1, 1_000), windowSeconds: 300 }),
       resend_verification_ip: Object.freeze({ limit: integer(env, "AUTH_RESEND_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
       resend_verification_email: Object.freeze({ limit: integer(env, "AUTH_RESEND_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 3_600 }),
+      request_password_reset_ip: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
+      request_password_reset_email: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_REQUEST_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 3_600 }),
+      reset_password_ip: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_IP_LIMIT", 10, 1, 100), windowSeconds: 900 }),
     }),
   });
 }
