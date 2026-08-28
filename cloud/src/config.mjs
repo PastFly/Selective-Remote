@@ -104,6 +104,7 @@ export function loadConfig(env = process.env) {
     sessionTTLDays: integer(env, "SESSION_TTL_DAYS", 30, 1, 365),
     emailVerificationTTLHours: integer(env, "EMAIL_VERIFICATION_TTL_HOURS", 24, 1, 168),
     passwordResetTTLHours: integer(env, "PASSWORD_RESET_TTL_HOURS", 1, 1, 24),
+    recoveryMinimumResponseMS: integer(env, "AUTH_RECOVERY_MIN_RESPONSE_MS", 500, 250, 5_000),
     authRateLimits: Object.freeze({
       register_ip: Object.freeze({ limit: integer(env, "AUTH_REGISTER_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
       register_email: Object.freeze({ limit: integer(env, "AUTH_REGISTER_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 86_400 }),

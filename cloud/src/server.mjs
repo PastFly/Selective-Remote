@@ -218,7 +218,11 @@ await start();
 
 async function shutdown(signal) {
   console.log(JSON.stringify({ level: "info", message: "Shutting down", signal }));
-  server.close(async () => { await store.close(); process.exit(0); });
+  server.close(async () => {
+    await service.waitForBackgroundTasks();
+    await store.close();
+    process.exit(0);
+  });
   setTimeout(() => process.exit(1), 10_000).unref();
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

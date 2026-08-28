@@ -79,6 +79,7 @@ const config = {
   sessionTTLDays: 30,
   emailVerificationTTLHours: 24,
   passwordResetTTLHours: 1,
+  recoveryMinimumResponseMS: 0,
 };
 const device = { id: "84f6c860-0d26-4ef5-8652-27cb8b991b70", name: "Test Mac", platform: "macOS", appVersion: "0.32.0" };
 
@@ -158,6 +159,7 @@ test("verification resend rotates the hash and always returns an accepted respon
   });
 
   assert.deepEqual(await service.resendEmailVerification({ email: "USER@example.com" }), { accepted: true });
+  await service.waitForBackgroundTasks();
   assert.equal(delivery.recipient, "user@example.com");
   assert.ok(delivery.token.length >= 40);
   assert.match(store.replacementVerificationHash, /^[0-9a-f]{64}$/);
@@ -198,6 +200,7 @@ test("verification resend hides mail provider failures", async () => {
   }, { warn(value) { warnings.push(value); } });
 
   assert.deepEqual(await service.resendEmailVerification({ email: "user@example.com" }), { accepted: true });
+  await service.waitForBackgroundTasks();
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].includes("private-provider-detail"), false);
   assert.equal(warnings[0].includes("user@example.com"), false);
@@ -230,6 +233,7 @@ test("password reset request stores only a hash and returns one generic response
   });
 
   assert.deepEqual(await service.requestPasswordReset({ email: "USER@example.com" }), { accepted: true });
+  await service.waitForBackgroundTasks();
   assert.equal(delivery.recipient, "user@example.com");
   assert.ok(delivery.token.length >= 40);
   assert.match(store.replacementPasswordResetHash, /^[0-9a-f]{64}$/);
@@ -270,6 +274,7 @@ test("password reset request hides mail provider failures", async () => {
   }, { warn(value) { warnings.push(value); } });
 
   assert.deepEqual(await service.requestPasswordReset({ email: "user@example.com" }), { accepted: true });
+  await service.waitForBackgroundTasks();
   assert.equal(warnings.length, 1);
   assert.equal(warnings[0].includes("private-provider-detail"), false);
   assert.equal(warnings[0].includes("user@example.com"), false);
@@ -291,6 +296,7 @@ test("password reset consumes its token once and revokes existing sessions", asy
   });
 
   await service.requestPasswordReset({ email: "user@example.com" });
+  await service.waitForBackgroundTasks();
   assert.deepEqual(await service.resetPassword({ token: delivery.token, password: "a new secure password" }), { reset: true });
   assert.match(store.lastPasswordHash, /^scrypt\$v=1\$/);
   assert.equal(store.sessions.size, 0);
@@ -302,4 +308,30 @@ test("password reset consumes its token once and revokes existing sessions", asy
     service.resetPassword({ token: "", password: "another secure password" }),
     /invalid_password_reset_token/,
   );
+});
+
+test("recovery responses do not wait for SMTP and enforce a common minimum delay", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "old-password-hash",
+    email_verified_at: new Date(),
+    disabled_at: null,
+  };
+  let releaseDelivery;
+  const blockedDelivery = new Promise((resolve) => { releaseDelivery = resolve; });
+  const service = new CloudService(store, { ...config, recoveryMinimumResponseMS: 25 }, {
+    async sendPasswordReset() { await blockedDelivery; },
+  });
+
+  const startedAt = Date.now();
+  assert.deepEqual(await service.requestPasswordReset({ email: "user@example.com" }), { accepted: true });
+  const elapsed = Date.now() - startedAt;
+  assert.ok(elapsed >= 20, `response completed too early: ${elapsed}ms`);
+  assert.equal(service.backgroundTasks.size, 1);
+
+  releaseDelivery();
+  await service.waitForBackgroundTasks();
+  assert.equal(service.backgroundTasks.size, 0);
 });

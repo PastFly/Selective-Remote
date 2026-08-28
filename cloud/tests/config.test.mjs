@@ -23,7 +23,9 @@ test("runtime secrets reject placeholders and short values", () => {
 
 test("password reset uses an independent bounded token lifetime", () => {
   assert.equal(loadConfig(baseEnv).passwordResetTTLHours, 1);
+  assert.equal(loadConfig(baseEnv).recoveryMinimumResponseMS, 500);
   assert.throws(() => loadConfig({ ...baseEnv, PASSWORD_RESET_TTL_HOURS: "25" }), /PASSWORD_RESET_TTL_HOURS/);
+  assert.throws(() => loadConfig({ ...baseEnv, AUTH_RECOVERY_MIN_RESPONSE_MS: "249" }), /AUTH_RECOVERY_MIN_RESPONSE_MS/);
 });
 
 test("proxy trust requires a header-safe independent hexadecimal secret", () => {

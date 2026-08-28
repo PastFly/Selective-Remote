@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   createEmailVerificationToken,
   createPasswordResetToken,
@@ -19,6 +20,7 @@ export class CloudService {
     this.config = config;
     this.mailer = mailer;
     this.logger = logger;
+    this.backgroundTasks = new Set();
   }
 
   sessionExpiry() {
@@ -31,6 +33,29 @@ export class CloudService {
 
   passwordResetExpiry() {
     return new Date(Date.now() + this.config.passwordResetTTLHours * 3_600_000);
+  }
+
+  async withRecoveryResponse(operation) {
+    const startedAt = Date.now();
+    try {
+      return await operation();
+    } finally {
+      const minimum = this.config.recoveryMinimumResponseMS ?? 0;
+      const remaining = minimum - (Date.now() - startedAt);
+      if (remaining > 0) await delay(remaining);
+    }
+  }
+
+  queueRecoveryEmail(operation, failureMessage) {
+    const task = Promise.resolve()
+      .then(operation)
+      .catch(() => this.logger.warn(JSON.stringify({ level: "warn", message: failureMessage })))
+      .finally(() => this.backgroundTasks.delete(task));
+    this.backgroundTasks.add(task);
+  }
+
+  async waitForBackgroundTasks() {
+    await Promise.allSettled([...this.backgroundTasks]);
   }
 
   validateDevice(value) {
@@ -109,47 +134,49 @@ export class CloudService {
   async resendEmailVerification(input) {
     if (!this.mailer) throw new Error("smtp_not_configured");
     const email = normalizeEmail(input.email);
-    const identity = await this.store.passwordIdentity(email);
-    if (!identity || identity.disabled_at || identity.email_verified_at) {
-      return { accepted: true };
-    }
+    return this.withRecoveryResponse(async () => {
+      const identity = await this.store.passwordIdentity(email);
+      if (!identity || identity.disabled_at || identity.email_verified_at) {
+        return { accepted: true };
+      }
 
-    const token = createEmailVerificationToken();
-    const replaced = await this.store.replaceEmailVerificationToken({
-      userID: identity.id,
-      tokenHash: hashEmailVerificationToken(token, this.config.emailVerificationPepper),
-      expiresAt: this.emailVerificationExpiry(),
+      const token = createEmailVerificationToken();
+      const replaced = await this.store.replaceEmailVerificationToken({
+        userID: identity.id,
+        tokenHash: hashEmailVerificationToken(token, this.config.emailVerificationPepper),
+        expiresAt: this.emailVerificationExpiry(),
+      });
+      if (!replaced) return { accepted: true };
+      this.queueRecoveryEmail(
+        () => this.mailer.sendEmailVerification({ recipient: email, token }),
+        "Verification email delivery failed",
+      );
+      return { accepted: true };
     });
-    if (!replaced) return { accepted: true };
-    try {
-      await this.mailer.sendEmailVerification({ recipient: email, token });
-    } catch {
-      this.logger.warn(JSON.stringify({ level: "warn", message: "Verification email delivery failed" }));
-    }
-    return { accepted: true };
   }
 
   async requestPasswordReset(input) {
     if (!this.mailer) throw new Error("smtp_not_configured");
     const email = normalizeEmail(input.email);
-    const identity = await this.store.passwordIdentity(email);
-    if (!identity || identity.disabled_at || !identity.email_verified_at) {
-      return { accepted: true };
-    }
+    return this.withRecoveryResponse(async () => {
+      const identity = await this.store.passwordIdentity(email);
+      if (!identity || identity.disabled_at || !identity.email_verified_at) {
+        return { accepted: true };
+      }
 
-    const token = createPasswordResetToken();
-    const replaced = await this.store.replacePasswordResetToken({
-      userID: identity.id,
-      tokenHash: hashPasswordResetToken(token, this.config.passwordResetTokenPepper),
-      expiresAt: this.passwordResetExpiry(),
+      const token = createPasswordResetToken();
+      const replaced = await this.store.replacePasswordResetToken({
+        userID: identity.id,
+        tokenHash: hashPasswordResetToken(token, this.config.passwordResetTokenPepper),
+        expiresAt: this.passwordResetExpiry(),
+      });
+      if (!replaced) return { accepted: true };
+      this.queueRecoveryEmail(
+        () => this.mailer.sendPasswordReset({ recipient: email, token }),
+        "Password reset email delivery failed",
+      );
+      return { accepted: true };
     });
-    if (!replaced) return { accepted: true };
-    try {
-      await this.mailer.sendPasswordReset({ recipient: email, token });
-    } catch {
-      this.logger.warn(JSON.stringify({ level: "warn", message: "Password reset email delivery failed" }));
-    }
-    return { accepted: true };
   }
 
   async resetPassword(input) {

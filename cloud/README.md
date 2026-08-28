@@ -33,13 +33,18 @@ end-to-end review, so registration must remain disabled.
 `POST /v1/auth/resend-verification` returns the same accepted response for
 unknown, disabled, verified and pending accounts. Pending accounts receive a
 replacement one-time link; provider failures are logged without the recipient
-or provider response and do not change the public response.
+or provider response and do not change the public response. Recovery responses
+use a common minimum delay and do not wait for SMTP delivery, reducing account
+enumeration through response timing.
 
 `POST /v1/auth/request-password-reset` uses the same generic accepted response
 for unknown, disabled, unverified and eligible accounts. Reset links carry an
 opaque token in the URL fragment; the browser removes it from history before
 showing the password form. `POST /v1/auth/reset-password` consumes a valid token
 once, replaces the scrypt password hash and revokes every existing session.
+Queued recovery mail is held in process; an abrupt process or host failure can
+drop that delivery, in which case the user can submit another rate-limited
+request.
 
 Authentication endpoints use persistent fixed-window limits keyed by HMACs of
 the client IP and, where applicable, the normalized email address. Raw IPs and
