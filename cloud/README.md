@@ -16,7 +16,11 @@ docker compose up --build
 
 Registration is intentionally disabled in the example configuration. It must
 stay disabled on a public host until email verification and SMTP delivery are
-configured.
+configured, password reset and request throttling are implemented, and the
+complete flow passes manual security review. Enabling it fails closed unless
+the verification-token pepper and all SMTP settings are present. SMTP uses
+implicit TLS when `SMTP_SECURE=true`; otherwise the client requires STARTTLS
+and rejects invalid certificates.
 
 The Cloud container applies numbered SQL migrations before starting the API.
 Applied filenames and SHA-256 checksums are recorded in `schema_migrations`.
