@@ -172,6 +172,97 @@ export class PostgresStore {
     };
   }
 
+  async replacePasswordResetToken({ userID, tokenHash, expiresAt }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const owner = await client.query(
+        `SELECT id FROM users
+         WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NOT NULL
+         FOR UPDATE`,
+        [userID],
+      );
+      if (!owner.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      await client.query(
+        `UPDATE password_reset_tokens SET invalidated_at = now()
+         WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
+        [userID],
+      );
+      await client.query(
+        `INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+         VALUES ($1, $2, $3)`,
+        [userID, tokenHash, expiresAt],
+      );
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async passwordResetIdentity(tokenHash) {
+    const result = await this.pool.query(
+      `SELECT token.user_id
+       FROM password_reset_tokens AS token
+       JOIN users AS owner ON owner.id = token.user_id
+       WHERE token.token_hash = $1
+         AND owner.disabled_at IS NULL
+         AND owner.email_verified_at IS NOT NULL
+         AND token.consumed_at IS NULL
+         AND token.invalidated_at IS NULL
+         AND token.expires_at > now()`,
+      [tokenHash],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async consumePasswordResetToken({ userID, tokenHash, passwordHash }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const consumed = await client.query(
+        `UPDATE password_reset_tokens AS token SET consumed_at = now()
+         FROM users AS owner
+         WHERE token.token_hash = $1 AND token.user_id = $2
+           AND token.user_id = owner.id
+           AND owner.disabled_at IS NULL AND owner.email_verified_at IS NOT NULL
+           AND token.consumed_at IS NULL AND token.invalidated_at IS NULL
+           AND token.expires_at > now()
+         RETURNING token.user_id`,
+        [tokenHash, userID],
+      );
+      if (!consumed.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      const password = await client.query(
+        `UPDATE account_identities SET password_hash = $2, last_used_at = NULL
+         WHERE user_id = $1 AND provider = 'password'
+         RETURNING id`,
+        [userID, passwordHash],
+      );
+      if (!password.rows[0]) throw new Error("password_identity_missing");
+      await client.query(
+        "UPDATE sessions SET revoked_at = COALESCE(revoked_at, now()) WHERE user_id = $1",
+        [userID],
+      );
+      await client.query("UPDATE users SET updated_at = now() WHERE id = $1", [userID]);
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async createSession({ userID, device, sessionHash, expiresAt }) {
     const client = await this.pool.connect();
     try {

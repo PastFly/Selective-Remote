@@ -11,8 +11,21 @@ test("numbered migrations have stable checksums", async () => {
     { version: 1, name: "001_initial.sql" },
     { version: 2, name: "002_email_verification.sql" },
     { version: 3, name: "003_auth_rate_limits.sql" },
+    { version: 4, name: "004_password_reset.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("password reset migration stores only hashed expiring one-time tokens", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const reset = migrations.find(({ version }) => version === 4);
+
+  assert.match(reset.sql, /token_hash text NOT NULL UNIQUE/);
+  assert.match(reset.sql, /token_hash ~ '\^\[0-9a-f\]\{64\}\$'/);
+  assert.match(reset.sql, /expires_at timestamptz NOT NULL/);
+  assert.match(reset.sql, /consumed_at timestamptz/);
+  assert.match(reset.sql, /invalidated_at timestamptz/);
+  assert.doesNotMatch(reset.sql, /\bpassword(?:_hash)?\s+text\b|\btoken\s+text\b/);
 });
 
 test("rate limit migration stores only bounded HMAC-keyed counters", async () => {

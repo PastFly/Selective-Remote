@@ -63,6 +63,15 @@ export function hashEmailVerificationToken(token, pepper) {
   return createHmac("sha256", pepper).update(token).digest("hex");
 }
 
+export function createPasswordResetToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashPasswordResetToken(token, pepper) {
+  if (!token || token.length > 256) throw new Error("invalid_password_reset_token");
+  return createHmac("sha256", pepper).update(token).digest("hex");
+}
+
 export function hashAbuseKey(scope, value, pepper) {
   const normalizedScope = String(scope ?? "");
   const normalizedValue = String(value ?? "");

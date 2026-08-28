@@ -188,3 +188,82 @@ test("verification token writes roll back and release their connection on failur
   assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
   assert.equal(fixture.released(), true);
 });
+
+test("password reset replacement rotates only for an eligible verified account", async () => {
+  const fixture = recordingStore((sql) => sql.includes("SELECT id FROM users")
+    ? { rows: [{ id: "user-1" }] }
+    : { rows: [] });
+  const tokenHash = "1".repeat(64);
+  const expiresAt = new Date("2030-01-02T00:00:00.000Z");
+
+  assert.equal(await fixture.store.replacePasswordResetToken({ userID: "user-1", tokenHash, expiresAt }), true);
+  const tokenInsert = fixture.queries.find(({ sql }) => sql.includes("INSERT INTO password_reset_tokens"));
+  assert.deepEqual(tokenInsert.parameters, ["user-1", tokenHash, expiresAt]);
+  assert.match(fixture.queries[1].sql, /email_verified_at IS NOT NULL/);
+  assert.match(fixture.queries[1].sql, /disabled_at IS NULL/);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes(tokenHash)), false);
+  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
+});
+
+test("password reset lookup accepts only an active token hash", async () => {
+  const fixture = recordingStore((sql) => sql.includes("FROM password_reset_tokens")
+    ? { rows: [{ user_id: "user-1" }] }
+    : { rows: [] });
+  const tokenHash = "2".repeat(64);
+  assert.deepEqual(await fixture.store.passwordResetIdentity(tokenHash), { user_id: "user-1" });
+  assert.deepEqual(fixture.queries[0].parameters, [tokenHash]);
+  assert.match(fixture.queries[0].sql, /expires_at > now\(\)/);
+  assert.match(fixture.queries[0].sql, /consumed_at IS NULL/);
+  assert.match(fixture.queries[0].sql, /invalidated_at IS NULL/);
+  assert.equal(fixture.queries[0].sql.includes(tokenHash), false);
+});
+
+test("password reset consumption changes the password and revokes every session", async () => {
+  const fixture = recordingStore((sql) => {
+    if (sql.includes("UPDATE password_reset_tokens")) return { rows: [{ user_id: "user-1" }] };
+    if (sql.includes("UPDATE account_identities")) return { rows: [{ id: "identity-1" }] };
+    return { rows: [] };
+  });
+  const tokenHash = "3".repeat(64);
+
+  assert.equal(await fixture.store.consumePasswordResetToken({
+    userID: "user-1",
+    tokenHash,
+    passwordHash: "new-password-hash",
+  }), true);
+  assert.deepEqual(fixture.queries.find(({ sql }) => sql.includes("UPDATE account_identities")).parameters,
+    ["user-1", "new-password-hash"]);
+  assert.match(fixture.queries.find(({ sql }) => sql.includes("UPDATE password_reset_tokens")).sql,
+    /owner\.disabled_at IS NULL/);
+  assert.match(fixture.queries.find(({ sql }) => sql.includes("UPDATE password_reset_tokens")).sql,
+    /owner\.email_verified_at IS NOT NULL/);
+  assert.match(fixture.queries.find(({ sql }) => sql.includes("UPDATE sessions")).sql, /COALESCE\(revoked_at, now\(\)\)/);
+  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
+});
+
+test("password reset rolls back if the password identity disappears", async () => {
+  const fixture = recordingStore((sql) => sql.includes("UPDATE password_reset_tokens")
+    ? { rows: [{ user_id: "user-1" }] }
+    : { rows: [] });
+
+  await assert.rejects(fixture.store.consumePasswordResetToken({
+    userID: "user-1",
+    tokenHash: "5".repeat(64),
+    passwordHash: "new-password-hash",
+  }), /password_identity_missing/);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes("UPDATE sessions")), false);
+  assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+  assert.equal(fixture.released(), true);
+});
+
+test("replayed password reset tokens change neither password nor sessions", async () => {
+  const fixture = recordingStore();
+  assert.equal(await fixture.store.consumePasswordResetToken({
+    userID: "user-1",
+    tokenHash: "4".repeat(64),
+    passwordHash: "new-password-hash",
+  }), false);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes("UPDATE account_identities")), false);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes("UPDATE sessions")), false);
+  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
+});

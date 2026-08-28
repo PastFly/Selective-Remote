@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createEmailVerificationToken,
+  createPasswordResetToken,
   hashAbuseKey,
+  hashPasswordResetToken,
   hashEmailVerificationToken,
   hashPassword,
   hashSessionToken,
@@ -51,6 +53,18 @@ test("abuse-control keys are scope- and pepper-bound HMAC values", () => {
   assert.notEqual(loginHash, hashAbuseKey("login_ip", value, "s".repeat(32)));
   assert.throws(() => hashAbuseKey("INVALID SCOPE", value, pepper), /invalid_abuse_key/);
   assert.throws(() => hashAbuseKey("login_ip", "", pepper), /invalid_abuse_key/);
+});
+
+test("password reset tokens are opaque and use a dedicated HMAC", () => {
+  const token = createPasswordResetToken();
+  const pepper = "p".repeat(32);
+  const hash = hashPasswordResetToken(token, pepper);
+
+  assert.ok(token.length >= 40);
+  assert.match(hash, /^[0-9a-f]{64}$/);
+  assert.notEqual(hash, token);
+  assert.notEqual(hash, hashPasswordResetToken(token, "q".repeat(32)));
+  assert.throws(() => hashPasswordResetToken("", pepper), /invalid_password_reset_token/);
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {

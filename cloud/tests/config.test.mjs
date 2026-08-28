@@ -6,6 +6,7 @@ const baseEnv = {
   DATABASE_URL: "postgres://example.invalid/selective_remote",
   SESSION_TOKEN_PEPPER: "s".repeat(32),
   EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
+  PASSWORD_RESET_TOKEN_PEPPER: "p".repeat(32),
   ABUSE_TOKEN_PEPPER: "a".repeat(32),
   PROXY_SHARED_SECRET: "b".repeat(64),
 };
@@ -18,6 +19,11 @@ test("runtime secrets reject placeholders and short values", () => {
   );
   assert.equal(validateSecret("TEST_SECRET", "x".repeat(32)), "x".repeat(32));
   assert.equal(validateSecret("OPTIONAL_SECRET", undefined, false), null);
+});
+
+test("password reset uses an independent bounded token lifetime", () => {
+  assert.equal(loadConfig(baseEnv).passwordResetTTLHours, 1);
+  assert.throws(() => loadConfig({ ...baseEnv, PASSWORD_RESET_TTL_HOURS: "25" }), /PASSWORD_RESET_TTL_HOURS/);
 });
 
 test("proxy trust requires a header-safe independent hexadecimal secret", () => {

@@ -69,11 +69,18 @@ export function loadConfig(env = process.env) {
   const sessionPepper = validateSecret("SESSION_TOKEN_PEPPER", env.SESSION_TOKEN_PEPPER);
   const abuseTokenPepper = validateSecret("ABUSE_TOKEN_PEPPER", env.ABUSE_TOKEN_PEPPER);
   const proxySharedSecret = validateProxySecret(env.PROXY_SHARED_SECRET);
+  const passwordResetTokenPepper = validateSecret("PASSWORD_RESET_TOKEN_PEPPER", env.PASSWORD_RESET_TOKEN_PEPPER);
   const emailVerificationPepper = validateSecret(
     "EMAIL_VERIFICATION_TOKEN_PEPPER",
     env.EMAIL_VERIFICATION_TOKEN_PEPPER,
   );
-  if (new Set([sessionPepper, emailVerificationPepper, abuseTokenPepper, proxySharedSecret]).size !== 4) {
+  if (new Set([
+    sessionPepper,
+    emailVerificationPepper,
+    passwordResetTokenPepper,
+    abuseTokenPepper,
+    proxySharedSecret,
+  ]).size !== 5) {
     throw new Error("runtime security secrets must be independent");
   }
   if (!databaseURL) throw new Error("DATABASE_URL is required");
@@ -90,11 +97,13 @@ export function loadConfig(env = process.env) {
     sessionPepper,
     abuseTokenPepper,
     proxySharedSecret,
+    passwordResetTokenPepper,
     emailVerificationPepper,
     smtp: loadSMTPConfig(env, allowRegistration),
     allowRegistration,
     sessionTTLDays: integer(env, "SESSION_TTL_DAYS", 30, 1, 365),
     emailVerificationTTLHours: integer(env, "EMAIL_VERIFICATION_TTL_HOURS", 24, 1, 168),
+    passwordResetTTLHours: integer(env, "PASSWORD_RESET_TTL_HOURS", 1, 1, 24),
     authRateLimits: Object.freeze({
       register_ip: Object.freeze({ limit: integer(env, "AUTH_REGISTER_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
       register_email: Object.freeze({ limit: integer(env, "AUTH_REGISTER_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 86_400 }),

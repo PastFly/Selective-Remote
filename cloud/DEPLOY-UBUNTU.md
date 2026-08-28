@@ -51,12 +51,14 @@ openssl rand -base64 48
 openssl rand -base64 48
 openssl rand -base64 48
 openssl rand -base64 48
+openssl rand -base64 48
 openssl rand -hex 32
 ```
 
 The first random value can be used for `POSTGRES_PASSWORD`, and the second for
 `SESSION_TOKEN_PEPPER`. Use the third, independent value for
-`EMAIL_VERIFICATION_TOKEN_PEPPER`, the fourth for `ABUSE_TOKEN_PEPPER`, and the
+`EMAIL_VERIFICATION_TOKEN_PEPPER`, the fourth for
+`PASSWORD_RESET_TOKEN_PEPPER`, the fifth for `ABUSE_TOKEN_PEPPER`, and the
 64-character hexadecimal value for `PROXY_SHARED_SECRET`. Set `ACME_EMAIL` to
 the certificate contact address. Configure `SMTP_HOST`, `SMTP_PORT`,
 `SMTP_USER`, `SMTP_PASSWORD` and `SMTP_FROM` using a dedicated mail account. Use
