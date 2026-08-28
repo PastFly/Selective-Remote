@@ -3,7 +3,6 @@ import SwiftUI
 private struct TerminalToolbarContainerModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
-            .controlSize(.regular)
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .background(

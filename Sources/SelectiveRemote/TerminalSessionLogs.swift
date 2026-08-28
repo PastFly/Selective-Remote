@@ -489,7 +489,10 @@ struct TerminalSessionLogsView: View {
     private var header: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("Session Logs")
+                Text(UpdateLocalization.text(
+                    ru: "Журналы сессий",
+                    en: "Session Logs"
+                ))
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                 Text("Локальная запись вывода SSH и Local Terminal")
                     .foregroundStyle(.secondary)

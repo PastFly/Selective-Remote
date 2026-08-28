@@ -435,6 +435,10 @@
 "Загрузка и проверка SHA-256 · %@%%" = "Downloading and verifying SHA-256 · %@%%";
 "DMG загружен и проверен" = "DMG downloaded and verified";
 "Автоматически загружать обновления" = "Automatically download updates";
+"Автоматически загружать найденные обновления" = "Automatically download available updates";
+"Место автоматической загрузки" = "Automatic download location";
+"Выбрать пользовательский каталог…" = "Choose Custom Folder…";
+"Использовать системный каталог" = "Use System Folder";
 "Загрузить обновление" = "Download Update";
 "Установить и перезапустить" = "Install & Restart";
 "Показать DMG" = "Show DMG";

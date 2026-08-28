@@ -49,17 +49,23 @@ private enum MainArea: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .connectionCenter: "Connection Center"
+        case .connectionCenter: UpdateLocalization.text(
+            ru: "Центр подключений",
+            en: "Connection Center"
+        )
         case .connections: UpdateLocalization.text(ru: "Подключения", en: "Connections")
         case .ssh: "SSH"
         case .terminal: UpdateLocalization.text(ru: "Терминал", en: "Terminal")
-        case .sftp: "SFTP"
-        case .forwarding: "Forwarding"
+        case .sftp: UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP")
+        case .forwarding: UpdateLocalization.text(ru: "Туннели", en: "Forwarding")
         case .snippets: UpdateLocalization.text(ru: "Сниппеты", en: "Snippets")
-        case .sessionLogs: "Session Logs"
+        case .sessionLogs: UpdateLocalization.text(
+            ru: "Журналы сессий",
+            en: "Session Logs"
+        )
         case .activity: UpdateLocalization.text(ru: "Журнал", en: "Activity")
         case .diagnostics: UpdateLocalization.text(ru: "Диагностика", en: "Diagnostics")
-        case .keychain: "Keychain"
+        case .keychain: UpdateLocalization.text(ru: "Связка ключей", en: "Keychain")
         }
     }
 
@@ -2249,13 +2255,14 @@ struct ContentView: View {
             .padding(.bottom, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .controlSize(.large)
     }
 
     private var globalSFTPDetail: some View {
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("SFTP")
+                    Text(UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP"))
                         .font(.system(size: 30, weight: .bold, design: .rounded))
                     Text("Несколько SFTP-вкладок · Local ↔ Server · Server ↔ Server")
                         .foregroundStyle(.secondary)
