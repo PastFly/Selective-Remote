@@ -68,14 +68,19 @@ CREATE TABLE IF NOT EXISTS personal_vaults (
     auth_tag text,
     content_hash text,
     updated_by_device_id uuid REFERENCES devices(id) ON DELETE SET NULL,
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT personal_vault_payload_complete CHECK (
+        (revision = 0 AND wrapped_key IS NULL AND ciphertext IS NULL AND nonce IS NULL AND auth_tag IS NULL AND content_hash IS NULL)
+        OR
+        (revision > 0 AND wrapped_key IS NOT NULL AND ciphertext IS NOT NULL AND nonce IS NOT NULL AND auth_tag IS NOT NULL AND content_hash IS NOT NULL)
+    )
 );
 
 CREATE TABLE IF NOT EXISTS vault_revisions (
     vault_id uuid NOT NULL REFERENCES personal_vaults(id) ON DELETE CASCADE,
     revision bigint NOT NULL CHECK (revision > 0),
     envelope_version integer NOT NULL,
-    wrapped_key jsonb,
+    wrapped_key jsonb NOT NULL,
     ciphertext text NOT NULL,
     nonce text NOT NULL,
     auth_tag text NOT NULL,

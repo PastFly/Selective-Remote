@@ -4,6 +4,8 @@ import { promisify } from "node:util";
 const scrypt = promisify(scryptCallback);
 const passwordKeyLength = 32;
 const scryptOptions = Object.freeze({ N: 1 << 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 });
+const base64URL = /^[A-Za-z0-9_-]+$/;
+const maxWrappedKeyBytes = 16 * 1024;
 
 export function normalizeEmail(value) {
   const email = String(value ?? "").trim().toLowerCase();
@@ -93,13 +95,38 @@ export function validateVaultEnvelope(value) {
   const envelope = value && typeof value === "object" ? value : {};
   const required = ["ciphertext", "nonce", "authTag", "contentHash"];
   for (const key of required) {
-    if (typeof envelope[key] !== "string" || envelope[key].length === 0) throw new Error("invalid_vault_envelope");
+    if (typeof envelope[key] !== "string" || !base64URL.test(envelope[key])) {
+      throw new Error("invalid_vault_envelope");
+    }
   }
-  if (!Number.isInteger(envelope.baseRevision) || envelope.baseRevision < 0) throw new Error("invalid_base_revision");
-  if (!Number.isInteger(envelope.envelopeVersion) || envelope.envelopeVersion < 1) throw new Error("invalid_envelope_version");
+  if (!Number.isSafeInteger(envelope.baseRevision) || envelope.baseRevision < 0) throw new Error("invalid_base_revision");
+  if (envelope.envelopeVersion !== 1) {
+    throw new Error("invalid_envelope_version");
+  }
   if (envelope.ciphertext.length > 32 * 1024 * 1024) throw new Error("vault_too_large");
-  if (envelope.nonce.length > 128 || envelope.authTag.length > 128 || envelope.contentHash.length > 256) {
+  if (envelope.nonce.length !== 16 || envelope.authTag.length !== 22 || envelope.contentHash.length !== 43) {
     throw new Error("invalid_vault_envelope");
   }
-  return envelope;
+  if (!envelope.wrappedKey || typeof envelope.wrappedKey !== "object" || Array.isArray(envelope.wrappedKey)) {
+    throw new Error("invalid_wrapped_key");
+  }
+  let wrappedKey;
+  try {
+    const serialized = JSON.stringify(envelope.wrappedKey);
+    if (!serialized || serialized === "{}" || Buffer.byteLength(serialized) > maxWrappedKeyBytes) {
+      throw new Error("invalid_wrapped_key");
+    }
+    wrappedKey = JSON.parse(serialized);
+  } catch {
+    throw new Error("invalid_wrapped_key");
+  }
+  return {
+    baseRevision: envelope.baseRevision,
+    envelopeVersion: envelope.envelopeVersion,
+    wrappedKey,
+    ciphertext: envelope.ciphertext,
+    nonce: envelope.nonce,
+    authTag: envelope.authTag,
+    contentHash: envelope.contentHash,
+  };
 }

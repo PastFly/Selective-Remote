@@ -64,7 +64,7 @@ function loadSMTPConfig(env, requiredForRegistration) {
 
 export function loadConfig(env = process.env) {
   const publicOrigin = env.CLOUD_PUBLIC_ORIGIN ?? "http://localhost:8080";
-  const databaseURL = env.DATABASE_URL;
+  const databaseURL = String(env.DATABASE_URL ?? "").trim();
   const allowRegistration = boolean(env, "ALLOW_REGISTRATION", false);
   const sessionPepper = validateSecret("SESSION_TOKEN_PEPPER", env.SESSION_TOKEN_PEPPER);
   const abuseTokenPepper = validateSecret("ABUSE_TOKEN_PEPPER", env.ABUSE_TOKEN_PEPPER);
@@ -83,8 +83,11 @@ export function loadConfig(env = process.env) {
   ]).size !== 5) {
     throw new Error("runtime security secrets must be independent");
   }
-  if (!databaseURL) throw new Error("DATABASE_URL is required");
+  if (!databaseURL || /replace-(?:me|with)/i.test(databaseURL)) throw new Error("DATABASE_URL is required");
   const origin = new URL(publicOrigin);
+  if (origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash) {
+    throw new Error("CLOUD_PUBLIC_ORIGIN must be an origin without credentials, path, query or fragment");
+  }
   if (env.NODE_ENV === "production" && origin.protocol !== "https:") {
     throw new Error("CLOUD_PUBLIC_ORIGIN must use HTTPS in production");
   }

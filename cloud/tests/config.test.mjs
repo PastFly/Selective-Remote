@@ -21,6 +21,27 @@ test("runtime secrets reject placeholders and short values", () => {
   assert.equal(validateSecret("OPTIONAL_SECRET", undefined, false), null);
 });
 
+test("configuration rejects placeholder database values and partial numbers", () => {
+  assert.throws(
+    () => loadConfig({ ...baseEnv, DATABASE_URL: "postgres://user:replace-me@postgres/db" }),
+    /DATABASE_URL/,
+  );
+  assert.throws(() => loadConfig({ ...baseEnv, CLOUD_PORT: "8080oops" }), /CLOUD_PORT/);
+  assert.throws(() => loadConfig({ ...baseEnv, SESSION_TTL_DAYS: "30days" }), /SESSION_TTL_DAYS/);
+});
+
+test("public origin is an origin and production requires HTTPS", () => {
+  assert.equal(loadConfig(baseEnv).publicOrigin, "http://localhost:8080");
+  assert.throws(
+    () => loadConfig({ ...baseEnv, CLOUD_PUBLIC_ORIGIN: "https://user@example.com/path" }),
+    /must be an origin/,
+  );
+  assert.throws(
+    () => loadConfig({ ...baseEnv, NODE_ENV: "production", CLOUD_PUBLIC_ORIGIN: "http://cloud.example.com" }),
+    /must use HTTPS/,
+  );
+});
+
 test("password reset uses an independent bounded token lifetime", () => {
   assert.equal(loadConfig(baseEnv).passwordResetTTLHours, 1);
   assert.equal(loadConfig(baseEnv).recoveryMinimumResponseMS, 500);
