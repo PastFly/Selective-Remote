@@ -30,6 +30,17 @@ stat_owner() {
     fi
 }
 
+write_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- "$1"
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1"
+    else
+        echo "A SHA-256 utility is required." >&2
+        return 69
+    fi
+}
+
 if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
     usage
     exit 0
@@ -110,7 +121,7 @@ mv -- "${temporary_backup}" "${backup_path}"
 
 (
     cd -- "${backup_dir}"
-    sha256sum -- "${backup_name}" > "${temporary_checksum}"
+    write_sha256 "${backup_name}" > "${temporary_checksum}"
 )
 chmod 600 "${temporary_checksum}"
 mv -- "${temporary_checksum}" "${checksum_path}"

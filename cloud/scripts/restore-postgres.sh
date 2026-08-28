@@ -14,6 +14,17 @@ objects and is intentionally blocked without the exact confirmation flag.
 USAGE
 }
 
+calculate_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- "$1" | awk '{ print $1 }'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$1" | awk '{ print $1 }'
+    else
+        echo "A SHA-256 utility is required." >&2
+        return 69
+    fi
+}
+
 if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
     usage
     exit 0
@@ -39,7 +50,6 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
     exit 69
 fi
 
-backup_dir="$(cd -- "$(dirname -- "${backup_path}")" && pwd -P)"
 backup_name="$(basename -- "${backup_path}")"
 if [[ ! "${backup_name}" =~ ^selective-remote-cloud-[0-9]{8}T[0-9]{6}Z\.dump$ ]]; then
     echo "Backup filename does not match the generated backup format." >&2
@@ -54,13 +64,14 @@ if [[ ! "${recorded_hash}" =~ ^[0-9a-f]{64}$ || "${recorded_name}" != "${backup_
     echo "Checksum file does not describe the selected backup." >&2
     exit 65
 fi
-(
-    cd -- "${backup_dir}"
-    sha256sum --check --status -- "${backup_name}.sha256"
-) || {
+actual_hash="$(calculate_sha256 "${backup_path}")" || {
+    echo "Backup checksum could not be calculated." >&2
+    exit 69
+}
+if [[ "${actual_hash}" != "${recorded_hash}" ]]; then
     echo "Backup checksum verification failed." >&2
     exit 65
-}
+fi
 
 compose=(docker compose --project-directory "${cloud_dir}" -f "${cloud_dir}/compose.yaml")
 running_services="$("${compose[@]}" ps --status running --services 2>/dev/null || true)"

@@ -31,7 +31,9 @@ test("backup is private, validated and does not read or print secrets", async ()
   assert.match(script, /mktemp/);
   assert.match(script, /pg_dump --format=custom/);
   assert.match(script, /pg_restore --list/);
+  assert.match(script, /write_sha256/);
   assert.match(script, /sha256sum/);
+  assert.match(script, /shasum -a 256/);
   assert.match(script, /Refusing to overwrite/);
   assert.match(script, /backup_published/);
   assert.doesNotMatch(script, /POSTGRES_PASSWORD|DATABASE_URL|\.env\b/);
@@ -40,7 +42,9 @@ test("backup is private, validated and does not read or print secrets", async ()
 test("restore fails closed around confirmation, integrity and active writes", async () => {
   const script = await readFile(restorePath, "utf8");
   assert.match(script, /--confirm-restore/);
-  assert.match(script, /sha256sum --check --status/);
+  assert.match(script, /calculate_sha256/);
+  assert.match(script, /actual_hash.*recorded_hash/);
+  assert.match(script, /shasum -a 256/);
   assert.match(script, /recorded_name.*backup_name/);
   assert.match(script, /generated backup format/);
   assert.match(script, /exactly one record/);
