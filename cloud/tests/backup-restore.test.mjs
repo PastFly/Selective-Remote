@@ -31,6 +31,7 @@ test("backup is private, validated and does not read or print secrets", async ()
   assert.match(script, /pg_restore --list/);
   assert.match(script, /sha256sum/);
   assert.match(script, /Refusing to overwrite/);
+  assert.match(script, /backup_published/);
   assert.doesNotMatch(script, /POSTGRES_PASSWORD|DATABASE_URL|\.env\b/);
 });
 
@@ -40,6 +41,7 @@ test("restore fails closed around confirmation, integrity and active writes", as
   assert.match(script, /sha256sum --check --status/);
   assert.match(script, /recorded_name.*backup_name/);
   assert.match(script, /generated backup format/);
+  assert.match(script, /exactly one record/);
   assert.match(script, /grep -Fxq "cloud"/);
   assert.match(script, /pg_restore --list/);
   assert.match(script, /--clean --if-exists/);

@@ -70,8 +70,12 @@ fi
 
 temporary_backup="$(mktemp "${backup_dir}/.selective-remote-cloud.XXXXXX")"
 temporary_checksum="$(mktemp "${backup_dir}/.selective-remote-cloud-sha256.XXXXXX")"
+backup_published=false
 cleanup() {
     rm -f -- "${temporary_backup}" "${temporary_checksum}"
+    if [[ "${backup_published}" != true ]]; then
+        rm -f -- "${backup_path}" "${checksum_path}"
+    fi
 }
 trap cleanup EXIT INT TERM
 
@@ -95,6 +99,7 @@ mv -- "${temporary_backup}" "${backup_path}"
 chmod 600 "${temporary_checksum}"
 mv -- "${temporary_checksum}" "${checksum_path}"
 
+backup_published=true
 trap - EXIT INT TERM
 echo "Backup created: ${backup_path}"
 echo "Checksum created: ${checksum_path}"

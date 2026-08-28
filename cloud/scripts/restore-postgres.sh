@@ -45,6 +45,10 @@ if [[ ! "${backup_name}" =~ ^selective-remote-cloud-[0-9]{8}T[0-9]{6}Z\.dump$ ]]
     echo "Backup filename does not match the generated backup format." >&2
     exit 65
 fi
+if [[ "$(wc -l < "${checksum_path}")" -ne 1 ]]; then
+    echo "Checksum file must contain exactly one record." >&2
+    exit 65
+fi
 read -r recorded_hash recorded_name < <(awk 'NR == 1 { print $1, $2 }' "${checksum_path}")
 if [[ ! "${recorded_hash}" =~ ^[0-9a-f]{64}$ || "${recorded_name}" != "${backup_name}" ]]; then
     echo "Checksum file does not describe the selected backup." >&2
