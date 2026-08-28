@@ -10,6 +10,7 @@ class MemoryStore {
     this.verificationAvailable = true;
     this.lastVerificationHash = null;
     this.lastVerificationExpiry = null;
+    this.replacementVerificationHash = null;
   }
   async createUser(input) {
     this.lastVerificationHash = input.verificationHash;
@@ -33,6 +34,11 @@ class MemoryStore {
     this.verificationAvailable = false;
     if (this.identity) this.identity.email_verified_at = new Date();
     return { id: "user-1" };
+  }
+  async replaceEmailVerificationToken(input) {
+    this.replacementVerificationHash = input.tokenHash;
+    this.lastVerificationExpiry = input.expiresAt;
+    return true;
   }
   async getVault() { return { id: "vault-1", revision: this.revision, envelope_version: 1, wrapped_key: null, ciphertext: null, nonce: null, auth_tag: null, content_hash: null, updated_at: new Date() }; }
   async putVault(_userID, _deviceID, envelope) {
@@ -101,11 +107,75 @@ test("registration fails closed when SMTP delivery is unavailable", async () => 
 
 test("mail transport errors do not expose provider details", async () => {
   const mailer = { async sendEmailVerification() { throw new Error("provider-secret-response"); } };
-  const service = new CloudService(new MemoryStore(), config, mailer);
+  const warnings = [];
+  const service = new CloudService(new MemoryStore(), config, mailer, { warn(value) { warnings.push(value); } });
   await assert.rejects(
     service.register({ email: "user@example.com", password: "correct horse battery", device }),
     (error) => error.message === "email_delivery_failed",
   );
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].includes("provider-secret-response"), false);
+  assert.equal(warnings[0].includes("user@example.com"), false);
+});
+
+test("verification resend rotates the hash and always returns an accepted response", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "unused",
+    email_verified_at: null,
+    disabled_at: null,
+  };
+  let delivery;
+  const service = new CloudService(store, config, {
+    async sendEmailVerification(value) { delivery = value; },
+  });
+
+  assert.deepEqual(await service.resendEmailVerification({ email: "USER@example.com" }), { accepted: true });
+  assert.equal(delivery.recipient, "user@example.com");
+  assert.ok(delivery.token.length >= 40);
+  assert.match(store.replacementVerificationHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(store.replacementVerificationHash, delivery.token);
+  assert.ok(store.lastVerificationExpiry > new Date());
+
+  const unknownStore = new MemoryStore();
+  let unknownDelivered = false;
+  const unknownService = new CloudService(unknownStore, config, {
+    async sendEmailVerification() { unknownDelivered = true; },
+  });
+  assert.deepEqual(await unknownService.resendEmailVerification({ email: "unknown@example.com" }), { accepted: true });
+  assert.equal(unknownDelivered, false);
+
+  unknownStore.identity = {
+    id: "user-2",
+    email: "verified@example.com",
+    password_hash: "unused",
+    email_verified_at: new Date(),
+    disabled_at: null,
+  };
+  assert.deepEqual(await unknownService.resendEmailVerification({ email: "verified@example.com" }), { accepted: true });
+  assert.equal(unknownDelivered, false);
+});
+
+test("verification resend hides mail provider failures", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1",
+    email: "user@example.com",
+    password_hash: "unused",
+    email_verified_at: null,
+    disabled_at: null,
+  };
+  const warnings = [];
+  const service = new CloudService(store, config, {
+    async sendEmailVerification() { throw new Error("private-provider-detail"); },
+  }, { warn(value) { warnings.push(value); } });
+
+  assert.deepEqual(await service.resendEmailVerification({ email: "user@example.com" }), { accepted: true });
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].includes("private-provider-detail"), false);
+  assert.equal(warnings[0].includes("user@example.com"), false);
 });
 
 test("email verification consumes an HMAC hash exactly once", async () => {

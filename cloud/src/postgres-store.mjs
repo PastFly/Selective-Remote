@@ -58,7 +58,16 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [userID]);
+      const owner = await client.query(
+        `SELECT id FROM users
+         WHERE id = $1 AND disabled_at IS NULL AND email_verified_at IS NULL
+         FOR UPDATE`,
+        [userID],
+      );
+      if (!owner.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
       await client.query(
         `UPDATE email_verification_tokens SET invalidated_at = now()
          WHERE user_id = $1 AND consumed_at IS NULL AND invalidated_at IS NULL`,
@@ -70,6 +79,7 @@ export class PostgresStore {
         [userID, tokenHash, expiresAt],
       );
       await client.query("COMMIT");
+      return true;
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
       throw error;

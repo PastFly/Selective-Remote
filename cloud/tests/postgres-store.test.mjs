@@ -94,11 +94,13 @@ test("rate limits reject invalid policies before querying PostgreSQL", async () 
 });
 
 test("replacing an email verification token invalidates the previous active hash", async () => {
-  const fixture = recordingStore();
+  const fixture = recordingStore((sql) => sql.includes("SELECT id FROM users")
+    ? { rows: [{ id: "user-1" }] }
+    : { rows: [] });
   const expiresAt = new Date("2030-01-02T00:00:00.000Z");
   const tokenHash = "a".repeat(64);
 
-  await fixture.store.replaceEmailVerificationToken({ userID: "user-1", tokenHash, expiresAt });
+  assert.equal(await fixture.store.replaceEmailVerificationToken({ userID: "user-1", tokenHash, expiresAt }), true);
 
   assert.deepEqual(fixture.queries.map(({ sql }) => sql.trim().split(/\s+/).slice(0, 2).join(" ")), [
     "BEGIN",
@@ -109,9 +111,23 @@ test("replacing an email verification token invalidates the previous active hash
   ]);
   assert.deepEqual(fixture.queries[1].parameters, ["user-1"]);
   assert.match(fixture.queries[1].sql, /FOR UPDATE/);
+  assert.match(fixture.queries[1].sql, /email_verified_at IS NULL/);
+  assert.match(fixture.queries[1].sql, /disabled_at IS NULL/);
   assert.deepEqual(fixture.queries[2].parameters, ["user-1"]);
   assert.deepEqual(fixture.queries[3].parameters, ["user-1", tokenHash, expiresAt]);
   assert.equal(fixture.queries.some(({ sql }) => sql.includes(tokenHash)), false);
+  assert.equal(fixture.released(), true);
+});
+
+test("verification replacement stops after locking an ineligible account", async () => {
+  const fixture = recordingStore();
+  assert.equal(await fixture.store.replaceEmailVerificationToken({
+    userID: "user-1",
+    tokenHash: "a".repeat(64),
+    expiresAt: new Date("2030-01-02T00:00:00.000Z"),
+  }), false);
+  assert.equal(fixture.queries.some(({ sql }) => sql.includes("INSERT INTO email_verification_tokens")), false);
+  assert.equal(fixture.queries.at(-1).sql, "COMMIT");
   assert.equal(fixture.released(), true);
 });
 
@@ -155,6 +171,7 @@ test("expired or replayed email verification hashes are rejected without changin
 test("verification token writes roll back and release their connection on failure", async () => {
   const failure = new Error("database_failure");
   const fixture = recordingStore((sql) => {
+    if (sql.includes("SELECT id FROM users")) return { rows: [{ id: "user-1" }] };
     if (sql.includes("INSERT INTO email_verification_tokens")) throw failure;
     return { rows: [] };
   });

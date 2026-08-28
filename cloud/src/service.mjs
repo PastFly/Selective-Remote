@@ -12,10 +12,11 @@ import {
 } from "./security.mjs";
 
 export class CloudService {
-  constructor(store, config, mailer = null) {
+  constructor(store, config, mailer = null, logger = console) {
     this.store = store;
     this.config = config;
     this.mailer = mailer;
+    this.logger = logger;
   }
 
   sessionExpiry() {
@@ -64,6 +65,7 @@ export class CloudService {
     try {
       await this.mailer.sendEmailVerification({ recipient: email, token: verificationToken });
     } catch {
+      this.logger.warn(JSON.stringify({ level: "warn", message: "Verification email delivery failed" }));
       throw new Error("email_delivery_failed");
     }
     return { verificationRequired: true, user: publicUser(user) };
@@ -96,6 +98,29 @@ export class CloudService {
     const user = await this.store.consumeEmailVerificationToken(tokenHash);
     if (!user) throw new Error("invalid_verification_token");
     return { verified: true };
+  }
+
+  async resendEmailVerification(input) {
+    if (!this.mailer) throw new Error("smtp_not_configured");
+    const email = normalizeEmail(input.email);
+    const identity = await this.store.passwordIdentity(email);
+    if (!identity || identity.disabled_at || identity.email_verified_at) {
+      return { accepted: true };
+    }
+
+    const token = createEmailVerificationToken();
+    const replaced = await this.store.replaceEmailVerificationToken({
+      userID: identity.id,
+      tokenHash: hashEmailVerificationToken(token, this.config.emailVerificationPepper),
+      expiresAt: this.emailVerificationExpiry(),
+    });
+    if (!replaced) return { accepted: true };
+    try {
+      await this.mailer.sendEmailVerification({ recipient: email, token });
+    } catch {
+      this.logger.warn(JSON.stringify({ level: "warn", message: "Verification email delivery failed" }));
+    }
+    return { accepted: true };
   }
 
   async authenticate(token) {

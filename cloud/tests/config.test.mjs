@@ -31,6 +31,7 @@ test("rate-limit overrides reject partial and out-of-range numbers", () => {
   assert.throws(() => loadConfig({ ...baseEnv, AUTH_REGISTER_IP_LIMIT: "0" }), /AUTH_REGISTER_IP_LIMIT/);
   const config = loadConfig({ ...baseEnv, AUTH_LOGIN_IP_LIMIT: "40" });
   assert.deepEqual(config.authRateLimits.login_ip, { limit: 40, windowSeconds: 300 });
+  assert.deepEqual(config.authRateLimits.resend_verification_email, { limit: 3, windowSeconds: 3_600 });
 });
 
 test("runtime security secrets cannot be reused across purposes", () => {

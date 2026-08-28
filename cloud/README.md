@@ -25,8 +25,14 @@ and rejects invalid certificates.
 Registration creates an unverified account and sends a one-time link; it does
 not return a bearer session. Password login and session lookup remain blocked
 until the token is consumed. SMTP connectivity is verified before the service
-starts whenever registration is enabled. A resend/recovery flow for delivery
-failures is not implemented yet, so registration must remain disabled.
+starts whenever registration is enabled. The rate-limited resend flow can
+recover a pending account after a delivery failure; password reset is still
+incomplete, so registration must remain disabled.
+
+`POST /v1/auth/resend-verification` returns the same accepted response for
+unknown, disabled, verified and pending accounts. Pending accounts receive a
+replacement one-time link; provider failures are logged without the recipient
+or provider response and do not change the public response.
 
 Authentication endpoints use persistent fixed-window limits keyed by HMACs of
 the client IP and, where applicable, the normalized email address. Raw IPs and

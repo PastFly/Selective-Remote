@@ -50,6 +50,16 @@ async function route(request, response) {
   if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
     return handleAuthOperation(request, response, "verify_email_ip", null, service.verifyEmail.bind(service));
   }
+  if (method === "POST" && url.pathname === "/v1/auth/resend-verification") {
+    return handleAuthOperation(
+      request,
+      response,
+      "resend_verification_ip",
+      "resend_verification_email",
+      service.resendEmailVerification.bind(service),
+      202,
+    );
+  }
 
   if (url.pathname.startsWith("/v1/")) {
     const session = await service.authenticate(bearerToken(request));
