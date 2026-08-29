@@ -11,10 +11,10 @@ must resolve to the Ubuntu host before Caddy starts certificate issuance.
 
 ## 1. Read-only preflight
 
-From a clean checkout of PR 28, run:
+From a clean reviewed checkout, run the generic audit without `sudo`:
 
 ```bash
-sudo bash cloud/scripts/preflight-ubuntu.sh
+bash cloud/scripts/audit-host-readonly.sh cloud.pastfly.ru
 ```
 
 Review the output before changing packages or firewall rules. In particular,
@@ -66,11 +66,41 @@ the certificate contact address. Configure `SMTP_HOST`, `SMTP_PORT`,
 STARTTLS; the application requires encryption and validates the server
 certificate in both modes.
 
-Keep `ALLOW_REGISTRATION=false` until email verification, password reset,
-request rate limiting and abuse protection are implemented and the complete
-flow is manually approved.
+Email verification, password reset, request rate limiting and abuse protection
+are implemented, but registration remains disabled until SMTP is configured
+and the complete browser/macOS flow is manually approved.
 
-## 4. Start and verify
+## 4. Database backup and restore drill
+
+Create a private directory outside the checkout, then run a custom-format
+backup. The script uses the PostgreSQL container environment without printing
+database credentials, validates the archive and writes a SHA-256 checksum.
+
+```bash
+sudo install -d -m 700 /var/backups/selective-remote-cloud
+bash cloud/scripts/backup-postgres.sh /var/backups/selective-remote-cloud
+```
+
+Keep at least one encrypted off-host copy under a separately controlled backup
+policy. A backup is not accepted until a restore drill succeeds on disposable
+staging infrastructure.
+
+Restore is destructive and fails unless the checksum is valid, PostgreSQL is
+running, Cloud is stopped and the exact confirmation flag is supplied:
+
+```bash
+docker compose -f cloud/compose.yaml stop cloud
+bash cloud/scripts/restore-postgres.sh --confirm-restore \
+  /var/backups/selective-remote-cloud/selective-remote-cloud-YYYYMMDDTHHMMSSZ.dump
+docker compose -f cloud/compose.yaml up -d cloud
+curl --fail --silent --show-error https://cloud.pastfly.ru/healthz
+```
+
+Do not perform the first restore drill against the only production database.
+Record only sanitized success metadata in the private continuity repository;
+never commit a dump, checksum containing a private path, or credentials.
+
+## 5. Start and verify
 
 This section is blocked on the current host until the 443 coexistence design is
 approved. Do not run the commands below while Xray owns TCP 443.
@@ -90,14 +120,14 @@ certificate, redirects HTTP to HTTPS and renews automatically. The persistent
 `caddy-data` volume contains ACME account and certificate state and must not be
 deleted during routine updates.
 
-## 5. Routine updates
+## 6. Routine updates
 
-Deploy only reviewed commits from the Cloud feature branch until v0.32 is
-approved for `main`:
+Deploy only an exact reviewed commit. For work already approved and merged,
+use `main` with fast-forward-only updates:
 
 ```bash
 git fetch origin
-git switch feature/selective-remote-cloud-v0.32.0
+git switch main
 git pull --ff-only
 docker compose -f cloud/compose.yaml build --pull
 docker compose -f cloud/compose.yaml up -d

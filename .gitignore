@@ -12,6 +12,7 @@ DerivedData/
 .idea/
 .vscode/
 node_modules/
+cloud/backups/
 *.log
 *.swp
 *~
