@@ -1,0 +1,9 @@
+services:
+  caddy:
+    environment:
+      CLOUD_PUBLIC_HOST: ${CLOUD_PUBLIC_HOST:?CLOUD_PUBLIC_HOST is required}
+    ports: !override
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile.443-only:/etc/caddy/Caddyfile:ro
