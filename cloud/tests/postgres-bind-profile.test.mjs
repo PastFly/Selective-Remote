@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,7 +44,10 @@ test("guarded starter validates before Compose config and start", async () => {
 });
 
 async function makeFixture() {
-  const root = await mkdtemp(join(tmpdir(), "sr-pg-storage-"));
+  // macOS exposes /var through /private/var. Canonicalize the fixture root so
+  // the test does not manufacture a path that our production symlink guard is
+  // specifically expected to reject.
+  const root = await realpath(await mkdtemp(join(tmpdir(), "sr-pg-storage-")));
   const bin = join(root, "bin");
   const mountRoot = join(root, "postgres-mount");
   const dataPath = join(mountRoot, "selective-remote");
