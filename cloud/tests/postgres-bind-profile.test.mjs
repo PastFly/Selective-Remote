@@ -20,6 +20,13 @@ test("storage scripts have valid shell syntax and safe help", () => {
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /Usage:/);
   }
+  const validator = readFile(validatorPath, "utf8");
+  return validator.then((source) => {
+    assert.match(source, /stat -f '%d'/);
+    assert.match(source, /stat -f '%u'/);
+    assert.match(source, /stat -f '%g'/);
+    assert.match(source, /stat -f '%Lp'/);
+  });
 });
 
 test("Compose profile replaces the PG volume and disables daemon auto-start", async () => {

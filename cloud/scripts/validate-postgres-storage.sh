@@ -20,6 +20,38 @@ never changes the mount root recursively.
 USAGE
 }
 
+stat_device() {
+    if stat -c '%d' -- "$1" >/dev/null 2>&1; then
+        stat -c '%d' -- "$1"
+    else
+        stat -f '%d' -- "$1"
+    fi
+}
+
+stat_uid() {
+    if stat -c '%u' -- "$1" >/dev/null 2>&1; then
+        stat -c '%u' -- "$1"
+    else
+        stat -f '%u' -- "$1"
+    fi
+}
+
+stat_gid() {
+    if stat -c '%g' -- "$1" >/dev/null 2>&1; then
+        stat -c '%g' -- "$1"
+    else
+        stat -f '%g' -- "$1"
+    fi
+}
+
+stat_mode() {
+    if stat -c '%a' -- "$1" >/dev/null 2>&1; then
+        stat -c '%a' -- "$1"
+    else
+        stat -f '%Lp' -- "$1"
+    fi
+}
+
 if [[ $# -eq 1 && ( "$1" == "--help" || "$1" == "-h" ) ]]; then
     usage
     exit 0
@@ -132,16 +164,16 @@ if [[ "$(findmnt -nr -T "${data_path}" -o TARGET)" != "${mount_root}" ]]; then
     echo "PostgreSQL data path is not on the reviewed mount." >&2
     exit 72
 fi
-if [[ "$(stat -c '%d' -- "${data_path}")" != "$(stat -c '%d' -- "${mount_root}")" ]]; then
+if [[ "$(stat_device "${data_path}")" != "$(stat_device "${mount_root}")" ]]; then
     echo "PostgreSQL data path is on a different filesystem." >&2
     exit 72
 fi
-if [[ "$(stat -c '%u' -- "${data_path}")" != "${expected_uid}" || \
-      "$(stat -c '%g' -- "${data_path}")" != "${expected_gid}" ]]; then
+if [[ "$(stat_uid "${data_path}")" != "${expected_uid}" || \
+      "$(stat_gid "${data_path}")" != "${expected_gid}" ]]; then
     echo "PostgreSQL data path ownership does not match the reviewed image." >&2
     exit 77
 fi
-if [[ "$(stat -c '%a' -- "${data_path}")" != "700" ]]; then
+if [[ "$(stat_mode "${data_path}")" != "700" ]]; then
     echo "PostgreSQL data path mode must be 0700." >&2
     exit 77
 fi
