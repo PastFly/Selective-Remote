@@ -1,0 +1,64 @@
+# Opt-in, single-user closed staging only. Apply after the 443-only override.
+# These limits do not establish production capacity or replace host monitoring.
+services:
+  postgres:
+    mem_limit: 160m
+    memswap_limit: 192m
+    cpus: 0.25
+    pids_limit: 128
+    restart: "on-failure:3"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=32MB
+      - -c
+      - work_mem=1MB
+      - -c
+      - maintenance_work_mem=16MB
+      - -c
+      - autovacuum_work_mem=16MB
+      - -c
+      - autovacuum_max_workers=1
+      - -c
+      - max_connections=20
+      - -c
+      - max_parallel_workers=0
+      - -c
+      - max_parallel_workers_per_gather=0
+      - -c
+      - max_wal_size=128MB
+      - -c
+      - min_wal_size=32MB
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  cloud:
+    mem_limit: 320m
+    memswap_limit: 384m
+    cpus: 0.4
+    pids_limit: 128
+    restart: "on-failure:3"
+    environment:
+      ALLOW_REGISTRATION: "false"
+      UV_THREADPOOL_SIZE: "1"
+      NODE_OPTIONS: "--max-old-space-size=96"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    mem_limit: 96m
+    memswap_limit: 128m
+    cpus: 0.1
+    pids_limit: 128
+    restart: "on-failure:3"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
