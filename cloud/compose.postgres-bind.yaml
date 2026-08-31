@@ -1,0 +1,17 @@
+# Opt-in staging storage profile. The host path must be prepared and verified
+# by scripts/validate-postgres-storage.sh before this file is applied.
+services:
+  postgres:
+    restart: "on-failure:3"
+    volumes: !override
+      - type: bind
+        source: ${POSTGRES_DATA_HOST_PATH:?POSTGRES_DATA_HOST_PATH is required}
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+
+  cloud:
+    restart: "on-failure:3"
+
+  caddy:
+    restart: "on-failure:3"
