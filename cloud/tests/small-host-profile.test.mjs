@@ -129,6 +129,12 @@ test("single-worker KDF probe preserves hashing strength within the baseline bud
 
 test("guide preserves operational and secret-handling boundaries", () => {
   assert.match(guide, /config --format json\s*\\\n\s*\| node scripts\/validate-small-host-model\.mjs/);
+  const orderedProfiles =
+    /compose\.yaml[\s\S]*compose\.443-only\.yaml[\s\S]*compose\.small-host\.yaml[\s\S]*compose\.postgres-bind\.yaml/;
+  assert.match(guide, orderedProfiles);
+  assert.match(guide, /PostgreSQL bind profile must appear once and last/);
+  assert.match(guide, /same four ordered profiles/);
+  assert.match(guide, /start-staging-guarded\.sh/);
   assert.match(guide, /runtime limits do not limit Docker builds/);
   assert.match(guide, /not a\s+disk quota/);
   assert.match(guide, /does not bound\s+the HTTP request queue/);

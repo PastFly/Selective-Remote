@@ -4,11 +4,14 @@ This profile is an experimental, opt-in budget for one operator using tiny
 synthetic records. It is not production sizing, protection against a hostile
 public workload, or permission to deploy. Leave the default profile unchanged.
 
-Apply files in this exact order from the `cloud` directory:
+On the current dedicated staging host, apply files in this exact order from
+the `cloud` directory. The PostgreSQL bind profile must appear once and last:
 
 ```bash
-docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml config --quiet
-docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml config --format json \
+docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml \
+  -f compose.postgres-bind.yaml config --quiet
+docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml \
+  -f compose.postgres-bind.yaml config --format json \
   | node scripts/validate-small-host-model.mjs
 ```
 
@@ -17,7 +20,10 @@ pipe it directly to the checker, do not paste it into chat/CI and do not commit
 it. Use a fresh private temporary directory and dummy-only `.env` when testing
 configuration before deployment. The checker prints only fixed status/budget
 metadata. Keep shell strict mode inside a child Bash, not the interactive SSH
-login shell. These commands do not start containers.
+login shell. These commands do not start containers. The resource checker does
+not replace the independent exact-source, mount and rendered-bind checks in
+`scripts/start-staging-guarded.sh`; pass the same four files to that wrapper
+only after all deployment gates are approved.
 
 ## Reviewed starting budgets, not measured service capacity
 
@@ -80,7 +86,7 @@ for broader tests or public traffic.
   out of container inspection output. Do not use the validation placeholders.
 - SMTP may remain entirely unset only while registration is disabled; email
   verification and password reset delivery are not accepted without real SMTP.
-- Apply the same three ordered profiles and project name to every later
+- Apply the same four ordered profiles and project name to every later
   operation. Prefer the default project identity derived from `cloud` so the
   existing backup/restore scripts locate the same PostgreSQL service. They
   currently select the base file only; a custom project name needs a separate
