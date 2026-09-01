@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 const composePath = fileURLToPath(new URL("../compose.postgres-bind.yaml", import.meta.url));
 const validatorPath = fileURLToPath(new URL("../scripts/validate-postgres-storage.sh", import.meta.url));
 const modelValidatorPath = fileURLToPath(new URL("../scripts/validate-postgres-bind-model.mjs", import.meta.url));
+const sourceValidatorPath = fileURLToPath(new URL("../scripts/validate-postgres-bind-source.mjs", import.meta.url));
 const starterPath = fileURLToPath(new URL("../scripts/start-staging-guarded.sh", import.meta.url));
 const guidePath = fileURLToPath(new URL("../POSTGRES-BIND-STAGING.md", import.meta.url));
 
@@ -41,12 +42,20 @@ test("Compose profile replaces the PG volume and disables daemon auto-start", as
 
 test("guarded starter validates before Compose config and start", async () => {
   const source = await readFile(starterPath, "utf8");
-  const guard = source.indexOf('validate-postgres-storage.sh" --check');
+  const sourceGuard = source.indexOf("validate-postgres-bind-source.mjs");
+  const storageGuard = source.indexOf('validate-postgres-storage.sh" --check');
   const config = source.indexOf("config --quiet");
   const model = source.indexOf("validate-postgres-bind-model.mjs");
   const start = source.indexOf("up -d");
-  assert.ok(guard >= 0 && guard < config && config < model && model < start);
+  assert.ok(
+    sourceGuard >= 0 &&
+      sourceGuard < storageGuard &&
+      storageGuard < config &&
+      config < model &&
+      model < start,
+  );
   assert.match(source, /--project-directory/);
+  assert.match(source, /compose_files/);
   assert.doesNotMatch(source, /\.env|POSTGRES_PASSWORD|DATABASE_URL/);
 });
 
@@ -136,6 +145,46 @@ exit 1
   }
 });
 
+test("source validator requires the exact reviewed profile as the final file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sr-pg-source-"));
+  const ordinary = join(root, "ordinary.yaml");
+  const altered = join(root, "altered.yaml");
+  try {
+    await writeFile(ordinary, "services: {}\n");
+    await writeFile(
+      altered,
+      (await readFile(composePath, "utf8")).replace(
+        "create_host_path: false",
+        "create_host_path: true",
+      ),
+    );
+
+    let result = spawnSync(
+      "node",
+      [sourceValidatorPath, ordinary, composePath],
+      { encoding: "utf8" },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /POSTGRES_BIND_SOURCE_OK/);
+
+    result = spawnSync(
+      "node",
+      [sourceValidatorPath, composePath, ordinary],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /must be the final Compose file/);
+
+    result = spawnSync("node", [sourceValidatorPath, ordinary, altered], {
+      encoding: "utf8",
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /exactly one exact reviewed/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("rendered-model validator accepts only the exact bind contract", () => {
   const source = "/srv/postgres/selective-remote";
   const valid = {
@@ -147,7 +196,7 @@ test("rendered-model validator accepts only the exact bind contract", () => {
           type: "bind",
           source,
           target: "/var/lib/postgresql/data",
-          bind: { create_host_path: false },
+          bind: {},
         }],
       },
       cloud: {
@@ -166,6 +215,17 @@ test("rendered-model validator accepts only the exact bind contract", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /POSTGRES_BIND_MODEL_OK/);
 
+  const explicitFalse = structuredClone(valid);
+  explicitFalse.services.postgres.volumes[0].bind = {
+    create_host_path: false,
+  };
+  result = spawnSync("node", [modelValidatorPath], {
+    encoding: "utf8",
+    input: JSON.stringify(explicitFalse),
+    env: { ...process.env, POSTGRES_DATA_HOST_PATH: source },
+  });
+  assert.equal(result.status, 0, result.stderr);
+
   const unsafe = structuredClone(valid);
   unsafe.services.postgres.volumes[0].bind.create_host_path = true;
   result = spawnSync("node", [modelValidatorPath], {
@@ -174,7 +234,7 @@ test("rendered-model validator accepts only the exact bind contract", () => {
     env: { ...process.env, POSTGRES_DATA_HOST_PATH: source },
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /disable host path creation/);
+  assert.match(result.stderr, /unsafe bind options/);
 });
 
 test("validator rejects wrong device, missing path and symlink path", async () => {

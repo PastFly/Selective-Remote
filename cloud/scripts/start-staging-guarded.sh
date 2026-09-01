@@ -28,6 +28,7 @@ if [[ $# -lt 1 ]]; then
 fi
 
 compose=(docker compose --project-directory "${cloud_dir}")
+compose_files=()
 for compose_file in "$@"; do
     if [[ "${compose_file}" == /* ]]; then
         resolved_file="${compose_file}"
@@ -39,8 +40,10 @@ for compose_file in "$@"; do
         exit 64
     fi
     compose+=( -f "${resolved_file}" )
+    compose_files+=( "${resolved_file}" )
 done
 
+node "${script_dir}/validate-postgres-bind-source.mjs" "${compose_files[@]}"
 "${script_dir}/validate-postgres-storage.sh" --check
 "${compose[@]}" config --quiet
 "${compose[@]}" config --format json | node "${script_dir}/validate-postgres-bind-model.mjs"

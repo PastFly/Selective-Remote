@@ -22,8 +22,20 @@ const mount = pgDataMounts[0];
 if (mount.type !== "bind" || mount.source !== expectedSource) {
   throw new Error("Rendered PostgreSQL data mount is not the reviewed bind source");
 }
-if (mount.bind?.create_host_path !== false) {
-  throw new Error("Rendered PostgreSQL bind must disable host path creation");
+const bindOptions = mount.bind;
+const bindKeys =
+  bindOptions !== null &&
+  typeof bindOptions === "object" &&
+  !Array.isArray(bindOptions)
+    ? Object.keys(bindOptions)
+    : null;
+if (
+  bindKeys === null ||
+  bindKeys.some((key) => key !== "create_host_path") ||
+  (Object.hasOwn(bindOptions, "create_host_path") &&
+    bindOptions.create_host_path !== false)
+) {
+  throw new Error("Rendered PostgreSQL mount has unsafe bind options");
 }
 
 for (const name of ["postgres", "cloud", "caddy"]) {

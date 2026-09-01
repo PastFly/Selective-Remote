@@ -13,7 +13,9 @@ unpublished, and the existing image/security/backup gates still apply.
 - The source is a direct child of a verified mount, never the mount root.
 - Device, filesystem, writable state, ownership and mode are checked.
 - Symlink traversal and an unexpected nested mount are rejected.
-- Compose automatic source-directory creation is disabled.
+- Compose automatic source-directory creation is disabled. Because Compose
+  2.40.3 omits the explicit `false` from rendered JSON, the exact reviewed
+  storage profile is digest-checked and must be the final Compose file.
 - All services use `on-failure:3`, so Docker daemon startup does not bypass the
   operator's guarded startup path.
 - A successful preflight does not prove backup/restore or mount-loss recovery.
@@ -43,15 +45,17 @@ scripts/start-staging-guarded.sh \
   compose.postgres-bind.yaml
 ```
 
-Add other reviewed overlays after `compose.yaml` and before or after the
-storage profile as their documentation requires. The storage profile must be
-included exactly once.
+Add other reviewed overlays after `compose.yaml` and before the storage
+profile as their documentation requires. The exact storage profile must be
+included once and must always be the final Compose file.
 
 ## Acceptance before real data
 
+- The final Compose input is the exact reviewed storage profile containing
+  `create_host_path: false`; its digest is verified before storage checks.
 - Rendered model contains exactly one PostgreSQL mount at
-  `/var/lib/postgresql/data`, of type `bind`, with the reviewed source and
-  `create_host_path: false`.
+  `/var/lib/postgresql/data`, of type `bind`, with the reviewed source and no
+  unsafe bind options.
 - PostgreSQL and API ports are not published; registration is false.
 - Actual container Mounts match the reviewed model without printing Env.
 - Missing mount, wrong device/filesystem, symlink path, wrong ownership and
