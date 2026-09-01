@@ -133,6 +133,7 @@ test("guide preserves operational and secret-handling boundaries", () => {
     /compose\.yaml[\s\S]*compose\.443-only\.yaml[\s\S]*compose\.small-host\.yaml[\s\S]*compose\.postgres-bind\.yaml/;
   assert.match(guide, orderedProfiles);
   assert.match(guide, /PostgreSQL bind profile must appear once and last/);
+  assert.match(guide, /Earlier three-file examples are not valid/);
   assert.match(guide, /same four ordered profiles/);
   assert.match(guide, /start-staging-guarded\.sh/);
   assert.match(guide, /runtime limits do not limit Docker builds/);
