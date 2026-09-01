@@ -6,6 +6,7 @@ public workload, or permission to deploy. Leave the default profile unchanged.
 
 On the current dedicated staging host, apply files in this exact order from
 the `cloud` directory. The PostgreSQL bind profile must appear once and last:
+Earlier three-file examples are not valid for this host and must not be reused.
 
 ```bash
 docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml \
