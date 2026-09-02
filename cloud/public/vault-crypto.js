@@ -53,19 +53,30 @@ function concatenate(...values) {
 function recoveryPassphraseBytes(passphrase) {
   const value = String(passphrase ?? "").normalize("NFC");
   const bytes = new TextEncoder().encode(value);
-  if (value.length < 16 || bytes.length > 1024) throw new Error("invalid_recovery_passphrase");
+  if (bytes.length < 16 || bytes.length > 1024) throw new Error("invalid_recovery_passphrase");
   return bytes;
 }
 
 function validatedWrappedKey(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_wrapped_key");
+  const keys = Object.keys(value).sort();
+  if (keys.join(",") !== "algorithm,iterations,salt,value") throw new Error("invalid_wrapped_key");
   if (value.algorithm !== recoveryAlgorithm || value.iterations !== recoveryKDFIterations) {
     throw new Error("invalid_wrapped_key");
   }
   try {
     const salt = base64URLToBytes(value.salt, 16);
     const wrapped = base64URLToBytes(value.value, 40);
-    return { salt, wrapped };
+    return {
+      salt,
+      wrapped,
+      normalized: {
+        algorithm: recoveryAlgorithm,
+        iterations: recoveryKDFIterations,
+        salt: value.salt,
+        value: value.value,
+      },
+    };
   } catch {
     throw new Error("invalid_wrapped_key");
   }
@@ -165,7 +176,7 @@ export async function encryptVaultPayload({
   cryptoValue = globalThis.crypto,
 }) {
   if (!Number.isSafeInteger(baseRevision) || baseRevision < 0) throw new Error("invalid_base_revision");
-  validatedWrappedKey(wrappedKey);
+  const { normalized: normalizedWrappedKey } = validatedWrappedKey(wrappedKey);
   const crypto = webCrypto(cryptoValue);
   const nonce = crypto.getRandomValues(new Uint8Array(12));
   const plaintext = validatedPayload(payload);
@@ -184,7 +195,7 @@ export async function encryptVaultPayload({
   return {
     baseRevision,
     envelopeVersion: vaultEnvelopeVersion,
-    wrappedKey: structuredClone(wrappedKey),
+    wrappedKey: normalizedWrappedKey,
     ciphertext: bytesToBase64URL(ciphertext),
     nonce: bytesToBase64URL(nonce),
     authTag: bytesToBase64URL(authTag),
@@ -198,6 +209,7 @@ export async function decryptVaultEnvelope(vaultKey, envelope, cryptoValue = glo
   const crypto = webCrypto(cryptoValue);
   const nonce = base64URLToBytes(envelope.nonce, 12);
   const authTag = base64URLToBytes(envelope.authTag, 16);
+  base64URLToBytes(envelope.contentHash, 32);
   if (typeof envelope.ciphertext !== "string" || envelope.ciphertext.length > maxCiphertextCharacters) {
     throw new Error("vault_too_large");
   }
