@@ -62,6 +62,30 @@ Envelope v1 uses unpadded base64url fields, a 12-byte AES-GCM nonce, a 16-byte
 authentication tag and a 32-byte content hash. Every uploaded revision includes
 the wrapped Vault key so a later write cannot accidentally erase recovery data.
 
+### Envelope v1 interoperability profile
+
+The browser implementation uses Web Crypto without Node-only dependencies:
+
+- the Vault key is a random extractable 256-bit AES-GCM key;
+- the recovery passphrase is normalized to Unicode NFC, encoded as UTF-8 and is
+  never sent to the service;
+- PBKDF2-HMAC-SHA256 uses a random 16-byte salt and exactly 600,000 iterations
+  to derive a non-extractable 256-bit AES-KW key;
+- `wrappedKey` contains only `algorithm=PBKDF2-SHA256+A256KW`,
+  `iterations=600000`, the unpadded base64url salt and the 40-byte AES-KW
+  wrapped Vault key;
+- Vault JSON is encrypted with AES-256-GCM, a fresh 12-byte nonce, a 16-byte tag
+  and UTF-8 additional authenticated data
+  `selective-remote:vault-envelope:v1`;
+- `contentHash` is unpadded base64url SHA-256 over
+  `0x01 || nonce || ciphertext || authTag`, in that byte order.
+
+Clients must reject changed KDF parameters, malformed lengths, content-hash
+mismatches and AES-GCM authentication failures. The account password is not a
+Vault or recovery key. PBKDF2 does not make a weak recovery passphrase safe;
+the UI must require and confirm a strong independent recovery passphrase and
+must not persist plaintext, the passphrase or raw Vault keys in web storage.
+
 The client downloads the latest revision, decrypts it locally, performs a
 record-level merge by stable UUID and modification timestamp, then uploads a
 new revision based on the latest server value. Deletions use tombstones so
