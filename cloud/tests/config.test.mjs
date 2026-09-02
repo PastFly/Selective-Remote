@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { loadConfig, validateProxySecret, validateSecret } from "../src/config.mjs";
@@ -113,6 +114,29 @@ test("example environment leaves optional SMTP disabled for closed staging", asy
     assert.match(example, new RegExp(`^# ${name}=`, "m"));
   }
   assert.match(example, /^ALLOW_REGISTRATION=false$/m);
+});
+
+test("Git ignores runtime environment files but preserves the example", async () => {
+  const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+  const ignore = await readFile(new URL("../../.gitignore", import.meta.url), "utf8");
+  assert.match(ignore, /^\.env$/m);
+  assert.match(ignore, /^\.env\.\*$/m);
+  assert.match(ignore, /^!\.env\.example$/m);
+
+  for (const path of ["cloud/.env", "cloud/.env.tmp.example"]) {
+    const result = spawnSync("git", ["check-ignore", "--no-index", "-q", path], {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, `${path}: ${result.stderr}`);
+  }
+
+  const example = spawnSync(
+    "git",
+    ["check-ignore", "--no-index", "-q", "cloud/.env.example"],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  );
+  assert.equal(example.status, 1, example.stderr);
 });
 
 test("verification pepper remains mandatory while registration is disabled", () => {
