@@ -22,8 +22,9 @@ unpublished, and the existing image/security/backup gates still apply.
 
 ## Preparation sequence
 
-1. Select and review the immutable PostgreSQL image/digest. Pull it before the
-   storage step; do not combine storage preparation with a major upgrade.
+1. Confirm that the pinned PostgreSQL `tag@sha256` identity matches the reviewed
+   target architecture. Pull it before the storage step; do not combine storage
+   preparation with a major upgrade.
 2. Determine the numeric `postgres` UID/GID from that exact image using an
    isolated, no-network inspection. Record the image digest and IDs privately.
 3. Export the six non-secret `POSTGRES_DATA_*` values documented by

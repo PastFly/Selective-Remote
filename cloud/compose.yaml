@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16.6-alpine
+    image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
@@ -30,7 +30,7 @@ services:
     networks: [private]
 
   caddy:
-    image: caddy:2.9.1-alpine
+    image: caddy:2.9.1-alpine@sha256:b4e3952384eb9524a887633ce65c752dd7c71314d2c2acf98cd5c715aaa534f0
     restart: unless-stopped
     environment:
       ACME_EMAIL: ${ACME_EMAIL}
