@@ -128,7 +128,10 @@ test("single-worker KDF probe preserves hashing strength within the baseline bud
 });
 
 test("guide preserves operational and secret-handling boundaries", () => {
-  assert.match(guide, /config --format json\s*\\\n\s*\| node scripts\/validate-small-host-model\.mjs/);
+  assert.match(guide, /config --format json\s*\\\n\s*\| docker run --rm -i --pull=never --network none --read-only/);
+  assert.match(guide, /node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b/);
+  assert.match(guide, /host Node\.js is not required/);
+  assert.doesNotMatch(guide, /\| node scripts\/validate-small-host-model\.mjs/);
   const orderedProfiles =
     /compose\.yaml[\s\S]*compose\.443-only\.yaml[\s\S]*compose\.small-host\.yaml[\s\S]*compose\.postgres-bind\.yaml/;
   assert.match(guide, orderedProfiles);
