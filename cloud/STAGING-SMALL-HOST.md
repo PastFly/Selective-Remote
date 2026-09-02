@@ -9,20 +9,28 @@ the `cloud` directory. The PostgreSQL bind profile must appear once and last:
 Earlier three-file examples are not valid for this host and must not be reused.
 
 ```bash
+node_validator_image='node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b'
 docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml \
   -f compose.postgres-bind.yaml config --quiet
 docker compose -f compose.yaml -f compose.443-only.yaml -f compose.small-host.yaml \
   -f compose.postgres-bind.yaml config --format json \
-  | node scripts/validate-small-host-model.mjs
+  | docker run --rm -i --pull=never --network none --read-only \
+      --user 65534:65534 --cap-drop ALL --security-opt no-new-privileges \
+      --memory 128m --memory-swap 128m --cpus 0.5 --pids-limit 64 \
+      --mount "type=bind,src=$(pwd -P)/scripts/validate-small-host-model.mjs,dst=/validator.mjs,readonly" \
+      "$node_validator_image" node /validator.mjs
 ```
 
-Use Node 22 for the checker. A generated Compose model may contain secrets;
-pipe it directly to the checker, do not paste it into chat/CI and do not commit
-it. Use a fresh private temporary directory and dummy-only `.env` when testing
-configuration before deployment. The checker prints only fixed status/budget
-metadata. Keep shell strict mode inside a child Bash, not the interactive SSH
-login shell. These commands do not start containers. The resource checker does
-not replace the independent exact-source, mount and rendered-bind checks in
+Use the pinned Node 22 container for the checker; host Node.js is not required.
+Pre-pull and verify the exact image because this command fails closed with
+`--pull=never`. A generated Compose model may contain secrets; pipe it directly
+to the checker, do not paste it into chat/CI and do not commit it. Use a fresh
+private temporary directory and dummy-only `.env` when testing configuration
+before deployment. The checker prints only fixed status/budget metadata. Keep
+shell strict mode inside a child Bash, not the interactive SSH login shell.
+These commands do not start services; Docker starts only the disposable
+validator container. The resource checker does not replace the independent
+exact-source, mount and rendered-bind checks in
 `scripts/start-staging-guarded.sh`; pass the same four files to that wrapper
 only after all deployment gates are approved.
 

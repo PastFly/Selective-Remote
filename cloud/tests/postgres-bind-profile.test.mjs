@@ -56,6 +56,11 @@ test("guarded starter validates before Compose config and start", async () => {
   );
   assert.match(source, /--project-directory/);
   assert.match(source, /compose_files/);
+  assert.match(source, /node@sha256:1b2479dd35a99687d6638f5976fd235e26c5b37e8122f786fcd5fe231d63de5b/);
+  assert.match(source, /docker run --rm --pull=never --network none --read-only/);
+  assert.match(source, /--user 65534:65534 --cap-drop ALL --security-opt no-new-privileges/);
+  assert.match(source, /config --format json \|\s*\n\s*"\$\{validator_container\[@\]\}" -i/);
+  assert.doesNotMatch(source, /(?:^|\n)\s*node\s/m);
   assert.doesNotMatch(source, /\.env|POSTGRES_PASSWORD|DATABASE_URL/);
 });
 

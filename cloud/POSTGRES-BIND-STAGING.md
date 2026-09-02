@@ -35,7 +35,10 @@ unpublished, and the existing image/security/backup gates still apply.
    profile after `compose.yaml` so `!override` replaces the named volume.
    The wrapper parses the rendered model without printing it and refuses to
    start unless the bind, restart policy, closed registration and unpublished
-   PostgreSQL/API ports match the contract.
+   PostgreSQL/API ports match the contract. It runs both JavaScript validators
+   in the pinned Node 22 image with no network, a read-only filesystem and
+   bounded resources; host Node.js is not a prerequisite. Pull and verify that
+   exact image before invoking the wrapper; the wrapper uses `--pull=never`.
 
 Example order for a new host with ordinary 80/443 ingress:
 
