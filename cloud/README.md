@@ -60,6 +60,11 @@ The Cloud container applies numbered SQL migrations before starting the API.
 Applied filenames and SHA-256 checksums are recorded in `schema_migrations`.
 Never edit an applied migration; add the next numbered file instead.
 
+All base and runtime container images are referenced as `tag@sha256`. Treat
+digest changes as reviewed dependency upgrades: verify the exact image on the
+target architecture, run the complete test and staging gates, then update the
+tag and digest together. Do not replace these references with mutable tags.
+
 ## Production host
 
 The supplied Caddy configuration expects `cloud.pastfly.ru` to resolve to the
