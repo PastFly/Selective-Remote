@@ -78,6 +78,10 @@ test("wrong recovery passphrases and downgraded KDF metadata fail closed", async
     unwrapVaultKey({ ...wrappedKey, iterations: 10_000 }, passphrase, webcrypto),
     (error) => error.message === "invalid_wrapped_key",
   );
+  await assert.rejects(
+    unwrapVaultKey({ ...wrappedKey, serverHint: "unexpected" }, passphrase, webcrypto),
+    (error) => error.message === "invalid_wrapped_key",
+  );
 });
 
 test("canonically equivalent Unicode recovery passphrases are interoperable", async () => {
@@ -112,6 +116,16 @@ test("ciphertext, tag and hash tampering is rejected before plaintext is returne
   await assert.rejects(
     decryptVaultEnvelope(vaultKey, { ...envelope, ciphertext: tamperedCiphertext }, webcrypto),
     (error) => error.message === "vault_content_hash_mismatch",
+  );
+});
+
+test("a valid content hash cannot bypass AES-GCM authentication with the wrong Vault key", async () => {
+  const { envelope } = await fixture();
+  const wrongVaultKey = await generateVaultKey(webcrypto);
+
+  await assert.rejects(
+    decryptVaultEnvelope(wrongVaultKey, envelope, webcrypto),
+    (error) => error.message === "vault_decryption_failed",
   );
 });
 
