@@ -12,6 +12,9 @@ DerivedData/
 .idea/
 .vscode/
 node_modules/
+.env
+.env.*
+!.env.example
 cloud/backups/
 *.log
 *.swp
