@@ -118,6 +118,35 @@ test("validation rejects duplicate identities, unknown fields and unsafe record 
     }),
     /invalid_record_data/,
   );
+  assert.throws(
+    () => validateVaultDocument({ schemaVersion: 1, records: Array(10_001), tombstones: [] }),
+    /vault_too_large/,
+  );
+  const oversizedData = Array.from({ length: 1_000 }, () => Array(101).fill(0));
+  assert.throws(
+    () => upsertVaultRecord(createEmptyVaultDocument(), {
+      id: recordID,
+      type: "host",
+      data: { oversizedData },
+      deviceID: deviceA,
+      modifiedAt: firstTime,
+    }),
+    /invalid_record_data/,
+  );
+});
+
+test("conflict-free merges are idempotent and order-independent", () => {
+  const first = host();
+  const second = upsertVaultRecord(first, {
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    type: "snippet",
+    data: { body: "Synthetic snippet" },
+    deviceID: deviceB,
+    modifiedAt: secondTime,
+  });
+
+  assert.deepEqual(mergeVaultDocuments(first, second), mergeVaultDocuments(second, first));
+  assert.deepEqual(mergeVaultDocuments(second, second), { document: second, conflicts: [] });
 });
 
 test("documents are normalized into deterministic entity and object-key order", () => {
