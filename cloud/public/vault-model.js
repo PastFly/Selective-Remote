@@ -6,6 +6,7 @@ const forbiddenKeys = new Set(["__proto__", "constructor", "prototype"]);
 const maxDocumentBytes = 24 * 1024 * 1024;
 const maxEntities = 10_000;
 const maxVersionDevices = 128;
+const maxJSONNodes = 100_000;
 
 function compareStrings(left, right) {
   if (left < right) return -1;
@@ -34,7 +35,9 @@ function normalizedTimestamp(value, code) {
   return value;
 }
 
-function normalizedJSON(value, depth = 0) {
+function normalizedJSON(value, depth = 0, budget = { remaining: maxJSONNodes }) {
+  budget.remaining -= 1;
+  if (budget.remaining < 0) throw new Error("invalid_record_data");
   if (depth > 32) throw new Error("invalid_record_data");
   if (value === null || typeof value === "string" || typeof value === "boolean") return value;
   if (typeof value === "number") {
@@ -43,14 +46,14 @@ function normalizedJSON(value, depth = 0) {
   }
   if (Array.isArray(value)) {
     if (value.length > maxEntities) throw new Error("invalid_record_data");
-    return value.map((item) => normalizedJSON(item, depth + 1));
+    return value.map((item) => normalizedJSON(item, depth + 1, budget));
   }
   if (!value || typeof value !== "object") throw new Error("invalid_record_data");
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) throw new Error("invalid_record_data");
   const keys = Object.keys(value).sort();
   if (keys.length > 1_000 || keys.some((key) => forbiddenKeys.has(key))) throw new Error("invalid_record_data");
-  return Object.fromEntries(keys.map((key) => [key, normalizedJSON(value[key], depth + 1)]));
+  return Object.fromEntries(keys.map((key) => [key, normalizedJSON(value[key], depth + 1, budget)]));
 }
 
 function normalizedVersion(value) {
@@ -66,7 +69,7 @@ function normalizedVersion(value) {
   return result;
 }
 
-function normalizedRecord(value) {
+function normalizedRecord(value, budget = { remaining: maxJSONNodes }) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("invalid_vault_record");
   exactKeys(value, ["id", "type", "version", "modifiedAt", "data"], "invalid_vault_record");
   if (!recordTypes.has(value.type)) throw new Error("invalid_record_type");
@@ -75,7 +78,7 @@ function normalizedRecord(value) {
     type: value.type,
     version: normalizedVersion(value.version),
     modifiedAt: normalizedTimestamp(value.modifiedAt, "invalid_modified_at"),
-    data: normalizedJSON(value.data),
+    data: normalizedJSON(value.data, 0, budget),
   };
 }
 
@@ -179,7 +182,12 @@ export function validateVaultDocument(value) {
   exactKeys(value, ["schemaVersion", "records", "tombstones"], "invalid_vault_document");
   if (value.schemaVersion !== vaultDocumentSchemaVersion) throw new Error("invalid_vault_schema_version");
   if (!Array.isArray(value.records) || !Array.isArray(value.tombstones)) throw new Error("invalid_vault_document");
-  return checkedDocument(value.records.map(normalizedRecord), value.tombstones.map(normalizedTombstone));
+  if (value.records.length + value.tombstones.length > maxEntities) throw new Error("vault_too_large");
+  const budget = { remaining: maxJSONNodes };
+  return checkedDocument(
+    value.records.map((record) => normalizedRecord(record, budget)),
+    value.tombstones.map(normalizedTombstone),
+  );
 }
 
 export function upsertVaultRecord(documentValue, {
