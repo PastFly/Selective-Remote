@@ -102,6 +102,27 @@ both vectors and increments the resolving device before the chosen record or
 tombstone can be uploaded. Modification timestamps are informational and do
 not establish causality, avoiding data loss from clock skew.
 
+### Browser-local preview boundary
+
+The initial personal Vault preview persists one strict local snapshot in
+IndexedDB: a monotonically increasing local revision, a random device UUID and
+the encrypted envelope. Record titles, addresses, usernames, secrets, snippets
+and forwarding configuration remain inside the ciphertext. The revision and
+random device UUID are local metadata and are not secret content.
+
+The recovery passphrase and raw Vault key are never written by the
+application. The raw key exists only in the live controller; explicit locking,
+failed unlock and page teardown drop that reference. Every CRUD mutation is
+normalized, encrypted with a fresh nonce and treated as committed only after
+the IndexedDB transaction completes. Storage corruption, unknown snapshot
+fields, revision mismatch, unavailable IndexedDB and wrong recovery phrases
+fail closed. There is deliberately no plaintext or Web Storage fallback.
+
+This preview is local-only. It does not authenticate, upload, download or claim
+cross-device recovery. Cloud synchronization must later reconcile the local
+encrypted revision against the authenticated server revision without making
+IndexedDB a second source of truth.
+
 The client downloads the latest revision, decrypts and validates it locally,
 performs this record-level merge, resolves any conflicts locally, then uploads
 a new encrypted revision based on the latest server revision. Tombstones
