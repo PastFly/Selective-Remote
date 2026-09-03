@@ -58,6 +58,62 @@
       <article><span>03</span><h3>Локальный режим</h3><p>Аккаунт необязателен: приложение продолжает полноценно работать автономно.</p></article>
     </section>
 
+    <section class="local-vault" id="local-vault" aria-labelledby="local-vault-title">
+      <div class="vault-heading">
+        <div>
+          <p class="eyebrow">PERSONAL VAULT · LOCAL PREVIEW</p>
+          <h2 id="local-vault-title">Зашифрованное хранилище в браузере</h2>
+        </div>
+        <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
+      </div>
+
+      <div class="vault-panel" id="local-vault-setup" hidden>
+        <h3>Создать локальный Vault</h3>
+        <p>Recovery-фраза не отправляется на сервер и не сохраняется в браузере. Потерянную фразу пока восстановить невозможно.</p>
+        <form id="local-vault-setup-form">
+          <label for="local-vault-passphrase">Независимая recovery-фраза</label>
+          <input id="local-vault-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="new-password" required>
+          <label for="local-vault-confirmation">Повторите recovery-фразу</label>
+          <input id="local-vault-confirmation" name="confirmation" type="password" minlength="16" maxlength="1024" autocomplete="new-password" required>
+          <button type="submit">Создать и разблокировать</button>
+        </form>
+      </div>
+
+      <div class="vault-panel" id="local-vault-unlock" hidden>
+        <h3>Разблокировать Vault</h3>
+        <p>Расшифровка выполняется локально. Ключ живёт только в памяти открытой вкладки.</p>
+        <form id="local-vault-unlock-form">
+          <label for="local-vault-unlock-passphrase">Recovery-фраза</label>
+          <input id="local-vault-unlock-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
+          <button type="submit">Разблокировать</button>
+        </form>
+      </div>
+
+      <div class="vault-workspace" id="local-vault-workspace" hidden>
+        <div class="vault-toolbar">
+          <div><h3>Личный Vault</h3><p>Локальная версия без Cloud-синхронизации.</p></div>
+          <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
+        </div>
+        <form class="record-form" id="local-vault-record-form">
+          <label for="local-record-type">Тип записи</label>
+          <select id="local-record-type" name="type">
+            <option value="host">Host</option>
+            <option value="credential">Credential</option>
+            <option value="snippet">Snippet</option>
+            <option value="forwarding">Forwarding</option>
+          </select>
+          <label for="local-record-title">Название</label>
+          <input id="local-record-title" name="title" maxlength="120" required>
+          <label for="local-record-target" id="local-record-target-label">Адрес</label>
+          <input id="local-record-target" name="target" maxlength="2048">
+          <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
+          <textarea id="local-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
+          <button type="submit">Зашифровать и сохранить</button>
+        </form>
+        <div class="vault-records" id="local-vault-records"></div>
+      </div>
+    </section>
+
     <section class="access">
       <div><p class="eyebrow">V0.32 FOUNDATION</p><h2>Портал готовится к первому входу</h2></div>
       <p>Регистрация будет открыта после завершения сброса пароля, ограничения запросов, защиты от злоупотреблений и ручной проверки безопасности.</p>
