@@ -72,3 +72,26 @@ test("password reset mail keeps the opaque token in a fragment", async () => {
   assert.equal(message.disableUrlAccess, true);
   assert.doesNotMatch(JSON.stringify(message), /secret-secret-secret/);
 });
+
+test("Team invitation mail carries one opaque fragment token and bounded metadata", async () => {
+  let message;
+  const mailer = createVerificationMailer(config, () => ({
+    async verify() {},
+    async sendMail(value) { message = value; return { messageId: "test" }; },
+  }));
+
+  await mailer.sendTeamInvitation({
+    recipient: "member@example.com",
+    token: "opaque-team-token",
+    teamID: "84f6c860-0d26-4ef5-8652-27cb8b991b70",
+    role: "viewer",
+    expiresAt: "2030-01-03T00:00:00.000Z",
+  });
+
+  assert.equal(message.to, "member@example.com");
+  assert.match(message.subject, /Приглашение в команду/);
+  assert.match(message.text, /#accept-team-invitation\?token=opaque-team-token/);
+  assert.match(message.text, /Роль: viewer/);
+  assert.equal(message.disableFileAccess, true);
+  assert.equal(message.disableUrlAccess, true);
+});

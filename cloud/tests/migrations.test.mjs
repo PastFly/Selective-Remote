@@ -12,8 +12,34 @@ test("numbered migrations have stable checksums", async () => {
     { version: 2, name: "002_email_verification.sql" },
     { version: 3, name: "003_auth_rate_limits.sql" },
     { version: 4, name: "004_password_reset.sql" },
+    { version: 5, name: "005_team_foundation.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("Team foundation migration keeps authorization and invitation state durable", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const team = migrations.find(({ version }) => version === 5);
+
+  for (const table of [
+    "teams",
+    "team_memberships",
+    "team_invitations",
+    "team_outbox_jobs",
+    "shared_vaults",
+    "shared_vault_rotation_tasks",
+    "team_audit_events",
+    "team_mutation_receipts",
+  ]) {
+    assert.match(team.sql, new RegExp(`CREATE TABLE ${table}`));
+  }
+  assert.match(team.sql, /role IN \('owner', 'admin', 'editor', 'viewer'\)/);
+  assert.match(team.sql, /team_memberships_one_active_user/);
+  assert.match(team.sql, /token_hash text NOT NULL UNIQUE/);
+  assert.match(team.sql, /token_hash ~ '\^\[0-9a-f\]\{64\}\$'/);
+  assert.match(team.sql, /payload_ciphertext text NOT NULL/);
+  assert.doesNotMatch(team.sql, /\btoken\s+text\b|\bplaintext\b|\bvault_key\b/);
+  assert.doesNotMatch(team.sql, /CREATE (?:TABLE|INDEX) IF NOT EXISTS/);
 });
 
 test("password reset migration stores only hashed expiring one-time tokens", async () => {

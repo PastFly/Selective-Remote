@@ -18,6 +18,7 @@ const service = new CloudService(store, config, mailer);
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
+const maxTeamBodyBytes = 16 * 1024;
 
 const server = createServer(async (request, response) => {
   const requestID = crypto.randomUUID();
@@ -113,6 +114,117 @@ async function route(request, response) {
         return handleOperationError(response, error);
       }
     }
+    if (method === "GET" && url.pathname === "/v1/teams") {
+      return handleOperation(response, () => service.listTeams(session));
+    }
+    if (method === "POST" && url.pathname === "/v1/teams") {
+      return handleOperation(
+        response,
+        async () => service.createTeam(session, await readJSON(request, maxTeamBodyBytes), idempotencyKey(request)),
+        201,
+      );
+    }
+    if (method === "POST" && url.pathname === "/v1/team-invitations/accept") {
+      return handleOperation(
+        response,
+        async () => {
+          await authRateLimiter.require(
+            "team_invitation_accept_ip",
+            clientIPAddress(request, config.proxySharedSecret),
+          );
+          return service.acceptTeamInvitation(
+            session,
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          );
+        },
+      );
+    }
+    const teamMembersMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/members$/i);
+    if (method === "GET" && teamMembersMatch) {
+      if (!isUUID(teamMembersMatch[1])) return sendError(response, 404, "team_not_found");
+      return handleOperation(response, () => service.listTeamMembers(session, teamMembersMatch[1]));
+    }
+    const teamInvitationsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations$/i);
+    if (method === "POST" && teamInvitationsMatch) {
+      if (!isUUID(teamInvitationsMatch[1])) return sendError(response, 404, "team_not_found");
+      return handleOperation(
+        response,
+        async () => {
+          await authRateLimiter.require("team_invitation_create_user", session.user_id);
+          return service.createTeamInvitation(
+            session,
+            teamInvitationsMatch[1],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          );
+        },
+        201,
+      );
+    }
+    const teamInvitationMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations\/([^/]+)$/i);
+    if (method === "DELETE" && teamInvitationMatch) {
+      if (!isUUID(teamInvitationMatch[1]) || !isUUID(teamInvitationMatch[2])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        () => service.cancelTeamInvitation(
+          session,
+          teamInvitationMatch[1],
+          teamInvitationMatch[2],
+          idempotencyKey(request),
+        ),
+      );
+    }
+    const teamMemberMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/members\/([^/]+)$/i);
+    if (teamMemberMatch) {
+      if (!isUUID(teamMemberMatch[1]) || !isUUID(teamMemberMatch[2])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      if (method === "PATCH") {
+        return handleOperation(
+          response,
+          async () => service.updateTeamMembershipRole(
+            session,
+            teamMemberMatch[1],
+            teamMemberMatch[2],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          ),
+        );
+      }
+      if (method === "DELETE") {
+        return handleOperation(
+          response,
+          () => service.revokeTeamMembership(
+            session,
+            teamMemberMatch[1],
+            teamMemberMatch[2],
+            idempotencyKey(request),
+          ),
+        );
+      }
+    }
+    const teamVaultsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults$/i);
+    if (teamVaultsMatch) {
+      if (!isUUID(teamVaultsMatch[1])) return sendError(response, 404, "team_not_found");
+      if (method === "GET") {
+        return handleOperation(response, () => service.listSharedVaults(session, teamVaultsMatch[1]));
+      }
+      if (method === "POST") {
+        return handleOperation(
+          response,
+          async () => service.createSharedVault(
+            session,
+            teamVaultsMatch[1],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          ),
+          201,
+        );
+      }
+    }
     return sendError(response, 404, "not_found");
   }
 
@@ -155,7 +267,12 @@ function bearerToken(request) {
   return value.startsWith("Bearer ") ? value.slice(7) : null;
 }
 
-async function readJSON(request) {
+function idempotencyKey(request) {
+  const value = request.headers["idempotency-key"];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+async function readJSON(request, maximumBytes = maxBodyBytes) {
   const contentType = request.headers["content-type"] ?? "";
   const mediaType = contentType.split(";", 1)[0].trim().toLowerCase();
   if (mediaType !== "application/json" && !/^application\/[a-z0-9.+-]+\+json$/.test(mediaType)) {
@@ -165,7 +282,7 @@ async function readJSON(request) {
   let total = 0;
   for await (const chunk of request) {
     total += chunk.length;
-    if (total > maxBodyBytes) throw new Error("request_too_large");
+    if (total > maximumBytes) throw new Error("request_too_large");
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); }
@@ -208,12 +325,28 @@ async function start() {
   server.listen(config.port, config.host, () => {
     console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
   });
+  scheduleOutboxPump();
 }
+
+let outboxPumpRunning = false;
+let outboxTimer = null;
 
 await start();
 
+outboxTimer = mailer ? setInterval(scheduleOutboxPump, 5_000) : null;
+outboxTimer?.unref();
+
+function scheduleOutboxPump() {
+  if (!mailer || outboxPumpRunning) return;
+  outboxPumpRunning = true;
+  service.queueTeamInvitationOutboxDispatch()
+    .catch(() => console.error(JSON.stringify({ level: "error", message: "Team outbox dispatch failed" })))
+    .finally(() => { outboxPumpRunning = false; });
+}
+
 async function shutdown(signal) {
   console.log(JSON.stringify({ level: "info", message: "Shutting down", signal }));
+  if (outboxTimer) clearInterval(outboxTimer);
   server.close(async () => {
     await service.waitForBackgroundTasks();
     await store.close();
