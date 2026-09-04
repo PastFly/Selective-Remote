@@ -1,4 +1,5 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
+import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 
 const verificationPrefix = "#verify-email?";
 const passwordResetPrefix = "#reset-password?";
@@ -245,6 +246,94 @@ export async function initializeLocalVault({
   return controller;
 }
 
+export async function initializeCloudAccount({
+  documentValue = document,
+  vault,
+  fetchValue = fetch,
+} = {}) {
+  const section = documentValue.querySelector("#cloud-account");
+  if (!section || !vault) return null;
+  const form = documentValue.querySelector("#cloud-login-form");
+  const signedIn = documentValue.querySelector("#cloud-signed-in");
+  const accountName = documentValue.querySelector("#cloud-account-name");
+  const message = documentValue.querySelector("#cloud-account-message");
+  const logoutButton = documentValue.querySelector("#cloud-logout");
+  const syncButton = documentValue.querySelector("#cloud-vault-sync");
+  const vaultMessage = documentValue.querySelector("#local-vault-message");
+  const client = createAuthenticatedVaultClient({ fetchValue });
+
+  function showSession(user) {
+    form.hidden = Boolean(user);
+    signedIn.hidden = !user;
+    syncButton.disabled = !user;
+    setText(accountName, user ? `${user.displayName || user.email} · ${user.email}` : "");
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = form.querySelector("button");
+    button.disabled = true;
+    try {
+      const user = await client.login({
+        email: form.elements.email.value,
+        password: form.elements.password.value,
+        deviceID: await vault.deviceID(),
+      });
+      form.elements.password.value = "";
+      showSession(user);
+      setText(message, "Вход выполнен. Сессионный токен хранится только в памяти этой вкладки.");
+    } catch {
+      setText(message, "Не удалось войти. Проверьте email, пароль и подтверждение аккаунта.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  logoutButton.addEventListener("click", async () => {
+    logoutButton.disabled = true;
+    try {
+      await client.logout();
+    } finally {
+      showSession(null);
+      logoutButton.disabled = false;
+      setText(message, "Сессия завершена, токен удалён из памяти вкладки.");
+    }
+  });
+
+  syncButton.addEventListener("click", async () => {
+    syncButton.disabled = true;
+    try {
+      const result = await synchronizeVault({ client, vault });
+      const messages = {
+        empty: "Сначала создайте локальный Vault.",
+        uploaded: `Зашифрованная ревизия ${result.revision} загружена.`,
+        uploaded_with_new_local_changes: `Ревизия ${result.revision} загружена; появились новые локальные изменения — синхронизируйте ещё раз.`,
+        downloaded: `Зашифрованная ревизия ${result.revision} загружена и объединена локально.`,
+        up_to_date: `Vault уже синхронизирован на ревизии ${result.revision}.`,
+        remote_changed: `Удалённый Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию для безопасного merge.`,
+        conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Upload остановлен; требуется явное разрешение конфликтов.`,
+      };
+      setText(vaultMessage, messages[result.status] ?? "Синхронизация завершена.");
+    } catch (error) {
+      const code = String(error?.message ?? "");
+      if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
+      else if (code === "authentication_required") {
+        showSession(null);
+        setText(vaultMessage, "Сессия истекла. Войдите снова.");
+      } else if (code === "recovery_passphrase_required") {
+        setText(vaultMessage, "На сервере есть Vault. Импорт в чистый браузер требует recovery-фразу и будет добавлен отдельным шагом.");
+      } else {
+        setText(vaultMessage, "Синхронизация не выполнена; локальные данные не потеряны.");
+      }
+    } finally {
+      syncButton.disabled = !client.session();
+    }
+  });
+
+  showSession(null);
+  return client;
+}
+
 async function updateServiceStatus(documentValue, fetchValue) {
   const status = documentValue.querySelector("#service-status");
   try {
@@ -329,7 +418,8 @@ export async function initializePortal({
       });
     }
   }
-  await initializeLocalVault({ documentValue });
+  const vault = await initializeLocalVault({ documentValue });
+  await initializeCloudAccount({ documentValue, vault, fetchValue });
   await updateServiceStatus(documentValue, fetchValue);
 }
 
