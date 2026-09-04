@@ -8,6 +8,16 @@ The final v0.32 product scope also includes Teams and shared Vaults. This
 foundation milestone does not yet implement membership, roles, shared-key
 distribution or shared-record APIs.
 
+The browser portal can create and unlock a client-encrypted personal Vault,
+perform local CRUD, sign in with an existing verified account and manually
+synchronize opaque revisions through the personal-Vault API. The bearer session
+exists only in page memory. IndexedDB contains ciphertext, a random device UUID
+and non-secret revision acknowledgement metadata, never the session token,
+recovery passphrase, raw Vault key or decrypted records. Concurrent record
+conflicts and server revision conflicts stop upload instead of overwriting.
+Registration, Team endpoints, conflict-resolution UI and complete clean-browser
+recovery UX remain disabled or unfinished.
+
 ## Local verification
 
 ```bash

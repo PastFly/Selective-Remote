@@ -4,10 +4,12 @@
 
 Version 0.32 introduces optional self-hosted accounts, personal Vaults, Teams
 and shared Team Vaults for Selective Remote. The macOS application remains
-fully usable without an account. This foundation milestone implements account,
-device and opaque personal-Vault storage only; shared Vault data structures,
-membership, roles and key distribution are later milestones within the final
-0.32 scope. FIDO2 remains outside the initial 0.32 release scope.
+fully usable without an account. The current cumulative implementation includes
+account/device APIs, opaque personal-Vault storage, browser-local encryption and
+manual authenticated personal-Vault synchronization. Shared Vault data
+structures, membership, roles and key distribution remain required later
+milestones within the final 0.32 scope. FIDO2 remains outside the initial 0.32
+release scope.
 
 The first production deployment targets:
 
