@@ -79,6 +79,14 @@ export function localVaultRecordSummary(record) {
   return summary.length > 240 ? `${summary.slice(0, 237)}…` : summary;
 }
 
+export function localVaultConflictSideSummary(entity) {
+  if (entity?.kind === "tombstone") return `Удалено · ${String(entity.value?.deletedAt ?? "")}`;
+  if (entity?.kind !== "record") throw new Error("invalid_vault_conflict");
+  const title = String(entity.value?.data?.title ?? "Без названия");
+  const boundedTitle = title.length > 120 ? `${title.slice(0, 117)}…` : title;
+  return `${boundedTitle} · ${String(entity.value?.type ?? "record")} · ${String(entity.value?.modifiedAt ?? "")}`;
+}
+
 function setText(element, value) {
   if (element) element.textContent = value;
 }
@@ -105,7 +113,32 @@ export async function initializeLocalVault({
   const secret = documentValue.querySelector("#local-record-secret");
   const targetLabel = documentValue.querySelector("#local-record-target-label");
   const secretLabel = documentValue.querySelector("#local-record-secret-label");
+  const recoveryPanel = documentValue.querySelector("#cloud-vault-recovery");
+  const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
+  const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
+  const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
+  const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
   const controller = createLocalVaultController({ repository });
+  let conflictResetListener = () => {};
+
+  function clearConflictUI() {
+    conflictPanel.hidden = true;
+    conflictForm.reset();
+    conflictList.replaceChildren();
+    for (const control of recordForm.querySelectorAll("input, select, textarea, button")) control.disabled = false;
+    for (const button of records.querySelectorAll("button")) button.disabled = false;
+    conflictResetListener();
+  }
+
+  function setConflictMode(active) {
+    for (const control of recordForm.querySelectorAll("input, select, textarea, button")) control.disabled = active;
+    for (const button of records.querySelectorAll("button")) button.disabled = active;
+  }
+
+  function hideRecovery() {
+    recoveryPanel.hidden = true;
+    recoveryForm.reset();
+  }
 
   function mode(value) {
     setup.hidden = value !== "empty";
@@ -154,6 +187,7 @@ export async function initializeLocalVault({
         remove.disabled = true;
         try {
           await controller.delete(record.id);
+          clearConflictUI();
           setText(message, "Запись удалена. Tombstone сохранён в зашифрованном Vault.");
           render();
         } catch {
@@ -179,6 +213,8 @@ export async function initializeLocalVault({
     try {
       await controller.create(passphrase);
       setupForm.reset();
+      hideRecovery();
+      clearConflictUI();
       mode("unlocked");
       setText(message, "Локальный Vault создан и разблокирован только в памяти этой вкладки.");
       render();
@@ -197,6 +233,7 @@ export async function initializeLocalVault({
       unlockForm.reset();
       button.disabled = false;
       mode("unlocked");
+      clearConflictUI();
       setText(message, "Vault расшифрован локально. Ключ существует только в памяти вкладки.");
       render();
     } catch {
@@ -215,6 +252,7 @@ export async function initializeLocalVault({
         data: localVaultRecordData(type.value, { title: title.value, target: target.value, secret: secret.value }),
       });
       recordForm.reset();
+      clearConflictUI();
       updateLabels();
       setText(message, "Запись локально зашифрована и сохранена.");
       render();
@@ -228,6 +266,8 @@ export async function initializeLocalVault({
   type.addEventListener("change", updateLabels);
   lockButton.addEventListener("click", () => {
     controller.lock();
+    hideRecovery();
+    clearConflictUI();
     mode("locked");
     records.replaceChildren();
     setText(message, "Vault заблокирован; ключ удалён из состояния страницы.");
@@ -236,21 +276,42 @@ export async function initializeLocalVault({
   updateLabels();
   try {
     mode(await controller.status());
-    setText(message, "Данные остаются на этом устройстве в зашифрованном виде; синхронизация ещё не подключена.");
+    setText(message, "Данные зашифрованы локально; после входа доступна ручная Cloud-синхронизация.");
   } catch {
     setup.hidden = true;
     unlock.hidden = true;
     workspace.hidden = true;
     setText(message, "Локальное защищённое хранилище недоступно в этом браузере.");
   }
-  return controller;
+  return {
+    controller,
+    mode,
+    render,
+    clearConflictUI,
+    setConflictMode,
+    setConflictResetListener(listener) {
+      conflictResetListener = typeof listener === "function" ? listener : () => {};
+    },
+    showRecovery() {
+      setup.hidden = true;
+      unlock.hidden = true;
+      workspace.hidden = true;
+      recoveryPanel.hidden = false;
+      recoveryForm.elements.passphrase.focus();
+    },
+    async hideRecoveryAndRestoreMode() {
+      hideRecovery();
+      mode(await controller.status());
+    },
+  };
 }
 
 export async function initializeCloudAccount({
   documentValue = document,
-  vault,
+  vaultUI,
   fetchValue = fetch,
 } = {}) {
+  const vault = vaultUI?.controller;
   const section = documentValue.querySelector("#cloud-account");
   if (!section || !vault) return null;
   const form = documentValue.querySelector("#cloud-login-form");
@@ -260,7 +321,60 @@ export async function initializeCloudAccount({
   const logoutButton = documentValue.querySelector("#cloud-logout");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
   const vaultMessage = documentValue.querySelector("#local-vault-message");
+  const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
+  const recoveryCancel = documentValue.querySelector("#cloud-vault-recovery-cancel");
+  const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
+  const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
+  const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
+  const conflictApply = documentValue.querySelector("#local-vault-conflicts-apply");
   const client = createAuthenticatedVaultClient({ fetchValue });
+  let activeConflicts = null;
+  vaultUI.setConflictResetListener(() => {
+    activeConflicts = null;
+    conflictApply.disabled = true;
+  });
+
+  function hideConflicts() {
+    activeConflicts = null;
+    vaultUI.clearConflictUI();
+    conflictApply.disabled = true;
+  }
+
+  function renderConflicts(result) {
+    activeConflicts = { revision: result.revision, ids: result.conflicts.map((conflict) => conflict.id) };
+    conflictForm.reset();
+    conflictList.replaceChildren();
+    conflictApply.disabled = true;
+    result.conflicts.forEach((conflict, index) => {
+      const fieldset = documentValue.createElement("fieldset");
+      const legend = documentValue.createElement("legend");
+      legend.textContent = `Конфликт ${index + 1}`;
+      fieldset.append(legend);
+      for (const [choice, prefix] of [["local", "Оставить локальную"], ["remote", "Принять Cloud-версию"]]) {
+        const label = documentValue.createElement("label");
+        const input = documentValue.createElement("input");
+        input.type = "radio";
+        input.name = `conflict-${index}`;
+        input.value = choice;
+        input.required = true;
+        label.append(input, ` ${prefix}: ${localVaultConflictSideSummary(conflict[choice])}`);
+        fieldset.append(label);
+      }
+      conflictList.append(fieldset);
+    });
+    vaultUI.setConflictMode(true);
+    conflictPanel.hidden = false;
+  }
+
+  function updateConflictApplyState() {
+    if (!activeConflicts) {
+      conflictApply.disabled = true;
+      return;
+    }
+    conflictApply.disabled = activeConflicts.ids.some((_id, index) => (
+      !conflictForm.querySelector(`input[name="conflict-${index}"]:checked`)
+    ));
+  }
 
   function showSession(user) {
     form.hidden = Boolean(user);
@@ -295,6 +409,8 @@ export async function initializeCloudAccount({
       await client.logout();
     } finally {
       showSession(null);
+      hideConflicts();
+      await vaultUI.hideRecoveryAndRestoreMode();
       logoutButton.disabled = false;
       setText(message, "Сессия завершена, токен удалён из памяти вкладки.");
     }
@@ -313,6 +429,8 @@ export async function initializeCloudAccount({
         remote_changed: `Удалённый Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию для безопасного merge.`,
         conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Upload остановлен; требуется явное разрешение конфликтов.`,
       };
+      if (result.status === "conflict") renderConflicts(result);
+      else hideConflicts();
       setText(vaultMessage, messages[result.status] ?? "Синхронизация завершена.");
     } catch (error) {
       const code = String(error?.message ?? "");
@@ -321,10 +439,65 @@ export async function initializeCloudAccount({
         showSession(null);
         setText(vaultMessage, "Сессия истекла. Войдите снова.");
       } else if (code === "recovery_passphrase_required") {
-        setText(vaultMessage, "На сервере есть Vault. Импорт в чистый браузер требует recovery-фразу и будет добавлен отдельным шагом.");
+        hideConflicts();
+        vaultUI.showRecovery();
+        setText(vaultMessage, "На сервере есть зашифрованный Vault. Введите recovery-фразу для локального импорта.");
       } else {
         setText(vaultMessage, "Синхронизация не выполнена; локальные данные не потеряны.");
       }
+    } finally {
+      syncButton.disabled = !client.session();
+    }
+  });
+
+  recoveryForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = recoveryForm.querySelector('button[type="submit"]');
+    const passphrase = recoveryForm.elements.passphrase.value;
+    button.disabled = true;
+    try {
+      const result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
+      recoveryForm.reset();
+      await vaultUI.hideRecoveryAndRestoreMode();
+      vaultUI.mode("unlocked");
+      vaultUI.render();
+      setText(vaultMessage, `Зашифрованная ревизия ${result.revision} восстановлена и расшифрована только в этой вкладке.`);
+    } catch (error) {
+      recoveryForm.elements.passphrase.value = "";
+      if (String(error?.message ?? "") === "authentication_required") {
+        showSession(null);
+        await vaultUI.hideRecoveryAndRestoreMode();
+        setText(vaultMessage, "Сессия истекла. Войдите снова.");
+      } else {
+        setText(vaultMessage, "Не удалось восстановить Vault. Recovery-фраза неверна или зашифрованные данные повреждены.");
+      }
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  recoveryCancel.addEventListener("click", async () => {
+    await vaultUI.hideRecoveryAndRestoreMode();
+    setText(vaultMessage, "Восстановление отменено; удалённый Vault не изменён.");
+  });
+
+  conflictForm.addEventListener("change", updateConflictApplyState);
+  conflictForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!activeConflicts) return;
+    conflictApply.disabled = true;
+    try {
+      const resolutions = activeConflicts.ids.map((id, index) => ({
+        id,
+        choice: conflictForm.querySelector(`input[name="conflict-${index}"]:checked`)?.value,
+      }));
+      const result = await vault.resolveConflicts({ revision: activeConflicts.revision, resolutions });
+      hideConflicts();
+      vaultUI.render();
+      setText(vaultMessage, `${result.conflictsResolved} конфликт(а) разрешено локально. Синхронизируйте ещё раз для условной загрузки.`);
+    } catch {
+      setText(vaultMessage, "Набор конфликтов устарел или выбран не полностью. Запустите синхронизацию ещё раз.");
+      hideConflicts();
     } finally {
       syncButton.disabled = !client.session();
     }
@@ -418,8 +591,8 @@ export async function initializePortal({
       });
     }
   }
-  const vault = await initializeLocalVault({ documentValue });
-  await initializeCloudAccount({ documentValue, vault, fetchValue });
+  const vaultUI = await initializeLocalVault({ documentValue });
+  await initializeCloudAccount({ documentValue, vaultUI, fetchValue });
   await updateServiceStatus(documentValue, fetchValue);
 }
 

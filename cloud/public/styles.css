@@ -44,6 +44,12 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .vault-records article { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
 .vault-records h4,.vault-records p { margin:0; overflow-wrap:anywhere; }.vault-records p,.vault-records small,.vault-empty { color:var(--muted); }.vault-records small { font-family:ui-monospace,monospace; }
 .vault-records button.danger { grid-column:2; grid-row:1 / span 3; align-self:center; padding:9px 12px; background:transparent; border:1px solid #ff8f7a66; color:#ffb4a6; }
+.vault-conflicts { margin-top:28px; padding:22px; border:1px solid #ffb86b66; border-radius:14px; background:#1a120a; }
+.vault-conflicts h3,.vault-conflicts p { margin-top:0; }.vault-conflicts p { color:var(--muted); line-height:1.55; }
+.vault-conflicts form { display:block; margin-top:20px; }.vault-conflicts fieldset { display:grid; gap:10px; margin:0 0 14px; padding:16px; border:1px solid var(--line); border-radius:12px; }
+.vault-conflicts legend { padding:0 6px; font-weight:750; }.vault-conflicts label { display:flex; gap:8px; align-items:flex-start; color:var(--ink); overflow-wrap:anywhere; }
+.vault-conflicts input { margin-top:3px; }.vault-conflicts button { border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
+.vault-conflicts button:disabled { opacity:.6; cursor:not-allowed; }
 .access { display:flex; justify-content:space-between; gap:40px; align-items:end; padding:34px; border:1px solid var(--line); border-radius:18px; background:#0c1714cc; }.access h2 { margin:8px 0 0; }.access>p { max-width:500px; margin:0; }
 @keyframes spin { to { transform:rotate(360deg); } }
 @media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.status{font-size:0}.status::after{content:"●";font-size:16px} }

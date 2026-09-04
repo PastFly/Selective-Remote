@@ -135,16 +135,23 @@ local acknowledgement. If the remote revision advanced, the client decrypts
 and causally merges it in memory before upload; unresolved concurrent entities
 block upload and are reported explicitly rather than timestamp-resolved.
 
-This milestone does not enable registration, persist account sessions, resolve
-conflicts in the UI, or complete clean-browser recovery. A remote Vault in a
-browser with no local snapshot requires the independent recovery passphrase;
-the import primitive is implemented, while the recovery UX remains a separate
-acceptance step.
+This milestone does not enable registration or persist account sessions. A
+remote Vault in a browser with no local snapshot requires the independent
+recovery passphrase; the import primitive and explicit recovery form are
+implemented. The phrase is cleared after each attempt and is never sent to the
+server or persisted.
 
 The client downloads the latest revision, decrypts and validates it locally,
 performs this record-level merge, resolves any conflicts locally, then uploads
 a new encrypted revision based on the latest server revision. Tombstones
 prevent another device from resurrecting a causally older deleted record.
+
+The browser conflict UI requires one explicit local-or-Cloud choice for every
+concurrent record/tombstone pair. It displays only bounded record metadata, not
+credential secrets, snippet bodies or other record content. The controller
+rejects incomplete, duplicate and stale resolution sets, joins both version
+vectors, persists one encrypted result and leaves it dirty until a subsequent
+conditional upload succeeds.
 
 The Cloud payload is separate from `.srbackup`. Backup archives remain manual,
 portable rollback artifacts; Cloud revisions are small synchronization units.
@@ -152,13 +159,19 @@ portable rollback artifacts; Cloud revisions are small synchronization units.
 Shared Vaults use independent random Vault keys. The final design must wrap a
 shared key separately for authorized members/devices, enforce roles in both
 the API and clients, and rotate the key (or use an equivalently reviewed
-revocation design) when access is removed. The exact invitation, role and key
-rotation protocol must be threat-modelled before those endpoints are added.
+revocation design) when access is removed. The invitation, role and key
+rotation contract is specified before those endpoints are added.
 The browser sync client accepts an explicit Vault scope and currently permits
 only `{type: "personal", id: "self"}`. Team scopes fail before any network
 request until authenticated Team endpoints and authorization are implemented.
 This keeps the ownership seam visible without pretending the personal endpoint
 already enforces Team roles.
+
+The mandatory role matrix, invitation lifecycle, device-bound key
+distribution, membership epochs and fail-closed rotation protocol are defined
+in [cloud-v0.32-team-threat-model.md](cloud-v0.32-team-threat-model.md). Shared
+data will use explicit Team/Vault-scoped endpoints and independent keys rather
+than overloading the personal route.
 
 ## API v1
 

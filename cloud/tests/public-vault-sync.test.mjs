@@ -209,6 +209,86 @@ test("concurrent record conflict blocks upload and preserves the local document"
   assert.equal(vaultA.document().records[0].data.address, "local.invalid");
 });
 
+test("an explicit complete conflict choice joins histories and uploads from the observed remote revision", async () => {
+  const repoA = memoryRepository();
+  const repoB = memoryRepository();
+  const vaultA = localVault(repoA, [deviceA]);
+  const vaultB = localVault(repoB, [deviceB]);
+  await vaultA.create(passphrase);
+  const initial = await vaultA.prepareUpload(0);
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+
+  await vaultA.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  await vaultB.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  await vaultB.upsert({ id: recordB, type: "snippet", data: { title: "Remote only", body: "uptime" } });
+  const remote = await vaultB.prepareUpload(1);
+  let serverRevision = 2;
+  let uploadedBase = null;
+  const client = {
+    session: () => ({ id: userID }),
+    getVault: async () => remoteValue(serverRevision, remote.envelope),
+    putVault: async (_scope, envelope) => {
+      uploadedBase = envelope.baseRevision;
+      serverRevision += 1;
+      return { conflict: false, revision: serverRevision };
+    },
+  };
+
+  const conflict = await synchronizeVault({ client, vault: vaultA });
+  assert.equal(conflict.status, "conflict");
+  assert.deepEqual(vaultA.pendingConflicts(), { revision: 2, conflicts: conflict.conflicts });
+  assert.equal(vaultA.document().records.some((record) => record.id === recordB), false);
+
+  await assert.rejects(
+    vaultA.resolveConflicts({ revision: 2, resolutions: [] }),
+    /incomplete_conflict_resolution/,
+  );
+  assert.deepEqual(
+    await vaultA.resolveConflicts({
+      revision: 2,
+      resolutions: [{ id: recordA, choice: "local" }],
+    }),
+    { revision: 2, localRevision: 3, conflictsResolved: 1 },
+  );
+  assert.equal(vaultA.pendingConflicts(), null);
+  assert.deepEqual(vaultA.document().records.map((record) => record.id), [recordA, recordB]);
+  assert.equal(vaultA.document().records[0].data.address, "local.invalid");
+  assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 2, dirty: true });
+
+  assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
+  assert.equal(uploadedBase, 2);
+  assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 3, dirty: false });
+});
+
+test("local edits invalidate a pending conflict set instead of applying a stale choice", async () => {
+  const repoA = memoryRepository();
+  const repoB = memoryRepository();
+  const vaultA = localVault(repoA, [deviceA]);
+  const vaultB = localVault(repoB, [deviceB]);
+  await vaultA.create(passphrase);
+  const initial = await vaultA.prepareUpload(0);
+  await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
+  await vaultB.importRemote({ revision: 1, envelope: initial.envelope }, passphrase);
+  await vaultA.upsert({ id: recordA, type: "host", data: { title: "Local", address: "local.invalid" } });
+  await vaultB.upsert({ id: recordA, type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  const remote = await vaultB.prepareUpload(1);
+  const client = {
+    session: () => ({ id: userID }),
+    getVault: async () => remoteValue(2, remote.envelope),
+    putVault: async () => { throw new Error("must_not_upload"); },
+  };
+
+  const conflict = await synchronizeVault({ client, vault: vaultA });
+  assert.equal(conflict.status, "conflict");
+  await vaultA.upsert({ id: recordB, type: "snippet", data: { title: "New local edit", body: "date" } });
+  assert.equal(vaultA.pendingConflicts(), null);
+  await assert.rejects(
+    vaultA.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "remote" }] }),
+    /invalid_pending_conflicts/,
+  );
+});
+
 test("a server-side optimistic conflict never marks local data as synchronized", async () => {
   const repository = memoryRepository();
   const vault = localVault(repository, [deviceA]);
