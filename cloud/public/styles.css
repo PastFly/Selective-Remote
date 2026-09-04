@@ -22,6 +22,12 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .vault-core span { font-size:38px; font-weight:800; line-height:1; }.vault-core small { font-size:10px; letter-spacing:.12em; margin-top:6px; }
 .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:var(--line); border:1px solid var(--line); margin:50px 0; }
 .grid article { background:var(--panel); padding:30px; min-height:210px; }.grid span { color:var(--accent); font-family:ui-monospace,monospace; }.grid h3 { margin:38px 0 12px; font-size:20px; }.grid p,.access p { color:var(--muted); line-height:1.55; }
+.cloud-account { margin:50px 0; padding:34px; display:grid; grid-template-columns:minmax(0,1fr) minmax(300px,.8fr); gap:34px; border:1px solid var(--line); border-radius:22px; background:#0c1714e8; }
+.cloud-account h2 { margin:8px 0 12px; }.cloud-account p { color:var(--muted); line-height:1.55; }
+.cloud-account form { display:grid; gap:10px; }.cloud-account label { color:var(--muted); font-size:13px; }
+.cloud-account input { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:#07100d; color:var(--ink); font:inherit; }
+.cloud-account button { justify-self:start; border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
+.cloud-account button.secondary { background:transparent; border:1px solid var(--line); color:var(--ink); }.cloud-account button:disabled { opacity:.6; cursor:wait; }
 .local-vault { margin:50px 0; padding:34px; border:1px solid var(--line); border-radius:22px; background:#0c1714e8; }
 .vault-heading,.vault-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:32px; }
 .vault-heading h2,.vault-toolbar h3 { margin:8px 0 0; }.vault-heading>p,.vault-toolbar p,.vault-panel>p { max-width:520px; color:var(--muted); line-height:1.55; margin:0; }
@@ -31,13 +37,14 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .vault-panel input,.record-form input,.record-form select,.record-form textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:#07100d; color:var(--ink); font:inherit; }
 .record-form textarea { resize:vertical; }.record-form select { color-scheme:dark; }
 .vault-panel button,.record-form button,.vault-toolbar button,.vault-records button { border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
+.vault-actions { display:flex; gap:10px; flex-wrap:wrap; justify-content:flex-end; }
 .vault-panel button,.record-form button { grid-column:2; justify-self:start; margin-top:6px; }.vault-toolbar button.secondary { background:transparent; border:1px solid var(--line); color:var(--ink); }
-.vault-panel button:disabled,.record-form button:disabled,.vault-records button:disabled { opacity:.6; cursor:wait; }
+.vault-panel button:disabled,.record-form button:disabled,.vault-toolbar button:disabled,.vault-records button:disabled { opacity:.6; cursor:wait; }
 .vault-records { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:28px; }
 .vault-records article { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
 .vault-records h4,.vault-records p { margin:0; overflow-wrap:anywhere; }.vault-records p,.vault-records small,.vault-empty { color:var(--muted); }.vault-records small { font-family:ui-monospace,monospace; }
 .vault-records button.danger { grid-column:2; grid-row:1 / span 3; align-self:center; padding:9px 12px; background:transparent; border:1px solid #ff8f7a66; color:#ffb4a6; }
 .access { display:flex; justify-content:space-between; gap:40px; align-items:end; padding:34px; border:1px solid var(--line); border-radius:18px; background:#0c1714cc; }.access h2 { margin:8px 0 0; }.access>p { max-width:500px; margin:0; }
 @keyframes spin { to { transform:rotate(360deg); } }
-@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access{align-items:start;flex-direction:column}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.status{font-size:0}.status::after{content:"●";font-size:16px} }
+@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.status{font-size:0}.status::after{content:"●";font-size:16px} }
 @media (prefers-reduced-motion:reduce) { .orbit{animation:none} }

@@ -4,10 +4,12 @@
 
 Version 0.32 introduces optional self-hosted accounts, personal Vaults, Teams
 and shared Team Vaults for Selective Remote. The macOS application remains
-fully usable without an account. This foundation milestone implements account,
-device and opaque personal-Vault storage only; shared Vault data structures,
-membership, roles and key distribution are later milestones within the final
-0.32 scope. FIDO2 remains outside the initial 0.32 release scope.
+fully usable without an account. The current cumulative implementation includes
+account/device APIs, opaque personal-Vault storage, browser-local encryption and
+manual authenticated personal-Vault synchronization. Shared Vault data
+structures, membership, roles and key distribution remain required later
+milestones within the final 0.32 scope. FIDO2 remains outside the initial 0.32
+release scope.
 
 The first production deployment targets:
 
@@ -118,10 +120,26 @@ the IndexedDB transaction completes. Storage corruption, unknown snapshot
 fields, revision mismatch, unavailable IndexedDB and wrong recovery phrases
 fail closed. There is deliberately no plaintext or Web Storage fallback.
 
-This preview is local-only. It does not authenticate, upload, download or claim
-cross-device recovery. Cloud synchronization must later reconcile the local
-encrypted revision against the authenticated server revision without making
-IndexedDB a second source of truth.
+The first preview was local-only. The next bounded browser milestone adds
+password login through the existing account API and manual personal-Vault
+synchronization. The opaque bearer token exists only in the live page closure:
+it is never written to IndexedDB, localStorage or sessionStorage. Reloading or
+explicit logout drops the client reference, and logout also revokes the server
+session when the endpoint is reachable.
+
+IndexedDB continues to hold only the encrypted local snapshot, a random browser
+device UUID and non-secret sync counters (`serverRevision` plus the local
+revision last acknowledged by the service). Offline CRUD remains local and
+dirty until a conditional upload succeeds. A server `409` never advances the
+local acknowledgement. If the remote revision advanced, the client decrypts
+and causally merges it in memory before upload; unresolved concurrent entities
+block upload and are reported explicitly rather than timestamp-resolved.
+
+This milestone does not enable registration, persist account sessions, resolve
+conflicts in the UI, or complete clean-browser recovery. A remote Vault in a
+browser with no local snapshot requires the independent recovery passphrase;
+the import primitive is implemented, while the recovery UX remains a separate
+acceptance step.
 
 The client downloads the latest revision, decrypts and validates it locally,
 performs this record-level merge, resolves any conflicts locally, then uploads
@@ -136,6 +154,11 @@ shared key separately for authorized members/devices, enforce roles in both
 the API and clients, and rotate the key (or use an equivalently reviewed
 revocation design) when access is removed. The exact invitation, role and key
 rotation protocol must be threat-modelled before those endpoints are added.
+The browser sync client accepts an explicit Vault scope and currently permits
+only `{type: "personal", id: "self"}`. Team scopes fail before any network
+request until authenticated Team endpoints and authorization are implemented.
+This keeps the ownership seam visible without pretending the personal endpoint
+already enforces Team roles.
 
 ## API v1
 

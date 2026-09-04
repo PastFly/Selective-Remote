@@ -58,6 +58,25 @@
       <article><span>03</span><h3>Локальный режим</h3><p>Аккаунт необязателен: приложение продолжает полноценно работать автономно.</p></article>
     </section>
 
+    <section class="cloud-account" id="cloud-account" aria-labelledby="cloud-account-title">
+      <div>
+        <p class="eyebrow">CLOUD SESSION · MEMORY ONLY</p>
+        <h2 id="cloud-account-title">Вход для зашифрованной синхронизации</h2>
+        <p id="cloud-account-message" aria-live="polite">Токен не сохраняется в localStorage, sessionStorage или IndexedDB.</p>
+      </div>
+      <form id="cloud-login-form" method="post" action="/v1/auth/login">
+        <label for="cloud-email">Email</label>
+        <input id="cloud-email" name="email" type="email" maxlength="254" autocomplete="username" required>
+        <label for="cloud-password">Пароль аккаунта</label>
+        <input id="cloud-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+        <button type="submit">Войти</button>
+      </form>
+      <div id="cloud-signed-in" hidden>
+        <p id="cloud-account-name"></p>
+        <button type="button" class="secondary" id="cloud-logout">Выйти и удалить токен из памяти</button>
+      </div>
+    </section>
+
     <section class="local-vault" id="local-vault" aria-labelledby="local-vault-title">
       <div class="vault-heading">
         <div>
@@ -91,8 +110,11 @@
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
         <div class="vault-toolbar">
-          <div><h3>Личный Vault</h3><p>Локальная версия без Cloud-синхронизации.</p></div>
-          <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
+          <div><h3>Личный Vault</h3><p>Зашифрованная локальная копия с ручной Cloud-синхронизацией.</p></div>
+          <div class="vault-actions">
+            <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
+            <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
+          </div>
         </div>
         <form class="record-form" id="local-vault-record-form">
           <label for="local-record-type">Тип записи</label>
