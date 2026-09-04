@@ -15,8 +15,17 @@ exists only in page memory. IndexedDB contains ciphertext, a random device UUID
 and non-secret revision acknowledgement metadata, never the session token,
 recovery passphrase, raw Vault key or decrypted records. Concurrent record
 conflicts and server revision conflicts stop upload instead of overwriting.
-Registration, Team endpoints, conflict-resolution UI and complete clean-browser
-recovery UX remain disabled or unfinished.
+The browser requires an explicit choice for every concurrent record or
+tombstone, joins both causal histories locally, and leaves the resolution dirty
+until the next conditional upload. A clean browser can import the encrypted
+remote Vault through a dedicated recovery form; the phrase is cleared after
+each attempt and never sent or persisted. Registration and Team endpoints
+remain disabled or unfinished.
+
+The mandatory Team/shared-Vault security contract is documented in
+`docs/cloud-v0.32-team-threat-model.md`. It fixes the four-role matrix,
+invitation lifecycle, device-bound wrappers, membership epochs and fail-closed
+key rotation. This is a design gate, not an implemented Team feature.
 
 ## Local verification
 

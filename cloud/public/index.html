@@ -86,6 +86,19 @@
         <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
       </div>
 
+      <div class="vault-panel" id="cloud-vault-recovery" hidden>
+        <h3>Восстановить Vault из Cloud</h3>
+        <p>Зашифрованная ревизия уже существует. Введите независимую recovery-фразу: она используется только локально и не отправляется на сервер.</p>
+        <form id="cloud-vault-recovery-form">
+          <label for="cloud-vault-recovery-passphrase">Recovery-фраза</label>
+          <input id="cloud-vault-recovery-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
+          <div class="vault-actions">
+            <button type="submit">Расшифровать и импортировать</button>
+            <button type="button" class="secondary" id="cloud-vault-recovery-cancel">Отмена</button>
+          </div>
+        </form>
+      </div>
+
       <div class="vault-panel" id="local-vault-setup" hidden>
         <h3>Создать локальный Vault</h3>
         <p>Recovery-фраза не отправляется на сервер и не сохраняется в браузере. Потерянную фразу пока восстановить невозможно.</p>
@@ -133,6 +146,14 @@
           <button type="submit">Зашифровать и сохранить</button>
         </form>
         <div class="vault-records" id="local-vault-records"></div>
+        <section class="vault-conflicts" id="local-vault-conflicts" aria-labelledby="local-vault-conflicts-title" hidden>
+          <h3 id="local-vault-conflicts-title">Требуется разрешить конфликты</h3>
+          <p>Выберите одну версию для каждой записи. Секретные поля и содержимое записей здесь не показываются.</p>
+          <form id="local-vault-conflicts-form">
+            <div id="local-vault-conflicts-list"></div>
+            <button type="submit" id="local-vault-conflicts-apply" disabled>Сохранить выбранные версии локально</button>
+          </form>
+        </section>
       </div>
     </section>
 

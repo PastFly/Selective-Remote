@@ -9,6 +9,7 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
+  resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
 } from "./vault-model.js";
@@ -144,6 +145,7 @@ export function createLocalVaultController({
   let snapshot = null;
   let vaultKey = null;
   let document = null;
+  let pendingConflicts = null;
 
   async function stableDeviceID() {
     if (snapshot?.deviceID) return snapshot.deviceID;
@@ -213,6 +215,7 @@ export function createLocalVaultController({
       snapshot = nextSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
+      pendingConflicts = null;
       return clone(document);
     },
 
@@ -230,6 +233,7 @@ export function createLocalVaultController({
       snapshot = nextSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
+      pendingConflicts = null;
       return clone(document);
     },
 
@@ -237,6 +241,7 @@ export function createLocalVaultController({
       snapshot = null;
       vaultKey = null;
       document = null;
+      pendingConflicts = null;
     },
 
     document() {
@@ -296,7 +301,15 @@ export function createLocalVaultController({
         throw new Error("remote_wrapped_key_changed");
       }
       const merged = mergeVaultDocuments(document, remoteDocument);
-      if (merged.conflicts.length > 0) return { conflicts: clone(merged.conflicts) };
+      if (merged.conflicts.length > 0) {
+        pendingConflicts = {
+          revision,
+          document: merged.document,
+          conflicts: clone(merged.conflicts),
+        };
+        return { conflicts: clone(merged.conflicts) };
+      }
+      pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
       const localChanged = JSON.stringify(merged.document) !== JSON.stringify(document);
       if (localChanged) await persist(merged.document);
@@ -304,6 +317,56 @@ export function createLocalVaultController({
         conflicts: [],
         matchesRemote,
         localChanged,
+      };
+    },
+
+    pendingConflicts() {
+      requireUnlocked();
+      return pendingConflicts
+        ? { revision: pendingConflicts.revision, conflicts: clone(pendingConflicts.conflicts) }
+        : null;
+    },
+
+    async resolveConflicts({ revision, resolutions }) {
+      requireUnlocked();
+      if (!pendingConflicts || revision !== pendingConflicts.revision || !Array.isArray(resolutions)) {
+        throw new Error("invalid_pending_conflicts");
+      }
+      if (resolutions.length !== pendingConflicts.conflicts.length) {
+        throw new Error("incomplete_conflict_resolution");
+      }
+      const choices = new Map();
+      for (const resolution of resolutions) {
+        exactKeys(resolution, ["choice", "id"], "invalid_conflict_resolution");
+        const id = String(resolution.id ?? "").toLowerCase();
+        if (!exactUUID.test(id) || !["local", "remote"].includes(resolution.choice) || choices.has(id)) {
+          throw new Error("invalid_conflict_resolution");
+        }
+        choices.set(id, resolution.choice);
+      }
+      const expectedIDs = new Set(pendingConflicts.conflicts.map((conflict) => conflict.id));
+      if (choices.size !== expectedIDs.size || [...choices.keys()].some((id) => !expectedIDs.has(id))) {
+        throw new Error("invalid_conflict_resolution");
+      }
+
+      let resolvedDocument = pendingConflicts.document;
+      const deviceID = snapshot.deviceID;
+      const resolvedAt = now();
+      for (const conflict of pendingConflicts.conflicts) {
+        resolvedDocument = resolveVaultConflict(resolvedDocument, conflict, {
+          choice: choices.get(conflict.id),
+          deviceID,
+          resolvedAt,
+        });
+      }
+      const previousLocalRevision = snapshot.revision;
+      await persist(resolvedDocument);
+      pendingConflicts = null;
+      await saveSyncMetadata({ serverRevision: revision, localRevision: previousLocalRevision });
+      return {
+        revision,
+        localRevision: snapshot.revision,
+        conflictsResolved: resolutions.length,
       };
     },
 
@@ -320,6 +383,7 @@ export function createLocalVaultController({
       snapshot = remoteSnapshot;
       vaultKey = nextVaultKey;
       document = nextDocument;
+      pendingConflicts = null;
       return clone(document);
     },
 
@@ -334,16 +398,19 @@ export function createLocalVaultController({
         modifiedAt: now(),
       });
       await persist(next);
+      pendingConflicts = null;
       return id;
     },
 
     async delete(id) {
       requireUnlocked();
-      return persist(deleteVaultRecord(document, {
+      const result = await persist(deleteVaultRecord(document, {
         id,
         deviceID: snapshot.deviceID,
         deletedAt: now(),
       }));
+      pendingConflicts = null;
+      return result;
     },
   };
 }
