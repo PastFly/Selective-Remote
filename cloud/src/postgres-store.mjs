@@ -449,7 +449,7 @@ export class PostgresStore {
       requireInvitationPermission(actor.role, role);
 
       const existingMember = await client.query(
-        `SELECT id FROM team_memberships AS membership
+        `SELECT membership.id FROM team_memberships AS membership
          JOIN users AS account ON account.id = membership.user_id
          WHERE membership.team_id = $1 AND membership.revoked_at IS NULL AND account.email = $2
          FOR UPDATE OF membership`,
