@@ -420,6 +420,44 @@ export class PostgresStore {
     });
   }
 
+  async bootstrapDeviceKey({ actorUserID, actorDeviceID, expectedPublicKey, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "device.key.bootstrap", idempotencyKey, async (client) => {
+      const owner = await client.query(
+        "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR UPDATE",
+        [actorUserID],
+      );
+      if (!owner.rows[0]) throw new Error("invalid_device");
+      const target = await client.query(
+        `SELECT id, public_key, public_key_algorithm, key_approved_at
+         FROM devices
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+         FOR UPDATE`,
+        [actorDeviceID, actorUserID],
+      );
+      const device = target.rows[0];
+      if (!device) throw new Error("invalid_device");
+      if (device.public_key_algorithm !== "p256-ecdh-v1" || device.public_key !== expectedPublicKey) {
+        throw new Error("device_public_key_mismatch");
+      }
+      if (device.key_approved_at) {
+        return { approved: true, deviceID: device.id, bootstrapped: false };
+      }
+      const approved = await client.query(
+        `SELECT id FROM devices
+         WHERE user_id = $1 AND revoked_at IS NULL AND key_approved_at IS NOT NULL
+         LIMIT 1`,
+        [actorUserID],
+      );
+      if (approved.rows[0]) throw new Error("device_approval_required");
+      await client.query(
+        `UPDATE devices SET key_approved_at = now(), key_approved_by_device_id = NULL
+         WHERE id = $1 AND user_id = $2`,
+        [actorDeviceID, actorUserID],
+      );
+      return { approved: true, deviceID: device.id, bootstrapped: true };
+    });
+  }
+
   async getVault(userID) {
     const result = await this.pool.query(
       `SELECT id, revision, envelope_version, wrapped_key, ciphertext, nonce, auth_tag, content_hash, updated_at

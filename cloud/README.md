@@ -9,9 +9,10 @@ foundation implements durable Teams, memberships, the fixed four-role policy,
 single-use 48-hour invitations, encrypted durable invitation delivery and
 explicit Team/shared-Vault metadata endpoints. Shared ciphertext revisions,
 P-256 device registration/approval, per-device key wrappers and fail-closed
-rotation completion are now implemented in the backend. Browser/macOS Team
-cryptography and UI remain later milestones, so shared records are not yet
-exposed by either client.
+rotation completion are implemented in the backend. The browser now has the
+interoperable cryptographic/client foundation: non-exportable P-256 identities,
+ECDH/HKDF/AES-GCM wrappers, scope-bound shared payload envelopes and strict Team
+API calls. Team UI and causal shared-record orchestration remain later layers.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
@@ -57,6 +58,10 @@ the database stores and replays the committed response atomically.
 - `POST /v1/devices/{deviceID}` approves a new device key from the current
   already-approved device after the submitted canonical public JWK matches the
   locked registered key. Password login alone never approves a Team key.
+- `POST /v1/devices/bootstrap-key` is the bounded legacy-account exception:
+  after authenticated password re-verification and user/IP rate limits, it can
+  approve only the current registered key and only while the account has zero
+  approved devices. The user row serializes competing first-device attempts.
 - `GET /v1/teams/{teamID}/vaults/{vaultID}/key-devices` returns the exact
   active approved device set to Owner/Admin clients preparing wrappers.
 - `GET|PUT /v1/teams/{teamID}/vaults/{vaultID}` downloads the current opaque
@@ -75,6 +80,16 @@ remain frozen until Owner/Admin conditionally commits a new full ciphertext,
 the next key generation and exactly one wrapper for every currently active
 approved device in a single PostgreSQL transaction. Partial/stale rotation is
 rejected and the same transaction completes its durable rotation tasks.
+
+The browser wrapper contract is fixed for macOS interoperability. It derives
+256 ECDH bits on P-256, imports them as HKDF-SHA-256 material, uses the SHA-256
+wrapper-context digest as HKDF salt and
+`selective-remote/team-vault-wrapper-key/v1` as HKDF info, then AES-256-GCM
+encrypts the raw 32-byte Vault key with the full canonical context as AAD.
+Shared payload AES-GCM AAD binds protocol, Team, Vault and key generation.
+Private device keys are non-exportable and stored as structured-cloned
+`CryptoKey` values in IndexedDB; simultaneous tabs converge through a
+create-if-absent transaction.
 
 ## Local verification
 

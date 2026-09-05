@@ -362,6 +362,24 @@ export class CloudService {
     });
   }
 
+  async bootstrapDeviceKey(session, input, idempotencyKey) {
+    const password = validatePassword(input?.password);
+    const identity = await this.store.passwordIdentity(session.email);
+    const passwordMatches = await this.passwordVerifier(
+      password,
+      identity?.password_hash ?? invalidLoginPasswordHash,
+    );
+    if (!identity || identity.id !== session.user_id || identity.disabled_at || !passwordMatches) {
+      throw new Error("invalid_credentials");
+    }
+    return this.store.bootstrapDeviceKey({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      expectedPublicKey: validateDevicePublicKey(input?.publicKey),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
   async listTeamKeyDevices(session, teamID, vaultID) {
     const rows = await this.store.listTeamKeyDevices(teamID, vaultID, session.user_id);
     return { devices: rows.map(publicTeamKeyDevice) };

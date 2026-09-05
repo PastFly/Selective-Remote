@@ -10,8 +10,10 @@ manual authenticated personal-Vault synchronization. The Team backend now has
 durable Team, membership, invitation, role, audit, idempotency and shared-Vault
 metadata structures, shared ciphertext revisions, approved P-256 devices,
 device-bound wrappers and fail-closed rotation completion plus explicitly
-scoped authenticated routes. Browser/macOS Team cryptography and clients remain
-required later milestones within the final 0.32 scope.
+scoped authenticated routes. The browser has the interoperable Team
+cryptographic/client foundation; Team UI, causal shared-record orchestration
+and the macOS implementation remain required milestones within the final 0.32
+scope.
 FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:

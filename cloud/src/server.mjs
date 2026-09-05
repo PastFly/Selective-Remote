@@ -97,6 +97,23 @@ async function route(request, response) {
     if (method === "GET" && url.pathname === "/v1/devices") {
       return sendJSON(response, 200, { devices: await store.listDevices(session.user_id) });
     }
+    if (method === "POST" && url.pathname === "/v1/devices/bootstrap-key") {
+      return handleOperation(
+        response,
+        async () => {
+          await authRateLimiter.require("device_key_bootstrap_user", session.user_id);
+          await authRateLimiter.require(
+            "device_key_bootstrap_ip",
+            clientIPAddress(request, config.proxySharedSecret),
+          );
+          return service.bootstrapDeviceKey(
+            session,
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          );
+        },
+      );
+    }
     const deviceMatch = url.pathname.match(/^\/v1\/devices\/([^/]+)$/i);
     if (deviceMatch && method === "POST") {
       if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");

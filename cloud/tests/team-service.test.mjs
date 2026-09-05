@@ -126,6 +126,16 @@ class TeamStore {
     return { approved: true, deviceID: input.deviceID };
   }
 
+  async passwordIdentity(email) {
+    this.calls.push(["passwordIdentity", email]);
+    return { id: "user-1", password_hash: "synthetic-hash", disabled_at: null };
+  }
+
+  async bootstrapDeviceKey(input) {
+    this.calls.push(["bootstrapDeviceKey", input]);
+    return { approved: true, deviceID: input.actorDeviceID, bootstrapped: true };
+  }
+
   async listTeamKeyDevices(team, vault, actor) {
     this.calls.push(["listTeamKeyDevices", team, vault, actor]);
     return [{
@@ -348,4 +358,30 @@ test("Team ciphertext service binds session device, generation and wrapper conte
     ext: true,
     key_ops: [],
   });
+});
+
+test("first Team device bootstrap requires password verification and stays bound to the session device", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config, null, console, async (password, hash) => (
+    password === "synthetic-password" && hash === "synthetic-hash"
+  ));
+  const publicKey = { kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) };
+  assert.deepEqual(await service.bootstrapDeviceKey(
+    session,
+    { password: "synthetic-password", publicKey },
+    "request:device-bootstrap-01",
+  ), { approved: true, deviceID, bootstrapped: true });
+  assert.deepEqual(store.calls[0], ["passwordIdentity", session.email]);
+  assert.deepEqual(store.calls[1][1], {
+    actorUserID: session.user_id,
+    actorDeviceID: session.device_id,
+    expectedPublicKey: JSON.stringify({ ...publicKey, ext: true, key_ops: [] }),
+    idempotencyKey: "request:device-bootstrap-01",
+  });
+
+  await assert.rejects(
+    service.bootstrapDeviceKey(session, { password: "wrong-password-value", publicKey }, "request:device-bootstrap-02"),
+    /invalid_credentials/,
+  );
+  assert.equal(store.calls.filter(([name]) => name === "bootstrapDeviceKey").length, 1);
 });

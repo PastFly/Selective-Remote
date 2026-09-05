@@ -481,3 +481,70 @@ test("only an already-approved account device can approve another public key", a
   assert.ok(f.queries.some(({ sql }) => sql.includes("SELECT id, public_key FROM devices") && sql.includes("FOR UPDATE")));
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
+
+test("legacy accounts can atomically bootstrap only their first approved Team device", async () => {
+  const publicKey = JSON.stringify({
+    kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],
+  });
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("SELECT id FROM users")) return { rows: [{ id: actorUserID }] };
+    if (sql.includes("SELECT id, public_key, public_key_algorithm, key_approved_at")) {
+      return { rows: [{
+        id: deviceID,
+        public_key: publicKey,
+        public_key_algorithm: "p256-ecdh-v1",
+        key_approved_at: null,
+      }] };
+    }
+    if (sql.includes("SELECT id FROM devices") && sql.includes("key_approved_at IS NOT NULL")) {
+      return { rows: [] };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.bootstrapDeviceKey({
+    actorUserID,
+    actorDeviceID: deviceID,
+    expectedPublicKey: publicKey,
+    idempotencyKey: "request:device-bootstrap-01",
+  }), { approved: true, deviceID, bootstrapped: true });
+  const userLock = f.queries.find(({ sql }) => sql.includes("SELECT id FROM users"));
+  const deviceLock = f.queries.find(({ sql }) => sql.includes("SELECT id, public_key, public_key_algorithm"));
+  assert.match(userLock.sql, /FOR UPDATE/);
+  assert.ok(f.queries.indexOf(userLock) < f.queries.indexOf(deviceLock));
+  assert.ok(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at = now()")));
+  assert.equal(f.queries.at(-2).sql, "COMMIT");
+});
+
+test("first-device bootstrap refuses to bypass an existing approved device", async () => {
+  const publicKey = JSON.stringify({
+    kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],
+  });
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("SELECT id FROM users")) return { rows: [{ id: actorUserID }] };
+    if (sql.includes("SELECT id, public_key, public_key_algorithm, key_approved_at")) {
+      return { rows: [{
+        id: deviceID,
+        public_key: publicKey,
+        public_key_algorithm: "p256-ecdh-v1",
+        key_approved_at: null,
+      }] };
+    }
+    if (sql.includes("SELECT id FROM devices") && sql.includes("key_approved_at IS NOT NULL")) {
+      return { rows: [{ id: "approved-device" }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(f.store.bootstrapDeviceKey({
+    actorUserID,
+    actorDeviceID: deviceID,
+    expectedPublicKey: publicKey,
+    idempotencyKey: "request:device-bootstrap-02",
+  }), /device_approval_required/);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at = now()")), false);
+  assert.equal(f.queries.at(-2).sql, "ROLLBACK");
+});
