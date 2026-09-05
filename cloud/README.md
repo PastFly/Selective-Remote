@@ -10,9 +10,11 @@ single-use 48-hour invitations, encrypted durable invitation delivery and
 explicit Team/shared-Vault metadata endpoints. Shared ciphertext revisions,
 P-256 device registration/approval, per-device key wrappers and fail-closed
 rotation completion are implemented in the backend. The browser now has the
-interoperable cryptographic/client foundation: non-exportable P-256 identities,
-ECDH/HKDF/AES-GCM wrappers, scope-bound shared payload envelopes and strict Team
-API calls. Team UI and causal shared-record orchestration remain later layers.
+interoperable cryptographic/client layer: non-exportable P-256 identities,
+ECDH/HKDF/AES-GCM wrappers, scope-bound shared payload envelopes, strict Team
+API calls, Team/member/shared-Vault UI and causal shared-record synchronization.
+The remaining client milestones include explicit new-device approval and
+rotation-completion UI plus the macOS implementation.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
@@ -90,6 +92,14 @@ Shared payload AES-GCM AAD binds protocol, Team, Vault and key generation.
 Private device keys are non-exportable and stored as structured-cloned
 `CryptoKey` values in IndexedDB; simultaneous tabs converge through a
 create-if-absent transaction.
+
+The Team portal keeps its bearer session and decrypted shared-Vault keys only
+in page memory. It persists one strict ciphertext-only IndexedDB snapshot per
+Team/Vault scope, supports the four versioned record types and performs manual
+optimistic synchronization. Concurrent record or tombstone edits block upload
+until the user chooses every winner explicitly. Membership or device revocation
+freezes writes at `rotation_required`; the current browser UI fails closed and
+does not attempt an incomplete key rotation.
 
 ## Local verification
 

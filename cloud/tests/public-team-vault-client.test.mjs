@@ -205,3 +205,89 @@ test("invalid Team scope, key sets and idempotency fail before a network request
   );
   assert.equal(calls.length, 0);
 });
+
+test("browser Team management covers lifecycle, members, invitations and shared Vault metadata", async () => {
+  const { identity } = await fixture();
+  const calls = [];
+  const timestamps = { createdAt: "2026-09-05T00:00:00.000Z", updatedAt: "2026-09-05T00:00:00.000Z" };
+  const team = {
+    id: teamID,
+    name: "Operations",
+    membershipID,
+    role: "owner",
+    membershipEpoch: 1,
+    ...timestamps,
+  };
+  const member = {
+    id: membershipID,
+    userID,
+    email: "user@example.invalid",
+    displayName: "User",
+    role: "owner",
+    epoch: 1,
+    joinedAt: timestamps.createdAt,
+  };
+  const vault = {
+    id: vaultID,
+    teamID,
+    name: "Operations",
+    revision: 0,
+    keyGeneration: 1,
+    rotationRequired: false,
+    ...timestamps,
+  };
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/v1/auth/login") return jsonResponse(200, {
+        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", displayName: "User" }, deviceID,
+      });
+      if (path === "/v1/teams" && !options.method) return jsonResponse(200, { teams: [team] });
+      if (path === "/v1/teams" && options.method === "POST") return jsonResponse(201, { team });
+      if (path.endsWith("/members") && !options.method) return jsonResponse(200, { members: [member] });
+      if (path.endsWith("/invitations")) return jsonResponse(201, { invitation: {
+        id: "66666666-6666-4666-8666-666666666666",
+        teamID,
+        email: "member@example.invalid",
+        role: "viewer",
+        status: "pending",
+        createdAt: timestamps.createdAt,
+        expiresAt: "2026-09-07T00:00:00.000Z",
+      } });
+      if (path === "/v1/team-invitations/accept") return jsonResponse(200, { membership: member });
+      if (path.endsWith(`/${membershipID}`) && options.method === "PATCH") {
+        return jsonResponse(200, { membership: { ...member, role: "editor" } });
+      }
+      if (path.endsWith(`/${membershipID}`) && options.method === "DELETE") {
+        return jsonResponse(200, { revoked: true, rotationRequiredVaults: 1 });
+      }
+      if (path.endsWith("/vaults") && !options.method) return jsonResponse(200, { vaults: [vault] });
+      if (path.endsWith("/vaults") && options.method === "POST") return jsonResponse(201, { vault });
+      throw new Error(`unexpected_request:${path}`);
+    },
+  });
+  await client.login({
+    email: "user@example.invalid", password: "synthetic-password", deviceID, publicKey: identity.publicKey,
+  });
+
+  assert.deepEqual(await client.listTeams(), [team]);
+  assert.deepEqual(await client.createTeam({ name: " Operations " }), team);
+  assert.deepEqual(await client.listTeamMembers(teamID), [member]);
+  const invitation = await client.inviteTeamMember({ teamID, email: "MEMBER@example.invalid", role: "viewer" });
+  assert.equal(invitation.email, "member@example.invalid");
+  assert.equal("token" in invitation, false);
+  assert.deepEqual(await client.acceptTeamInvitation({ token: "x".repeat(48) }), member);
+  assert.equal((await client.updateTeamMemberRole({ teamID, membershipID, role: "editor" })).role, "editor");
+  assert.deepEqual(await client.revokeTeamMember({ teamID, membershipID }), {
+    revoked: true, rotationRequiredVaults: 1,
+  });
+  assert.deepEqual(await client.listSharedVaults(teamID), [vault]);
+  assert.deepEqual(await client.createSharedVault({ teamID, name: " Operations " }), vault);
+
+  for (const call of calls.filter(({ options }) => options.method && options.method !== "POST" || options.body)) {
+    if (call.path === "/v1/auth/login") continue;
+    assert.match(call.options.headers.Authorization, /^Bearer /u);
+    if (call.options.method !== undefined) assert.match(call.options.headers["Idempotency-Key"], /^web:/u);
+  }
+  assert.doesNotMatch(JSON.stringify(calls), /localStorage|sessionStorage/u);
+});

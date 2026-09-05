@@ -167,6 +167,74 @@ function normalizedRemoteTeamVault(value, scope) {
   };
 }
 
+function normalizedTeam(value) {
+  exactKeys(value, ["createdAt", "id", "membershipEpoch", "membershipID", "name", "role", "updatedAt"], "invalid_team");
+  if (!["owner", "admin", "editor", "viewer"].includes(value.role)
+    || !Number.isSafeInteger(value.membershipEpoch) || value.membershipEpoch < 1) {
+    throw new Error("invalid_team");
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_team"),
+    name: String(value.name ?? ""),
+    membershipID: normalizedUUID(value.membershipID, "invalid_team"),
+    role: value.role,
+    membershipEpoch: value.membershipEpoch,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function normalizedTeamMember(value) {
+  exactKeys(value, ["displayName", "email", "epoch", "id", "joinedAt", "role", "userID"], "invalid_team_member");
+  if (!["owner", "admin", "editor", "viewer"].includes(value.role)
+    || !Number.isSafeInteger(value.epoch) || value.epoch < 1) {
+    throw new Error("invalid_team_member");
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_team_member"),
+    userID: normalizedUUID(value.userID, "invalid_team_member"),
+    email: String(value.email ?? ""),
+    displayName: String(value.displayName ?? ""),
+    role: value.role,
+    epoch: value.epoch,
+    joinedAt: value.joinedAt,
+  };
+}
+
+function normalizedSharedVault(value, teamID) {
+  exactKeys(value, [
+    "createdAt", "id", "keyGeneration", "name", "revision", "rotationRequired", "teamID", "updatedAt",
+  ], "invalid_shared_vault");
+  if (normalizedUUID(value.teamID, "invalid_shared_vault") !== teamID
+    || !Number.isSafeInteger(value.revision) || value.revision < 0
+    || !Number.isSafeInteger(value.keyGeneration) || value.keyGeneration < 1
+    || typeof value.rotationRequired !== "boolean") {
+    throw new Error("invalid_shared_vault");
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_shared_vault"),
+    teamID,
+    name: String(value.name ?? ""),
+    revision: value.revision,
+    keyGeneration: value.keyGeneration,
+    rotationRequired: value.rotationRequired,
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+  };
+}
+
+function normalizedTeamName(value, code = "invalid_team") {
+  const name = String(value ?? "").trim();
+  if (!name || name.length > 120) throw new Error(code);
+  return name;
+}
+
+function generatedIdempotencyKey(prefix) {
+  const id = globalThis.crypto?.randomUUID?.();
+  if (!id) throw new Error("idempotency_unavailable");
+  return `${prefix}:${id}`;
+}
+
 function normalizedEnvelope(value, expectedBaseRevision = null) {
   exactKeys(value, envelopeKeys, "invalid_remote_vault");
   if (!Number.isSafeInteger(value.baseRevision) || value.baseRevision < 0) throw new Error("invalid_remote_vault");
@@ -305,6 +373,116 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         user = null;
         currentDeviceID = null;
       }
+    },
+
+    async listTeams() {
+      const response = await authorizedRequest("/v1/teams");
+      const result = await responseJSON(response, "teams_download_failed");
+      if (!response.ok || !Array.isArray(result.teams) || result.teams.length > 1_000) {
+        throw new Error("teams_download_failed");
+      }
+      return result.teams.map(normalizedTeam);
+    },
+
+    async createTeam({ name, idempotencyKey = generatedIdempotencyKey("web:team:create") }) {
+      const response = await authorizedRequest("/v1/teams", {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ name: normalizedTeamName(name) }),
+      });
+      const result = await responseJSON(response, "team_create_failed");
+      if (!response.ok || !result.team) throw new Error("team_create_failed");
+      return normalizedTeam(result.team);
+    },
+
+    async listTeamMembers(teamID) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/members`);
+      const result = await responseJSON(response, "team_members_download_failed");
+      if (!response.ok || !Array.isArray(result.members) || result.members.length > 10_000) {
+        throw new Error("team_members_download_failed");
+      }
+      return result.members.map(normalizedTeamMember);
+    },
+
+    async inviteTeamMember({ teamID, email, role, idempotencyKey = generatedIdempotencyKey("web:team:invite") }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedRole = String(role ?? "");
+      if (!["admin", "editor", "viewer"].includes(normalizedRole)) throw new Error("invalid_team_role");
+      const normalizedEmail = String(email ?? "").trim().toLowerCase();
+      if (!normalizedEmail || normalizedEmail.length > 254) throw new Error("invalid_email");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/invitations`, {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ email: normalizedEmail, role: normalizedRole }),
+      });
+      const result = await responseJSON(response, "team_invitation_failed");
+      if (!response.ok || !result.invitation || "token" in result.invitation) throw new Error("team_invitation_failed");
+      return structuredClone(result.invitation);
+    },
+
+    async acceptTeamInvitation({ token: invitationToken, idempotencyKey = generatedIdempotencyKey("web:team:accept") }) {
+      const value = String(invitationToken ?? "").trim();
+      if (value.length < 32 || value.length > 512) throw new Error("invalid_team_invitation");
+      const response = await authorizedRequest("/v1/team-invitations/accept", {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ token: value }),
+      });
+      const result = await responseJSON(response, "team_invitation_accept_failed");
+      if (!response.ok || !result.membership) throw new Error("team_invitation_accept_failed");
+      return normalizedTeamMember(result.membership);
+    },
+
+    async updateTeamMemberRole({ teamID, membershipID, role, idempotencyKey = generatedIdempotencyKey("web:team:role") }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedMembershipID = normalizedUUID(membershipID, "invalid_team_member");
+      const normalizedRole = String(role ?? "");
+      if (!["owner", "admin", "editor", "viewer"].includes(normalizedRole)) throw new Error("invalid_team_role");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/members/${normalizedMembershipID}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ role: normalizedRole }),
+      });
+      const result = await responseJSON(response, "team_member_role_failed");
+      if (!response.ok || !result.membership) throw new Error("team_member_role_failed");
+      return normalizedTeamMember(result.membership);
+    },
+
+    async revokeTeamMember({ teamID, membershipID, idempotencyKey = generatedIdempotencyKey("web:team:revoke") }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedMembershipID = normalizedUUID(membershipID, "invalid_team_member");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/members/${normalizedMembershipID}`, {
+        method: "DELETE",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+      });
+      const result = await responseJSON(response, "team_member_revoke_failed");
+      if (!response.ok || result.revoked !== true || !Number.isSafeInteger(result.rotationRequiredVaults)) {
+        throw new Error("team_member_revoke_failed");
+      }
+      return { revoked: true, rotationRequiredVaults: result.rotationRequiredVaults };
+    },
+
+    async listSharedVaults(teamID) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/vaults`);
+      const result = await responseJSON(response, "shared_vaults_download_failed");
+      if (!response.ok || !Array.isArray(result.vaults) || result.vaults.length > 10_000) {
+        throw new Error("shared_vaults_download_failed");
+      }
+      return result.vaults.map((vault) => normalizedSharedVault(vault, normalizedTeamID));
+    },
+
+    async createSharedVault({ teamID, name, idempotencyKey = generatedIdempotencyKey("web:team:vault:create") }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/vaults`, {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ name: normalizedTeamName(name, "invalid_shared_vault") }),
+      });
+      const result = await responseJSON(response, "shared_vault_create_failed");
+      if (!response.ok || !result.vault) throw new Error("shared_vault_create_failed");
+      return normalizedSharedVault(result.vault, normalizedTeamID);
     },
 
     async getVault(scope = personalVaultScope) {

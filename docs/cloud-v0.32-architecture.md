@@ -11,9 +11,9 @@ durable Team, membership, invitation, role, audit, idempotency and shared-Vault
 metadata structures, shared ciphertext revisions, approved P-256 devices,
 device-bound wrappers and fail-closed rotation completion plus explicitly
 scoped authenticated routes. The browser has the interoperable Team
-cryptographic/client foundation; Team UI, causal shared-record orchestration
-and the macOS implementation remain required milestones within the final 0.32
-scope.
+cryptographic/client layer, Team/member/shared-Vault UI and causal shared-record
+orchestration. Explicit new-device approval, rotation-completion UI and the
+macOS implementation remain required milestones within the final 0.32 scope.
 FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:
@@ -167,11 +167,12 @@ removed; the backend receives only ciphertext and context-bound wrappers,
 never the key. Team lifecycle, invitation, membership and shared-Vault metadata
 endpoints implement the non-plaintext authorization foundation. The API enforces
 optimistic revision/generation writes, approved-device wrappers and atomic
-complete-set rotation; the clients do not consume it yet.
-The browser sync client accepts an explicit Vault scope and currently permits
-only `{type: "personal", id: "self"}`. Team scopes fail before any network
-request until the browser Team client and shared-key protocol are implemented.
-The backend routes do not weaken that client-side gate.
+complete-set rotation. The browser Team client consumes explicit Team/Vault
+scopes, generates one wrapper per currently approved device, stores only local
+ciphertext and performs the same version-vector/tombstone merge used by the
+personal Vault. Concurrent entities require explicit choices and revocation
+states freeze writes. Rotation completion remains a separate required client
+milestone; the current UI never weakens the server's fail-closed gate.
 
 The mandatory role matrix, invitation lifecycle, device-bound key
 distribution, membership epochs and fail-closed rotation protocol are defined

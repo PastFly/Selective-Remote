@@ -29,6 +29,26 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .cloud-account button { justify-self:start; border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
 .cloud-account button.secondary { background:transparent; border:1px solid var(--line); color:var(--ink); }.cloud-account button:disabled { opacity:.6; cursor:wait; }
 .local-vault { margin:50px 0; padding:34px; border:1px solid var(--line); border-radius:22px; background:#0c1714e8; }
+.team-vault { margin:50px 0; padding:34px; border:1px solid #75e0b45c; border-radius:22px; background:linear-gradient(145deg,#0c1714f2,#102019e8); }
+.team-onboarding,.team-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:26px; }
+.team-onboarding form,.team-columns>div { padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
+.team-onboarding form,.team-columns form { display:grid; gap:10px; }
+.team-onboarding h3,.team-columns h3,.team-columns h4 { margin:0 0 8px; }
+.team-vault label { color:var(--muted); font-size:13px; }
+.team-vault input,.team-vault select,.team-picker select { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:#07100d; color:var(--ink); font:inherit; }
+.team-vault button,.team-picker button { border:0; border-radius:10px; padding:12px 18px; background:var(--accent); color:#082016; font:inherit; font-weight:750; cursor:pointer; }
+.team-vault button.secondary,.team-picker button.secondary { background:transparent; border:1px solid var(--line); color:var(--ink); }
+.team-vault button.danger { background:transparent; border:1px solid #ff8f7a66; color:#ffb4a6; }
+.team-vault button:disabled { opacity:.55; cursor:not-allowed; }
+.team-picker { display:grid; grid-template-columns:auto minmax(220px,1fr) auto; align-items:center; gap:12px; margin-top:24px; }
+.team-picker.compact { grid-template-columns:auto minmax(160px,1fr) auto; }
+.team-summary { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-top:28px; padding-top:24px; border-top:1px solid var(--line); }
+.team-summary h3,.team-summary p { margin:0; }.team-summary p { color:var(--muted); max-width:580px; line-height:1.55; }
+.team-members { display:grid; gap:10px; margin-bottom:20px; }
+.team-members article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px 10px; align-items:center; padding:14px; border:1px solid var(--line); border-radius:12px; }
+.team-members strong,.team-members small { grid-column:1; overflow-wrap:anywhere; }.team-members small { color:var(--muted); }
+.team-members select { grid-column:2; grid-row:1 / span 2; min-width:110px; }
+.team-members button { padding:9px 11px; }.team-members button.danger { grid-column:3; }
 .vault-heading,.vault-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:32px; }
 .vault-heading h2,.vault-toolbar h3 { margin:8px 0 0; }.vault-heading>p,.vault-toolbar p,.vault-panel>p { max-width:520px; color:var(--muted); line-height:1.55; margin:0; }
 .vault-panel,.vault-workspace { margin-top:28px; padding-top:28px; border-top:1px solid var(--line); }.vault-panel h3 { margin-top:0; }
@@ -52,5 +72,5 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .vault-conflicts button:disabled { opacity:.6; cursor:not-allowed; }
 .access { display:flex; justify-content:space-between; gap:40px; align-items:end; padding:34px; border:1px solid var(--line); border-radius:18px; background:#0c1714cc; }.access h2 { margin:8px 0 0; }.access>p { max-width:500px; margin:0; }
 @keyframes spin { to { transform:rotate(360deg); } }
-@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.status{font-size:0}.status::after{content:"●";font-size:16px} }
+@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account,.team-onboarding,.team-columns{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access,.team-summary{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.team-picker,.team-picker.compact{grid-template-columns:1fr}.team-members article{grid-template-columns:1fr}.team-members strong,.team-members small,.team-members select,.team-members button,.team-members button.danger{grid-column:1;grid-row:auto}.status{font-size:0}.status::after{content:"●";font-size:16px} }
 @media (prefers-reduced-motion:reduce) { .orbit{animation:none} }
