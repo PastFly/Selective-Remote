@@ -9,6 +9,10 @@ const operationStatuses = Object.freeze({
   invalid_email: 400,
   invalid_password: 400,
   invalid_device: 400,
+  invalid_device_public_key: 400,
+  device_public_key_mismatch: 409,
+  device_not_found: 404,
+  device_approval_required: 403,
   invalid_content_type: 415,
   invalid_json: 400,
   request_too_large: 413,
@@ -16,6 +20,14 @@ const operationStatuses = Object.freeze({
   invalid_wrapped_key: 400,
   invalid_base_revision: 400,
   invalid_envelope_version: 400,
+  invalid_key_generation: 409,
+  invalid_team_vault_wrapper: 400,
+  invalid_team_vault_wrapper_context: 400,
+  invalid_team_vault_wrappers: 400,
+  incomplete_team_vault_wrappers: 409,
+  unexpected_team_vault_wrappers: 400,
+  team_vault_key_unavailable: 403,
+  team_vault_conflict: 409,
   vault_too_large: 413,
   vault_missing: 404,
   invalid_team: 400,
@@ -28,6 +40,7 @@ const operationStatuses = Object.freeze({
   team_member_exists: 409,
   team_last_owner: 409,
   shared_vault_exists: 409,
+  shared_vault_wrapper_exists: 409,
 });
 
 export function publicOperationError(error) {

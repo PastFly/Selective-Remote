@@ -14,6 +14,7 @@ const passwordKeyLength = 32;
 const scryptOptions = Object.freeze({ N: 1 << 17, r: 8, p: 1, maxmem: 256 * 1024 * 1024 });
 const base64URL = /^[A-Za-z0-9_-]+$/;
 const maxWrappedKeyBytes = 16 * 1024;
+const maxTeamWrappers = 1024;
 
 export function normalizeEmail(value) {
   const email = String(value ?? "").trim().toLowerCase();
@@ -176,6 +177,114 @@ export function validateVaultEnvelope(value) {
     baseRevision: envelope.baseRevision,
     envelopeVersion: envelope.envelopeVersion,
     wrappedKey,
+    ciphertext: envelope.ciphertext,
+    nonce: envelope.nonce,
+    authTag: envelope.authTag,
+    contentHash: envelope.contentHash,
+  };
+}
+
+export function validateDevicePublicKey(value) {
+  const key = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  if (key.kty !== "EC" || key.crv !== "P-256"
+    || typeof key.x !== "string" || key.x.length !== 43 || !base64URL.test(key.x)
+    || typeof key.y !== "string" || key.y.length !== 43 || !base64URL.test(key.y)) {
+    throw new Error("invalid_device_public_key");
+  }
+  if (("d" in key) || ("key_ops" in key && (!Array.isArray(key.key_ops) || key.key_ops.length !== 0))) {
+    throw new Error("invalid_device_public_key");
+  }
+  return JSON.stringify({ kty: "EC", crv: "P-256", x: key.x, y: key.y, ext: true, key_ops: [] });
+}
+
+export function validateTeamVaultEnvelope(value) {
+  const envelope = validateEncryptedPayload(value);
+  if (!Number.isSafeInteger(value?.keyGeneration) || value.keyGeneration < 1) {
+    throw new Error("invalid_key_generation");
+  }
+  const wrappers = value?.wrappers === undefined ? null : validateTeamVaultWrappers(value.wrappers);
+  return { ...envelope, keyGeneration: value.keyGeneration, wrappers };
+}
+
+export function validateTeamVaultWrapper(value) {
+  const wrapper = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+  if (!isUUID(wrapper.membershipID) || !isUUID(wrapper.deviceID)
+    || !Number.isSafeInteger(wrapper.membershipEpoch) || wrapper.membershipEpoch < 1
+    || wrapper.wrapperVersion !== 1) {
+    throw new Error("invalid_team_vault_wrapper");
+  }
+  for (const [field, length] of [["ciphertext", 43], ["nonce", 16], ["authTag", 22], ["contextHash", 43]]) {
+    if (typeof wrapper[field] !== "string" || wrapper[field].length !== length || !base64URL.test(wrapper[field])) {
+      throw new Error("invalid_team_vault_wrapper");
+    }
+  }
+  return {
+    membershipID: wrapper.membershipID.toLowerCase(),
+    membershipEpoch: wrapper.membershipEpoch,
+    deviceID: wrapper.deviceID.toLowerCase(),
+    wrapperVersion: 1,
+    ephemeralPublicKey: JSON.parse(validateDevicePublicKey(wrapper.ephemeralPublicKey)),
+    ciphertext: wrapper.ciphertext,
+    nonce: wrapper.nonce,
+    authTag: wrapper.authTag,
+    contextHash: wrapper.contextHash,
+  };
+}
+
+export function teamVaultWrapperContextHash({
+  teamID,
+  vaultID,
+  keyGeneration,
+  membershipID,
+  membershipEpoch,
+  deviceID,
+}) {
+  if (!isUUID(teamID) || !isUUID(vaultID) || !isUUID(membershipID) || !isUUID(deviceID)
+    || !Number.isSafeInteger(keyGeneration) || keyGeneration < 1
+    || !Number.isSafeInteger(membershipEpoch) || membershipEpoch < 1) {
+    throw new Error("invalid_team_vault_wrapper");
+  }
+  const context = [
+    "selective-remote/team-vault-wrapper/v1",
+    teamID.toLowerCase(),
+    vaultID.toLowerCase(),
+    String(keyGeneration),
+    membershipID.toLowerCase(),
+    String(membershipEpoch),
+    deviceID.toLowerCase(),
+  ].join("\0");
+  return createHash("sha256").update(context, "utf8").digest("base64url");
+}
+
+function validateTeamVaultWrappers(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > maxTeamWrappers) {
+    throw new Error("invalid_team_vault_wrappers");
+  }
+  const wrappers = value.map(validateTeamVaultWrapper);
+  if (new Set(wrappers.map((wrapper) => wrapper.deviceID)).size !== wrappers.length) {
+    throw new Error("invalid_team_vault_wrappers");
+  }
+  return wrappers;
+}
+
+function validateEncryptedPayload(value) {
+  const envelope = value && typeof value === "object" ? value : {};
+  for (const key of ["ciphertext", "nonce", "authTag", "contentHash"]) {
+    if (typeof envelope[key] !== "string" || !base64URL.test(envelope[key])) {
+      throw new Error("invalid_vault_envelope");
+    }
+  }
+  if (!Number.isSafeInteger(envelope.baseRevision) || envelope.baseRevision < 0) {
+    throw new Error("invalid_base_revision");
+  }
+  if (envelope.envelopeVersion !== 1) throw new Error("invalid_envelope_version");
+  if (envelope.ciphertext.length > 32 * 1024 * 1024) throw new Error("vault_too_large");
+  if (envelope.nonce.length !== 16 || envelope.authTag.length !== 22 || envelope.contentHash.length !== 43) {
+    throw new Error("invalid_vault_envelope");
+  }
+  return {
+    baseRevision: envelope.baseRevision,
+    envelopeVersion: 1,
     ciphertext: envelope.ciphertext,
     nonce: envelope.nonce,
     authTag: envelope.authTag,

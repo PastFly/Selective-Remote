@@ -1,10 +1,11 @@
 # Cloud 0.32 Team and shared Vault threat model
 
-Status: design contract with the backend Team-access foundation implemented.
+Status: design contract with the backend Team-access and ciphertext protocol implemented.
 Durable Teams, memberships, four-role checks, membership epochs, hash-only
 invitations, encrypted outbox delivery, audit events, idempotency receipts and
-shared-Vault metadata are present. Shared ciphertext, device approval/wrappers,
-rotation completion and browser/macOS Team clients are not yet implemented.
+shared-Vault metadata, shared ciphertext revisions, approved P-256 devices,
+per-device wrappers and atomic rotation completion are present. Browser/macOS
+Team cryptography and UI are not yet implemented.
 
 ## Security outcome
 
@@ -100,8 +101,10 @@ fixtures must lock the exact encoding and algorithms:
 - P-256 ECDH;
 - HKDF-SHA-256;
 - AES-256-GCM key wrapping;
-- canonical context containing protocol version, Team ID, Vault ID, key
-  generation, member ID and device ID.
+- canonical UTF-8 context joined with NUL separators: protocol label
+  `selective-remote/team-vault-wrapper/v1`, Team ID, Vault ID, decimal key
+  generation, membership ID, decimal membership epoch and device ID. The API
+  verifies its base64url SHA-256 hash before storing a wrapper.
 
 For every shared Vault generation, an authorized client creates one random
 256-bit Vault key, encrypts the normalized Vault document locally, and creates
@@ -189,6 +192,7 @@ or wrappers.
 - Server/database inspection proving no personal or shared plaintext/key is
   present.
 
-Team/shared Vault release status remains `planned_required`: the access
-foundation is only the first implementation slice, and the full contract plus
-browser/macOS acceptance suite must pass before Cloud 0.32 is complete.
+Team/shared Vault release status remains `planned_required`: the server-side
+access and ciphertext protocol is implemented, but interoperable browser/macOS
+cryptography, Team UI and the complete acceptance suite must pass before Cloud
+0.32 is complete.

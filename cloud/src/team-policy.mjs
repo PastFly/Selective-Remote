@@ -5,6 +5,8 @@ const permissions = Object.freeze({
   read: new Set(teamRoles),
   list_members: new Set(teamRoles),
   create_vault: new Set(["owner", "admin"]),
+  write_vault: new Set(["owner", "admin", "editor"]),
+  manage_vault_keys: new Set(["owner", "admin"]),
   invite_member: new Set(["owner", "admin"]),
   invite_admin: new Set(["owner"]),
   manage_member: new Set(["owner", "admin"]),

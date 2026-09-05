@@ -4,6 +4,7 @@ import {
   requireMembershipChange,
   requireTeamPermission,
 } from "./team-policy.mjs";
+import { teamVaultWrapperContextHash } from "./security.mjs";
 
 const { Pool } = pg;
 
@@ -29,7 +30,13 @@ export class PostgresStore {
         [user.id, email, passwordHash],
       );
       await client.query(
-        "INSERT INTO devices (id, user_id, name, platform, app_version, public_key) VALUES ($1, $2, $3, $4, $5, $6)",
+        `INSERT INTO devices
+          (id, user_id, name, platform, app_version, public_key, public_key_algorithm,
+           key_registered_at, key_approved_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE 'p256-ecdh-v1' END,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE now() END,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE now() END)`,
         [device.id, user.id, device.name, device.platform, device.appVersion, device.publicKey],
       );
       await client.query("INSERT INTO personal_vaults (user_id) VALUES ($1)", [user.id]);
@@ -272,15 +279,29 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        `INSERT INTO devices (id, user_id, name, platform, app_version, public_key)
-         VALUES ($1, $2, $3, $4, $5, $6)
+      const deviceResult = await client.query(
+        `INSERT INTO devices
+          (id, user_id, name, platform, app_version, public_key, public_key_algorithm, key_registered_at)
+         VALUES ($1, $2, $3, $4, $5, $6,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE 'p256-ecdh-v1' END,
+           CASE WHEN $6::text IS NULL THEN NULL ELSE now() END)
          ON CONFLICT (user_id, id) DO UPDATE SET
            name = EXCLUDED.name, platform = EXCLUDED.platform,
-           app_version = EXCLUDED.app_version, public_key = EXCLUDED.public_key,
-           last_seen_at = now(), revoked_at = NULL`,
+           app_version = EXCLUDED.app_version,
+           public_key = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
+             THEN EXCLUDED.public_key ELSE devices.public_key END,
+           public_key_algorithm = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
+             THEN EXCLUDED.public_key_algorithm ELSE devices.public_key_algorithm END,
+           key_registered_at = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
+             THEN EXCLUDED.key_registered_at ELSE devices.key_registered_at END,
+           last_seen_at = now()
+         WHERE devices.revoked_at IS NULL
+           AND (devices.public_key_algorithm IS NULL OR EXCLUDED.public_key IS NULL
+             OR devices.public_key = EXCLUDED.public_key)
+         RETURNING id`,
         [device.id, userID, device.name, device.platform, device.appVersion, device.publicKey],
       );
+      if (!deviceResult.rows[0]) throw new Error("invalid_device");
       await client.query(
         "INSERT INTO sessions (user_id, device_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
         [userID, device.id, sessionHash, expiresAt],
@@ -314,7 +335,9 @@ export class PostgresStore {
 
   async listDevices(userID) {
     const result = await this.pool.query(
-      `SELECT id, name, platform, app_version, created_at, last_seen_at, revoked_at
+      `SELECT id, name, platform, app_version, created_at, last_seen_at, revoked_at,
+         public_key IS NOT NULL AS key_registered, public_key_algorithm, public_key,
+         key_approved_at
        FROM devices WHERE user_id = $1 ORDER BY last_seen_at DESC`,
       [userID],
     );
@@ -322,13 +345,79 @@ export class PostgresStore {
   }
 
   async revokeDevice(userID, deviceID) {
-    const result = await this.pool.query(
-      "UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL RETURNING id",
-      [userID, deviceID],
-    );
-    if (result.rowCount === 0) return false;
-    await this.pool.query("UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL", [userID, deviceID]);
-    return true;
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
+        `UPDATE devices SET revoked_at = now()
+         WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL
+         RETURNING id, key_approved_at`,
+        [userID, deviceID],
+      );
+      if (!result.rows[0]) {
+        await client.query("COMMIT");
+        return false;
+      }
+      await client.query(
+        "UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
+        [userID, deviceID],
+      );
+      if (result.rows[0].key_approved_at) {
+        await client.query(
+          `WITH affected AS (
+             UPDATE shared_vaults AS vault SET rotation_required = true, updated_at = now()
+             FROM team_memberships AS membership
+             WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+               AND vault.team_id = membership.team_id AND vault.archived_at IS NULL
+             RETURNING vault.id, vault.key_generation
+           )
+           INSERT INTO shared_vault_rotation_tasks
+             (vault_id, from_generation, removed_device_id)
+           SELECT id, key_generation, $2 FROM affected
+           ON CONFLICT (vault_id, from_generation, removed_device_id)
+             WHERE removed_device_id IS NOT NULL DO NOTHING`,
+          [userID, deviceID],
+        );
+      }
+      await client.query("COMMIT");
+      return true;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async approveDeviceKey({ actorUserID, actorDeviceID, deviceID, expectedPublicKey, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "device.key.approve", idempotencyKey, async (client) => {
+      const actor = await client.query(
+        `SELECT id FROM devices
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+           AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+           AND key_approved_at IS NOT NULL
+         FOR UPDATE`,
+        [actorDeviceID, actorUserID],
+      );
+      if (!actor.rows[0]) throw new Error("device_approval_required");
+      const target = await client.query(
+        `SELECT id, public_key FROM devices
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+           AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+         FOR UPDATE`,
+        [deviceID, actorUserID],
+      );
+      if (!target.rows[0]) throw new Error("device_not_found");
+      if (target.rows[0].public_key !== expectedPublicKey) throw new Error("device_public_key_mismatch");
+      const approved = await client.query(
+        `UPDATE devices SET key_approved_at = COALESCE(key_approved_at, now()),
+           key_approved_by_device_id = COALESCE(key_approved_by_device_id, $1)
+         WHERE id = $2 AND user_id = $3
+         RETURNING id, key_approved_at`,
+        [actorDeviceID, deviceID, actorUserID],
+      );
+      return { approved: true, deviceID: approved.rows[0].id };
+    });
   }
 
   async getVault(userID) {
@@ -690,6 +779,194 @@ export class PostgresStore {
     });
   }
 
+  async listTeamKeyDevices(teamID, vaultID, actorUserID) {
+    const access = await this.pool.query(
+      `SELECT membership.role
+       FROM team_memberships AS membership
+       JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+       JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+       WHERE membership.team_id = $1 AND vault.id = $2 AND membership.user_id = $3
+         AND membership.revoked_at IS NULL`,
+      [teamID, vaultID, actorUserID],
+    );
+    if (!access.rows[0]) throw new Error("team_not_found");
+    requireTeamPermission(access.rows[0].role, "manage_vault_keys");
+    const result = await this.pool.query(
+      `SELECT membership.id AS membership_id, membership.epoch AS membership_epoch,
+         device.id AS device_id, device.public_key_algorithm, device.public_key
+       FROM team_memberships AS membership
+       JOIN devices AS device ON device.user_id = membership.user_id
+       WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
+         AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
+         AND device.public_key IS NOT NULL
+       ORDER BY membership.id, device.id`,
+      [teamID],
+    );
+    return result.rows;
+  }
+
+  async getSharedVault(teamID, vaultID, actorUserID, actorDeviceID) {
+    const result = await this.pool.query(
+      `SELECT vault.id, vault.team_id, vault.name, vault.revision, vault.key_generation,
+         vault.rotation_required, vault.envelope_version, vault.ciphertext, vault.nonce,
+         vault.auth_tag, vault.content_hash, vault.created_at, vault.updated_at,
+         membership.id AS membership_id, membership.epoch AS membership_epoch,
+         device.id AS device_id, device.key_approved_at,
+         wrapper.wrapper_version, wrapper.ephemeral_public_key,
+         wrapper.ciphertext AS wrapper_ciphertext, wrapper.nonce AS wrapper_nonce,
+         wrapper.auth_tag AS wrapper_auth_tag, wrapper.context_hash
+       FROM team_memberships AS membership
+       JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+       JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+       JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
+         AND device.revoked_at IS NULL
+       LEFT JOIN shared_vault_key_wrappers AS wrapper
+         ON wrapper.vault_id = vault.id AND wrapper.key_generation = vault.key_generation
+         AND wrapper.membership_id = membership.id AND wrapper.membership_epoch = membership.epoch
+         AND wrapper.device_id = device.id
+       WHERE membership.team_id = $1 AND vault.id = $2 AND membership.user_id = $3
+         AND membership.revoked_at IS NULL`,
+      [teamID, vaultID, actorUserID, actorDeviceID],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("team_not_found");
+    if (!row.key_approved_at) throw new Error("device_approval_required");
+    return row;
+  }
+
+  async putSharedVault({
+    actorUserID,
+    actorDeviceID,
+    teamID,
+    vaultID,
+    envelope,
+    idempotencyKey,
+  }) {
+    return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client) => {
+      const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
+      if (!context) throw new Error("team_not_found");
+      if (!context.key_approved_at) throw new Error("device_approval_required");
+      requireTeamPermission(context.role, "write_vault");
+      const currentRevision = Number(context.revision);
+      const currentGeneration = Number(context.key_generation);
+      if (currentRevision !== envelope.baseRevision) {
+        return { conflict: true, revision: currentRevision, keyGeneration: currentGeneration };
+      }
+
+      const initializing = currentRevision === 0;
+      const rotating = context.rotation_required === true;
+      if (initializing || rotating) requireTeamPermission(context.role, "manage_vault_keys");
+      if (rotating && envelope.keyGeneration !== currentGeneration + 1) {
+        throw new Error("invalid_key_generation");
+      }
+      if (!rotating && envelope.keyGeneration !== currentGeneration) {
+        throw new Error("invalid_key_generation");
+      }
+      if ((initializing || rotating) !== (envelope.wrappers !== null)) {
+        throw new Error(initializing || rotating ? "incomplete_team_vault_wrappers" : "unexpected_team_vault_wrappers");
+      }
+      if (!initializing && !rotating) {
+        const actorWrapper = await client.query(
+          `SELECT 1 FROM shared_vault_key_wrappers
+           WHERE vault_id = $1 AND key_generation = $2 AND membership_id = $3
+             AND membership_epoch = $4 AND device_id = $5`,
+          [vaultID, currentGeneration, context.membership_id, context.epoch, actorDeviceID],
+        );
+        if (!actorWrapper.rows[0]) throw new Error("team_vault_key_unavailable");
+      }
+
+      const nextGeneration = envelope.keyGeneration;
+      if (envelope.wrappers) {
+        const eligible = await lockEligibleTeamDevices(client, teamID);
+        requireCompleteWrapperSet(eligible, envelope.wrappers);
+        requireWrapperContextHashes(teamID, vaultID, nextGeneration, envelope.wrappers);
+        await insertSharedVaultWrappers(
+          client,
+          vaultID,
+          nextGeneration,
+          actorDeviceID,
+          envelope.wrappers,
+        );
+      }
+
+      const revision = currentRevision + 1;
+      await client.query(
+        `INSERT INTO shared_vault_revisions
+          (vault_id, revision, key_generation, envelope_version, ciphertext, nonce,
+           auth_tag, content_hash, updated_by_device_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [vaultID, revision, nextGeneration, envelope.envelopeVersion, envelope.ciphertext,
+          envelope.nonce, envelope.authTag, envelope.contentHash, actorDeviceID],
+      );
+      await client.query(
+        `UPDATE shared_vaults SET revision = $2, key_generation = $3, envelope_version = $4,
+           ciphertext = $5, nonce = $6, auth_tag = $7, content_hash = $8,
+           updated_by_device_id = $9, rotation_required = false, updated_at = now()
+         WHERE id = $1`,
+        [vaultID, revision, nextGeneration, envelope.envelopeVersion, envelope.ciphertext,
+          envelope.nonce, envelope.authTag, envelope.contentHash, actorDeviceID],
+      );
+      if (rotating) {
+        await client.query(
+          `UPDATE shared_vault_rotation_tasks SET status = 'completed', completed_at = now()
+           WHERE vault_id = $1 AND from_generation = $2 AND status = 'pending'`,
+          [vaultID, currentGeneration],
+        );
+      }
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: rotating ? "team.vault_rotated" : "team.vault_revision_created",
+        targetVaultID: vaultID,
+        metadata: { revision, keyGeneration: nextGeneration },
+      });
+      return { conflict: false, revision, keyGeneration: nextGeneration, rotationCompleted: rotating };
+    });
+  }
+
+  async grantSharedVaultWrapper({
+    actorUserID,
+    actorDeviceID,
+    teamID,
+    vaultID,
+    wrapper,
+    keyGeneration,
+    idempotencyKey,
+  }) {
+    return this.withTeamMutation(actorUserID, "team.vault.wrapper.grant", idempotencyKey, async (client) => {
+      const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
+      if (!context) throw new Error("team_not_found");
+      if (!context.key_approved_at) throw new Error("device_approval_required");
+      requireTeamPermission(context.role, "manage_vault_keys");
+      if (!Number.isSafeInteger(keyGeneration) || keyGeneration !== Number(context.key_generation)
+        || Number(context.revision) === 0 || context.rotation_required === true) {
+        throw new Error("invalid_key_generation");
+      }
+      const eligible = await lockEligibleTeamDevices(client, teamID);
+      const target = eligible.find((row) => row.device_id === wrapper.deviceID);
+      if (!target || target.membership_id !== wrapper.membershipID
+        || Number(target.membership_epoch) !== wrapper.membershipEpoch) {
+        throw new Error("team_not_found");
+      }
+      requireWrapperContextHashes(teamID, vaultID, keyGeneration, [wrapper]);
+      try {
+        await insertSharedVaultWrappers(client, vaultID, keyGeneration, actorDeviceID, [wrapper]);
+      } catch (error) {
+        if (error?.code === "23505") throw new Error("shared_vault_wrapper_exists");
+        throw error;
+      }
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.vault_wrapper_granted",
+        targetMembershipID: wrapper.membershipID,
+        targetVaultID: vaultID,
+        metadata: { deviceID: wrapper.deviceID, keyGeneration },
+      });
+      return { granted: true, keyGeneration, deviceID: wrapper.deviceID };
+    });
+  }
+
   async claimTeamInvitationOutbox(claimOwner) {
     const result = await this.pool.query(
       `WITH candidate AS (
@@ -784,6 +1061,82 @@ async function lockTeamMembership(client, teamID, membershipID) {
     [teamID, membershipID],
   );
   return result.rows[0] ?? null;
+}
+
+async function lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID) {
+  const result = await client.query(
+    `SELECT membership.id AS membership_id, membership.role, membership.epoch,
+       device.key_approved_at, vault.revision, vault.key_generation, vault.rotation_required
+     FROM team_memberships AS membership
+     JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+     JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+     JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
+       AND device.revoked_at IS NULL
+     WHERE membership.team_id = $1 AND vault.id = $2 AND membership.user_id = $3
+       AND membership.revoked_at IS NULL
+     FOR UPDATE OF membership, team, vault, device`,
+    [teamID, vaultID, actorUserID, actorDeviceID],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function lockEligibleTeamDevices(client, teamID) {
+  const result = await client.query(
+    `SELECT membership.id AS membership_id, membership.epoch AS membership_epoch,
+       device.id AS device_id
+     FROM team_memberships AS membership
+     JOIN devices AS device ON device.user_id = membership.user_id
+     WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
+       AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
+       AND device.public_key IS NOT NULL
+     ORDER BY membership.id, device.id
+     FOR UPDATE OF membership, device`,
+    [teamID],
+  );
+  return result.rows;
+}
+
+function requireCompleteWrapperSet(eligible, wrappers) {
+  if (eligible.length === 0 || wrappers.length !== eligible.length) {
+    throw new Error("incomplete_team_vault_wrappers");
+  }
+  const byDevice = new Map(wrappers.map((wrapper) => [wrapper.deviceID, wrapper]));
+  for (const row of eligible) {
+    const wrapper = byDevice.get(row.device_id);
+    if (!wrapper || wrapper.membershipID !== row.membership_id
+      || wrapper.membershipEpoch !== Number(row.membership_epoch)) {
+      throw new Error("incomplete_team_vault_wrappers");
+    }
+  }
+}
+
+function requireWrapperContextHashes(teamID, vaultID, keyGeneration, wrappers) {
+  for (const wrapper of wrappers) {
+    const expected = teamVaultWrapperContextHash({
+      teamID,
+      vaultID,
+      keyGeneration,
+      membershipID: wrapper.membershipID,
+      membershipEpoch: wrapper.membershipEpoch,
+      deviceID: wrapper.deviceID,
+    });
+    if (wrapper.contextHash !== expected) throw new Error("invalid_team_vault_wrapper_context");
+  }
+}
+
+async function insertSharedVaultWrappers(client, vaultID, keyGeneration, actorDeviceID, wrappers) {
+  for (const wrapper of wrappers) {
+    await client.query(
+      `INSERT INTO shared_vault_key_wrappers
+        (vault_id, key_generation, membership_id, membership_epoch, device_id,
+         wrapper_version, ephemeral_public_key, ciphertext, nonce, auth_tag,
+         context_hash, created_by_device_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12)`,
+      [vaultID, keyGeneration, wrapper.membershipID, wrapper.membershipEpoch,
+        wrapper.deviceID, wrapper.wrapperVersion, JSON.stringify(wrapper.ephemeralPublicKey),
+        wrapper.ciphertext, wrapper.nonce, wrapper.authTag, wrapper.contextHash, actorDeviceID],
+    );
+  }
 }
 
 async function requireAnotherOwner(client, teamID, excludedMembershipID) {

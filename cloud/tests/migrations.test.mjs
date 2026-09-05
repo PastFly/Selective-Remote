@@ -13,8 +13,22 @@ test("numbered migrations have stable checksums", async () => {
     { version: 3, name: "003_auth_rate_limits.sql" },
     { version: 4, name: "004_password_reset.sql" },
     { version: 5, name: "005_team_foundation.sql" },
+    { version: 6, name: "006_team_vault_crypto.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("Team Vault crypto migration persists ciphertext, device wrappers and rotation subjects", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const crypto = migrations.find(({ version }) => version === 6);
+
+  assert.match(crypto.sql, /CREATE TABLE shared_vault_revisions/);
+  assert.match(crypto.sql, /CREATE TABLE shared_vault_key_wrappers/);
+  assert.match(crypto.sql, /public_key_algorithm = 'p256-ecdh-v1'/);
+  assert.match(crypto.sql, /membership_epoch bigint NOT NULL/);
+  assert.match(crypto.sql, /removed_device_id uuid/);
+  assert.match(crypto.sql, /shared_vault_rotation_subject/);
+  assert.doesNotMatch(crypto.sql, /\bplaintext\b|\bvault_key\s+text\b|\bprivate_key\b/);
 });
 
 test("Team foundation migration keeps authorization and invitation state durable", async () => {

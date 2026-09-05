@@ -8,8 +8,10 @@ The final v0.32 product scope also includes Teams and shared Vaults. The backend
 foundation implements durable Teams, memberships, the fixed four-role policy,
 single-use 48-hour invitations, encrypted durable invitation delivery and
 explicit Team/shared-Vault metadata endpoints. Shared ciphertext revisions,
-device-bound key wrappers, rotation completion and client UI remain later
-milestones; a metadata-only shared Vault is not yet usable for records.
+P-256 device registration/approval, per-device key wrappers and fail-closed
+rotation completion are now implemented in the backend. Browser/macOS Team
+cryptography and UI remain later milestones, so shared records are not yet
+exposed by either client.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
@@ -28,8 +30,9 @@ closed-staging configuration.
 The mandatory Team/shared-Vault security contract is documented in
 `docs/cloud-v0.32-team-threat-model.md`. It fixes the four-role matrix,
 invitation lifecycle, device-bound wrappers, membership epochs and fail-closed
-key rotation. Migration `005_team_foundation.sql` implements only the durable
-identity/access and metadata portion of that contract.
+key rotation. Migration `005_team_foundation.sql` implements durable
+identity/access metadata; `006_team_vault_crypto.sql` adds the plaintext-blind
+ciphertext, device-wrapper and rotation transaction layer.
 
 ## Team API foundation
 
@@ -51,15 +54,27 @@ the database stores and replays the committed response atomically.
   Admin escalation and removal of the last Owner fail closed.
 - `GET|POST /v1/teams/{teamID}/vaults` lists or creates shared-Vault metadata.
   Only Owner/Admin may create one.
+- `POST /v1/devices/{deviceID}` approves a new device key from the current
+  already-approved device after the submitted canonical public JWK matches the
+  locked registered key. Password login alone never approves a Team key.
+- `GET /v1/teams/{teamID}/vaults/{vaultID}/key-devices` returns the exact
+  active approved device set to Owner/Admin clients preparing wrappers.
+- `GET|PUT /v1/teams/{teamID}/vaults/{vaultID}` downloads the current opaque
+  envelope/current-device wrapper or conditionally writes a ciphertext
+  revision. Viewer writes are rejected.
+- `POST /v1/teams/{teamID}/vaults/{vaultID}/wrappers` grants a current-
+  generation wrapper to one newly authorized device under Owner/Admin checks.
 
 The invitation table stores only an HMAC hash. The opaque token and recipient
 are held in an AES-256-GCM outbox envelope under an independent runtime key;
 multi-replica delivery uses a bounded `FOR UPDATE SKIP LOCKED` lease. Logs do
 not contain recipients, tokens or mail-provider responses. Revoking a member
-immediately marks every active shared Vault `rotation_required`; shared content
-writes are deliberately absent until the wrapper/rotation protocol is complete.
-The same revocation transaction creates one durable rotation task per affected
-Vault and removed membership epoch.
+immediately marks every active shared Vault `rotation_required`; revoking an
+approved device does the same and invalidates all of its sessions. Writes then
+remain frozen until Owner/Admin conditionally commits a new full ciphertext,
+the next key generation and exactly one wrapper for every currently active
+approved device in a single PostgreSQL transaction. Partial/stale rotation is
+rejected and the same transaction completes its durable rotation tasks.
 
 ## Local verification
 

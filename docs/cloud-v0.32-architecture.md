@@ -8,9 +8,10 @@ fully usable without an account. The current cumulative implementation includes
 account/device APIs, opaque personal-Vault storage, browser-local encryption and
 manual authenticated personal-Vault synchronization. The Team backend now has
 durable Team, membership, invitation, role, audit, idempotency and shared-Vault
-metadata structures plus explicitly scoped authenticated routes. Shared
-ciphertext, device-bound wrappers, key rotation completion and browser/macOS
-Team clients remain required later milestones within the final 0.32 scope.
+metadata structures, shared ciphertext revisions, approved P-256 devices,
+device-bound wrappers and fail-closed rotation completion plus explicitly
+scoped authenticated routes. Browser/macOS Team cryptography and clients remain
+required later milestones within the final 0.32 scope.
 FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:
@@ -158,13 +159,13 @@ conditional upload succeeds.
 The Cloud payload is separate from `.srbackup`. Backup archives remain manual,
 portable rollback artifacts; Cloud revisions are small synchronization units.
 
-Shared Vaults use independent random Vault keys. The final design must wrap a
-shared key separately for authorized members/devices, enforce roles in both
-the API and clients, and rotate the key (or use an equivalently reviewed
-revocation design) when access is removed. Team lifecycle, invitation,
-membership and shared-Vault metadata endpoints now implement the non-plaintext
-authorization foundation. Ciphertext and wrapper writes remain absent until
-the key-rotation contract can be enforced as one complete protocol.
+Shared Vaults use independent random Vault keys. Authorized clients wrap each
+key separately for approved member devices and rotate it when access is
+removed; the backend receives only ciphertext and context-bound wrappers,
+never the key. Team lifecycle, invitation, membership and shared-Vault metadata
+endpoints implement the non-plaintext authorization foundation. The API enforces
+optimistic revision/generation writes, approved-device wrappers and atomic
+complete-set rotation; the clients do not consume it yet.
 The browser sync client accepts an explicit Vault scope and currently permits
 only `{type: "personal", id: "self"}`. Team scopes fail before any network
 request until the browser Team client and shared-key protocol are implemented.
@@ -188,6 +189,7 @@ than overloading the personal route.
 | `POST` | `/v1/auth/logout` | Revoke the current session |
 | `GET` | `/v1/me` | Current account and device |
 | `GET` | `/v1/devices` | List account devices |
+| `POST` | `/v1/devices/{id}` | Approve a device key from an approved device |
 | `DELETE` | `/v1/devices/{id}` | Revoke a device and its sessions |
 | `GET` | `/v1/vault` | Download latest encrypted revision |
 | `PUT` | `/v1/vault` | Conditionally upload a revision |
@@ -201,6 +203,10 @@ than overloading the personal route.
 | `DELETE` | `/v1/teams/{teamID}/members/{membershipID}` | Revoke membership and require rotation |
 | `GET` | `/v1/teams/{teamID}/vaults` | List shared-Vault metadata |
 | `POST` | `/v1/teams/{teamID}/vaults` | Create shared-Vault metadata |
+| `GET` | `/v1/teams/{teamID}/vaults/{vaultID}/key-devices` | List active approved wrapping targets |
+| `GET` | `/v1/teams/{teamID}/vaults/{vaultID}` | Download ciphertext and current-device wrapper |
+| `PUT` | `/v1/teams/{teamID}/vaults/{vaultID}` | Conditionally write/rotate shared ciphertext |
+| `POST` | `/v1/teams/{teamID}/vaults/{vaultID}/wrappers` | Grant one current-generation device wrapper |
 
 Every Team mutation requires an `Idempotency-Key`. Role and membership state
 is locked and checked in the same PostgreSQL transaction as the mutation.

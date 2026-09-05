@@ -98,6 +98,18 @@ async function route(request, response) {
       return sendJSON(response, 200, { devices: await store.listDevices(session.user_id) });
     }
     const deviceMatch = url.pathname.match(/^\/v1\/devices\/([^/]+)$/i);
+    if (deviceMatch && method === "POST") {
+      if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
+      return handleOperation(
+        response,
+        async () => service.approveDeviceKey(
+          session,
+          deviceMatch[1],
+          await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request),
+        ),
+      );
+    }
     if (method === "DELETE" && deviceMatch) {
       if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
       const revoked = await store.revokeDevice(session.user_id, deviceMatch[1]);
@@ -223,6 +235,63 @@ async function route(request, response) {
           ),
           201,
         );
+      }
+    }
+    const teamVaultDevicesMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/key-devices$/i,
+    );
+    if (method === "GET" && teamVaultDevicesMatch) {
+      if (!isUUID(teamVaultDevicesMatch[1]) || !isUUID(teamVaultDevicesMatch[2])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        () => service.listTeamKeyDevices(session, teamVaultDevicesMatch[1], teamVaultDevicesMatch[2]),
+      );
+    }
+    const teamVaultWrappersMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/wrappers$/i,
+    );
+    if (method === "POST" && teamVaultWrappersMatch) {
+      if (!isUUID(teamVaultWrappersMatch[1]) || !isUUID(teamVaultWrappersMatch[2])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        async () => service.grantSharedVaultWrapper(
+          session,
+          teamVaultWrappersMatch[1],
+          teamVaultWrappersMatch[2],
+          await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request),
+        ),
+        201,
+      );
+    }
+    const teamVaultMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)$/i);
+    if (teamVaultMatch) {
+      if (!isUUID(teamVaultMatch[1]) || !isUUID(teamVaultMatch[2])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      if (method === "GET") {
+        return handleOperation(
+          response,
+          () => service.getSharedVault(session, teamVaultMatch[1], teamVaultMatch[2]),
+        );
+      }
+      if (method === "PUT") {
+        try {
+          const result = await service.putSharedVault(
+            session,
+            teamVaultMatch[1],
+            teamVaultMatch[2],
+            await readJSON(request),
+            idempotencyKey(request),
+          );
+          return sendJSON(response, result.conflict ? 409 : 200, result);
+        } catch (error) {
+          return handleOperationError(response, error);
+        }
       }
     }
     return sendError(response, 404, "not_found");

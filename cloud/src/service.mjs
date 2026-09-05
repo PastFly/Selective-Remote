@@ -14,7 +14,10 @@ import {
   hashTeamInvitationToken,
   isUUID,
   normalizeEmail,
+  validateDevicePublicKey,
   validatePassword,
+  validateTeamVaultEnvelope,
+  validateTeamVaultWrapper,
   validateVaultEnvelope,
   verifyPassword,
 } from "./security.mjs";
@@ -89,7 +92,7 @@ export class CloudService {
       name,
       platform,
       appVersion: String(device.appVersion ?? "").slice(0, 40),
-      publicKey: device.publicKey ? String(device.publicKey).slice(0, 4096) : null,
+      publicKey: device.publicKey ? validateDevicePublicKey(device.publicKey) : null,
     };
   }
 
@@ -349,6 +352,54 @@ export class CloudService {
     return { vault: publicSharedVault(result.vault) };
   }
 
+  async approveDeviceKey(session, deviceID, input, idempotencyKey) {
+    return this.store.approveDeviceKey({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      deviceID,
+      expectedPublicKey: validateDevicePublicKey(input?.publicKey),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async listTeamKeyDevices(session, teamID, vaultID) {
+    const rows = await this.store.listTeamKeyDevices(teamID, vaultID, session.user_id);
+    return { devices: rows.map(publicTeamKeyDevice) };
+  }
+
+  async getSharedVault(session, teamID, vaultID) {
+    const row = await this.store.getSharedVault(
+      teamID,
+      vaultID,
+      session.user_id,
+      session.device_id,
+    );
+    return publicSharedVaultEnvelope(row);
+  }
+
+  async putSharedVault(session, teamID, vaultID, input, idempotencyKey) {
+    return this.store.putSharedVault({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      teamID,
+      vaultID,
+      envelope: validateTeamVaultEnvelope(input),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async grantSharedVaultWrapper(session, teamID, vaultID, input, idempotencyKey) {
+    return this.store.grantSharedVaultWrapper({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      teamID,
+      vaultID,
+      wrapper: validateTeamVaultWrapper(input?.wrapper),
+      keyGeneration: input?.keyGeneration,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
   async dispatchTeamInvitationOutbox() {
     if (!this.mailer) return false;
     const job = await this.store.claimTeamInvitationOutbox(this.outboxClaimOwner);
@@ -423,6 +474,39 @@ function publicSharedVault(row) {
     keyGeneration: Number(row.key_generation),
     rotationRequired: row.rotation_required === true,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function publicTeamKeyDevice(row) {
+  return {
+    membershipID: row.membership_id,
+    membershipEpoch: Number(row.membership_epoch),
+    deviceID: row.device_id,
+    publicKeyAlgorithm: row.public_key_algorithm,
+    publicKey: JSON.parse(row.public_key),
+  };
+}
+
+function publicSharedVaultEnvelope(row) {
+  return {
+    ...publicSharedVault(row),
+    envelopeVersion: row.envelope_version,
+    ciphertext: row.ciphertext,
+    nonce: row.nonce,
+    authTag: row.auth_tag,
+    contentHash: row.content_hash,
+    wrapper: row.wrapper_ciphertext ? {
+      wrapperVersion: Number(row.wrapper_version),
+      membershipID: row.membership_id,
+      membershipEpoch: Number(row.membership_epoch),
+      deviceID: row.device_id,
+      ephemeralPublicKey: row.ephemeral_public_key,
+      ciphertext: row.wrapper_ciphertext,
+      nonce: row.wrapper_nonce,
+      authTag: row.wrapper_auth_tag,
+      contextHash: row.context_hash,
+    } : null,
     updatedAt: row.updated_at,
   };
 }
