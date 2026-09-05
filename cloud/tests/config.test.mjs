@@ -10,6 +10,8 @@ const baseEnv = {
   SESSION_TOKEN_PEPPER: "s".repeat(32),
   EMAIL_VERIFICATION_TOKEN_PEPPER: "e".repeat(32),
   PASSWORD_RESET_TOKEN_PEPPER: "p".repeat(32),
+  TEAM_INVITATION_TOKEN_PEPPER: "t".repeat(32),
+  TEAM_OUTBOX_ENCRYPTION_KEY: "o".repeat(32),
   ABUSE_TOKEN_PEPPER: "a".repeat(32),
   PROXY_SHARED_SECRET: "b".repeat(64),
 };
@@ -52,6 +54,21 @@ test("password reset uses an independent bounded token lifetime", () => {
   assert.throws(() => loadConfig({ ...baseEnv, AUTH_RECOVERY_MIN_RESPONSE_MS: "249" }), /AUTH_RECOVERY_MIN_RESPONSE_MS/);
 });
 
+test("Team invitations use fixed 48-hour expiry and independent secrets", () => {
+  const config = loadConfig(baseEnv);
+  assert.equal(config.teamInvitationTTLHours, 48);
+  assert.equal(config.teamInvitationTokenPepper, "t".repeat(32));
+  assert.equal(config.teamOutboxEncryptionKey, "o".repeat(32));
+  assert.throws(
+    () => loadConfig({ ...baseEnv, TEAM_OUTBOX_ENCRYPTION_KEY: baseEnv.TEAM_INVITATION_TOKEN_PEPPER }),
+    /security secrets must be independent/,
+  );
+  const { TEAM_INVITATION_TOKEN_PEPPER: _missingInvitation, ...withoutInvitation } = baseEnv;
+  const { TEAM_OUTBOX_ENCRYPTION_KEY: _missingOutbox, ...withoutOutbox } = baseEnv;
+  assert.throws(() => loadConfig(withoutInvitation), /TEAM_INVITATION_TOKEN_PEPPER/);
+  assert.throws(() => loadConfig(withoutOutbox), /TEAM_OUTBOX_ENCRYPTION_KEY/);
+});
+
 test("proxy trust requires a header-safe independent hexadecimal secret", () => {
   assert.equal(validateProxySecret("a".repeat(64)), "a".repeat(64));
   assert.throws(() => validateProxySecret("A".repeat(64)), /64 lowercase hexadecimal/);
@@ -67,6 +84,8 @@ test("rate-limit overrides reject partial and out-of-range numbers", () => {
   assert.deepEqual(config.authRateLimits.request_password_reset_ip, { limit: 5, windowSeconds: 3_600 });
   assert.deepEqual(config.authRateLimits.request_password_reset_email, { limit: 3, windowSeconds: 3_600 });
   assert.deepEqual(config.authRateLimits.reset_password_ip, { limit: 10, windowSeconds: 900 });
+  assert.deepEqual(config.authRateLimits.team_invitation_create_user, { limit: 50, windowSeconds: 3_600 });
+  assert.deepEqual(config.authRateLimits.team_invitation_accept_ip, { limit: 20, windowSeconds: 3_600 });
   assert.throws(
     () => loadConfig({ ...baseEnv, AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT: "0" }),
     /AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT/,

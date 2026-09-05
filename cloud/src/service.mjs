@@ -1,18 +1,28 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { randomUUID } from "node:crypto";
 import {
   createEmailVerificationToken,
   createPasswordResetToken,
   createSessionToken,
+  createTeamInvitationToken,
+  decryptOutboxPayload,
+  encryptOutboxPayload,
   hashEmailVerificationToken,
   hashPassword,
   hashPasswordResetToken,
   hashSessionToken,
+  hashTeamInvitationToken,
   isUUID,
   normalizeEmail,
   validatePassword,
   validateVaultEnvelope,
   verifyPassword,
 } from "./security.mjs";
+import {
+  validateIdempotencyKey,
+  validateTeamName,
+  validateTeamRole,
+} from "./team-policy.mjs";
 
 // A valid, non-secret sentinel hash ensures unknown and disabled accounts still
 // perform the same scrypt verification work as known password identities.
@@ -26,6 +36,7 @@ export class CloudService {
     this.logger = logger;
     this.passwordVerifier = passwordVerifier;
     this.backgroundTasks = new Set();
+    this.outboxClaimOwner = randomUUID();
   }
 
   sessionExpiry() {
@@ -38,6 +49,10 @@ export class CloudService {
 
   passwordResetExpiry() {
     return new Date(Date.now() + this.config.passwordResetTTLHours * 3_600_000);
+  }
+
+  teamInvitationExpiry() {
+    return new Date(Date.now() + this.config.teamInvitationTTLHours * 3_600_000);
   }
 
   async withRecoveryResponse(operation) {
@@ -229,8 +244,185 @@ export class CloudService {
   async putVault(session, input) {
     return this.store.putVault(session.user_id, session.device_id, validateVaultEnvelope(input));
   }
+
+  async listTeams(session) {
+    const rows = await this.store.listTeams(session.user_id);
+    return { teams: rows.map(publicTeam) };
+  }
+
+  async createTeam(session, input, idempotencyKey) {
+    const result = await this.store.createTeam({
+      actorUserID: session.user_id,
+      name: validateTeamName(input?.name),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { team: publicTeam({
+      ...result.team,
+      membership_id: result.membership.id,
+      role: result.membership.role,
+      epoch: result.membership.epoch,
+    }) };
+  }
+
+  async listTeamMembers(session, teamID) {
+    const rows = await this.store.listTeamMembers(teamID, session.user_id);
+    return { members: rows.map(publicTeamMember) };
+  }
+
+  async createTeamInvitation(session, teamID, input, idempotencyKey) {
+    if (!this.mailer) throw new Error("smtp_not_configured");
+    const email = normalizeEmail(input?.email);
+    const role = validateTeamRole(input?.role, { invitation: true });
+    const token = createTeamInvitationToken();
+    const expiresAt = this.teamInvitationExpiry();
+    const outboxEnvelope = encryptOutboxPayload({
+      recipient: email,
+      token,
+      teamID,
+      role,
+      expiresAt: expiresAt.toISOString(),
+    }, this.config.teamOutboxEncryptionKey);
+    const result = await this.store.createTeamInvitation({
+      actorUserID: session.user_id,
+      teamID,
+      email,
+      role,
+      tokenHash: hashTeamInvitationToken(token, this.config.teamInvitationTokenPepper),
+      expiresAt,
+      outboxEnvelope,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { invitation: publicTeamInvitation(result.invitation) };
+  }
+
+  async acceptTeamInvitation(session, input, idempotencyKey) {
+    const result = await this.store.acceptTeamInvitation({
+      actorUserID: session.user_id,
+      actorEmail: session.email,
+      tokenHash: hashTeamInvitationToken(input?.token, this.config.teamInvitationTokenPepper),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { membership: publicTeamMember(result.membership) };
+  }
+
+  async cancelTeamInvitation(session, teamID, invitationID, idempotencyKey) {
+    return this.store.cancelTeamInvitation({
+      actorUserID: session.user_id,
+      teamID,
+      invitationID,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async updateTeamMembershipRole(session, teamID, membershipID, input, idempotencyKey) {
+    const result = await this.store.updateTeamMembershipRole({
+      actorUserID: session.user_id,
+      teamID,
+      membershipID,
+      role: validateTeamRole(input?.role),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { membership: publicTeamMember(result.membership) };
+  }
+
+  async revokeTeamMembership(session, teamID, membershipID, idempotencyKey) {
+    return this.store.revokeTeamMembership({
+      actorUserID: session.user_id,
+      teamID,
+      membershipID,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async listSharedVaults(session, teamID) {
+    const rows = await this.store.listSharedVaults(teamID, session.user_id);
+    return { vaults: rows.map(publicSharedVault) };
+  }
+
+  async createSharedVault(session, teamID, input, idempotencyKey) {
+    const result = await this.store.createSharedVault({
+      actorUserID: session.user_id,
+      teamID,
+      name: validateTeamName(input?.name, "invalid_shared_vault"),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { vault: publicSharedVault(result.vault) };
+  }
+
+  async dispatchTeamInvitationOutbox() {
+    if (!this.mailer) return false;
+    const job = await this.store.claimTeamInvitationOutbox(this.outboxClaimOwner);
+    if (!job) return false;
+    try {
+      const payload = decryptOutboxPayload(job, this.config.teamOutboxEncryptionKey);
+      await this.mailer.sendTeamInvitation(payload);
+      await this.store.completeTeamInvitationOutbox(job.id, this.outboxClaimOwner);
+      return true;
+    } catch {
+      const retrySeconds = Math.min(3_600, 15 * (2 ** Math.min(Number(job.attempts ?? 1) - 1, 8)));
+      await this.store.retryTeamInvitationOutbox(job.id, this.outboxClaimOwner, retrySeconds);
+      this.logger.warn(JSON.stringify({ level: "warn", message: "Team invitation delivery failed" }));
+      return false;
+    }
+  }
+
+  queueTeamInvitationOutboxDispatch() {
+    const task = this.dispatchTeamInvitationOutbox()
+      .finally(() => this.backgroundTasks.delete(task));
+    this.backgroundTasks.add(task);
+    return task;
+  }
 }
 
 function publicUser(row) {
   return { id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at };
+}
+
+function publicTeam(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    membershipID: row.membership_id ?? row.id,
+    role: row.role,
+    membershipEpoch: Number(row.epoch),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function publicTeamMember(row) {
+  return {
+    id: row.id,
+    userID: row.user_id,
+    email: row.email,
+    displayName: row.display_name,
+    role: row.role,
+    epoch: Number(row.epoch),
+    joinedAt: row.joined_at,
+  };
+}
+
+function publicTeamInvitation(row) {
+  return {
+    id: row.id,
+    teamID: row.team_id,
+    email: row.email,
+    role: row.role,
+    status: "pending",
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+  };
+}
+
+function publicSharedVault(row) {
+  return {
+    id: row.id,
+    teamID: row.team_id,
+    name: row.name,
+    revision: Number(row.revision),
+    keyGeneration: Number(row.key_generation),
+    rotationRequired: row.rotation_required === true,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }

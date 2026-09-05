@@ -1,8 +1,10 @@
 # Cloud 0.32 Team and shared Vault threat model
 
-Status: design contract for the mandatory Team/shared-Vault milestone. None of
-the Team API, membership or key-distribution behavior described here is
-implemented by the personal-Vault browser client.
+Status: design contract with the backend Team-access foundation implemented.
+Durable Teams, memberships, four-role checks, membership epochs, hash-only
+invitations, encrypted outbox delivery, audit events, idempotency receipts and
+shared-Vault metadata are present. Shared ciphertext, device approval/wrappers,
+rotation completion and browser/macOS Team clients are not yet implemented.
 
 ## Security outcome
 
@@ -117,9 +119,12 @@ sessions and excludes it from all later wrapper sets.
 
 Membership removal is a fail-closed state transition:
 
-1. In one database transaction, mark membership revoked, revoke its sessions,
-   reject its reads/writes immediately, mark every affected shared Vault
-   `rotation_required`, and enqueue durable idempotent rotation work.
+1. In one database transaction, mark membership revoked, invalidate any
+   Team-scoped grants, reject its Team reads/writes immediately, mark every
+   affected shared Vault `rotation_required`, and enqueue durable idempotent
+   rotation work. A global account session may remain valid for the user's
+   personal Vault, but every Team operation rechecks active membership and can
+   no longer authorize it.
 2. Until an Owner/Admin client completes rotation, existing authorized members
    may download the last authorized ciphertext but shared writes are frozen.
    The removed member receives neither reads nor wrappers even during this
@@ -184,5 +189,6 @@ or wrappers.
 - Server/database inspection proving no personal or shared plaintext/key is
   present.
 
-Team/shared Vault status remains `planned_required` until these contracts are
-implemented and the acceptance suite passes in both browser and macOS clients.
+Team/shared Vault release status remains `planned_required`: the access
+foundation is only the first implementation slice, and the full contract plus
+browser/macOS acceptance suite must pass before Cloud 0.32 is complete.

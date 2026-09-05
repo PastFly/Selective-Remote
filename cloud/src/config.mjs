@@ -70,6 +70,14 @@ export function loadConfig(env = process.env) {
   const abuseTokenPepper = validateSecret("ABUSE_TOKEN_PEPPER", env.ABUSE_TOKEN_PEPPER);
   const proxySharedSecret = validateProxySecret(env.PROXY_SHARED_SECRET);
   const passwordResetTokenPepper = validateSecret("PASSWORD_RESET_TOKEN_PEPPER", env.PASSWORD_RESET_TOKEN_PEPPER);
+  const teamInvitationTokenPepper = validateSecret(
+    "TEAM_INVITATION_TOKEN_PEPPER",
+    env.TEAM_INVITATION_TOKEN_PEPPER,
+  );
+  const teamOutboxEncryptionKey = validateSecret(
+    "TEAM_OUTBOX_ENCRYPTION_KEY",
+    env.TEAM_OUTBOX_ENCRYPTION_KEY,
+  );
   const emailVerificationPepper = validateSecret(
     "EMAIL_VERIFICATION_TOKEN_PEPPER",
     env.EMAIL_VERIFICATION_TOKEN_PEPPER,
@@ -78,9 +86,11 @@ export function loadConfig(env = process.env) {
     sessionPepper,
     emailVerificationPepper,
     passwordResetTokenPepper,
+    teamInvitationTokenPepper,
+    teamOutboxEncryptionKey,
     abuseTokenPepper,
     proxySharedSecret,
-  ]).size !== 5) {
+  ]).size !== 7) {
     throw new Error("runtime security secrets must be independent");
   }
   if (!databaseURL || /replace-(?:me|with)/i.test(databaseURL)) throw new Error("DATABASE_URL is required");
@@ -101,12 +111,15 @@ export function loadConfig(env = process.env) {
     abuseTokenPepper,
     proxySharedSecret,
     passwordResetTokenPepper,
+    teamInvitationTokenPepper,
+    teamOutboxEncryptionKey,
     emailVerificationPepper,
     smtp: loadSMTPConfig(env, allowRegistration),
     allowRegistration,
     sessionTTLDays: integer(env, "SESSION_TTL_DAYS", 30, 1, 365),
     emailVerificationTTLHours: integer(env, "EMAIL_VERIFICATION_TTL_HOURS", 24, 1, 168),
     passwordResetTTLHours: integer(env, "PASSWORD_RESET_TTL_HOURS", 1, 1, 24),
+    teamInvitationTTLHours: 48,
     recoveryMinimumResponseMS: integer(env, "AUTH_RECOVERY_MIN_RESPONSE_MS", 500, 250, 5_000),
     authRateLimits: Object.freeze({
       register_ip: Object.freeze({ limit: integer(env, "AUTH_REGISTER_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
@@ -119,6 +132,8 @@ export function loadConfig(env = process.env) {
       request_password_reset_ip: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT", 5, 1, 100), windowSeconds: 3_600 }),
       request_password_reset_email: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_REQUEST_EMAIL_LIMIT", 3, 1, 100), windowSeconds: 3_600 }),
       reset_password_ip: Object.freeze({ limit: integer(env, "AUTH_PASSWORD_RESET_IP_LIMIT", 10, 1, 100), windowSeconds: 900 }),
+      team_invitation_create_user: Object.freeze({ limit: integer(env, "TEAM_INVITATION_CREATE_USER_LIMIT", 50, 1, 1_000), windowSeconds: 3_600 }),
+      team_invitation_accept_ip: Object.freeze({ limit: integer(env, "TEAM_INVITATION_ACCEPT_IP_LIMIT", 20, 1, 1_000), windowSeconds: 3_600 }),
     }),
   });
 }

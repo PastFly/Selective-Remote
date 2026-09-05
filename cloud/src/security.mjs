@@ -1,4 +1,12 @@
-import { createHash, createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  scrypt as scryptCallback,
+  timingSafeEqual,
+} from "node:crypto";
 import { promisify } from "node:util";
 
 const scrypt = promisify(scryptCallback);
@@ -72,6 +80,50 @@ export function createPasswordResetToken() {
 export function hashPasswordResetToken(token, pepper) {
   if (!token || token.length > 256) throw new Error("invalid_password_reset_token");
   return createHmac("sha256", pepper).update(token).digest("hex");
+}
+
+export function createTeamInvitationToken() {
+  return randomBytes(32).toString("base64url");
+}
+
+export function hashTeamInvitationToken(token, pepper) {
+  if (!token || token.length > 256) throw new Error("invalid_team_invitation");
+  return createHmac("sha256", pepper).update(token).digest("hex");
+}
+
+export function encryptOutboxPayload(value, secret) {
+  const plaintext = Buffer.from(JSON.stringify(value), "utf8");
+  if (plaintext.length === 0 || plaintext.length > 16 * 1024) throw new Error("invalid_outbox_payload");
+  const nonce = randomBytes(12);
+  const key = createHash("sha256").update(secret).digest();
+  const cipher = createCipheriv("aes-256-gcm", key, nonce);
+  cipher.setAAD(Buffer.from("selective-remote/team-outbox/v1", "utf8"));
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  return {
+    ciphertext: ciphertext.toString("base64url"),
+    nonce: nonce.toString("base64url"),
+    authTag: cipher.getAuthTag().toString("base64url"),
+  };
+}
+
+export function decryptOutboxPayload(envelope, secret) {
+  try {
+    const key = createHash("sha256").update(secret).digest();
+    const decipher = createDecipheriv(
+      "aes-256-gcm",
+      key,
+      Buffer.from(envelope.nonce, "base64url"),
+    );
+    decipher.setAAD(Buffer.from("selective-remote/team-outbox/v1", "utf8"));
+    decipher.setAuthTag(Buffer.from(envelope.auth_tag ?? envelope.authTag, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(envelope.payload_ciphertext ?? envelope.ciphertext, "base64url")),
+      decipher.final(),
+    ]);
+    return JSON.parse(plaintext.toString("utf8"));
+  } catch {
+    throw new Error("invalid_outbox_payload");
+  }
 }
 
 export function hashAbuseKey(scope, value, pepper) {

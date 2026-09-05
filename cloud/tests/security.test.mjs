@@ -3,11 +3,15 @@ import test from "node:test";
 import {
   createEmailVerificationToken,
   createPasswordResetToken,
+  createTeamInvitationToken,
+  decryptOutboxPayload,
+  encryptOutboxPayload,
   hashAbuseKey,
   hashPasswordResetToken,
   hashEmailVerificationToken,
   hashPassword,
   hashSessionToken,
+  hashTeamInvitationToken,
   normalizeEmail,
   validateVaultEnvelope,
   verifyPassword,
@@ -65,6 +69,30 @@ test("password reset tokens are opaque and use a dedicated HMAC", () => {
   assert.notEqual(hash, token);
   assert.notEqual(hash, hashPasswordResetToken(token, "q".repeat(32)));
   assert.throws(() => hashPasswordResetToken("", pepper), /invalid_password_reset_token/);
+});
+
+test("Team invitation tokens are hash-only and outbox payloads are authenticated ciphertext", () => {
+  const token = createTeamInvitationToken();
+  const tokenPepper = "t".repeat(32);
+  const outboxKey = "o".repeat(32);
+  const payload = {
+    recipient: "member@example.com",
+    token,
+    teamID: "84f6c860-0d26-4ef5-8652-27cb8b991b70",
+    role: "editor",
+  };
+  const tokenHash = hashTeamInvitationToken(token, tokenPepper);
+  const envelope = encryptOutboxPayload(payload, outboxKey);
+
+  assert.match(tokenHash, /^[0-9a-f]{64}$/);
+  assert.notEqual(tokenHash, token);
+  assert.doesNotMatch(JSON.stringify(envelope), /member@example\.com|editor/);
+  assert.deepEqual(decryptOutboxPayload(envelope, outboxKey), payload);
+  assert.throws(
+    () => decryptOutboxPayload({ ...envelope, authTag: "A".repeat(22) }, outboxKey),
+    /invalid_outbox_payload/,
+  );
+  assert.throws(() => hashTeamInvitationToken("", tokenPepper), /invalid_team_invitation/);
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {

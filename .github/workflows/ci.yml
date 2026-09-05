@@ -14,6 +14,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cloud-postgres:
+    name: Team storage on PostgreSQL 16
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
+        env:
+          POSTGRES_DB: selective_remote_test
+          POSTGRES_USER: selective_remote_test
+          POSTGRES_PASSWORD: integration-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U selective_remote_test -d selective_remote_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Select Node 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          cache: npm
+          cache-dependency-path: cloud/package-lock.json
+
+      - name: Install Cloud dependencies
+        working-directory: cloud
+        run: npm ci
+
+      - name: Apply migrations and test Team transactions
+        working-directory: cloud
+        env:
+          TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
+        run: node --test tests/team-postgres-integration.test.mjs
+
   test:
     name: Swift tests on macOS
     runs-on: macos-14

@@ -18,6 +18,16 @@ const operationStatuses = Object.freeze({
   invalid_envelope_version: 400,
   vault_too_large: 413,
   vault_missing: 404,
+  invalid_team: 400,
+  invalid_team_role: 400,
+  invalid_shared_vault: 400,
+  invalid_idempotency_key: 400,
+  invalid_team_invitation: 400,
+  team_not_found: 404,
+  team_access_denied: 403,
+  team_member_exists: 409,
+  team_last_owner: 409,
+  shared_vault_exists: 409,
 });
 
 export function publicOperationError(error) {

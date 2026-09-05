@@ -1,4 +1,9 @@
 import pg from "pg";
+import {
+  requireInvitationPermission,
+  requireMembershipChange,
+  requireTeamPermission,
+} from "./team-policy.mjs";
 
 const { Pool } = pg;
 
@@ -369,4 +374,441 @@ export class PostgresStore {
       client.release();
     }
   }
+
+  async listTeams(userID) {
+    const result = await this.pool.query(
+      `SELECT team.id, team.name, membership.id AS membership_id,
+         membership.role, membership.epoch, team.created_at, team.updated_at
+       FROM team_memberships AS membership
+       JOIN teams AS team ON team.id = membership.team_id
+       WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+         AND team.archived_at IS NULL
+       ORDER BY lower(team.name), team.id`,
+      [userID],
+    );
+    return result.rows;
+  }
+
+  async createTeam({ actorUserID, name, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.create", idempotencyKey, async (client) => {
+      const teamResult = await client.query(
+        `INSERT INTO teams (name, created_by_user_id)
+         VALUES ($1, $2)
+         RETURNING id, name, created_at, updated_at`,
+        [name, actorUserID],
+      );
+      const team = teamResult.rows[0];
+      const membershipResult = await client.query(
+        `INSERT INTO team_memberships (team_id, user_id, role)
+         VALUES ($1, $2, 'owner')
+         RETURNING id, role, epoch, joined_at`,
+        [team.id, actorUserID],
+      );
+      const membership = membershipResult.rows[0];
+      await writeTeamAudit(client, {
+        teamID: team.id,
+        actorUserID,
+        action: "team.created",
+        targetUserID: actorUserID,
+        targetMembershipID: membership.id,
+      });
+      return { team, membership };
+    });
+  }
+
+  async listTeamMembers(teamID, actorUserID) {
+    const result = await this.pool.query(
+      `SELECT member.id, member.user_id, member.role, member.epoch,
+         member.joined_at, account.email, account.display_name
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       JOIN team_memberships AS member ON member.team_id = team.id AND member.revoked_at IS NULL
+       JOIN users AS account ON account.id = member.user_id AND account.disabled_at IS NULL
+       WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
+       ORDER BY CASE member.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END,
+         lower(account.email), member.id`,
+      [teamID, actorUserID],
+    );
+    if (result.rows.length === 0) throw new Error("team_not_found");
+    return result.rows;
+  }
+
+  async createTeamInvitation({
+    actorUserID,
+    teamID,
+    email,
+    role,
+    tokenHash,
+    expiresAt,
+    outboxEnvelope,
+    idempotencyKey,
+  }) {
+    return this.withTeamMutation(actorUserID, "team.invitation.create", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      requireInvitationPermission(actor.role, role);
+
+      const existingMember = await client.query(
+        `SELECT membership.id FROM team_memberships AS membership
+         JOIN users AS account ON account.id = membership.user_id
+         WHERE membership.team_id = $1 AND membership.revoked_at IS NULL AND account.email = $2
+         FOR UPDATE OF membership`,
+        [teamID, email],
+      );
+      if (existingMember.rows[0]) throw new Error("team_member_exists");
+
+      await client.query(
+        `WITH cancelled AS (
+           UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $3
+           WHERE team_id = $1 AND email = $2 AND accepted_at IS NULL AND cancelled_at IS NULL
+           RETURNING id
+         )
+         UPDATE team_outbox_jobs AS job SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
+         FROM cancelled WHERE job.aggregate_id = cancelled.id AND job.delivered_at IS NULL`,
+        [teamID, email, actorUserID],
+      );
+      const invitationResult = await client.query(
+        `INSERT INTO team_invitations
+          (team_id, email, role, token_hash, invited_by_user_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id, team_id, email, role, created_at, expires_at`,
+        [teamID, email, role, tokenHash, actorUserID, expiresAt],
+      );
+      const invitation = invitationResult.rows[0];
+      await client.query(
+        `INSERT INTO team_outbox_jobs
+          (kind, aggregate_id, idempotency_key, payload_ciphertext, nonce, auth_tag)
+         VALUES ('team_invitation_email', $1, $2, $3, $4, $5)`,
+        [invitation.id, `team-invitation:${invitation.id}`, outboxEnvelope.ciphertext,
+          outboxEnvelope.nonce, outboxEnvelope.authTag],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.invitation_created",
+        metadata: { role },
+      });
+      return { invitation };
+    });
+  }
+
+  async acceptTeamInvitation({ actorUserID, actorEmail, tokenHash, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client) => {
+      const invitationResult = await client.query(
+        `SELECT invitation.id, invitation.team_id, invitation.email, invitation.role
+         FROM team_invitations AS invitation
+         JOIN teams AS team ON team.id = invitation.team_id
+         WHERE invitation.token_hash = $1 AND invitation.email = $2
+           AND invitation.accepted_at IS NULL AND invitation.cancelled_at IS NULL
+           AND invitation.expires_at > now() AND team.archived_at IS NULL
+         FOR UPDATE OF invitation, team`,
+        [tokenHash, actorEmail],
+      );
+      const invitation = invitationResult.rows[0];
+      if (!invitation) throw new Error("invalid_team_invitation");
+
+      const priorResult = await client.query(
+        `SELECT id, epoch, revoked_at FROM team_memberships
+         WHERE team_id = $1 AND user_id = $2
+         ORDER BY epoch DESC FOR UPDATE`,
+        [invitation.team_id, actorUserID],
+      );
+      if (priorResult.rows.some((row) => row.revoked_at === null)) {
+        throw new Error("invalid_team_invitation");
+      }
+      const nextEpoch = priorResult.rows.reduce((maximum, row) => Math.max(maximum, Number(row.epoch)), 0) + 1;
+      const membershipResult = await client.query(
+        `INSERT INTO team_memberships (team_id, user_id, role, epoch)
+         VALUES ($1, $2, $3, $4)
+         RETURNING id, team_id, user_id, role, epoch, joined_at`,
+        [invitation.team_id, actorUserID, invitation.role, nextEpoch],
+      );
+      const membership = membershipResult.rows[0];
+      const accepted = await client.query(
+        `UPDATE team_invitations SET accepted_at = now(), accepted_by_user_id = $2
+         WHERE id = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
+         RETURNING id`,
+        [invitation.id, actorUserID],
+      );
+      if (!accepted.rows[0]) throw new Error("invalid_team_invitation");
+      await writeTeamAudit(client, {
+        teamID: invitation.team_id,
+        actorUserID,
+        action: "team.invitation_accepted",
+        targetUserID: actorUserID,
+        targetMembershipID: membership.id,
+        metadata: { role: membership.role, epoch: nextEpoch },
+      });
+      return { membership };
+    });
+  }
+
+  async cancelTeamInvitation({ actorUserID, teamID, invitationID, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.invitation.cancel", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      const invitationResult = await client.query(
+        `SELECT id, role FROM team_invitations
+         WHERE id = $1 AND team_id = $2 AND accepted_at IS NULL AND cancelled_at IS NULL
+         FOR UPDATE`,
+        [invitationID, teamID],
+      );
+      const invitation = invitationResult.rows[0];
+      if (!invitation) throw new Error("team_not_found");
+      requireInvitationPermission(actor.role, invitation.role);
+      await client.query(
+        `UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $3
+         WHERE id = $1 AND team_id = $2 AND accepted_at IS NULL AND cancelled_at IS NULL`,
+        [invitationID, teamID, actorUserID],
+      );
+      await client.query(
+        `UPDATE team_outbox_jobs SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
+         WHERE aggregate_id = $1 AND delivered_at IS NULL`,
+        [invitationID],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.invitation_cancelled",
+        metadata: { role: invitation.role },
+      });
+      return { cancelled: true };
+    });
+  }
+
+  async updateTeamMembershipRole({ actorUserID, teamID, membershipID, role, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.membership.role", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      const target = await lockTeamMembership(client, teamID, membershipID);
+      if (!actor || !target) throw new Error("team_not_found");
+      requireMembershipChange(actor, target, role);
+      if (target.role === "owner" && role !== "owner") await requireAnotherOwner(client, teamID, target.id);
+      const updated = await client.query(
+        `UPDATE team_memberships SET role = $3
+         WHERE id = $1 AND team_id = $2 AND revoked_at IS NULL
+         RETURNING id, team_id, user_id, role, epoch, joined_at`,
+        [membershipID, teamID, role],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.membership_role_changed",
+        targetUserID: target.user_id,
+        targetMembershipID: target.id,
+        metadata: { previousRole: target.role, role },
+      });
+      return { membership: updated.rows[0] };
+    });
+  }
+
+  async revokeTeamMembership({ actorUserID, teamID, membershipID, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.membership.revoke", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      const target = await lockTeamMembership(client, teamID, membershipID);
+      if (!actor || !target) throw new Error("team_not_found");
+      requireMembershipChange(actor, target);
+      if (target.role === "owner") await requireAnotherOwner(client, teamID, target.id);
+      const revoked = await client.query(
+        `UPDATE team_memberships SET revoked_at = now(), revoked_by_user_id = $3
+         WHERE id = $1 AND team_id = $2 AND revoked_at IS NULL
+         RETURNING id, user_id, role, epoch, revoked_at`,
+        [membershipID, teamID, actorUserID],
+      );
+      if (!revoked.rows[0]) throw new Error("team_not_found");
+      const affectedVaults = await client.query(
+        `WITH affected AS (
+           UPDATE shared_vaults SET rotation_required = true, updated_at = now()
+           WHERE team_id = $1 AND archived_at IS NULL
+           RETURNING id, key_generation
+         )
+         INSERT INTO shared_vault_rotation_tasks
+           (vault_id, from_generation, removed_membership_id)
+         SELECT id, key_generation, $2 FROM affected
+         ON CONFLICT (vault_id, from_generation, removed_membership_id) DO NOTHING
+         RETURNING vault_id AS id`,
+        [teamID, target.id],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.membership_revoked",
+        targetUserID: target.user_id,
+        targetMembershipID: target.id,
+        metadata: { role: target.role, epoch: Number(target.epoch), affectedVaults: affectedVaults.rowCount },
+      });
+      return { revoked: true, rotationRequiredVaults: affectedVaults.rowCount };
+    });
+  }
+
+  async listSharedVaults(teamID, actorUserID) {
+    const result = await this.pool.query(
+      `SELECT vault.id, vault.team_id, vault.name, vault.revision, vault.key_generation,
+         vault.rotation_required, vault.created_at, vault.updated_at
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+       WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
+       ORDER BY lower(vault.name), vault.id`,
+      [teamID, actorUserID],
+    );
+    const access = await this.pool.query(
+      `SELECT 1 FROM team_memberships AS membership
+       JOIN teams AS team ON team.id = membership.team_id
+       WHERE membership.team_id = $1 AND membership.user_id = $2
+         AND membership.revoked_at IS NULL AND team.archived_at IS NULL`,
+      [teamID, actorUserID],
+    );
+    if (!access.rows[0]) throw new Error("team_not_found");
+    return result.rows;
+  }
+
+  async createSharedVault({ actorUserID, teamID, name, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.vault.create", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      requireTeamPermission(actor.role, "create_vault");
+      let vault;
+      try {
+        const result = await client.query(
+          `INSERT INTO shared_vaults (team_id, name, created_by_user_id)
+           VALUES ($1, $2, $3)
+           RETURNING id, team_id, name, revision, key_generation, rotation_required, created_at, updated_at`,
+          [teamID, name, actorUserID],
+        );
+        vault = result.rows[0];
+      } catch (error) {
+        if (error?.code === "23505") throw new Error("shared_vault_exists");
+        throw error;
+      }
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.vault_created",
+        targetVaultID: vault.id,
+      });
+      return { vault };
+    });
+  }
+
+  async claimTeamInvitationOutbox(claimOwner) {
+    const result = await this.pool.query(
+      `WITH candidate AS (
+         SELECT id FROM team_outbox_jobs
+         WHERE delivered_at IS NULL AND attempts < 25 AND available_at <= now()
+           AND (claimed_at IS NULL OR claimed_at < now() - interval '5 minutes')
+         ORDER BY available_at, created_at
+         LIMIT 1 FOR UPDATE SKIP LOCKED
+       )
+       UPDATE team_outbox_jobs AS job SET
+         claimed_at = now(), claim_owner = $1, attempts = attempts + 1
+       FROM candidate WHERE job.id = candidate.id
+       RETURNING job.*`,
+      [claimOwner],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async completeTeamInvitationOutbox(jobID, claimOwner) {
+    const result = await this.pool.query(
+      `UPDATE team_outbox_jobs SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
+       WHERE id = $1 AND claim_owner = $2 AND delivered_at IS NULL RETURNING id`,
+      [jobID, claimOwner],
+    );
+    return result.rowCount === 1;
+  }
+
+  async retryTeamInvitationOutbox(jobID, claimOwner, retrySeconds) {
+    const result = await this.pool.query(
+      `UPDATE team_outbox_jobs SET claimed_at = NULL, claim_owner = NULL,
+         available_at = now() + $3 * interval '1 second'
+       WHERE id = $1 AND claim_owner = $2 AND delivered_at IS NULL RETURNING id`,
+      [jobID, claimOwner, retrySeconds],
+    );
+    return result.rowCount === 1;
+  }
+
+  async withTeamMutation(actorUserID, operation, idempotencyKey, mutation) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const reservation = await client.query(
+        `INSERT INTO team_mutation_receipts (actor_user_id, operation, idempotency_key, response)
+         VALUES ($1, $2, $3, '{}'::jsonb)
+         ON CONFLICT (actor_user_id, operation, idempotency_key) DO NOTHING
+         RETURNING actor_user_id`,
+        [actorUserID, operation, idempotencyKey],
+      );
+      if (!reservation.rows[0]) {
+        const replay = await client.query(
+          `SELECT response FROM team_mutation_receipts
+           WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
+          [actorUserID, operation, idempotencyKey],
+        );
+        await client.query("COMMIT");
+        return replay.rows[0]?.response ?? {};
+      }
+      const response = await mutation(client);
+      await client.query(
+        `UPDATE team_mutation_receipts SET response = $4::jsonb
+         WHERE actor_user_id = $1 AND operation = $2 AND idempotency_key = $3`,
+        [actorUserID, operation, idempotencyKey, JSON.stringify(response)],
+      );
+      await client.query("COMMIT");
+      return response;
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+}
+
+async function lockTeamActor(client, teamID, actorUserID) {
+  const result = await client.query(
+    `SELECT membership.id, membership.user_id, membership.role, membership.epoch
+     FROM team_memberships AS membership
+     JOIN teams AS team ON team.id = membership.team_id
+     WHERE membership.team_id = $1 AND membership.user_id = $2
+       AND membership.revoked_at IS NULL AND team.archived_at IS NULL
+     FOR UPDATE OF membership, team`,
+    [teamID, actorUserID],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function lockTeamMembership(client, teamID, membershipID) {
+  const result = await client.query(
+    `SELECT id, user_id, role, epoch FROM team_memberships
+     WHERE team_id = $1 AND id = $2 AND revoked_at IS NULL FOR UPDATE`,
+    [teamID, membershipID],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function requireAnotherOwner(client, teamID, excludedMembershipID) {
+  const result = await client.query(
+    `SELECT id FROM team_memberships
+     WHERE team_id = $1 AND role = 'owner' AND revoked_at IS NULL AND id <> $2
+     ORDER BY id FOR UPDATE`,
+    [teamID, excludedMembershipID],
+  );
+  if (!result.rows[0]) throw new Error("team_last_owner");
+}
+
+async function writeTeamAudit(client, {
+  teamID,
+  actorUserID,
+  action,
+  targetUserID = null,
+  targetMembershipID = null,
+  targetVaultID = null,
+  metadata = {},
+}) {
+  await client.query(
+    `INSERT INTO team_audit_events
+      (team_id, actor_user_id, action, target_user_id, target_membership_id, target_vault_id, metadata)
+     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [teamID, actorUserID, action, targetUserID, targetMembershipID, targetVaultID, JSON.stringify(metadata)],
+  );
 }

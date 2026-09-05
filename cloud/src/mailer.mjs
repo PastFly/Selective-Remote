@@ -52,5 +52,24 @@ export function createVerificationMailer(config, createTransport = nodemailer.cr
         ].join("\n"),
       });
     },
+    async sendTeamInvitation({ recipient, token, teamID, role, expiresAt }) {
+      const invitationURL = new URL("/", config.publicOrigin);
+      invitationURL.hash = `accept-team-invitation?${new URLSearchParams({ token })}`;
+      return transport.sendMail({
+        from: `Selective Remote <${config.smtp.from}>`,
+        to: recipient,
+        subject: "Приглашение в команду Selective Remote",
+        disableFileAccess: true,
+        disableUrlAccess: true,
+        text: [
+          "Вас пригласили в команду Selective Remote.",
+          invitationURL.toString(),
+          "",
+          `Роль: ${role}. Идентификатор команды: ${teamID}.`,
+          `Приглашение действует до ${expiresAt} и может быть использовано один раз.`,
+          "Если вы не ожидали приглашение, проигнорируйте это письмо.",
+        ].join("\n"),
+      });
+    },
   });
 }

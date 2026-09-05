@@ -4,9 +4,12 @@ Self-hosted Cloud foundation for Selective Remote v0.32. The API stores only
 opaque encrypted Vault revisions; plaintext remote-access data remains on user
 devices.
 
-The final v0.32 product scope also includes Teams and shared Vaults. This
-foundation milestone does not yet implement membership, roles, shared-key
-distribution or shared-record APIs.
+The final v0.32 product scope also includes Teams and shared Vaults. The backend
+foundation implements durable Teams, memberships, the fixed four-role policy,
+single-use 48-hour invitations, encrypted durable invitation delivery and
+explicit Team/shared-Vault metadata endpoints. Shared ciphertext revisions,
+device-bound key wrappers, rotation completion and client UI remain later
+milestones; a metadata-only shared Vault is not yet usable for records.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
@@ -19,13 +22,44 @@ The browser requires an explicit choice for every concurrent record or
 tombstone, joins both causal histories locally, and leaves the resolution dirty
 until the next conditional upload. A clean browser can import the encrypted
 remote Vault through a dedicated recovery form; the phrase is cleared after
-each attempt and never sent or persisted. Registration and Team endpoints
-remain disabled or unfinished.
+each attempt and never sent or persisted. Registration remains disabled in the
+closed-staging configuration.
 
 The mandatory Team/shared-Vault security contract is documented in
 `docs/cloud-v0.32-team-threat-model.md`. It fixes the four-role matrix,
 invitation lifecycle, device-bound wrappers, membership epochs and fail-closed
-key rotation. This is a design gate, not an implemented Team feature.
+key rotation. Migration `005_team_foundation.sql` implements only the durable
+identity/access and metadata portion of that contract.
+
+## Team API foundation
+
+Authenticated Team routes derive the actor exclusively from the bearer
+session. Every mutation requires a 16–128 character `Idempotency-Key` header;
+the database stores and replays the committed response atomically.
+
+- `GET|POST /v1/teams` lists or creates Teams; creation atomically grants the
+  creator the first Owner membership.
+- `GET /v1/teams/{teamID}/members` lists active members.
+- `POST /v1/teams/{teamID}/invitations` queues a rate-limited invitation;
+  Admins cannot invite Admins and invitations cannot directly grant Owner.
+- `DELETE /v1/teams/{teamID}/invitations/{invitationID}` cancels a pending
+  invitation and retires its undelivered outbox job.
+- `POST /v1/team-invitations/accept` accepts a token once, only for the
+  authenticated verified email, and creates the next membership epoch.
+- `PATCH|DELETE /v1/teams/{teamID}/members/{membershipID}` changes a role or
+  revokes membership under a transactionally locked role check. Self-mutation,
+  Admin escalation and removal of the last Owner fail closed.
+- `GET|POST /v1/teams/{teamID}/vaults` lists or creates shared-Vault metadata.
+  Only Owner/Admin may create one.
+
+The invitation table stores only an HMAC hash. The opaque token and recipient
+are held in an AES-256-GCM outbox envelope under an independent runtime key;
+multi-replica delivery uses a bounded `FOR UPDATE SKIP LOCKED` lease. Logs do
+not contain recipients, tokens or mail-provider responses. Revoking a member
+immediately marks every active shared Vault `rotation_required`; shared content
+writes are deliberately absent until the wrapper/rotation protocol is complete.
+The same revocation transaction creates one durable rotation task per affected
+Vault and removed membership epoch.
 
 ## Local verification
 

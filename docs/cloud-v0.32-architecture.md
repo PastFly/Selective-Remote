@@ -6,10 +6,12 @@ Version 0.32 introduces optional self-hosted accounts, personal Vaults, Teams
 and shared Team Vaults for Selective Remote. The macOS application remains
 fully usable without an account. The current cumulative implementation includes
 account/device APIs, opaque personal-Vault storage, browser-local encryption and
-manual authenticated personal-Vault synchronization. Shared Vault data
-structures, membership, roles and key distribution remain required later
-milestones within the final 0.32 scope. FIDO2 remains outside the initial 0.32
-release scope.
+manual authenticated personal-Vault synchronization. The Team backend now has
+durable Team, membership, invitation, role, audit, idempotency and shared-Vault
+metadata structures plus explicitly scoped authenticated routes. Shared
+ciphertext, device-bound wrappers, key rotation completion and browser/macOS
+Team clients remain required later milestones within the final 0.32 scope.
+FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:
 
@@ -159,13 +161,14 @@ portable rollback artifacts; Cloud revisions are small synchronization units.
 Shared Vaults use independent random Vault keys. The final design must wrap a
 shared key separately for authorized members/devices, enforce roles in both
 the API and clients, and rotate the key (or use an equivalently reviewed
-revocation design) when access is removed. The invitation, role and key
-rotation contract is specified before those endpoints are added.
+revocation design) when access is removed. Team lifecycle, invitation,
+membership and shared-Vault metadata endpoints now implement the non-plaintext
+authorization foundation. Ciphertext and wrapper writes remain absent until
+the key-rotation contract can be enforced as one complete protocol.
 The browser sync client accepts an explicit Vault scope and currently permits
 only `{type: "personal", id: "self"}`. Team scopes fail before any network
-request until authenticated Team endpoints and authorization are implemented.
-This keeps the ownership seam visible without pretending the personal endpoint
-already enforces Team roles.
+request until the browser Team client and shared-key protocol are implemented.
+The backend routes do not weaken that client-side gate.
 
 The mandatory role matrix, invitation lifecycle, device-bound key
 distribution, membership epochs and fail-closed rotation protocol are defined
@@ -188,6 +191,21 @@ than overloading the personal route.
 | `DELETE` | `/v1/devices/{id}` | Revoke a device and its sessions |
 | `GET` | `/v1/vault` | Download latest encrypted revision |
 | `PUT` | `/v1/vault` | Conditionally upload a revision |
+| `GET` | `/v1/teams` | List the current user's active Teams |
+| `POST` | `/v1/teams` | Create a Team and its first Owner membership |
+| `GET` | `/v1/teams/{teamID}/members` | List active Team members |
+| `POST` | `/v1/teams/{teamID}/invitations` | Queue a role-bounded invitation |
+| `DELETE` | `/v1/teams/{teamID}/invitations/{invitationID}` | Cancel a pending invitation |
+| `POST` | `/v1/team-invitations/accept` | Accept one matching invitation token |
+| `PATCH` | `/v1/teams/{teamID}/members/{membershipID}` | Change a member role |
+| `DELETE` | `/v1/teams/{teamID}/members/{membershipID}` | Revoke membership and require rotation |
+| `GET` | `/v1/teams/{teamID}/vaults` | List shared-Vault metadata |
+| `POST` | `/v1/teams/{teamID}/vaults` | Create shared-Vault metadata |
+
+Every Team mutation requires an `Idempotency-Key`. Role and membership state
+is locked and checked in the same PostgreSQL transaction as the mutation.
+Cross-Team identifiers do not accept a user/owner ID from the request body.
+Invitation creation and acceptance are separately rate-limited.
 
 Google, Apple and Microsoft/Azure sign-in are represented as account identity
 providers in the schema for future compatibility. OAuth redirect and callback
