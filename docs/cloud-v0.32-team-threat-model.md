@@ -95,8 +95,8 @@ contain actor, Team, target, role and timestamps but no token or Vault data.
 
 Each authorized device owns a non-exportable P-256 ECDH private key when the
 platform supports it; its public key and attestation metadata are registered
-with the account. Before implementation, browser/macOS interoperability
-fixtures must lock the exact encoding and algorithms:
+with the account. Browser interoperability fixtures lock the exact encoding
+and algorithms that the macOS client must reproduce:
 
 - P-256 ECDH;
 - HKDF-SHA-256;
@@ -106,6 +106,15 @@ fixtures must lock the exact encoding and algorithms:
   generation, membership ID, decimal membership epoch and device ID. The API
   verifies its base64url SHA-256 hash before storing a wrapper.
 
+The 256-bit ECDH result is imported as HKDF material. HKDF-SHA-256 uses the
+SHA-256 digest of the full canonical wrapper context as salt and UTF-8
+`selective-remote/team-vault-wrapper-key/v1` as info. AES-256-GCM encrypts the
+raw 32-byte shared Vault key with a fresh 96-bit nonce and the full canonical
+context as AAD. The separately encrypted shared payload uses canonical AAD
+`selective-remote/team-vault-payload/v1`, Team ID, Vault ID and decimal key
+generation joined with NUL separators; its content hash binds that context,
+envelope version, nonce, ciphertext and tag.
+
 For every shared Vault generation, an authorized client creates one random
 256-bit Vault key, encrypts the normalized Vault document locally, and creates
 a context-bound wrapper for each authorized member device. The server stores
@@ -114,9 +123,12 @@ shared secret. A wrapper for one Team/Vault/generation/device must fail when
 replayed in any other context.
 
 A newly registered device requires approval from an existing authorized
-device or a separately reviewed account-recovery flow. Email/password login
-alone does not grant old shared-Vault keys. Device revocation invalidates its
-sessions and excludes it from all later wrapper sets.
+device. A legacy account with zero approved devices may bootstrap only its
+current registered key after password re-verification, user/IP rate limiting
+and an account-row lock that permits exactly one winner. Once any device is
+approved, password login and bootstrap cannot approve another device or grant
+old shared-Vault keys. Device revocation invalidates its sessions and excludes
+it from all later wrapper sets.
 
 ## Removal and rotation
 

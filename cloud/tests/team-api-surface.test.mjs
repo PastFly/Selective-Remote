@@ -24,7 +24,12 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
   assert.match(serverSource, /team_invitation_accept_ip/);
   assert.match(serverSource, /service\.putSharedVault/);
   assert.match(serverSource, /service\.approveDeviceKey/);
+  assert.match(serverSource, /service\.bootstrapDeviceKey/);
   assert.match(serverSource, /service\.grantSharedVaultWrapper/);
+  assert.ok(serverSource.indexOf('url.pathname === "/v1/devices/bootstrap-key"')
+    < serverSource.indexOf("const deviceMatch"));
+  assert.match(serverSource, /device_key_bootstrap_user/);
+  assert.match(serverSource, /device_key_bootstrap_ip/);
 });
 
 test("malformed or cross-scope Team identifiers use the same not-found boundary", () => {

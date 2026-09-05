@@ -86,6 +86,8 @@ test("rate-limit overrides reject partial and out-of-range numbers", () => {
   assert.deepEqual(config.authRateLimits.reset_password_ip, { limit: 10, windowSeconds: 900 });
   assert.deepEqual(config.authRateLimits.team_invitation_create_user, { limit: 50, windowSeconds: 3_600 });
   assert.deepEqual(config.authRateLimits.team_invitation_accept_ip, { limit: 20, windowSeconds: 3_600 });
+  assert.deepEqual(config.authRateLimits.device_key_bootstrap_user, { limit: 5, windowSeconds: 900 });
+  assert.deepEqual(config.authRateLimits.device_key_bootstrap_ip, { limit: 20, windowSeconds: 900 });
   assert.throws(
     () => loadConfig({ ...baseEnv, AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT: "0" }),
     /AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT/,

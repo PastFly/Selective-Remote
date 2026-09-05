@@ -10,6 +10,8 @@ const databaseURL = process.env.TEST_DATABASE_URL;
 const migrationsDirectory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const ownerDeviceID = "33cc880e-084a-4d9a-b1ea-f99d2ff86032";
 const viewerDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+const legacyDeviceID = "c9afe150-1081-49dc-ad2e-ea67c59a4a25";
+const legacySecondDeviceID = "dab87dc1-99fd-43f4-aa31-cba26c207cff";
 
 function integrationWrapper(membership, deviceID, marker, teamID, vaultID, keyGeneration) {
   return {
@@ -43,7 +45,8 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
          ('owner@example.com', 'Owner', now()),
          ('admin@example.com', 'Admin', now()),
          ('viewer@example.com', 'Viewer', now()),
-         ('other@example.com', 'Other', now())
+         ('other@example.com', 'Other', now()),
+         ('legacy@example.com', 'Legacy', now())
        RETURNING id, email`,
     );
     const byEmail = Object.fromEntries(users.rows.map((row) => [row.email, row.id]));
@@ -66,6 +69,25 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       [ownerDeviceID, byEmail["owner@example.com"], publicKey,
         viewerDeviceID, byEmail["viewer@example.com"]],
     );
+    await pool.query(
+      `INSERT INTO devices
+        (id, user_id, name, platform, public_key, public_key_algorithm, key_registered_at)
+       VALUES ($1, $2, 'Legacy browser', 'web', $3, 'p256-ecdh-v1', now()),
+              ($4, $2, 'Legacy second browser', 'web', $3, 'p256-ecdh-v1', now())`,
+      [legacyDeviceID, byEmail["legacy@example.com"], publicKey, legacySecondDeviceID],
+    );
+    assert.deepEqual(await store.bootstrapDeviceKey({
+      actorUserID: byEmail["legacy@example.com"],
+      actorDeviceID: legacyDeviceID,
+      expectedPublicKey: publicKey,
+      idempotencyKey: "integration:device-bootstrap-01",
+    }), { approved: true, deviceID: legacyDeviceID, bootstrapped: true });
+    await assert.rejects(store.bootstrapDeviceKey({
+      actorUserID: byEmail["legacy@example.com"],
+      actorDeviceID: legacySecondDeviceID,
+      expectedPublicKey: publicKey,
+      idempotencyKey: "integration:device-bootstrap-02",
+    }), /device_approval_required/);
     const replayed = await store.createTeam({
       actorUserID: byEmail["owner@example.com"],
       name: "Different ignored replay body",
