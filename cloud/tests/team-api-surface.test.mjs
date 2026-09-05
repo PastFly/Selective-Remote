@@ -14,18 +14,24 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
     "teamInvitationMatch",
     "teamMemberMatch",
     "teamVaultsMatch",
+    "teamVaultMatch",
+    "teamVaultDevicesMatch",
+    "teamVaultWrappersMatch",
   ]) assert.match(serverSource, new RegExp(fragment.replaceAll("/", "\\/")));
   assert.match(serverSource, /idempotencyKey\(request\)/);
   assert.match(serverSource, /maxTeamBodyBytes = 16 \* 1024/);
   assert.match(serverSource, /team_invitation_create_user/);
   assert.match(serverSource, /team_invitation_accept_ip/);
-  assert.doesNotMatch(serverSource, /\/v1\/teams\/\$\{[^}]+\}\/vaults\/\$\{[^}]+\}.*PUT/);
+  assert.match(serverSource, /service\.putSharedVault/);
+  assert.match(serverSource, /service\.approveDeviceKey/);
+  assert.match(serverSource, /service\.grantSharedVaultWrapper/);
 });
 
 test("malformed or cross-scope Team identifiers use the same not-found boundary", () => {
   assert.match(serverSource, /!isUUID\(teamMembersMatch\[1\]\).*team_not_found/s);
   assert.match(serverSource, /!isUUID\(teamMemberMatch\[1\]\) \|\| !isUUID\(teamMemberMatch\[2\]\).*team_not_found/s);
   assert.match(serverSource, /!isUUID\(teamVaultsMatch\[1\]\).*team_not_found/s);
+  assert.match(serverSource, /!isUUID\(teamVaultMatch\[1\]\) \|\| !isUUID\(teamVaultMatch\[2\]\).*team_not_found/s);
 });
 
 test("invitation outbox is pumped with one-process overlap protection", () => {
