@@ -3,8 +3,12 @@ import Foundation
 
 enum SelectiveRemoteTeamCryptoError: Error, Equatable {
     case invalidPublicKey
+    case invalidPrivateKey
     case invalidGeneration
     case invalidEnvelope
+    case wrapperDeviceMismatch
+    case wrapperContextMismatch
+    case keyUnwrapFailed
 }
 
 struct SelectiveRemoteTeamDevicePublicKey: Codable, Equatable, Sendable {
@@ -36,6 +40,26 @@ struct SelectiveRemoteTeamDevicePublicKey: Codable, Equatable, Sendable {
         self.keyOps = []
     }
 
+    init(_ key: P256.KeyAgreement.PublicKey) throws {
+        let representation = key.x963Representation
+        guard representation.count == 65, representation.first == 0x04 else {
+            throw SelectiveRemoteTeamCryptoError.invalidPublicKey
+        }
+        try self.init(
+            x: Data(representation[1..<33]).selectiveRemoteBase64URL,
+            y: Data(representation[33..<65]).selectiveRemoteBase64URL
+        )
+    }
+
+    var keyAgreementPublicKey: P256.KeyAgreement.PublicKey {
+        get throws {
+            guard let xData = Data(selectiveRemoteBase64URL: x, expectedLength: 32),
+                  let yData = Data(selectiveRemoteBase64URL: y, expectedLength: 32)
+            else { throw SelectiveRemoteTeamCryptoError.invalidPublicKey }
+            return try P256.KeyAgreement.PublicKey(x963Representation: Data([0x04]) + xData + yData)
+        }
+    }
+
     init(from decoder: any Decoder) throws {
         let actualKeys = try decoder.container(keyedBy: SelectiveRemoteAnyCodingKey.self)
             .allKeys.map(\.stringValue).sorted()
@@ -53,6 +77,91 @@ struct SelectiveRemoteTeamDevicePublicKey: Codable, Equatable, Sendable {
             throw SelectiveRemoteTeamCryptoError.invalidPublicKey
         }
         try self.init(x: x, y: y)
+    }
+}
+
+struct SelectiveRemoteTeamVaultKeyWrapper: Codable, Equatable, Sendable {
+    let membershipID: UUID
+    let membershipEpoch: Int
+    let deviceID: UUID
+    let wrapperVersion: Int
+    let ephemeralPublicKey: SelectiveRemoteTeamDevicePublicKey
+    let ciphertext: String
+    let nonce: String
+    let authTag: String
+    let contextHash: String
+
+    enum CodingKeys: String, CodingKey {
+        case membershipID, membershipEpoch, deviceID, wrapperVersion
+        case ephemeralPublicKey, ciphertext, nonce, authTag, contextHash
+    }
+
+    init(
+        membershipID: UUID,
+        membershipEpoch: Int,
+        deviceID: UUID,
+        wrapperVersion: Int = 1,
+        ephemeralPublicKey: SelectiveRemoteTeamDevicePublicKey,
+        ciphertext: String,
+        nonce: String,
+        authTag: String,
+        contextHash: String
+    ) throws {
+        guard membershipID.isSelectiveRemoteCloudUUID,
+              deviceID.isSelectiveRemoteCloudUUID,
+              membershipEpoch > 0,
+              wrapperVersion == 1,
+              Data(selectiveRemoteBase64URL: ciphertext, expectedLength: 32) != nil,
+              Data(selectiveRemoteBase64URL: nonce, expectedLength: 12) != nil,
+              Data(selectiveRemoteBase64URL: authTag, expectedLength: 16) != nil,
+              Data(selectiveRemoteBase64URL: contextHash, expectedLength: 32) != nil
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        self.membershipID = membershipID
+        self.membershipEpoch = membershipEpoch
+        self.deviceID = deviceID
+        self.wrapperVersion = wrapperVersion
+        self.ephemeralPublicKey = ephemeralPublicKey
+        self.ciphertext = ciphertext
+        self.nonce = nonce
+        self.authTag = authTag
+        self.contextHash = contextHash
+    }
+
+    init(from decoder: any Decoder) throws {
+        let actualKeys = try decoder.container(keyedBy: SelectiveRemoteAnyCodingKey.self)
+            .allKeys.map(\.stringValue).sorted()
+        guard actualKeys == [
+            "authTag", "ciphertext", "contextHash", "deviceID", "ephemeralPublicKey",
+            "membershipEpoch", "membershipID", "nonce", "wrapperVersion"
+        ] else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        guard let membershipID = UUID(uuidString: try values.decode(String.self, forKey: .membershipID)),
+              let deviceID = UUID(uuidString: try values.decode(String.self, forKey: .deviceID))
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        try self.init(
+            membershipID: membershipID,
+            membershipEpoch: try values.decode(Int.self, forKey: .membershipEpoch),
+            deviceID: deviceID,
+            wrapperVersion: try values.decode(Int.self, forKey: .wrapperVersion),
+            ephemeralPublicKey: try values.decode(SelectiveRemoteTeamDevicePublicKey.self, forKey: .ephemeralPublicKey),
+            ciphertext: try values.decode(String.self, forKey: .ciphertext),
+            nonce: try values.decode(String.self, forKey: .nonce),
+            authTag: try values.decode(String.self, forKey: .authTag),
+            contextHash: try values.decode(String.self, forKey: .contextHash)
+        )
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(membershipID.canonicalCloudString, forKey: .membershipID)
+        try values.encode(membershipEpoch, forKey: .membershipEpoch)
+        try values.encode(deviceID.canonicalCloudString, forKey: .deviceID)
+        try values.encode(wrapperVersion, forKey: .wrapperVersion)
+        try values.encode(ephemeralPublicKey, forKey: .ephemeralPublicKey)
+        try values.encode(ciphertext, forKey: .ciphertext)
+        try values.encode(nonce, forKey: .nonce)
+        try values.encode(authTag, forKey: .authTag)
+        try values.encode(contextHash, forKey: .contextHash)
     }
 }
 
@@ -150,9 +259,122 @@ enum SelectiveRemoteTeamVaultCrypto {
         let bytes = Data([envelopeVersion]) + context + nonceData + ciphertextData + authTagData
         return Data(SHA256.hash(data: bytes)).selectiveRemoteBase64URL
     }
+
+    static func wrapVaultKey(
+        _ vaultKey: Data,
+        for recipientPublicKey: SelectiveRemoteTeamDevicePublicKey,
+        context: SelectiveRemoteTeamWrapperContext,
+        ephemeralPrivateKeyRepresentation: Data? = nil,
+        nonce: Data? = nil
+    ) throws -> SelectiveRemoteTeamVaultKeyWrapper {
+        guard vaultKey.count == 32 else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        let ephemeral: P256.KeyAgreement.PrivateKey
+        do {
+            if let ephemeralPrivateKeyRepresentation {
+                ephemeral = try P256.KeyAgreement.PrivateKey(
+                    rawRepresentation: ephemeralPrivateKeyRepresentation
+                )
+            } else {
+                ephemeral = P256.KeyAgreement.PrivateKey()
+            }
+        } catch {
+            throw SelectiveRemoteTeamCryptoError.invalidPrivateKey
+        }
+        let recipientKey = try recipientPublicKey.keyAgreementPublicKey
+        let contextData = wrapperContext(context)
+        let wrappingKey = try deriveWrapperKey(
+            privateKey: ephemeral,
+            publicKey: recipientKey,
+            context: contextData
+        )
+        let nonceData = nonce ?? Data(AES.GCM.Nonce())
+        guard nonceData.count == 12 else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        do {
+            let sealed = try AES.GCM.seal(
+                vaultKey,
+                using: wrappingKey,
+                nonce: AES.GCM.Nonce(data: nonceData),
+                authenticating: contextData
+            )
+            return try SelectiveRemoteTeamVaultKeyWrapper(
+                membershipID: context.membershipID,
+                membershipEpoch: context.membershipEpoch,
+                deviceID: context.deviceID,
+                ephemeralPublicKey: SelectiveRemoteTeamDevicePublicKey(ephemeral.publicKey),
+                ciphertext: sealed.ciphertext.selectiveRemoteBase64URL,
+                nonce: nonceData.selectiveRemoteBase64URL,
+                authTag: sealed.tag.selectiveRemoteBase64URL,
+                contextHash: wrapperContextHash(context)
+            )
+        } catch let error as SelectiveRemoteTeamCryptoError {
+            throw error
+        } catch {
+            throw SelectiveRemoteTeamCryptoError.invalidEnvelope
+        }
+    }
+
+    static func unwrapVaultKey(
+        _ wrapper: SelectiveRemoteTeamVaultKeyWrapper,
+        with identity: SelectiveRemoteTeamDeviceIdentity,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int
+    ) throws -> Data {
+        guard wrapper.deviceID == identity.deviceID else {
+            throw SelectiveRemoteTeamCryptoError.wrapperDeviceMismatch
+        }
+        let context = try SelectiveRemoteTeamWrapperContext(
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: keyGeneration,
+            membershipID: wrapper.membershipID,
+            membershipEpoch: wrapper.membershipEpoch,
+            deviceID: wrapper.deviceID
+        )
+        guard wrapper.contextHash == wrapperContextHash(context) else {
+            throw SelectiveRemoteTeamCryptoError.wrapperContextMismatch
+        }
+        guard let nonce = Data(selectiveRemoteBase64URL: wrapper.nonce, expectedLength: 12),
+              let ciphertext = Data(selectiveRemoteBase64URL: wrapper.ciphertext, expectedLength: 32),
+              let tag = Data(selectiveRemoteBase64URL: wrapper.authTag, expectedLength: 16)
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        do {
+            let wrappingKey = try deriveWrapperKey(
+                privateKey: identity.privateKey,
+                publicKey: wrapper.ephemeralPublicKey.keyAgreementPublicKey,
+                context: wrapperContext(context)
+            )
+            let sealed = try AES.GCM.SealedBox(
+                nonce: AES.GCM.Nonce(data: nonce),
+                ciphertext: ciphertext,
+                tag: tag
+            )
+            let rawKey = try AES.GCM.open(sealed, using: wrappingKey, authenticating: wrapperContext(context))
+            guard rawKey.count == 32 else { throw SelectiveRemoteTeamCryptoError.keyUnwrapFailed }
+            return rawKey
+        } catch let error as SelectiveRemoteTeamCryptoError {
+            throw error
+        } catch {
+            throw SelectiveRemoteTeamCryptoError.keyUnwrapFailed
+        }
+    }
+
+    private static func deriveWrapperKey(
+        privateKey: P256.KeyAgreement.PrivateKey,
+        publicKey: P256.KeyAgreement.PublicKey,
+        context: Data
+    ) throws -> SymmetricKey {
+        let secret = try privateKey.sharedSecretFromKeyAgreement(with: publicKey)
+        return secret.hkdfDerivedSymmetricKey(
+            using: SHA256.self,
+            salt: Data(SHA256.hash(data: context)),
+            sharedInfo: Data(wrapperKeyInfo.utf8),
+            outputByteCount: 32
+        )
+    }
 }
 
-private extension UUID {
+extension UUID {
     var canonicalCloudString: String { uuidString.lowercased() }
 
     var isSelectiveRemoteCloudUUID: Bool {
@@ -163,7 +385,7 @@ private extension UUID {
     }
 }
 
-private struct SelectiveRemoteAnyCodingKey: CodingKey {
+struct SelectiveRemoteAnyCodingKey: CodingKey {
     var stringValue: String
     var intValue: Int?
 
@@ -177,7 +399,7 @@ private struct SelectiveRemoteAnyCodingKey: CodingKey {
     }
 }
 
-private extension Data {
+extension Data {
     init?(selectiveRemoteBase64URL value: String, expectedLength: Int? = nil) {
         guard !value.isEmpty,
               value.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil

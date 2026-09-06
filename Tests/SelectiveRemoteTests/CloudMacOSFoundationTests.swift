@@ -129,6 +129,78 @@ struct CloudMacOSFoundationTests {
         }
     }
 
+    @Test("device identity converges on one device-only stored P-256 key")
+    func persistentDeviceIdentity() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let store = SelectiveRemoteTeamDeviceMemoryKeyStore()
+        let first = try await SelectiveRemoteTeamDeviceIdentityManager(store: store)
+            .identity(endpoint: endpoint, deviceID: deviceID)
+        let second = try await SelectiveRemoteTeamDeviceIdentityManager(store: store)
+            .identity(endpoint: endpoint, deviceID: deviceID)
+        #expect(first.deviceID == deviceID)
+        #expect(first.publicKey == second.publicKey)
+        #expect(first.privateKey.rawRepresentation == second.privateKey.rawRepresentation)
+    }
+
+    @Test("macOS deterministic wrapper decrypts in the browser fixture format")
+    func sharedKeyWrapFixture() throws {
+        let fixture = try Self.fixture()
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        #expect(identity.publicKey == fixture.publicKey)
+        let context = try SelectiveRemoteTeamWrapperContext(
+            teamID: try fixture.wrapper.teamID.uuid,
+            vaultID: try fixture.wrapper.vaultID.uuid,
+            keyGeneration: fixture.wrapper.keyGeneration,
+            membershipID: try fixture.wrapper.membershipID.uuid,
+            membershipEpoch: fixture.wrapper.membershipEpoch,
+            deviceID: deviceID
+        )
+        let wrapper = try SelectiveRemoteTeamVaultCrypto.wrapVaultKey(
+            try fixture.keyWrap.vaultKey.base64URLData,
+            for: fixture.publicKey,
+            context: context,
+            ephemeralPrivateKeyRepresentation: try fixture.keyWrap.ephemeralPrivateScalar.base64URLData,
+            nonce: try fixture.keyWrap.nonce.base64URLData
+        )
+        #expect(wrapper.ephemeralPublicKey == fixture.keyWrap.ephemeralPublicKey)
+        #expect(wrapper.ciphertext == fixture.keyWrap.ciphertext)
+        #expect(wrapper.authTag == fixture.keyWrap.authTag)
+        #expect(wrapper.contextHash == fixture.wrapper.contextHash)
+        let expectedVaultKey = try fixture.keyWrap.vaultKey.base64URLData
+        #expect(try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+            wrapper,
+            with: identity,
+            teamID: context.teamID,
+            vaultID: context.vaultID,
+            keyGeneration: context.keyGeneration
+        ) == expectedVaultKey)
+
+        let otherVaultID = try #require(UUID(uuidString: "33333333-3333-4333-8333-333333333333"))
+        #expect(throws: SelectiveRemoteTeamCryptoError.wrapperContextMismatch) {
+            try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+                wrapper,
+                with: identity,
+                teamID: context.teamID,
+                vaultID: otherVaultID,
+                keyGeneration: context.keyGeneration
+            )
+        }
+    }
+
+    private static func fixture() throws -> TeamVaultFixture {
+        let url = try #require(Bundle.module.url(
+            forResource: "team-vault-v1",
+            withExtension: "json",
+            subdirectory: "Fixtures"
+        ))
+        return try JSONDecoder().decode(TeamVaultFixture.self, from: Data(contentsOf: url))
+    }
+
     private static func response(
         _ request: URLRequest,
         status: Int,
@@ -162,6 +234,7 @@ private struct TeamVaultFixture: Decodable {
     var publicKey: SelectiveRemoteTeamDevicePublicKey
     var fingerprint: String
     var wrapper: Wrapper
+    var keyWrap: KeyWrap
     var payload: Payload
 
     struct Wrapper: Decodable {
@@ -186,12 +259,31 @@ private struct TeamVaultFixture: Decodable {
         var authTag: String
         var contentHash: String
     }
+
+    struct KeyWrap: Decodable {
+        var recipientPrivateScalar: String
+        var ephemeralPrivateScalar: String
+        var ephemeralPublicKey: SelectiveRemoteTeamDevicePublicKey
+        var vaultKey: String
+        var nonce: String
+        var ciphertext: String
+        var authTag: String
+    }
 }
 
 private extension String {
     var uuid: UUID {
         get throws {
             guard let value = UUID(uuidString: self) else {
+                throw SelectiveRemoteTeamCryptoError.invalidEnvelope
+            }
+            return value
+        }
+    }
+
+    var base64URLData: Data {
+        get throws {
+            guard let value = Data(selectiveRemoteBase64URL: self) else {
                 throw SelectiveRemoteTeamCryptoError.invalidEnvelope
             }
             return value

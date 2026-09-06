@@ -22,11 +22,12 @@ Team behind exact-name confirmation. Archiving immediately closes Team access,
 retires pending invitations/outbox work and rotation tasks, soft-archives its
 Vaults, and retains ciphertext and audit history. The remaining client
 milestone is the complete macOS implementation and cross-client acceptance.
-The first macOS foundation now provides typed login/logout/current-user/Team
-transport, device-only Keychain bearer-session storage and strict P-256
-fingerprint/context/content-hash primitives. A shared JSON fixture is exercised
-by both Swift and browser tests; Vault encryption, sync UI and end-to-end
-interoperability remain pending.
+The macOS foundation now provides typed login/logout/current-user/Team
+transport, device-only Keychain bearer-session and P-256 device-identity
+storage, strict fingerprint/context/content-hash primitives, and interoperable
+ECDH/HKDF/AES-GCM Team Vault-key wrap/unwrap. A deterministic synthetic JSON
+fixture is produced exactly by Swift and decrypted by the browser tests; Vault
+payload encryption, sync UI and end-to-end service acceptance remain pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
