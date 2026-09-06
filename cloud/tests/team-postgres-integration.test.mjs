@@ -337,6 +337,91 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       [shared.vault.id, viewerDeviceID],
     );
     assert.deepEqual(deviceRotation.rows, [{ rotation_required: true, removed_device_id: viewerDeviceID }]);
+
+    const pendingLifecycleInvite = await store.createTeamInvitation({
+      actorUserID: byEmail["owner@example.com"],
+      teamID: created.team.id,
+      email: "other@example.com",
+      role: "viewer",
+      tokenHash: "e".repeat(64),
+      expiresAt: new Date(Date.now() + 48 * 3_600_000),
+      outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      idempotencyKey: "integration:invite-lifecycle-01",
+    });
+    const renamed = await store.renameTeam({
+      actorUserID: byEmail["owner@example.com"],
+      teamID: created.team.id,
+      name: "Platform",
+      idempotencyKey: "integration:team-rename-01",
+    });
+    assert.equal(renamed.team.name, "Platform");
+    assert.deepEqual(await store.transferTeamOwnership({
+      actorUserID: byEmail["owner@example.com"],
+      teamID: created.team.id,
+      membershipID: viewer.membership.id,
+      idempotencyKey: "integration:team-transfer-01",
+    }), {
+      transferred: true,
+      teamID: created.team.id,
+      previousOwnerMembershipID: created.membership.id,
+      ownerMembershipID: viewer.membership.id,
+    });
+    const transferredRoles = await pool.query(
+      `SELECT user_id, role FROM team_memberships
+       WHERE id IN ($1, $2) ORDER BY user_id`,
+      [created.membership.id, viewer.membership.id],
+    );
+    const roleByUser = Object.fromEntries(transferredRoles.rows.map((row) => [row.user_id, row.role]));
+    assert.equal(roleByUser[byEmail["owner@example.com"]], "admin");
+    assert.equal(roleByUser[byEmail["viewer@example.com"]], "owner");
+    await assert.rejects(store.archiveTeam({
+      actorUserID: byEmail["viewer@example.com"],
+      teamID: created.team.id,
+      expectedName: "Operations",
+      idempotencyKey: "integration:team-archive-mismatch-01",
+    }), /team_name_mismatch/);
+    assert.deepEqual(await store.archiveTeam({
+      actorUserID: byEmail["viewer@example.com"],
+      teamID: created.team.id,
+      expectedName: "Platform",
+      idempotencyKey: "integration:team-archive-01",
+    }), { archived: true, teamID: created.team.id });
+    assert.deepEqual(await store.listTeams(byEmail["owner@example.com"]), []);
+    assert.deepEqual(await store.listTeams(byEmail["viewer@example.com"]), []);
+    await assert.rejects(
+      store.listSharedVaults(created.team.id, byEmail["owner@example.com"]),
+      /team_not_found/,
+    );
+    const lifecycleState = await pool.query(
+      `SELECT team.archived_at AS team_archived_at, vault.archived_at AS vault_archived_at,
+         invitation.cancelled_at, job.delivered_at
+       FROM teams AS team
+       JOIN shared_vaults AS vault ON vault.team_id = team.id
+       JOIN team_invitations AS invitation ON invitation.id = $2
+       JOIN team_outbox_jobs AS job ON job.aggregate_id = invitation.id
+       WHERE team.id = $1 AND vault.id = $3`,
+      [created.team.id, pendingLifecycleInvite.invitation.id, shared.vault.id],
+    );
+    assert.ok(lifecycleState.rows[0].team_archived_at);
+    assert.ok(lifecycleState.rows[0].vault_archived_at);
+    assert.ok(lifecycleState.rows[0].cancelled_at);
+    assert.ok(lifecycleState.rows[0].delivered_at);
+    const pendingAfterArchive = await pool.query(
+      `SELECT count(*)::int AS count FROM shared_vault_rotation_tasks AS task
+       JOIN shared_vaults AS vault ON vault.id = task.vault_id
+       WHERE vault.team_id = $1 AND task.status = 'pending'`,
+      [created.team.id],
+    );
+    assert.equal(pendingAfterArchive.rows[0].count, 0);
+    const auditActions = await pool.query(
+      `SELECT action FROM team_audit_events WHERE team_id = $1
+       AND action IN ('team.renamed', 'team.ownership_transferred', 'team.archived')
+       ORDER BY id`,
+      [created.team.id],
+    );
+    assert.deepEqual(auditActions.rows.map((row) => row.action), [
+      "team.renamed", "team.ownership_transferred", "team.archived",
+    ]);
     assert.equal(viewer.membership.role, "viewer");
     assert.equal(adminInvite.invitation.email, "admin@example.com");
   } finally {

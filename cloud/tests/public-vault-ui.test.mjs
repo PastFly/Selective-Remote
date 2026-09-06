@@ -98,6 +98,11 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(html, /id="team-create-form"/u);
   assert.match(html, /id="team-invitation-accept-form"/u);
   assert.match(html, /id="team-select"/u);
+  assert.match(html, /id="team-lifecycle"[^>]*hidden/u);
+  assert.match(html, /id="team-rename-form"/u);
+  assert.match(html, /id="team-ownership-transfer-form"/u);
+  assert.match(html, /id="team-archive-form"/u);
+  assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /id="team-devices"/u);
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
   assert.match(html, /id="team-vault-record-form"/u);
@@ -110,6 +115,10 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(application, /teamDevicePublicKeyFingerprint/u);
   assert.match(application, /client\.approveDeviceKey/u);
   assert.match(application, /client\.revokeDevice/u);
+  assert.match(application, /client\.renameTeam/u);
+  assert.match(application, /client\.transferTeamOwnership/u);
+  assert.match(application, /client\.archiveTeam/u);
+  assert.match(application, /createIndexedDBTeamVaultRepository[\s\S]*\.remove\(\)/u);
   assert.match(application, /resolveConflicts/u);
   assert.match(application, /recoveryPassphrase/u);
   assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);

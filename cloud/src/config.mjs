@@ -136,6 +136,8 @@ export function loadConfig(env = process.env) {
       team_invitation_accept_ip: Object.freeze({ limit: integer(env, "TEAM_INVITATION_ACCEPT_IP_LIMIT", 20, 1, 1_000), windowSeconds: 3_600 }),
       device_key_bootstrap_user: Object.freeze({ limit: integer(env, "DEVICE_KEY_BOOTSTRAP_USER_LIMIT", 5, 1, 100), windowSeconds: 900 }),
       device_key_bootstrap_ip: Object.freeze({ limit: integer(env, "DEVICE_KEY_BOOTSTRAP_IP_LIMIT", 20, 1, 1_000), windowSeconds: 900 }),
+      team_sensitive_user: Object.freeze({ limit: integer(env, "TEAM_SENSITIVE_USER_LIMIT", 10, 1, 100), windowSeconds: 900 }),
+      team_sensitive_ip: Object.freeze({ limit: integer(env, "TEAM_SENSITIVE_IP_LIMIT", 30, 1, 1_000), windowSeconds: 900 }),
     }),
   });
 }

@@ -556,6 +556,108 @@ export class PostgresStore {
     });
   }
 
+  async renameTeam({ actorUserID, teamID, name, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.rename", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      requireTeamPermission(actor.role, "rename_team");
+      const result = await client.query(
+        `UPDATE teams SET name = $2, updated_at = now()
+         WHERE id = $1 AND archived_at IS NULL
+         RETURNING id, name, created_at, updated_at`,
+        [teamID, name],
+      );
+      const team = result.rows[0];
+      if (!team) throw new Error("team_not_found");
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.renamed",
+        metadata: { previousName: actor.team_name, name },
+      });
+      return { team, membership: actor };
+    });
+  }
+
+  async transferTeamOwnership({ actorUserID, teamID, membershipID, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.ownership.transfer", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      const target = await lockTeamMembership(client, teamID, membershipID);
+      if (!actor || !target) throw new Error("team_not_found");
+      requireTeamPermission(actor.role, "transfer_ownership");
+      if (actor.id === target.id) throw new Error("team_access_denied");
+      await client.query(
+        `UPDATE team_memberships SET role = 'owner'
+         WHERE id = $1 AND team_id = $2 AND revoked_at IS NULL`,
+        [target.id, teamID],
+      );
+      await client.query(
+        `UPDATE team_memberships SET role = 'admin'
+         WHERE id = $1 AND team_id = $2 AND revoked_at IS NULL`,
+        [actor.id, teamID],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.ownership_transferred",
+        targetUserID: target.user_id,
+        targetMembershipID: target.id,
+        metadata: { previousRole: target.role, previousOwnerRole: actor.role, previousOwnerNextRole: "admin" },
+      });
+      return {
+        transferred: true,
+        teamID,
+        previousOwnerMembershipID: actor.id,
+        ownerMembershipID: target.id,
+      };
+    });
+  }
+
+  async archiveTeam({ actorUserID, teamID, expectedName, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.archive", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      requireTeamPermission(actor.role, "archive_team");
+      if (actor.team_name !== expectedName) throw new Error("team_name_mismatch");
+
+      await client.query(
+        `WITH cancelled AS (
+           UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $2
+           WHERE team_id = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
+           RETURNING id
+         )
+         UPDATE team_outbox_jobs AS job
+         SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
+         FROM cancelled WHERE job.aggregate_id = cancelled.id AND job.delivered_at IS NULL`,
+        [teamID, actorUserID],
+      );
+      await client.query(
+        `UPDATE shared_vault_rotation_tasks AS task SET status = 'cancelled', completed_at = NULL
+         FROM shared_vaults AS vault
+         WHERE task.vault_id = vault.id AND vault.team_id = $1 AND task.status = 'pending'`,
+        [teamID],
+      );
+      await client.query(
+        `UPDATE shared_vaults SET archived_at = now(), updated_at = now()
+         WHERE team_id = $1 AND archived_at IS NULL`,
+        [teamID],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.archived",
+        metadata: { name: actor.team_name },
+      });
+      const archived = await client.query(
+        `UPDATE teams SET archived_at = now(), updated_at = now()
+         WHERE id = $1 AND archived_at IS NULL RETURNING id`,
+        [teamID],
+      );
+      if (!archived.rows[0]) throw new Error("team_not_found");
+      return { archived: true, teamID };
+    });
+  }
+
   async listTeamMembers(teamID, actorUserID) {
     const result = await this.pool.query(
       `SELECT member.id, member.user_id, member.role, member.epoch,
@@ -1101,7 +1203,8 @@ export class PostgresStore {
 
 async function lockTeamActor(client, teamID, actorUserID) {
   const result = await client.query(
-    `SELECT membership.id, membership.user_id, membership.role, membership.epoch
+    `SELECT membership.id, membership.user_id, membership.role, membership.epoch,
+       team.name AS team_name
      FROM team_memberships AS membership
      JOIN teams AS team ON team.id = membership.team_id
      WHERE membership.team_id = $1 AND membership.user_id = $2

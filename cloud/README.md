@@ -16,7 +16,11 @@ API calls, Team/member/shared-Vault UI and causal shared-record synchronization.
 The portal also lists account devices, shows canonical SHA-256 public-key
 fingerprints, approves a matching new key only from an approved device, revokes
 other devices, lets Owner/Admin grant missing current-generation wrappers from
-an unlocked Vault and completes required rotations. The remaining client
+an unlocked Vault and completes required rotations. Owners can rename Teams,
+atomically transfer ownership after password re-authentication, and archive a
+Team behind exact-name confirmation. Archiving immediately closes Team access,
+retires pending invitations/outbox work and rotation tasks, soft-archives its
+Vaults, and retains ciphertext and audit history. The remaining client
 milestone is the macOS implementation and cross-client acceptance.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
@@ -48,6 +52,12 @@ the database stores and replays the committed response atomically.
 
 - `GET|POST /v1/teams` lists or creates Teams; creation atomically grants the
   creator the first Owner membership.
+- `PATCH /v1/teams/{teamID}` renames an active Team under an Owner lock.
+- `POST /v1/teams/{teamID}/ownership-transfer` re-authenticates the Owner,
+  promotes one active target member and demotes the actor to Admin atomically.
+- `DELETE /v1/teams/{teamID}` requires rate-limited password re-authentication
+  and exact current-name confirmation, then transactionally soft-archives the
+  Team and Vaults while retiring pending invitations, delivery and rotations.
 - `GET /v1/teams/{teamID}/members` lists active members.
 - `POST /v1/teams/{teamID}/invitations` queues a rate-limited invitation;
   Admins cannot invite Admins and invitations cannot directly grant Owner.

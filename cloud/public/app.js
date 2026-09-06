@@ -335,6 +335,11 @@ export function initializeTeamWorkspace({
   const teamRole = documentValue.querySelector("#team-role");
   const members = documentValue.querySelector("#team-members");
   const inviteForm = documentValue.querySelector("#team-invite-form");
+  const lifecyclePanel = documentValue.querySelector("#team-lifecycle");
+  const renameTeamForm = documentValue.querySelector("#team-rename-form");
+  const transferOwnershipForm = documentValue.querySelector("#team-ownership-transfer-form");
+  const transferOwnershipMember = documentValue.querySelector("#team-ownership-member");
+  const archiveTeamForm = documentValue.querySelector("#team-archive-form");
   const createVaultForm = documentValue.querySelector("#team-vault-create-form");
   const vaultSelect = documentValue.querySelector("#team-vault-select");
   const vaultOpen = documentValue.querySelector("#team-vault-open");
@@ -360,6 +365,7 @@ export function initializeTeamWorkspace({
   let identity = null;
   let teams = [];
   let vaults = [];
+  let teamMembers = [];
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
@@ -586,6 +592,14 @@ export function initializeTeamWorkspace({
       card.append(name, detail, role, save, revoke);
       members.append(card);
     }
+    transferOwnershipMember.replaceChildren();
+    for (const member of values.filter((value) => value.id !== selectedTeam.membershipID)) {
+      const option = documentValue.createElement("option");
+      option.value = member.id;
+      option.textContent = `${member.displayName || member.email} · ${member.role}`;
+      transferOwnershipMember.append(option);
+    }
+    transferOwnershipForm.querySelector("button").disabled = transferOwnershipMember.options.length === 0;
   }
 
   function populateVaults() {
@@ -667,10 +681,15 @@ export function initializeTeamWorkspace({
     teamRole.textContent = `${selectedTeam.name} · ${selectedTeam.role}`;
     inviteForm.hidden = !canManage();
     createVaultForm.hidden = !canManage();
-    const [teamMembers, sharedVaults] = await Promise.all([
+    lifecyclePanel.hidden = selectedTeam.role !== "owner";
+    renameTeamForm.elements.name.value = selectedTeam.name;
+    archiveTeamForm.reset();
+    transferOwnershipForm.reset();
+    const [loadedMembers, sharedVaults] = await Promise.all([
       client.listTeamMembers(selectedTeam.id),
       client.listSharedVaults(selectedTeam.id),
     ]);
+    teamMembers = loadedMembers;
     renderMembers(teamMembers);
     vaults = sharedVaults;
     populateVaults();
@@ -742,6 +761,81 @@ export function initializeTeamWorkspace({
     } catch {
       setText(message, "Приглашение не создано. Проверьте SMTP, роль и полномочия.");
     } finally {
+      button.disabled = false;
+    }
+  });
+
+  renameTeamForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (selectedTeam?.role !== "owner") return;
+    const button = renameTeamForm.querySelector("button");
+    button.disabled = true;
+    try {
+      const team = await client.renameTeam({ teamID: selectedTeam.id, name: renameTeamForm.elements.name.value });
+      await loadTeams(team.id);
+      setText(message, "Название Team обновлено.");
+    } catch {
+      setText(message, "Team не переименована: проверьте название и полномочия Owner.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  transferOwnershipForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (selectedTeam?.role !== "owner") return;
+    const currentTeamID = selectedTeam.id;
+    const button = transferOwnershipForm.querySelector("button");
+    button.disabled = true;
+    try {
+      if (!confirmValue("Передать роль Owner выбранному участнику и продолжить как Admin?")) return;
+      await client.transferTeamOwnership({
+        teamID: currentTeamID,
+        membershipID: transferOwnershipForm.elements.membershipID.value,
+        password: transferOwnershipForm.elements.password.value,
+      });
+      lockCurrentVault();
+      await loadTeams(currentTeamID);
+      setText(message, "Владение передано. Ваша роль изменена на Admin.");
+    } catch {
+      setText(message, "Владение не передано: проверьте пароль, участника и полномочия Owner.");
+    } finally {
+      transferOwnershipForm.elements.password.value = "";
+      button.disabled = transferOwnershipMember.options.length === 0;
+    }
+  });
+
+  archiveTeamForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (selectedTeam?.role !== "owner") return;
+    const archivedTeam = selectedTeam;
+    const archivedVaults = [...vaults];
+    const button = archiveTeamForm.querySelector("button");
+    let remotelyArchived = false;
+    button.disabled = true;
+    try {
+      if (!confirmValue(`Архивировать Team «${archivedTeam.name}» и немедленно закрыть к ней доступ?`)) return;
+      await client.archiveTeam({
+        teamID: archivedTeam.id,
+        expectedName: archiveTeamForm.elements.expectedName.value,
+        password: archiveTeamForm.elements.password.value,
+      });
+      remotelyArchived = true;
+      lockCurrentVault();
+      const removals = await Promise.allSettled(archivedVaults.map((vault) => (
+        createIndexedDBTeamVaultRepository({ type: "team", teamID: archivedTeam.id, vaultID: vault.id }).remove()
+      )));
+      await loadTeams();
+      const failed = removals.filter((result) => result.status === "rejected").length;
+      setText(message, failed === 0
+        ? "Team архивирована; локальные зашифрованные снимки удалены."
+        : `Team архивирована, но ${failed} локальных зашифрованных снимков не удалось удалить.`);
+    } catch {
+      setText(message, remotelyArchived
+        ? "Team архивирована, но локальную очистку или обновление списка не удалось завершить."
+        : "Team не архивирована: точное название, пароль или полномочия Owner не подтверждены.");
+    } finally {
+      archiveTeamForm.elements.password.value = "";
       button.disabled = false;
     }
   });
@@ -931,6 +1025,7 @@ export function initializeTeamWorkspace({
       identity = null;
       teams = [];
       vaults = [];
+      teamMembers = [];
       selectedTeam = null;
       lockCurrentVault();
       teamSelect.replaceChildren();

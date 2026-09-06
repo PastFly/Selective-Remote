@@ -157,6 +157,45 @@ async function route(request, response) {
         201,
       );
     }
+    const teamMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)$/i);
+    if (teamMatch) {
+      if (!isUUID(teamMatch[1])) return sendError(response, 404, "team_not_found");
+      if (method === "PATCH") {
+        return handleOperation(
+          response,
+          async () => service.renameTeam(
+            session,
+            teamMatch[1],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          ),
+        );
+      }
+      if (method === "DELETE") {
+        return handleOperation(response, async () => {
+          await requireTeamSensitiveRateLimits(request, session);
+          return service.archiveTeam(
+            session,
+            teamMatch[1],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          );
+        });
+      }
+    }
+    const teamOwnershipMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/ownership-transfer$/i);
+    if (method === "POST" && teamOwnershipMatch) {
+      if (!isUUID(teamOwnershipMatch[1])) return sendError(response, 404, "team_not_found");
+      return handleOperation(response, async () => {
+        await requireTeamSensitiveRateLimits(request, session);
+        return service.transferTeamOwnership(
+          session,
+          teamOwnershipMatch[1],
+          await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request),
+        );
+      });
+    }
     if (method === "POST" && url.pathname === "/v1/team-invitations/accept") {
       return handleOperation(
         response,
@@ -320,6 +359,11 @@ async function route(request, response) {
 
   if (method === "GET" || method === "HEAD") return serveStatic(url.pathname, response, method === "HEAD");
   return sendError(response, 404, "not_found");
+}
+
+async function requireTeamSensitiveRateLimits(request, session) {
+  await authRateLimiter.require("team_sensitive_user", session.user_id);
+  await authRateLimiter.require("team_sensitive_ip", clientIPAddress(request, config.proxySharedSecret));
 }
 
 async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200) {

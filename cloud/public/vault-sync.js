@@ -267,6 +267,20 @@ function normalizedTeamName(value, code = "invalid_team") {
   return name;
 }
 
+function normalizedPassword(value) {
+  const password = String(value ?? "");
+  if (password.length < 12 || password.length > 1024) throw new Error("invalid_password");
+  return password;
+}
+
+function confirmedTeamName(value) {
+  const name = String(value ?? "");
+  if (name !== normalizedTeamName(name) || /[\u0000-\u001f\u007f]/u.test(name)) {
+    throw new Error("team_name_mismatch");
+  }
+  return name;
+}
+
 function generatedIdempotencyKey(prefix) {
   const id = globalThis.crypto?.randomUUID?.();
   if (!id) throw new Error("idempotency_unavailable");
@@ -451,6 +465,69 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       const result = await responseJSON(response, "team_create_failed");
       if (!response.ok || !result.team) throw new Error("team_create_failed");
       return normalizedTeam(result.team);
+    },
+
+    async renameTeam({ teamID, name, idempotencyKey = generatedIdempotencyKey("web:team:rename") }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}`, {
+        method: "PATCH",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ name: normalizedTeamName(name) }),
+      });
+      const result = await responseJSON(response, "team_rename_failed");
+      if (!response.ok || !result.team) throw new Error("team_rename_failed");
+      return normalizedTeam(result.team);
+    },
+
+    async transferTeamOwnership({
+      teamID,
+      membershipID,
+      password,
+      idempotencyKey = generatedIdempotencyKey("web:team:ownership"),
+    }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedMembershipID = normalizedUUID(membershipID, "invalid_team_member");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/ownership-transfer`, {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({ membershipID: normalizedMembershipID, password: normalizedPassword(password) }),
+      });
+      const result = await responseJSON(response, "team_ownership_transfer_failed");
+      if (!response.ok || result.transferred !== true
+        || normalizedUUID(result.teamID, "team_ownership_transfer_failed") !== normalizedTeamID
+        || normalizedUUID(result.previousOwnerMembershipID, "team_ownership_transfer_failed") === normalizedMembershipID
+        || normalizedUUID(result.ownerMembershipID, "team_ownership_transfer_failed") !== normalizedMembershipID) {
+        throw new Error("team_ownership_transfer_failed");
+      }
+      return {
+        transferred: true,
+        teamID: normalizedTeamID,
+        previousOwnerMembershipID: result.previousOwnerMembershipID.toLowerCase(),
+        ownerMembershipID: normalizedMembershipID,
+      };
+    },
+
+    async archiveTeam({
+      teamID,
+      expectedName,
+      password,
+      idempotencyKey = generatedIdempotencyKey("web:team:archive"),
+    }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}`, {
+        method: "DELETE",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        body: JSON.stringify({
+          expectedName: confirmedTeamName(expectedName),
+          password: normalizedPassword(password),
+        }),
+      });
+      const result = await responseJSON(response, "team_archive_failed");
+      if (!response.ok || result.archived !== true
+        || normalizedUUID(result.teamID, "team_archive_failed") !== normalizedTeamID) {
+        throw new Error("team_archive_failed");
+      }
+      return { archived: true, teamID: normalizedTeamID };
     },
 
     async listTeamMembers(teamID) {

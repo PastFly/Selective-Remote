@@ -44,6 +44,29 @@ class TeamStore {
     };
   }
 
+  async renameTeam(input) {
+    this.calls.push(["renameTeam", input]);
+    return {
+      team: { id: teamID, name: input.name, created_at: "then", updated_at: "now" },
+      membership: { id: membershipID, role: "owner", epoch: 1 },
+    };
+  }
+
+  async transferTeamOwnership(input) {
+    this.calls.push(["transferTeamOwnership", input]);
+    return {
+      transferred: true,
+      teamID: input.teamID,
+      previousOwnerMembershipID: membershipID,
+      ownerMembershipID: input.membershipID,
+    };
+  }
+
+  async archiveTeam(input) {
+    this.calls.push(["archiveTeam", input]);
+    return { archived: true, teamID: input.teamID };
+  }
+
   async createTeamInvitation(input) {
     this.calls.push(["createTeamInvitation", input]);
     this.job = {
@@ -198,6 +221,73 @@ test("Team creation derives Owner identity from the authenticated session", asyn
     name: "Operations",
     idempotencyKey: "request:team-create-01",
   });
+});
+
+test("Team rename remains Owner-scoped and derives actor identity from the session", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+  const result = await service.renameTeam(
+    session,
+    teamID,
+    { name: " Platform ", actorUserID: "attacker" },
+    "request:team-rename-01",
+  );
+  assert.equal(result.team.name, "Platform");
+  assert.deepEqual(store.calls[0][1], {
+    actorUserID: session.user_id,
+    teamID,
+    name: "Platform",
+    idempotencyKey: "request:team-rename-01",
+  });
+});
+
+test("ownership transfer and Team archive require password reauthentication", async () => {
+  const targetMembershipID = "87806d7b-d3a9-4701-8262-f247bd5de1e9";
+  const store = new TeamStore();
+  const service = new CloudService(store, config, null, console, async (password, hash) => (
+    password === "synthetic-password" && hash === "synthetic-hash"
+  ));
+
+  assert.equal((await service.transferTeamOwnership(
+    session,
+    teamID,
+    { membershipID: targetMembershipID, password: "synthetic-password", actorUserID: "attacker" },
+    "request:team-transfer-01",
+  )).ownerMembershipID, targetMembershipID);
+  assert.deepEqual(store.calls[1][1], {
+    actorUserID: session.user_id,
+    teamID,
+    membershipID: targetMembershipID,
+    idempotencyKey: "request:team-transfer-01",
+  });
+
+  assert.deepEqual(await service.archiveTeam(
+    session,
+    teamID,
+    { expectedName: "Operations", password: "synthetic-password", actorUserID: "attacker" },
+    "request:team-archive-01",
+  ), { archived: true, teamID });
+  assert.deepEqual(store.calls[3][1], {
+    actorUserID: session.user_id,
+    teamID,
+    expectedName: "Operations",
+    idempotencyKey: "request:team-archive-01",
+  });
+
+  await assert.rejects(service.transferTeamOwnership(
+    session,
+    teamID,
+    { membershipID: targetMembershipID, password: "wrong-password-value" },
+    "request:team-transfer-02",
+  ), /invalid_credentials/);
+  await assert.rejects(service.archiveTeam(
+    session,
+    teamID,
+    { expectedName: " Operations ", password: "synthetic-password" },
+    "request:team-archive-02",
+  ), /team_name_mismatch/);
+  assert.equal(store.calls.filter(([name]) => name === "transferTeamOwnership").length, 1);
+  assert.equal(store.calls.filter(([name]) => name === "archiveTeam").length, 1);
 });
 
 test("invitation API persists only a hash and encrypted durable outbox payload", async () => {

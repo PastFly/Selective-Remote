@@ -12,6 +12,7 @@ const userID = "99999999-9999-4999-8999-999999999999";
 const teamID = "11111111-1111-4111-8111-111111111111";
 const vaultID = "22222222-2222-4222-8222-222222222222";
 const membershipID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const otherMembershipID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const deviceID = "44444444-4444-4444-8444-444444444444";
 const otherDeviceID = "55555555-5555-4555-8555-555555555555";
 const scope = { type: "team", teamID, vaultID };
@@ -289,6 +290,20 @@ test("browser Team management covers lifecycle, members, invitations and shared 
       });
       if (path === "/v1/teams" && !options.method) return jsonResponse(200, { teams: [team] });
       if (path === "/v1/teams" && options.method === "POST") return jsonResponse(201, { team });
+      if (path === `/v1/teams/${teamID}` && options.method === "PATCH") {
+        return jsonResponse(200, { team: { ...team, name: "Platform" } });
+      }
+      if (path === `/v1/teams/${teamID}/ownership-transfer` && options.method === "POST") {
+        return jsonResponse(200, {
+          transferred: true,
+          teamID,
+          previousOwnerMembershipID: membershipID,
+          ownerMembershipID: otherMembershipID,
+        });
+      }
+      if (path === `/v1/teams/${teamID}` && options.method === "DELETE") {
+        return jsonResponse(200, { archived: true, teamID });
+      }
       if (path.endsWith("/members") && !options.method) return jsonResponse(200, { members: [member] });
       if (path.endsWith("/invitations")) return jsonResponse(201, { invitation: {
         id: "66666666-6666-4666-8666-666666666666",
@@ -317,6 +332,28 @@ test("browser Team management covers lifecycle, members, invitations and shared 
 
   assert.deepEqual(await client.listTeams(), [team]);
   assert.deepEqual(await client.createTeam({ name: " Operations " }), team);
+  assert.equal((await client.renameTeam({ teamID, name: " Platform " })).name, "Platform");
+  assert.deepEqual(await client.transferTeamOwnership({
+    teamID,
+    membershipID: otherMembershipID,
+    password: "synthetic-password",
+  }), {
+    transferred: true,
+    teamID,
+    previousOwnerMembershipID: membershipID,
+    ownerMembershipID: otherMembershipID,
+  });
+  assert.deepEqual(await client.archiveTeam({
+    teamID,
+    expectedName: "Operations",
+    password: "synthetic-password",
+  }), { archived: true, teamID });
+  await assert.rejects(client.archiveTeam({
+    teamID,
+    expectedName: " Operations ",
+    password: "synthetic-password",
+  }), /team_name_mismatch/);
+  assert.equal(calls.filter(({ path, options }) => path === `/v1/teams/${teamID}` && options.method === "DELETE").length, 1);
   assert.deepEqual(await client.listTeamMembers(teamID), [member]);
   const invitation = await client.inviteTeamMember({ teamID, email: "MEMBER@example.invalid", role: "viewer" });
   assert.equal(invitation.email, "member@example.invalid");
@@ -335,4 +372,5 @@ test("browser Team management covers lifecycle, members, invitations and shared 
     if (call.options.method !== undefined) assert.match(call.options.headers["Idempotency-Key"], /^web:/u);
   }
   assert.doesNotMatch(JSON.stringify(calls), /localStorage|sessionStorage/u);
+  assert.equal(JSON.stringify(client.session()).includes("synthetic-password"), false);
 });
