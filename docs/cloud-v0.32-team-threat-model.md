@@ -1,11 +1,12 @@
 # Cloud 0.32 Team and shared Vault threat model
 
-Status: design contract with the backend Team-access and ciphertext protocol implemented.
+Status: design contract with the backend protocol and browser Team client implemented.
 Durable Teams, memberships, four-role checks, membership epochs, hash-only
 invitations, encrypted outbox delivery, audit events, idempotency receipts and
 shared-Vault metadata, shared ciphertext revisions, approved P-256 devices,
-per-device wrappers and atomic rotation completion are present. Browser/macOS
-Team cryptography and UI are not yet implemented.
+per-device wrappers and atomic rotation completion are present. The browser has
+Team/member/shared-Vault UI, non-exportable device keys and causal shared-record
+synchronization. Browser approval/rotation UI and the macOS client remain.
 
 ## Security outcome
 
@@ -205,6 +206,6 @@ or wrappers.
   present.
 
 Team/shared Vault release status remains `planned_required`: the server-side
-access and ciphertext protocol is implemented, but interoperable browser/macOS
-cryptography, Team UI and the complete acceptance suite must pass before Cloud
-0.32 is complete.
+protocol and browser Team UI/cryptography/causal sync are implemented, but
+browser approval/rotation completion, macOS interoperability and the complete
+acceptance suite must pass before Cloud 0.32 is complete.

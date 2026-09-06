@@ -1,5 +1,14 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
+import {
+  createIndexedDBTeamDeviceRepository,
+  ensureTeamDeviceIdentity,
+} from "./team-vault-crypto.js";
+import {
+  createIndexedDBTeamVaultRepository,
+  createTeamVaultController,
+  synchronizeTeamVault,
+} from "./team-vault-sync.js";
 
 const verificationPrefix = "#verify-email?";
 const passwordResetPrefix = "#reset-password?";
@@ -306,6 +315,489 @@ export async function initializeLocalVault({
   };
 }
 
+export function initializeTeamWorkspace({
+  documentValue = document,
+  client,
+  confirmValue = (message) => globalThis.confirm(message),
+} = {}) {
+  const section = documentValue.querySelector("#team-vault");
+  if (!section || !client) return null;
+  const message = documentValue.querySelector("#team-vault-message");
+  const createTeamForm = documentValue.querySelector("#team-create-form");
+  const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
+  const teamSelect = documentValue.querySelector("#team-select");
+  const teamRefresh = documentValue.querySelector("#team-refresh");
+  const selectedPanel = documentValue.querySelector("#team-selected");
+  const teamRole = documentValue.querySelector("#team-role");
+  const members = documentValue.querySelector("#team-members");
+  const inviteForm = documentValue.querySelector("#team-invite-form");
+  const createVaultForm = documentValue.querySelector("#team-vault-create-form");
+  const vaultSelect = documentValue.querySelector("#team-vault-select");
+  const vaultOpen = documentValue.querySelector("#team-vault-open");
+  const workspace = documentValue.querySelector("#team-vault-workspace");
+  const workspaceTitle = documentValue.querySelector("#team-vault-workspace-title");
+  const workspaceStatus = documentValue.querySelector("#team-vault-workspace-status");
+  const syncButton = documentValue.querySelector("#team-vault-sync");
+  const lockButton = documentValue.querySelector("#team-vault-lock");
+  const recordForm = documentValue.querySelector("#team-vault-record-form");
+  const recordType = documentValue.querySelector("#team-record-type");
+  const recordTitle = documentValue.querySelector("#team-record-title");
+  const recordTarget = documentValue.querySelector("#team-record-target");
+  const recordSecret = documentValue.querySelector("#team-record-secret");
+  const recordTargetLabel = documentValue.querySelector("#team-record-target-label");
+  const recordSecretLabel = documentValue.querySelector("#team-record-secret-label");
+  const records = documentValue.querySelector("#team-vault-records");
+  const conflictPanel = documentValue.querySelector("#team-vault-conflicts");
+  const conflictForm = documentValue.querySelector("#team-vault-conflicts-form");
+  const conflictList = documentValue.querySelector("#team-vault-conflicts-list");
+  const conflictApply = documentValue.querySelector("#team-vault-conflicts-apply");
+  let identity = null;
+  let teams = [];
+  let vaults = [];
+  let selectedTeam = null;
+  let selectedVault = null;
+  let controller = null;
+  let activeConflicts = null;
+
+  function canManage() {
+    return ["owner", "admin"].includes(selectedTeam?.role);
+  }
+
+  function canEdit() {
+    return ["owner", "admin", "editor"].includes(selectedTeam?.role);
+  }
+
+  function setWorkspaceControls(disabled) {
+    for (const control of recordForm.querySelectorAll("input, select, textarea, button")) {
+      control.disabled = disabled || !canEdit();
+    }
+    for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
+  }
+
+  function clearConflicts() {
+    activeConflicts = null;
+    conflictPanel.hidden = true;
+    conflictForm.reset();
+    conflictList.replaceChildren();
+    conflictApply.disabled = true;
+    setWorkspaceControls(false);
+  }
+
+  function updateRecordLabels() {
+    const labels = {
+      host: ["Адрес", "Дополнительные данные не требуются"],
+      credential: ["Имя пользователя", "Секрет"],
+      snippet: ["Не используется", "Текст Snippet"],
+      forwarding: ["Назначение", "Параметры"],
+    };
+    const [targetText, secretText] = labels[recordType.value] ?? labels.host;
+    setText(recordTargetLabel, targetText);
+    setText(recordSecretLabel, secretText);
+    recordTarget.required = recordType.value !== "snippet";
+    recordSecret.required = ["credential", "snippet"].includes(recordType.value);
+  }
+
+  function renderRecords() {
+    records.replaceChildren();
+    if (!controller) return;
+    const current = controller.document();
+    if (current.records.length === 0) {
+      const empty = documentValue.createElement("p");
+      empty.className = "vault-empty";
+      empty.textContent = "Shared Vault пока пуст.";
+      records.append(empty);
+      return;
+    }
+    for (const record of current.records) {
+      const card = documentValue.createElement("article");
+      const heading = documentValue.createElement("h4");
+      const summary = documentValue.createElement("p");
+      const metadata = documentValue.createElement("small");
+      const remove = documentValue.createElement("button");
+      heading.textContent = String(record.data.title ?? "Без названия");
+      summary.textContent = localVaultRecordSummary(record);
+      metadata.textContent = `${record.type} · ${record.modifiedAt}`;
+      remove.type = "button";
+      remove.className = "danger";
+      remove.textContent = "Удалить";
+      remove.disabled = !canEdit();
+      remove.addEventListener("click", async () => {
+        remove.disabled = true;
+        try {
+          await controller.delete(record.id);
+          clearConflicts();
+          renderRecords();
+          setText(workspaceStatus, "Удаление зашифровано локально. Выполните синхронизацию.");
+        } catch {
+          setText(workspaceStatus, "Не удалось сохранить удаление.");
+          remove.disabled = !canEdit();
+        }
+      });
+      card.append(heading, summary, metadata, remove);
+      records.append(card);
+    }
+  }
+
+  function renderConflicts(result) {
+    activeConflicts = { revision: result.revision, ids: result.conflicts.map((conflict) => conflict.id) };
+    conflictForm.reset();
+    conflictList.replaceChildren();
+    result.conflicts.forEach((conflict, index) => {
+      const fieldset = documentValue.createElement("fieldset");
+      const legend = documentValue.createElement("legend");
+      legend.textContent = `Конфликт ${index + 1}`;
+      fieldset.append(legend);
+      for (const [choice, prefix] of [["local", "Оставить локальную"], ["remote", "Принять Team-версию"]]) {
+        const label = documentValue.createElement("label");
+        const input = documentValue.createElement("input");
+        input.type = "radio";
+        input.name = `team-conflict-${index}`;
+        input.value = choice;
+        input.required = true;
+        label.append(input, ` ${prefix}: ${localVaultConflictSideSummary(conflict[choice])}`);
+        fieldset.append(label);
+      }
+      conflictList.append(fieldset);
+    });
+    conflictApply.disabled = true;
+    setWorkspaceControls(true);
+    conflictPanel.hidden = false;
+  }
+
+  function renderMembers(values) {
+    members.replaceChildren();
+    for (const member of values) {
+      const card = documentValue.createElement("article");
+      const name = documentValue.createElement("strong");
+      const detail = documentValue.createElement("small");
+      const role = documentValue.createElement("select");
+      const save = documentValue.createElement("button");
+      const revoke = documentValue.createElement("button");
+      name.textContent = member.displayName || member.email;
+      detail.textContent = `${member.email} · epoch ${member.epoch}`;
+      const editableByActor = selectedTeam.role === "owner"
+        || (selectedTeam.role === "admin" && ["editor", "viewer"].includes(member.role));
+      const self = member.id === selectedTeam.membershipID;
+      for (const value of ["owner", "admin", "editor", "viewer"]) {
+        const option = documentValue.createElement("option");
+        option.value = value;
+        option.textContent = value;
+        option.selected = member.role === value;
+        option.disabled = selectedTeam.role !== "owner" && !["editor", "viewer"].includes(value);
+        role.append(option);
+      }
+      role.disabled = !editableByActor || self;
+      save.type = "button";
+      save.textContent = "Изменить роль";
+      save.disabled = !editableByActor || self;
+      save.addEventListener("click", async () => {
+        save.disabled = true;
+        try {
+          await client.updateTeamMemberRole({ teamID: selectedTeam.id, membershipID: member.id, role: role.value });
+          await loadSelectedTeam();
+          setText(message, "Роль участника обновлена.");
+        } catch {
+          setText(message, "Роль не изменена: проверьте полномочия и правило последнего Owner.");
+          save.disabled = !editableByActor || self;
+        }
+      });
+      revoke.type = "button";
+      revoke.className = "danger";
+      revoke.textContent = "Отозвать доступ";
+      revoke.disabled = !editableByActor || self;
+      revoke.addEventListener("click", async () => {
+        if (!confirmValue(`Отозвать доступ для ${member.email}? Все Shared Vaults будут заморожены до ротации ключей.`)) return;
+        revoke.disabled = true;
+        try {
+          const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
+          await loadSelectedTeam();
+          lockCurrentVault();
+          setText(message, `Доступ отозван. Vaults для обязательной ротации: ${result.rotationRequiredVaults}.`);
+        } catch {
+          setText(message, "Доступ не отозван: проверьте полномочия и правило последнего Owner.");
+          revoke.disabled = !editableByActor || self;
+        }
+      });
+      card.append(name, detail, role, save, revoke);
+      members.append(card);
+    }
+  }
+
+  function populateVaults() {
+    vaultSelect.replaceChildren();
+    for (const vault of vaults) {
+      const option = documentValue.createElement("option");
+      option.value = vault.id;
+      option.textContent = `${vault.name}${vault.rotationRequired ? " · требуется ротация" : ""}`;
+      vaultSelect.append(option);
+    }
+    vaultOpen.disabled = vaults.length === 0;
+  }
+
+  function lockCurrentVault() {
+    controller?.lock();
+    controller = null;
+    selectedVault = null;
+    workspace.hidden = true;
+    records.replaceChildren();
+    clearConflicts();
+  }
+
+  async function openSelectedVault() {
+    const vault = vaults.find((value) => value.id === vaultSelect.value);
+    if (!vault || !identity) return;
+    lockCurrentVault();
+    selectedVault = vault;
+    const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
+    controller = createTeamVaultController({
+      repository: createIndexedDBTeamVaultRepository(scope),
+      identity,
+      scope,
+    });
+    workspace.hidden = false;
+    workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
+    setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
+    syncButton.disabled = true;
+    try {
+      const result = await synchronizeTeamVault({ client, controller, role: selectedTeam.role });
+      renderRecords();
+      setWorkspaceControls(false);
+      syncButton.disabled = false;
+      setText(workspaceStatus, {
+        initialized: `Shared Vault создан и зашифрован для всех одобренных устройств · ревизия ${result.revision}.`,
+        downloaded: `Team-ревизия ${result.revision} расшифрована локально.`,
+        up_to_date: `Shared Vault синхронизирован · ревизия ${result.revision}.`,
+      }[result.status] ?? "Shared Vault открыт.");
+    } catch (error) {
+      const code = String(error?.message ?? "");
+      setWorkspaceControls(true);
+      setText(workspaceStatus, code === "team_vault_rotation_required"
+        ? "Запись заморожена: после отзыва участника или устройства требуется полная ротация ключа."
+        : code === "team_vault_key_unavailable"
+          ? "Для этого устройства нет wrapper ключа. Требуется одобрение существующим устройством."
+          : "Shared Vault не открыт; локальные данные не изменены.");
+    }
+  }
+
+  async function loadSelectedTeam() {
+    selectedTeam = teams.find((team) => team.id === teamSelect.value) ?? null;
+    lockCurrentVault();
+    if (!selectedTeam) {
+      selectedPanel.hidden = true;
+      return;
+    }
+    selectedPanel.hidden = false;
+    teamRole.textContent = `${selectedTeam.name} · ${selectedTeam.role}`;
+    inviteForm.hidden = !canManage();
+    createVaultForm.hidden = !canManage();
+    const [teamMembers, sharedVaults] = await Promise.all([
+      client.listTeamMembers(selectedTeam.id),
+      client.listSharedVaults(selectedTeam.id),
+    ]);
+    renderMembers(teamMembers);
+    vaults = sharedVaults;
+    populateVaults();
+  }
+
+  async function loadTeams(preferredID = null) {
+    teams = await client.listTeams();
+    teamSelect.replaceChildren();
+    for (const team of teams) {
+      const option = documentValue.createElement("option");
+      option.value = team.id;
+      option.textContent = `${team.name} · ${team.role}`;
+      teamSelect.append(option);
+    }
+    if (preferredID && teams.some((team) => team.id === preferredID)) teamSelect.value = preferredID;
+    if (teams.length > 0) await loadSelectedTeam();
+    else {
+      selectedTeam = null;
+      selectedPanel.hidden = true;
+      setText(message, "Команд пока нет. Создайте Team или примите приглашение.");
+    }
+  }
+
+  createTeamForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = createTeamForm.querySelector("button");
+    button.disabled = true;
+    try {
+      const team = await client.createTeam({ name: createTeamForm.elements.name.value });
+      createTeamForm.reset();
+      await loadTeams(team.id);
+      setText(message, "Team создан. Вы назначены Owner.");
+    } catch {
+      setText(message, "Team не создан. Проверьте название и повторите попытку.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  acceptInvitationForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = acceptInvitationForm.querySelector("button");
+    button.disabled = true;
+    try {
+      await client.acceptTeamInvitation({ token: acceptInvitationForm.elements.token.value });
+      acceptInvitationForm.reset();
+      await loadTeams();
+      setText(message, "Приглашение принято.");
+    } catch {
+      acceptInvitationForm.elements.token.value = "";
+      setText(message, "Приглашение недействительно, истекло или предназначено другому email.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  inviteForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = inviteForm.querySelector("button");
+    button.disabled = true;
+    try {
+      await client.inviteTeamMember({
+        teamID: selectedTeam.id,
+        email: inviteForm.elements.email.value,
+        role: inviteForm.elements.role.value,
+      });
+      inviteForm.reset();
+      setText(message, "Приглашение поставлено в защищённую очередь доставки на 48 часов.");
+    } catch {
+      setText(message, "Приглашение не создано. Проверьте SMTP, роль и полномочия.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  createVaultForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = createVaultForm.querySelector("button");
+    button.disabled = true;
+    try {
+      const vault = await client.createSharedVault({ teamID: selectedTeam.id, name: createVaultForm.elements.name.value });
+      createVaultForm.reset();
+      await loadSelectedTeam();
+      vaultSelect.value = vault.id;
+      await openSelectedVault();
+      setText(message, "Shared Vault создан. Состояние криптографической инициализации показано ниже.");
+    } catch {
+      setText(message, "Shared Vault не создан или не инициализирован. Проверьте роль и одобрение устройства.");
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  teamSelect.addEventListener("change", () => loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team.")));
+  teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
+  vaultOpen.addEventListener("click", () => openSelectedVault());
+  recordType.addEventListener("change", updateRecordLabels);
+  recordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = recordForm.querySelector("button");
+    button.disabled = true;
+    try {
+      await controller.upsert({
+        type: recordType.value,
+        data: localVaultRecordData(recordType.value, {
+          title: recordTitle.value,
+          target: recordTarget.value,
+          secret: recordSecret.value,
+        }),
+      });
+      recordForm.reset();
+      updateRecordLabels();
+      clearConflicts();
+      renderRecords();
+      setText(workspaceStatus, "Изменение зашифровано локально. Выполните синхронизацию.");
+    } catch {
+      setText(workspaceStatus, "Запись не сохранена. Проверьте поля и роль.");
+    } finally {
+      button.disabled = !canEdit();
+    }
+  });
+
+  syncButton.addEventListener("click", async () => {
+    syncButton.disabled = true;
+    try {
+      const result = await synchronizeTeamVault({ client, controller, role: selectedTeam.role });
+      if (result.status === "conflict") renderConflicts(result);
+      else {
+        clearConflicts();
+        renderRecords();
+      }
+      const messages = {
+        initialized: `Shared Vault инициализирован · ревизия ${result.revision}.`,
+        uploaded: `Зашифрованная Team-ревизия ${result.revision} загружена.`,
+        uploaded_with_new_local_changes: `Ревизия ${result.revision} загружена; остались новые локальные изменения.`,
+        downloaded: `Team-ревизия ${result.revision} загружена и объединена локально.`,
+        up_to_date: `Shared Vault синхронизирован · ревизия ${result.revision}.`,
+        remote_changed: `Team Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию.`,
+        conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Выберите версии явно.`,
+      };
+      setText(workspaceStatus, messages[result.status] ?? "Синхронизация завершена.");
+    } catch (error) {
+      setText(workspaceStatus, String(error?.message ?? "") === "team_vault_rotation_required"
+        ? "Синхронизация заморожена до безопасной ротации ключа."
+        : "Синхронизация не выполнена; локальная зашифрованная копия сохранена.");
+    } finally {
+      syncButton.disabled = !controller;
+    }
+  });
+
+  lockButton.addEventListener("click", () => {
+    controller?.lock();
+    records.replaceChildren();
+    clearConflicts();
+    setWorkspaceControls(true);
+    setText(workspaceStatus, "Ключ Shared Vault удалён из памяти. Нажмите синхронизацию для повторного локального unlock.");
+  });
+
+  conflictForm.addEventListener("change", () => {
+    conflictApply.disabled = !activeConflicts || activeConflicts.ids.some((_id, index) => (
+      !conflictForm.querySelector(`input[name="team-conflict-${index}"]:checked`)
+    ));
+  });
+  conflictForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!activeConflicts) return;
+    try {
+      await controller.resolveConflicts({
+        revision: activeConflicts.revision,
+        resolutions: activeConflicts.ids.map((id, index) => ({
+          id,
+          choice: conflictForm.querySelector(`input[name="team-conflict-${index}"]:checked`)?.value,
+        })),
+      });
+      clearConflicts();
+      renderRecords();
+      setText(workspaceStatus, "Конфликты разрешены локально. Синхронизируйте условную запись.");
+    } catch {
+      clearConflicts();
+      setText(workspaceStatus, "Набор конфликтов устарел. Запустите синхронизацию ещё раз.");
+    }
+  });
+
+  updateRecordLabels();
+  return {
+    async activate(nextIdentity) {
+      identity = nextIdentity;
+      section.hidden = false;
+      await loadTeams();
+    },
+    deactivate() {
+      identity = null;
+      teams = [];
+      vaults = [];
+      selectedTeam = null;
+      lockCurrentVault();
+      teamSelect.replaceChildren();
+      members.replaceChildren();
+      selectedPanel.hidden = true;
+      section.hidden = true;
+    },
+  };
+}
+
 export async function initializeCloudAccount({
   documentValue = document,
   vaultUI,
@@ -328,6 +820,8 @@ export async function initializeCloudAccount({
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
   const conflictApply = documentValue.querySelector("#local-vault-conflicts-apply");
   const client = createAuthenticatedVaultClient({ fetchValue });
+  const teamWorkspace = initializeTeamWorkspace({ documentValue, client });
+  const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
   vaultUI.setConflictResetListener(() => {
     activeConflicts = null;
@@ -388,14 +882,43 @@ export async function initializeCloudAccount({
     const button = form.querySelector("button");
     button.disabled = true;
     try {
+      const password = form.elements.password.value;
+      const deviceID = await vault.deviceID();
+      let identity = null;
+      try {
+        identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID });
+      } catch {
+        // Team keys are optional for personal-Vault login and fail independently.
+      }
       const user = await client.login({
         email: form.elements.email.value,
-        password: form.elements.password.value,
-        deviceID: await vault.deviceID(),
+        password,
+        deviceID,
+        publicKey: identity?.publicKey ?? null,
       });
+      if (identity) {
+        try {
+          await client.bootstrapDeviceKey({
+            password,
+            publicKey: identity.publicKey,
+            idempotencyKey: `web:device:bootstrap:${globalThis.crypto.randomUUID()}`,
+          });
+        } catch {
+          // Existing accounts with an approved device must use device-to-device approval.
+        }
+      }
       form.elements.password.value = "";
       showSession(user);
-      setText(message, "Вход выполнен. Сессионный токен хранится только в памяти этой вкладки.");
+      if (!identity) {
+        setText(message, "Вход выполнен. Team-ключ недоступен в этом браузере; личный Vault продолжает работать.");
+      } else {
+        try {
+          await teamWorkspace?.activate(identity);
+          setText(message, "Вход выполнен. Сессионный токен хранится только в памяти этой вкладки.");
+        } catch {
+          setText(message, "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.");
+        }
+      }
     } catch {
       setText(message, "Не удалось войти. Проверьте email, пароль и подтверждение аккаунта.");
     } finally {
@@ -409,6 +932,7 @@ export async function initializeCloudAccount({
       await client.logout();
     } finally {
       showSession(null);
+      teamWorkspace?.deactivate();
       hideConflicts();
       await vaultUI.hideRecoveryAndRestoreMode();
       logoutButton.disabled = false;

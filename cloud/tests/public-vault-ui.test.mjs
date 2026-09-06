@@ -81,10 +81,11 @@ test("conflict choices expose only bounded metadata and never record secrets or 
 });
 
 test("portal exposes memory-only login and explicit manual synchronization controls", async () => {
-  const [html, application, synchronization] = await Promise.all([
+  const [html, application, synchronization, teamSynchronization] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../public/vault-sync.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/team-vault-sync.js", import.meta.url), "utf8"),
   ]);
 
   assert.match(html, /id="cloud-login-form"/u);
@@ -93,11 +94,21 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(html, /id="cloud-vault-recovery-form"/u);
   assert.match(html, /id="local-vault-conflicts-form"/u);
   assert.match(html, /id="local-vault-conflicts-apply"[^>]*disabled/u);
+  assert.match(html, /id="team-vault"[^>]*hidden/u);
+  assert.match(html, /id="team-create-form"/u);
+  assert.match(html, /id="team-invitation-accept-form"/u);
+  assert.match(html, /id="team-select"/u);
+  assert.match(html, /id="team-vault-record-form"/u);
+  assert.match(html, /id="team-vault-conflicts-form"/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
+  assert.match(application, /ensureTeamDeviceIdentity/u);
+  assert.match(application, /synchronizeTeamVault/u);
   assert.match(application, /resolveConflicts/u);
   assert.match(application, /recoveryPassphrase/u);
-  assert.doesNotMatch(`${application}\n${synchronization}`, /localStorage|sessionStorage/u);
+  assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
   assert.match(synchronization, /unsupported_vault_scope/u);
   assert.match(synchronization, /credentials: "omit"/u);
+  assert.match(teamSynchronization, /team_vault_rotation_required/u);
+  assert.match(teamSynchronization, /prepareInitialization/u);
 });
