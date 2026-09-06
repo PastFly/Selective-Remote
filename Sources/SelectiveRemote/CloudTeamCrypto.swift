@@ -98,7 +98,7 @@ enum SelectiveRemoteTeamVaultCrypto {
 
     static func deviceFingerprint(_ key: SelectiveRemoteTeamDevicePublicKey) -> String {
         let canonical = "selective-remote/team-device-key/v1\0\(key.x)\0\(key.y)"
-        let digest = SHA256.hash(data: Data(canonical.utf8))
+        let digest = Array(SHA256.hash(data: Data(canonical.utf8)))
         return stride(from: 0, to: digest.count, by: 2).map { offset in
             digest[offset..<min(offset + 2, digest.count)].map { String(format: "%02x", $0) }.joined()
         }.joined(separator: "-")
