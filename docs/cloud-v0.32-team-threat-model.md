@@ -7,7 +7,10 @@ shared-Vault metadata, shared ciphertext revisions, approved P-256 devices,
 per-device wrappers and atomic rotation completion are present. The browser has
 Team/member/shared-Vault UI, non-exportable device keys, fingerprint-confirmed
 device approval/revocation, causal shared-record synchronization and atomic
-rotation completion. The macOS client and cross-client acceptance remain.
+rotation completion. The macOS foundation now pins device-only Keychain
+session storage and the exact P-256 fingerprint, wrapper-context and payload
+content-hash encodings through a fixture shared with browser tests. Full macOS
+key wrapping, Vault sync/UI and cross-client acceptance remain.
 
 ## Security outcome
 

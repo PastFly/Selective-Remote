@@ -27,6 +27,13 @@ struct CloudFoundationTests {
         }
     }
 
+    @Test("Endpoints cannot smuggle an API path")
+    func rejectsEndpointPath() {
+        #expect(throws: SelectiveRemoteCloudError.invalidEndpoint) {
+            try SelectiveRemoteCloudEndpoint.normalized("https://cloud.pastfly.ru/untrusted")
+        }
+    }
+
     @Test("Cloud metadata matches API v1 contract")
     func decodesMetadata() throws {
         let data = Data(#"{"apiVersion":1,"vaultSchemaVersion":1,"registrationEnabled":false}"#.utf8)
