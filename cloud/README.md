@@ -13,8 +13,11 @@ rotation completion are implemented in the backend. The browser now has the
 interoperable cryptographic/client layer: non-exportable P-256 identities,
 ECDH/HKDF/AES-GCM wrappers, scope-bound shared payload envelopes, strict Team
 API calls, Team/member/shared-Vault UI and causal shared-record synchronization.
-The remaining client milestones include explicit new-device approval and
-rotation-completion UI plus the macOS implementation.
+The portal also lists account devices, shows canonical SHA-256 public-key
+fingerprints, approves a matching new key only from an approved device, revokes
+other devices, lets Owner/Admin grant missing current-generation wrappers from
+an unlocked Vault and completes required rotations. The remaining client
+milestone is the macOS implementation and cross-client acceptance.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
@@ -98,8 +101,12 @@ in page memory. It persists one strict ciphertext-only IndexedDB snapshot per
 Team/Vault scope, supports the four versioned record types and performs manual
 optimistic synchronization. Concurrent record or tombstone edits block upload
 until the user chooses every winner explicitly. Membership or device revocation
-freezes writes at `rotation_required`; the current browser UI fails closed and
-does not attempt an incomplete key rotation.
+freezes writes at `rotation_required`. Owner/Admin rotation decrypts and merges
+only in memory, generates a new key, wraps it for the exact current approved
+device set and conditionally uploads the full ciphertext plus wrappers. Local
+state changes only after the atomic server acknowledgement. A competing writer
+leaves the losing snapshot untouched; an unknown network result is reconciled
+against the exact revision, generation and content hash before local commit.
 
 ## Local verification
 

@@ -144,6 +144,7 @@ class TeamStore {
       device_id: deviceID,
       public_key_algorithm: "p256-ecdh-v1",
       public_key: JSON.stringify({ kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) }),
+      has_wrapper: true,
     }];
   }
 
@@ -346,6 +347,7 @@ test("Team ciphertext service binds session device, generation and wrapper conte
   );
 
   assert.equal(devices.devices[0].publicKey.crv, "P-256");
+  assert.equal(devices.devices[0].hasWrapper, true);
   assert.equal(vault.wrapper.membershipEpoch, 1);
   for (const call of store.calls.filter(([name]) => [
     "approveDeviceKey", "putSharedVault", "grantSharedVaultWrapper",

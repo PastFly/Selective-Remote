@@ -26,6 +26,7 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
   assert.match(serverSource, /service\.approveDeviceKey/);
   assert.match(serverSource, /service\.bootstrapDeviceKey/);
   assert.match(serverSource, /service\.grantSharedVaultWrapper/);
+  assert.match(serverSource, /store\.revokeDevice\(session\.user_id, deviceMatch\[1\], session\.device_id\)/);
   assert.ok(serverSource.indexOf('url.pathname === "/v1/devices/bootstrap-key"')
     < serverSource.indexOf("const deviceMatch"));
   assert.match(serverSource, /device_key_bootstrap_user/);

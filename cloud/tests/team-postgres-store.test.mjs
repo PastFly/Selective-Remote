@@ -482,6 +482,24 @@ test("only an already-approved account device can approve another public key", a
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
 
+test("an unapproved session device cannot revoke another account device", async () => {
+  const targetDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+  const f = fixture((sql) => {
+    if (sql.includes("SELECT id FROM devices") && sql.includes("key_approved_at IS NOT NULL")) {
+      return { rows: [] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+
+  await assert.rejects(
+    f.store.revokeDevice(actorUserID, targetDeviceID, deviceID),
+    /device_approval_required/u,
+  );
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET revoked_at")), false);
+  assert.equal(f.queries.at(-2).sql, "ROLLBACK");
+  assert.equal(f.queries.at(-1).sql, "RELEASE");
+});
+
 test("legacy accounts can atomically bootstrap only their first approved Team device", async () => {
   const publicKey = JSON.stringify({
     kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],

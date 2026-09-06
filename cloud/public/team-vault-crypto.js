@@ -122,6 +122,16 @@ export function normalizeTeamDevicePublicKey(value) {
   return { kty: "EC", crv: "P-256", x: value.x, y: value.y, ext: true, key_ops: [] };
 }
 
+export async function teamDevicePublicKeyFingerprint(value, cryptoValue = globalThis.crypto) {
+  const publicKey = normalizeTeamDevicePublicKey(value);
+  const digest = new Uint8Array(await webCrypto(cryptoValue).subtle.digest(
+    "SHA-256",
+    textEncoder.encode(`selective-remote/team-device-key/v1\0${publicKey.x}\0${publicKey.y}`),
+  ));
+  const hex = [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  return hex.match(/.{1,4}/gu).join("-");
+}
+
 export function normalizeTeamVaultScope(value) {
   exactKeys(value, ["teamID", "type", "vaultID"], "invalid_team_vault_scope");
   if (value.type !== "team") throw new Error("invalid_team_vault_scope");

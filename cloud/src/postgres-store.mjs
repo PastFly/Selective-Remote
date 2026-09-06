@@ -336,7 +336,9 @@ export class PostgresStore {
   async listDevices(userID) {
     const result = await this.pool.query(
       `SELECT id, name, platform, app_version, created_at, last_seen_at, revoked_at,
-         public_key IS NOT NULL AS key_registered, public_key_algorithm, public_key,
+         public_key_algorithm = 'p256-ecdh-v1' AND public_key IS NOT NULL AS key_registered,
+         public_key_algorithm,
+         CASE WHEN public_key_algorithm = 'p256-ecdh-v1' THEN public_key ELSE NULL END AS public_key,
          key_approved_at
        FROM devices WHERE user_id = $1 ORDER BY last_seen_at DESC`,
       [userID],
@@ -344,10 +346,21 @@ export class PostgresStore {
     return result.rows;
   }
 
-  async revokeDevice(userID, deviceID) {
+  async revokeDevice(userID, deviceID, actorDeviceID = null) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      if (actorDeviceID !== null) {
+        const actor = await client.query(
+          `SELECT id FROM devices
+           WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+             AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+             AND key_approved_at IS NOT NULL
+           FOR UPDATE`,
+          [actorDeviceID, userID],
+        );
+        if (!actor.rows[0]) throw new Error("device_approval_required");
+      }
       const result = await client.query(
         `UPDATE devices SET revoked_at = now()
          WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL
@@ -831,9 +844,16 @@ export class PostgresStore {
     requireTeamPermission(access.rows[0].role, "manage_vault_keys");
     const result = await this.pool.query(
       `SELECT membership.id AS membership_id, membership.epoch AS membership_epoch,
-         device.id AS device_id, device.public_key_algorithm, device.public_key
+         device.id AS device_id, device.public_key_algorithm, device.public_key,
+         wrapper.device_id IS NOT NULL AS has_wrapper
        FROM team_memberships AS membership
        JOIN devices AS device ON device.user_id = membership.user_id
+       JOIN shared_vaults AS vault ON vault.id = $2 AND vault.team_id = membership.team_id
+         AND vault.archived_at IS NULL
+       LEFT JOIN shared_vault_key_wrappers AS wrapper
+         ON wrapper.vault_id = vault.id AND wrapper.key_generation = vault.key_generation
+         AND wrapper.membership_id = membership.id AND wrapper.membership_epoch = membership.epoch
+         AND wrapper.device_id = device.id
        WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
          AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
          AND device.public_key IS NOT NULL

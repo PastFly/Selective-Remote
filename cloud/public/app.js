@@ -3,10 +3,12 @@ import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.j
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
+  teamDevicePublicKeyFingerprint,
 } from "./team-vault-crypto.js";
 import {
   createIndexedDBTeamVaultRepository,
   createTeamVaultController,
+  rotateTeamVault,
   synchronizeTeamVault,
 } from "./team-vault-sync.js";
 
@@ -323,6 +325,8 @@ export function initializeTeamWorkspace({
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
   const message = documentValue.querySelector("#team-vault-message");
+  const devices = documentValue.querySelector("#team-devices");
+  const devicesRefresh = documentValue.querySelector("#team-devices-refresh");
   const createTeamForm = documentValue.querySelector("#team-create-form");
   const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
   const teamSelect = documentValue.querySelector("#team-select");
@@ -338,6 +342,8 @@ export function initializeTeamWorkspace({
   const workspaceTitle = documentValue.querySelector("#team-vault-workspace-title");
   const workspaceStatus = documentValue.querySelector("#team-vault-workspace-status");
   const syncButton = documentValue.querySelector("#team-vault-sync");
+  const rotateButton = documentValue.querySelector("#team-vault-rotate");
+  const grantWrappersButton = documentValue.querySelector("#team-vault-grant-wrappers");
   const lockButton = documentValue.querySelector("#team-vault-lock");
   const recordForm = documentValue.querySelector("#team-vault-record-form");
   const recordType = documentValue.querySelector("#team-record-type");
@@ -464,6 +470,65 @@ export function initializeTeamWorkspace({
     conflictPanel.hidden = false;
   }
 
+  async function loadDevices() {
+    const values = await client.listDevices();
+    devices.replaceChildren();
+    for (const device of values) {
+      const card = documentValue.createElement("article");
+      const name = documentValue.createElement("strong");
+      const detail = documentValue.createElement("small");
+      const fingerprint = documentValue.createElement("p");
+      const approve = documentValue.createElement("button");
+      const revoke = documentValue.createElement("button");
+      const current = device.id === client.deviceID();
+      const approved = device.keyApprovedAt !== null;
+      name.textContent = `${device.name || "Без названия"}${current ? " · текущее" : ""}`;
+      detail.textContent = `${device.platform || "unknown"} ${device.appVersion || ""} · ${device.revokedAt ? "отозвано" : approved ? "ключ одобрен" : device.keyRegistered ? "ожидает одобрения" : "без Team-ключа"}`;
+      fingerprint.className = "team-device-fingerprint";
+      fingerprint.textContent = device.publicKey
+        ? `SHA-256: ${await teamDevicePublicKeyFingerprint(device.publicKey)}`
+        : "SHA-256: ключ не зарегистрирован";
+      approve.type = "button";
+      approve.textContent = "Одобрить ключ";
+      approve.disabled = current || Boolean(device.revokedAt) || approved || !device.publicKey;
+      approve.addEventListener("click", async () => {
+        if (!confirmValue(`Сравните отпечаток на новом устройстве:\n${fingerprint.textContent}\n\nОдобрить этот ключ?`)) return;
+        approve.disabled = true;
+        try {
+          await client.approveDeviceKey({
+            deviceID: device.id,
+            publicKey: device.publicKey,
+            idempotencyKey: `web:device:approve:${globalThis.crypto.randomUUID()}`,
+          });
+          await loadDevices();
+          setText(message, "Ключ устройства одобрен. Owner/Admin может выдать недостающие wrappers из открытого Shared Vault.");
+        } catch {
+          setText(message, "Ключ не одобрен: требуется уже одобренное текущее устройство и совпадающий отпечаток.");
+          approve.disabled = false;
+        }
+      });
+      revoke.type = "button";
+      revoke.className = "danger";
+      revoke.textContent = "Отозвать";
+      revoke.disabled = current || Boolean(device.revokedAt);
+      revoke.addEventListener("click", async () => {
+        if (!confirmValue(`Отозвать устройство «${device.name || device.id}»? Его сессии завершатся, а затронутые Shared Vaults будут заморожены до ротации.`)) return;
+        revoke.disabled = true;
+        try {
+          await client.revokeDevice(device.id);
+          lockCurrentVault();
+          await Promise.all([loadDevices(), loadTeams(selectedTeam?.id)]);
+          setText(message, "Устройство отозвано. Завершите ротацию отмеченных Shared Vaults.");
+        } catch {
+          setText(message, "Устройство не отозвано: операция разрешена только с одобренного текущего устройства.");
+          revoke.disabled = false;
+        }
+      });
+      card.append(name, detail, fingerprint, approve, revoke);
+      devices.append(card);
+    }
+  }
+
   function renderMembers(values) {
     members.replaceChildren();
     for (const member of values) {
@@ -539,6 +604,10 @@ export function initializeTeamWorkspace({
     controller = null;
     selectedVault = null;
     workspace.hidden = true;
+    rotateButton.hidden = true;
+    rotateButton.disabled = true;
+    grantWrappersButton.hidden = true;
+    grantWrappersButton.disabled = true;
     records.replaceChildren();
     clearConflicts();
   }
@@ -555,6 +624,10 @@ export function initializeTeamWorkspace({
       scope,
     });
     workspace.hidden = false;
+    rotateButton.hidden = !vault.rotationRequired || !canManage();
+    rotateButton.disabled = !vault.rotationRequired || !canManage();
+    grantWrappersButton.hidden = vault.rotationRequired || !canManage();
+    grantWrappersButton.disabled = true;
     workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
     setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
     syncButton.disabled = true;
@@ -563,6 +636,7 @@ export function initializeTeamWorkspace({
       renderRecords();
       setWorkspaceControls(false);
       syncButton.disabled = false;
+      grantWrappersButton.disabled = grantWrappersButton.hidden;
       setText(workspaceStatus, {
         initialized: `Shared Vault создан и зашифрован для всех одобренных устройств · ревизия ${result.revision}.`,
         downloaded: `Team-ревизия ${result.revision} расшифрована локально.`,
@@ -571,6 +645,9 @@ export function initializeTeamWorkspace({
     } catch (error) {
       const code = String(error?.message ?? "");
       setWorkspaceControls(true);
+      grantWrappersButton.disabled = true;
+      rotateButton.hidden = code !== "team_vault_rotation_required" || !canManage();
+      rotateButton.disabled = rotateButton.hidden;
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Запись заморожена: после отзыва участника или устройства требуется полная ротация ключа."
         : code === "team_vault_key_unavailable"
@@ -689,7 +766,69 @@ export function initializeTeamWorkspace({
 
   teamSelect.addEventListener("change", () => loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team.")));
   teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
+  devicesRefresh.addEventListener("click", () => loadDevices().catch(() => setText(message, "Не удалось обновить устройства.")));
   vaultOpen.addEventListener("click", () => openSelectedVault());
+  rotateButton.addEventListener("click", async () => {
+    if (!controller || !selectedVault || !canManage()) return;
+    if (!confirmValue("Зашифровать полную текущую Team-ревизию новым ключом и выдать wrappers всем актуальным одобренным устройствам?")) return;
+    rotateButton.disabled = true;
+    syncButton.disabled = true;
+    lockButton.disabled = true;
+    grantWrappersButton.disabled = true;
+    setWorkspaceControls(true);
+    try {
+      const result = await rotateTeamVault({ client, controller, role: selectedTeam.role });
+      if (result.status === "conflict") {
+        renderConflicts(result);
+        setText(workspaceStatus, `Перед ротацией разрешите конфликтов: ${result.conflicts.length}. Секреты не отображаются.`);
+      } else if (result.status === "remote_changed") {
+        setText(workspaceStatus, `Другая ротация или запись уже изменила Vault до ревизии ${result.remoteRevision}. Повторно откройте Vault.`);
+      } else {
+        selectedVault = { ...selectedVault, rotationRequired: false, revision: result.revision, keyGeneration: result.keyGeneration };
+        vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
+        populateVaults();
+        vaultSelect.value = selectedVault.id;
+        rotateButton.hidden = true;
+        grantWrappersButton.hidden = !canManage();
+        grantWrappersButton.disabled = grantWrappersButton.hidden;
+        clearConflicts();
+        renderRecords();
+        setWorkspaceControls(false);
+        setText(workspaceStatus, `Ротация завершена атомарно · ревизия ${result.revision} · поколение ключа ${result.keyGeneration}.`);
+      }
+    } catch {
+      setText(workspaceStatus, "Ротация не подтверждена. Локальный snapshot не заменён; безопасно повторите операцию.");
+    } finally {
+      lockButton.disabled = false;
+      syncButton.disabled = !controller || !rotateButton.hidden;
+      rotateButton.disabled = rotateButton.hidden || !canManage() || Boolean(activeConflicts);
+      grantWrappersButton.disabled = grantWrappersButton.hidden || Boolean(activeConflicts);
+    }
+  });
+  grantWrappersButton.addEventListener("click", async () => {
+    if (!controller || !selectedVault || !canManage() || selectedVault.rotationRequired) return;
+    grantWrappersButton.disabled = true;
+    try {
+      const keyDevices = await client.listTeamKeyDevices(controller.scope);
+      const missing = keyDevices.devices.filter((device) => !device.hasWrapper);
+      const state = await controller.syncState();
+      for (const recipient of missing) {
+        const wrapper = await controller.prepareWrapper(recipient);
+        await client.grantTeamVaultWrapper(
+          controller.scope,
+          { keyGeneration: state.keyGeneration, wrapper },
+          `web:team:vault:grant:${globalThis.crypto.randomUUID()}`,
+        );
+      }
+      setText(workspaceStatus, missing.length === 0
+        ? "Все актуальные одобренные устройства уже имеют wrapper этой генерации."
+        : `Выдано недостающих wrappers: ${missing.length}. Vault plaintext не покидал браузер.`);
+    } catch {
+      setText(workspaceStatus, "Не все wrappers подтверждены. Обновите состояние и безопасно повторите операцию.");
+    } finally {
+      grantWrappersButton.disabled = !controller || selectedVault?.rotationRequired || !canManage();
+    }
+  });
   recordType.addEventListener("change", updateRecordLabels);
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -707,6 +846,7 @@ export function initializeTeamWorkspace({
       recordForm.reset();
       updateRecordLabels();
       clearConflicts();
+      rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();
       renderRecords();
       setText(workspaceStatus, "Изменение зашифровано локально. Выполните синхронизацию.");
     } catch {
@@ -769,8 +909,11 @@ export function initializeTeamWorkspace({
         })),
       });
       clearConflicts();
+      rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();
       renderRecords();
-      setText(workspaceStatus, "Конфликты разрешены локально. Синхронизируйте условную запись.");
+      setText(workspaceStatus, selectedVault?.rotationRequired
+        ? "Конфликты разрешены локально. Повторите безопасную ротацию."
+        : "Конфликты разрешены локально. Синхронизируйте условную запись.");
     } catch {
       clearConflicts();
       setText(workspaceStatus, "Набор конфликтов устарел. Запустите синхронизацию ещё раз.");
@@ -782,7 +925,7 @@ export function initializeTeamWorkspace({
     async activate(nextIdentity) {
       identity = nextIdentity;
       section.hidden = false;
-      await loadTeams();
+      await Promise.all([loadDevices(), loadTeams()]);
     },
     deactivate() {
       identity = null;
@@ -791,6 +934,7 @@ export function initializeTeamWorkspace({
       selectedTeam = null;
       lockCurrentVault();
       teamSelect.replaceChildren();
+      devices.replaceChildren();
       members.replaceChildren();
       selectedPanel.hidden = true;
       section.hidden = true;
