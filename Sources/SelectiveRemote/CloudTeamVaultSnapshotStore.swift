@@ -86,14 +86,12 @@ protocol SelectiveRemoteTeamVaultSnapshotStore: Sendable {
 
 struct SelectiveRemoteTeamVaultFileSnapshotStore: SelectiveRemoteTeamVaultSnapshotStore {
     private let root: URL
-    private let fileManager: FileManager
 
-    init(root: URL? = nil, fileManager: FileManager = .default) throws {
-        self.fileManager = fileManager
+    init(root: URL? = nil) throws {
         if let root {
             self.root = root
         } else {
-            guard let applicationSupport = fileManager.urls(
+            guard let applicationSupport = FileManager.default.urls(
                 for: .applicationSupportDirectory,
                 in: .userDomainMask
             ).first else { throw SelectiveRemoteTeamVaultSnapshotError.storageUnavailable }
@@ -105,6 +103,7 @@ struct SelectiveRemoteTeamVaultFileSnapshotStore: SelectiveRemoteTeamVaultSnapsh
 
     func load(endpoint: URL, teamID: UUID, vaultID: UUID) throws -> SelectiveRemoteTeamVaultSnapshot? {
         let url = try snapshotURL(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: url.path) else { return nil }
         do {
             let data = try Data(contentsOf: url, options: .mappedIfSafe)
@@ -118,6 +117,7 @@ struct SelectiveRemoteTeamVaultFileSnapshotStore: SelectiveRemoteTeamVaultSnapsh
 
     func save(_ snapshot: SelectiveRemoteTeamVaultSnapshot, endpoint: URL) throws {
         let url = try snapshotURL(endpoint: endpoint, teamID: snapshot.teamID, vaultID: snapshot.vaultID)
+        let fileManager = FileManager.default
         do {
             try fileManager.createDirectory(
                 at: url.deletingLastPathComponent(),
@@ -135,6 +135,7 @@ struct SelectiveRemoteTeamVaultFileSnapshotStore: SelectiveRemoteTeamVaultSnapsh
 
     func remove(endpoint: URL, teamID: UUID, vaultID: UUID) throws {
         let url = try snapshotURL(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: url.path) else { return }
         do {
             try fileManager.removeItem(at: url)
@@ -173,7 +174,7 @@ final class SelectiveRemoteTeamVaultMemorySnapshotStore: SelectiveRemoteTeamVaul
 
     func remove(endpoint: URL, teamID: UUID, vaultID: UUID) throws {
         let key = try snapshotKey(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
-        lock.withLock { snapshots.removeValue(forKey: key) }
+        _ = lock.withLock { snapshots.removeValue(forKey: key) }
     }
 
     private func snapshotKey(endpoint: URL, teamID: UUID, vaultID: UUID) throws -> String {
