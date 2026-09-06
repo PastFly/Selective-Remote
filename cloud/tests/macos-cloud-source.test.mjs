@@ -35,3 +35,20 @@ test("macOS Team crypto source pins the browser protocol labels and strict JWK s
   assert.match(identity, /savePrivateKeyIfAbsent/);
   assert.doesNotMatch(identity, /UserDefaults/);
 });
+
+test("macOS Team payload transport persists ciphertext-only offline snapshots", async () => {
+  const [client, crypto, snapshots] = await Promise.all([
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamCrypto.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultSnapshotStore.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(crypto, /static func encryptPayload/);
+  assert.match(crypto, /static func decryptPayload/);
+  assert.match(crypto, /payloadContentHashMismatch/);
+  assert.match(client, /Idempotency-Key/);
+  assert.match(client, /http\.statusCode == 200 \|\| http\.statusCode == 409/);
+  assert.match(client, /key-devices/);
+  assert.match(snapshots, /\.write\(to: url, options: \[\.atomic\]\)/);
+  assert.match(snapshots, /posixPermissions: 0o600/);
+  assert.doesNotMatch(snapshots, /\b(?:let|var)\s+(?:vaultKey|plaintext|password|token)\b/iu);
+});

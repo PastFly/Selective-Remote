@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { createHash, webcrypto } from "node:crypto";
 import test from "node:test";
 import {
+  decryptTeamVaultPayload,
   teamDevicePublicKeyFingerprint,
   teamVaultWrapperContext,
   teamVaultWrapperContextHash,
@@ -88,4 +89,35 @@ test("browser unwraps the deterministic macOS Team Vault key wrapper", async () 
     Buffer.from(await webcrypto.subtle.exportKey("raw", key)).toString("base64url"),
     fixture.keyWrap.vaultKey,
   );
+});
+
+test("browser decrypts the deterministic macOS Team Vault payload", async () => {
+  const fixture = JSON.parse(await readFile(fixtureURL, "utf8"));
+  const vaultKey = await webcrypto.subtle.importKey(
+    "raw",
+    decodeBase64URL(fixture.keyWrap.vaultKey),
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["decrypt"],
+  );
+  const envelope = {
+    baseRevision: fixture.payload.baseRevision,
+    keyGeneration: fixture.payload.keyGeneration,
+    envelopeVersion: fixture.payload.envelopeVersion,
+    ciphertext: fixture.payload.ciphertext,
+    nonce: fixture.payload.nonce,
+    authTag: fixture.payload.authTag,
+    contentHash: fixture.payload.contentHash,
+  };
+  const payload = await decryptTeamVaultPayload({
+    vaultKey,
+    envelope,
+    scope: {
+      type: "team",
+      teamID: fixture.payload.teamID,
+      vaultID: fixture.payload.vaultID,
+    },
+    cryptoValue: webcrypto,
+  });
+  assert.deepEqual(payload, JSON.parse(decodeBase64URL(fixture.payload.plaintext).toString("utf8")));
 });

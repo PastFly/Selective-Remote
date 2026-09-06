@@ -25,9 +25,13 @@ milestone is the complete macOS implementation and cross-client acceptance.
 The macOS foundation now provides typed login/logout/current-user/Team
 transport, device-only Keychain bearer-session and P-256 device-identity
 storage, strict fingerprint/context/content-hash primitives, and interoperable
-ECDH/HKDF/AES-GCM Team Vault-key wrap/unwrap. A deterministic synthetic JSON
-fixture is produced exactly by Swift and decrypted by the browser tests; Vault
-payload encryption, sync UI and end-to-end service acceptance remain pending.
+ECDH/HKDF/AES-GCM Team Vault-key wrap/unwrap. This bounded macOS layer adds
+scope/generation-bound Team payload encryption/decryption, strict shared-Vault
+list/key-device/download/conditional-upload transport and atomic local storage
+of ciphertext-only offline snapshots. A deterministic synthetic JSON fixture is
+produced exactly by Swift and decrypted by the browser tests. Full sync
+orchestration, personal-Vault recovery wrapping, sync UI and end-to-end service
+acceptance remain pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually

@@ -10,8 +10,11 @@ device approval/revocation, causal shared-record synchronization and atomic
 rotation completion. The macOS foundation now pins device-only Keychain
 session and P-256 identity storage, exact fingerprints/context hashes, and
 ECDH/HKDF/AES-GCM Team Vault-key wrapping. A deterministic synthetic wrapper
-created by Swift must decrypt in browser code. Full macOS payload encryption,
-Vault sync/UI and service-level cross-client acceptance remain.
+created by Swift must decrypt in browser code. The bounded follow-up also adds
+scope/generation-bound Team payload encryption, strict conditional API transport
+and atomic ciphertext-only offline snapshots; the browser decrypts the exact
+Swift payload fixture. Full sync orchestration, personal-Vault recovery
+wrapping, Vault UI and service-level cross-client acceptance remain.
 
 ## Security outcome
 
