@@ -98,12 +98,18 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(html, /id="team-create-form"/u);
   assert.match(html, /id="team-invitation-accept-form"/u);
   assert.match(html, /id="team-select"/u);
+  assert.match(html, /id="team-devices"/u);
+  assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
+  assert.match(application, /rotateTeamVault/u);
+  assert.match(application, /teamDevicePublicKeyFingerprint/u);
+  assert.match(application, /client\.approveDeviceKey/u);
+  assert.match(application, /client\.revokeDevice/u);
   assert.match(application, /resolveConflicts/u);
   assert.match(application, /recoveryPassphrase/u);
   assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);

@@ -44,6 +44,14 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .team-picker.compact { grid-template-columns:auto minmax(160px,1fr) auto; }
 .team-summary { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-top:28px; padding-top:24px; border-top:1px solid var(--line); }
 .team-summary h3,.team-summary p { margin:0; }.team-summary p { color:var(--muted); max-width:580px; line-height:1.55; }
+.team-devices-panel { margin-top:26px; padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
+.team-devices-heading { display:flex; align-items:start; justify-content:space-between; gap:20px; }
+.team-devices-heading h3,.team-devices-heading p { margin:0; }.team-devices-heading p { margin-top:8px; color:var(--muted); line-height:1.5; max-width:720px; }
+.team-devices { display:grid; gap:10px; margin-top:18px; }
+.team-devices article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px 12px; align-items:center; padding:14px; border:1px solid var(--line); border-radius:12px; }
+.team-devices strong,.team-devices small,.team-device-fingerprint { grid-column:1; overflow-wrap:anywhere; }
+.team-devices small,.team-device-fingerprint { color:var(--muted); }.team-device-fingerprint { margin:0; font:12px ui-monospace,monospace; }
+.team-devices button { grid-row:1 / span 3; }.team-devices button.danger { grid-column:3; }
 .team-members { display:grid; gap:10px; margin-bottom:20px; }
 .team-members article { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:8px 10px; align-items:center; padding:14px; border:1px solid var(--line); border-radius:12px; }
 .team-members strong,.team-members small { grid-column:1; overflow-wrap:anywhere; }.team-members small { color:var(--muted); }
@@ -72,5 +80,5 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .vault-conflicts button:disabled { opacity:.6; cursor:not-allowed; }
 .access { display:flex; justify-content:space-between; gap:40px; align-items:end; padding:34px; border:1px solid var(--line); border-radius:18px; background:#0c1714cc; }.access h2 { margin:8px 0 0; }.access>p { max-width:500px; margin:0; }
 @keyframes spin { to { transform:rotate(360deg); } }
-@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account,.team-onboarding,.team-columns{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access,.team-summary{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.team-picker,.team-picker.compact{grid-template-columns:1fr}.team-members article{grid-template-columns:1fr}.team-members strong,.team-members small,.team-members select,.team-members button,.team-members button.danger{grid-column:1;grid-row:auto}.status{font-size:0}.status::after{content:"●";font-size:16px} }
+@media (max-width:760px) { .shell{width:min(100% - 24px,1180px);padding-top:18px}.hero{grid-template-columns:1fr;padding:64px 0;gap:30px}.vault-visual{width:230px}.grid,.cloud-account,.team-onboarding,.team-columns{grid-template-columns:1fr}.vault-heading,.vault-toolbar,.access,.team-summary,.team-devices-heading{align-items:start;flex-direction:column}.vault-actions{justify-content:flex-start}.vault-panel form,.record-form{grid-template-columns:1fr}.vault-panel button,.record-form button{grid-column:1}.vault-records{grid-template-columns:1fr}.team-picker,.team-picker.compact{grid-template-columns:1fr}.team-members article,.team-devices article{grid-template-columns:1fr}.team-members strong,.team-members small,.team-members select,.team-members button,.team-members button.danger,.team-devices strong,.team-devices small,.team-device-fingerprint,.team-devices button,.team-devices button.danger{grid-column:1;grid-row:auto}.status{font-size:0}.status::after{content:"●";font-size:16px} }
 @media (prefers-reduced-motion:reduce) { .orbit{animation:none} }

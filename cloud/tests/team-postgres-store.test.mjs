@@ -279,6 +279,23 @@ test("outbox claim uses multi-replica-safe SKIP LOCKED leasing", async () => {
   assert.deepEqual(f.queries[0].parameters, ["claim-owner"]);
 });
 
+test("Team key-device listing binds both the Team and Vault scope", async () => {
+  const f = fixture((sql) => {
+    if (sql.includes("SELECT membership.role")) return { rows: [{ role: "owner" }] };
+    if (sql.includes("wrapper.device_id IS NOT NULL AS has_wrapper")) {
+      return { rows: [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }] };
+    }
+    return { rows: [] };
+  });
+
+  assert.deepEqual(
+    await f.store.listTeamKeyDevices(teamID, vaultID, actorUserID),
+    [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }],
+  );
+  assert.deepEqual(f.queries[0].parameters, [teamID, vaultID, actorUserID]);
+  assert.deepEqual(f.queries[1].parameters, [teamID, vaultID]);
+});
+
 test("initial shared ciphertext and the complete device wrapper set commit atomically", async () => {
   const f = fixture((sql) => {
     const reservation = mutationReservation(sql);
@@ -480,6 +497,24 @@ test("only an already-approved account device can approve another public key", a
   assert.match(actorLock.sql, /public_key_algorithm = 'p256-ecdh-v1'/);
   assert.ok(f.queries.some(({ sql }) => sql.includes("SELECT id, public_key FROM devices") && sql.includes("FOR UPDATE")));
   assert.equal(f.queries.at(-2).sql, "COMMIT");
+});
+
+test("an unapproved session device cannot revoke another account device", async () => {
+  const targetDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+  const f = fixture((sql) => {
+    if (sql.includes("SELECT id FROM devices") && sql.includes("key_approved_at IS NOT NULL")) {
+      return { rows: [] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+
+  await assert.rejects(
+    f.store.revokeDevice(actorUserID, targetDeviceID, deviceID),
+    /device_approval_required/u,
+  );
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET revoked_at")), false);
+  assert.equal(f.queries.at(-2).sql, "ROLLBACK");
+  assert.equal(f.queries.at(-1).sql, "RELEASE");
 });
 
 test("legacy accounts can atomically bootstrap only their first approved Team device", async () => {

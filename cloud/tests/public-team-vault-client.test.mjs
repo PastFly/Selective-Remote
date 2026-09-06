@@ -62,6 +62,7 @@ test("authenticated browser client registers its public key and keeps Team reque
         deviceID,
         publicKeyAlgorithm: "p256-ecdh-v1",
         publicKey: identity.publicKey,
+        hasWrapper: true,
       }] });
     }
     if (path === `/v1/teams/${teamID}/vaults/${vaultID}` && !options.method) {
@@ -98,6 +99,7 @@ test("authenticated browser client registers its public key and keeps Team reque
 
   const devices = await client.listTeamKeyDevices(scope);
   assert.equal(devices.devices[0].deviceID, deviceID);
+  assert.equal(devices.devices[0].hasWrapper, true);
   const remote = await client.getTeamVault(scope);
   assert.equal(remote.scope.teamID, teamID);
   assert.equal(remote.wrapper.deviceID, deviceID);
@@ -106,6 +108,49 @@ test("authenticated browser client registers its public key and keeps Team reque
     assert.equal(call.path.includes(teamID), true);
     assert.equal(call.path.includes(vaultID), true);
   }
+});
+
+test("account device transport normalizes approval metadata and revokes without parsing a 204 body", async () => {
+  const { identity } = await fixture();
+  const calls = [];
+  const timestamp = "2026-09-06T00:00:00.000Z";
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/v1/auth/login") return jsonResponse(200, {
+        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", displayName: "User" }, deviceID,
+      });
+      if (path === "/v1/devices") return jsonResponse(200, { devices: [{
+        id: otherDeviceID,
+        name: "New browser",
+        platform: "web",
+        app_version: "0.32",
+        created_at: timestamp,
+        last_seen_at: timestamp,
+        revoked_at: null,
+        key_registered: true,
+        public_key_algorithm: "p256-ecdh-v1",
+        public_key: JSON.stringify(identity.publicKey),
+        key_approved_at: null,
+      }] });
+      if (path === `/v1/devices/${otherDeviceID}` && options.method === "DELETE") {
+        return new Response(null, { status: 204 });
+      }
+      throw new Error(`unexpected_request:${path}`);
+    },
+  });
+  await client.login({ email: "user@example.invalid", password: "synthetic-password", deviceID, publicKey: identity.publicKey });
+
+  const devices = await client.listDevices();
+  assert.equal(client.deviceID(), deviceID);
+  assert.equal(devices[0].id, otherDeviceID);
+  assert.deepEqual(devices[0].publicKey, identity.publicKey);
+  assert.equal(devices[0].keyApprovedAt, null);
+  assert.deepEqual(await client.revokeDevice(otherDeviceID), { revoked: true, deviceID: otherDeviceID });
+  const revoke = calls.at(-1);
+  assert.equal(revoke.options.method, "DELETE");
+  assert.match(revoke.options.headers.Authorization, /^Bearer /u);
+  assert.equal(revoke.options.credentials, "omit");
 });
 
 test("Team writes carry idempotency and distinguish conflict from committed rotation", async () => {

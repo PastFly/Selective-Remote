@@ -6,6 +6,7 @@ import {
   encryptTeamVaultPayload,
   ensureTeamDeviceIdentity,
   generateTeamDeviceIdentity,
+  teamDevicePublicKeyFingerprint,
   normalizeTeamVaultScope,
   teamVaultWrapperContext,
   teamVaultWrapperContextHash,
@@ -280,6 +281,21 @@ test("client-side rotation moves ciphertext to a new key and excludes the remove
     }),
     /team_vault_wrapper_context_mismatch/,
   );
+});
+
+test("device approval fingerprints are stable, bounded and key-specific", async () => {
+  const identityA = await generateTeamDeviceIdentity(webcrypto);
+  const identityB = await generateTeamDeviceIdentity(webcrypto);
+  const fingerprintA = await teamDevicePublicKeyFingerprint(identityA.publicKey, webcrypto);
+
+  assert.match(fingerprintA, /^(?:[0-9a-f]{4}-){15}[0-9a-f]{4}$/u);
+  assert.equal(await teamDevicePublicKeyFingerprint({
+    y: identityA.publicKey.y,
+    x: identityA.publicKey.x,
+    crv: "P-256",
+    kty: "EC",
+  }, webcrypto), fingerprintA);
+  assert.notEqual(await teamDevicePublicKeyFingerprint(identityB.publicKey, webcrypto), fingerprintA);
 });
 
 test("device identity is generated once and repository persistence never needs an exportable private key", async () => {

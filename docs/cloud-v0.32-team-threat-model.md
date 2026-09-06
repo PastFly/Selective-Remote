@@ -5,8 +5,9 @@ Durable Teams, memberships, four-role checks, membership epochs, hash-only
 invitations, encrypted outbox delivery, audit events, idempotency receipts and
 shared-Vault metadata, shared ciphertext revisions, approved P-256 devices,
 per-device wrappers and atomic rotation completion are present. The browser has
-Team/member/shared-Vault UI, non-exportable device keys and causal shared-record
-synchronization. Browser approval/rotation UI and the macOS client remain.
+Team/member/shared-Vault UI, non-exportable device keys, fingerprint-confirmed
+device approval/revocation, causal shared-record synchronization and atomic
+rotation completion. The macOS client and cross-client acceptance remain.
 
 ## Security outcome
 
@@ -206,6 +207,6 @@ or wrappers.
   present.
 
 Team/shared Vault release status remains `planned_required`: the server-side
-protocol and browser Team UI/cryptography/causal sync are implemented, but
-browser approval/rotation completion, macOS interoperability and the complete
+protocol and browser Team UI/cryptography/causal sync/device approval/rotation
+completion are implemented, but macOS interoperability and the complete
 acceptance suite must pass before Cloud 0.32 is complete.

@@ -170,6 +170,8 @@ export function createTeamVaultController({
   let vaultKey = null;
   let document = null;
   let pendingConflicts = null;
+  let pendingRotation = null;
+  let pendingGeneration = null;
 
   function requireUnlocked() {
     if (!snapshot || !vaultKey || !document) throw new Error("team_vault_locked");
@@ -183,6 +185,8 @@ export function createTeamVaultController({
 
   async function persist(nextDocument) {
     requireUnlocked();
+    if (pendingRotation) throw new Error("team_vault_rotation_in_progress");
+    if (pendingGeneration) throw new Error("team_vault_generation_conflict");
     const normalizedDocument = validateVaultDocument(nextDocument);
     const envelope = await encryptTeamVaultPayload({
       vaultKey,
@@ -228,6 +232,8 @@ export function createTeamVaultController({
       vaultKey = nextKey;
       document = nextDocument;
       pendingConflicts = null;
+      pendingRotation = null;
+      pendingGeneration = null;
       return clone(document);
     },
 
@@ -236,6 +242,8 @@ export function createTeamVaultController({
       vaultKey = null;
       document = null;
       pendingConflicts = null;
+      pendingRotation = null;
+      pendingGeneration = null;
     },
 
     document() {
@@ -382,6 +390,141 @@ export function createTeamVaultController({
       };
     },
 
+    async prepareWrapper(recipient) {
+      requireUnlocked();
+      if (pendingRotation) throw new Error("team_vault_rotation_in_progress");
+      return wrapTeamVaultKeyForDevice({
+        vaultKey,
+        recipient,
+        ...normalizedScope,
+        keyGeneration: snapshot.keyGeneration,
+        cryptoValue,
+      });
+    },
+
+    async prepareRotation(remote, keyDevices) {
+      if (pendingRotation) throw new Error("team_vault_rotation_in_progress");
+      if (!remote?.rotationRequired || !Number.isSafeInteger(remote.revision) || remote.revision < 1
+        || !Number.isSafeInteger(remote.keyGeneration) || remote.keyGeneration < 1) {
+        throw new Error("team_vault_rotation_not_required");
+      }
+      let status = await this.status();
+      if (status === "locked") {
+        await this.unlock();
+        status = "unlocked";
+      }
+      let currentKey = vaultKey;
+      let localDocument = document;
+      const sourceLocalRevision = snapshot?.localRevision ?? 0;
+      if (status === "unlocked") {
+        if (snapshot.keyGeneration !== remote.keyGeneration) throw new Error("team_vault_generation_changed");
+        if (snapshot.serverRevision > remote.revision) throw new Error("remote_revision_regressed");
+      } else if (status === "empty") {
+        if (!remote.wrapper) throw new Error("team_vault_key_unavailable");
+        currentKey = await unwrapTeamVaultKeyForDevice({
+          privateKey: identity.privateKey,
+          wrapper: remote.wrapper,
+          ...normalizedScope,
+          keyGeneration: remote.keyGeneration,
+          deviceID,
+          cryptoValue,
+        });
+      } else {
+        throw new Error("team_vault_locked");
+      }
+      const encryptedRemote = remoteEnvelope(remote);
+      const remoteDocument = validateVaultDocument(await decryptTeamVaultPayload({
+        vaultKey: currentKey,
+        envelope: encryptedRemote,
+        scope: normalizedScope,
+        cryptoValue,
+      }));
+      let nextDocument = remoteDocument;
+      if (localDocument) {
+        const merged = mergeVaultDocuments(localDocument, remoteDocument);
+        if (merged.conflicts.length > 0) {
+          pendingConflicts = { revision: remote.revision, document: merged.document, conflicts: clone(merged.conflicts) };
+          return { conflicts: clone(merged.conflicts), revision: remote.revision };
+        }
+        nextDocument = merged.document;
+      }
+      if (!Array.isArray(keyDevices) || keyDevices.length === 0) throw new Error("team_key_devices_required");
+      const unique = new Set(keyDevices.map((value) => normalizedUUID(value?.deviceID, "invalid_team_key_devices")));
+      if (unique.size !== keyDevices.length || !unique.has(deviceID)) throw new Error("invalid_team_key_devices");
+      const nextGeneration = remote.keyGeneration + 1;
+      const nextKey = await generateVaultKey(cryptoValue);
+      const wrappers = await Promise.all(keyDevices.map((recipient) => wrapTeamVaultKeyForDevice({
+        vaultKey: nextKey,
+        recipient,
+        ...normalizedScope,
+        keyGeneration: nextGeneration,
+        cryptoValue,
+      })));
+      const currentWrapper = wrappers.find((wrapper) => wrapper.deviceID === deviceID);
+      if (!currentWrapper) throw new Error("team_vault_key_unavailable");
+      const envelope = await encryptTeamVaultPayload({
+        vaultKey: nextKey,
+        payload: nextDocument,
+        scope: normalizedScope,
+        baseRevision: remote.revision,
+        keyGeneration: nextGeneration,
+        wrappers,
+        cryptoValue,
+      });
+      const token = randomUUID();
+      pendingRotation = {
+        token,
+        baseRevision: remote.revision,
+        sourceLocalRevision,
+        keyGeneration: nextGeneration,
+        vaultKey: nextKey,
+        document: nextDocument,
+        uploadEnvelope: envelope,
+        envelope: { ...envelope, wrappers: undefined },
+        wrapper: currentWrapper,
+      };
+      delete pendingRotation.envelope.wrappers;
+      return { token, baseRevision: remote.revision, envelope, keyGeneration: nextGeneration, conflicts: [] };
+    },
+
+    rotationPreparation() {
+      if (!pendingRotation) return null;
+      return {
+        token: pendingRotation.token,
+        baseRevision: pendingRotation.baseRevision,
+        keyGeneration: pendingRotation.keyGeneration,
+        envelope: clone(pendingRotation.uploadEnvelope),
+      };
+    },
+
+    async commitRotation({ token, serverRevision, keyGeneration }) {
+      const prepared = pendingRotation;
+      if (!prepared || prepared.token !== token || prepared.keyGeneration !== keyGeneration
+        || serverRevision !== prepared.baseRevision + 1) {
+        throw new Error("invalid_team_vault_rotation");
+      }
+      const nextLocalRevision = Math.max(1, prepared.sourceLocalRevision + 1);
+      await save({
+        scope: normalizedScope,
+        deviceID,
+        keyGeneration,
+        localRevision: nextLocalRevision,
+        serverRevision,
+        syncedLocalRevision: nextLocalRevision,
+        envelope: prepared.envelope,
+        wrapper: prepared.wrapper,
+      });
+      vaultKey = prepared.vaultKey;
+      document = prepared.document;
+      pendingConflicts = null;
+      pendingRotation = null;
+      return { revision: serverRevision, keyGeneration };
+    },
+
+    cancelRotation(token) {
+      if (pendingRotation?.token === token) pendingRotation = null;
+    },
+
     async markSynced({ serverRevision, localRevision }) {
       requireUnlocked();
       if (!Number.isSafeInteger(serverRevision) || serverRevision < 1
@@ -432,6 +575,63 @@ export function createTeamVaultController({
       return { conflicts: [], matchesRemote, localChanged };
     },
 
+    async mergeRemoteGeneration(remote) {
+      requireUnlocked();
+      if (remote.rotationRequired) throw new Error("team_vault_rotation_required");
+      if (remote.keyGeneration <= snapshot.keyGeneration || remote.revision <= snapshot.serverRevision) {
+        throw new Error("team_vault_generation_changed");
+      }
+      if (!remote.wrapper) throw new Error("team_vault_key_unavailable");
+      const nextKey = await unwrapTeamVaultKeyForDevice({
+        privateKey: identity.privateKey,
+        wrapper: remote.wrapper,
+        ...normalizedScope,
+        keyGeneration: remote.keyGeneration,
+        deviceID,
+        cryptoValue,
+      });
+      const envelope = remoteEnvelope(remote);
+      const remoteDocument = validateVaultDocument(await decryptTeamVaultPayload({
+        vaultKey: nextKey,
+        envelope,
+        scope: normalizedScope,
+        cryptoValue,
+      }));
+      const merged = mergeVaultDocuments(document, remoteDocument);
+      if (merged.conflicts.length > 0) {
+        pendingGeneration = { remote, vaultKey: nextKey, envelope, wrapper: remote.wrapper };
+        pendingConflicts = { revision: remote.revision, document: merged.document, conflicts: clone(merged.conflicts) };
+        return { conflicts: clone(merged.conflicts) };
+      }
+      const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
+      const nextLocalRevision = snapshot.localRevision + 1;
+      let nextEnvelope = envelope;
+      if (!matchesRemote) {
+        nextEnvelope = await encryptTeamVaultPayload({
+          vaultKey: nextKey,
+          payload: merged.document,
+          scope: normalizedScope,
+          baseRevision: remote.revision,
+          keyGeneration: remote.keyGeneration,
+          cryptoValue,
+        });
+      }
+      await save({
+        ...snapshot,
+        keyGeneration: remote.keyGeneration,
+        localRevision: nextLocalRevision,
+        serverRevision: remote.revision,
+        syncedLocalRevision: matchesRemote ? nextLocalRevision : snapshot.syncedLocalRevision,
+        envelope: nextEnvelope,
+        wrapper: remote.wrapper,
+      });
+      vaultKey = nextKey;
+      document = merged.document;
+      pendingConflicts = null;
+      pendingGeneration = null;
+      return { conflicts: [], matchesRemote };
+    },
+
     pendingConflicts() {
       requireUnlocked();
       return pendingConflicts ? { revision: pendingConflicts.revision, conflicts: clone(pendingConflicts.conflicts) } : null;
@@ -463,8 +663,32 @@ export function createTeamVaultController({
           resolvedAt: now(),
         });
       }
-      await persist(resolved);
-      await save({ ...snapshot, serverRevision: revision });
+      if (pendingGeneration) {
+        const generation = pendingGeneration;
+        const nextLocalRevision = snapshot.localRevision + 1;
+        const envelope = await encryptTeamVaultPayload({
+          vaultKey: generation.vaultKey,
+          payload: resolved,
+          scope: normalizedScope,
+          baseRevision: revision,
+          keyGeneration: generation.remote.keyGeneration,
+          cryptoValue,
+        });
+        await save({
+          ...snapshot,
+          keyGeneration: generation.remote.keyGeneration,
+          localRevision: nextLocalRevision,
+          serverRevision: revision,
+          envelope,
+          wrapper: generation.wrapper,
+        });
+        vaultKey = generation.vaultKey;
+        document = resolved;
+        pendingGeneration = null;
+      } else {
+        await persist(resolved);
+        await save({ ...snapshot, serverRevision: revision });
+      }
       const count = pendingConflicts?.conflicts.length ?? resolutions.length;
       pendingConflicts = null;
       return { revision, localRevision: snapshot.localRevision, conflictsResolved: count };
@@ -554,8 +778,16 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
     await controller.markSynced({ serverRevision: result.revision, localRevision: prepared.localRevision });
     return { status: "initialized", revision: result.revision };
   }
-  if (remote.keyGeneration !== state.keyGeneration) throw new Error("team_vault_generation_changed");
   if (remote.revision < state.serverRevision) throw new Error("remote_revision_regressed");
+  if (remote.keyGeneration < state.keyGeneration) throw new Error("team_vault_generation_changed");
+  if (remote.keyGeneration > state.keyGeneration) {
+    const merged = await controller.mergeRemoteGeneration(remote);
+    if (merged.conflicts.length > 0) {
+      return { status: "conflict", revision: remote.revision, conflicts: merged.conflicts };
+    }
+    if (merged.matchesRemote) return { status: "downloaded", revision: remote.revision };
+    return uploadCurrent({ client, controller, scope, baseRevision: remote.revision });
+  }
   if (remote.revision === state.serverRevision) {
     return state.dirty
       ? uploadCurrent({ client, controller, scope, baseRevision: remote.revision })
@@ -567,4 +799,66 @@ export async function synchronizeTeamVault({ client, controller, role } = {}) {
   }
   if (merged.matchesRemote) return { status: "downloaded", revision: remote.revision };
   return uploadCurrent({ client, controller, scope, baseRevision: remote.revision });
+}
+
+export async function rotateTeamVault({ client, controller, role } = {}) {
+  if (!client?.session()) throw new Error("authentication_required");
+  if (!controller || typeof controller.prepareRotation !== "function") {
+    throw new Error("invalid_team_vault_controller");
+  }
+  if (!["owner", "admin"].includes(role)) throw new Error("team_vault_rotation_forbidden");
+  const scope = controller.scope;
+  const remote = await client.getTeamVault(scope);
+  let prepared = controller.rotationPreparation();
+  if (prepared && !remote.rotationRequired) {
+    if (remote.revision === prepared.baseRevision + 1
+      && remote.keyGeneration === prepared.keyGeneration
+      && remote.contentHash === prepared.envelope.contentHash) {
+      await controller.commitRotation({
+        token: prepared.token,
+        serverRevision: remote.revision,
+        keyGeneration: remote.keyGeneration,
+      });
+      return { status: "rotated", revision: remote.revision, keyGeneration: remote.keyGeneration };
+    }
+    controller.cancelRotation(prepared.token);
+    throw new Error("team_vault_rotation_not_required");
+  }
+  if (!remote.rotationRequired) throw new Error("team_vault_rotation_not_required");
+  if (prepared && (prepared.baseRevision !== remote.revision
+    || prepared.keyGeneration !== remote.keyGeneration + 1)) {
+    controller.cancelRotation(prepared.token);
+    prepared = null;
+  }
+  if (!prepared) {
+    const devices = await client.listTeamKeyDevices(scope);
+    prepared = await controller.prepareRotation(remote, devices.devices);
+    if (prepared.conflicts.length > 0) {
+      return { status: "conflict", revision: prepared.revision, conflicts: prepared.conflicts };
+    }
+  }
+  const result = await client.putTeamVault(
+    scope,
+    prepared.envelope,
+    `web:team:vault:rotate:${prepared.token}`,
+  );
+  if (result.conflict) {
+    controller.cancelRotation(prepared.token);
+    return {
+      status: "remote_changed",
+      remoteRevision: result.revision,
+      keyGeneration: result.keyGeneration,
+    };
+  }
+  if (!result.rotationCompleted || result.revision !== prepared.baseRevision + 1
+    || result.keyGeneration !== prepared.keyGeneration) {
+    controller.cancelRotation(prepared.token);
+    throw new Error("invalid_team_vault_rotation");
+  }
+  await controller.commitRotation({
+    token: prepared.token,
+    serverRevision: result.revision,
+    keyGeneration: result.keyGeneration,
+  });
+  return { status: "rotated", revision: result.revision, keyGeneration: result.keyGeneration };
 }

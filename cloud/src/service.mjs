@@ -503,6 +503,7 @@ function publicTeamKeyDevice(row) {
     deviceID: row.device_id,
     publicKeyAlgorithm: row.public_key_algorithm,
     publicKey: JSON.parse(row.public_key),
+    hasWrapper: row.has_wrapper === true,
   };
 }
 

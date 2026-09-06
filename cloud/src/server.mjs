@@ -129,8 +129,12 @@ async function route(request, response) {
     }
     if (method === "DELETE" && deviceMatch) {
       if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
-      const revoked = await store.revokeDevice(session.user_id, deviceMatch[1]);
-      return revoked ? empty(response, 204) : sendError(response, 404, "device_not_found");
+      try {
+        const revoked = await store.revokeDevice(session.user_id, deviceMatch[1], session.device_id);
+        return revoked ? empty(response, 204) : sendError(response, 404, "device_not_found");
+      } catch (error) {
+        return handleOperationError(response, error);
+      }
     }
     if (method === "GET" && url.pathname === "/v1/vault") {
       return sendJSON(response, 200, await service.getVault(session));

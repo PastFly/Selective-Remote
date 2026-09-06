@@ -100,9 +100,10 @@ function normalizedTeamKeyDevices(value, scope) {
   exactKeys(value, ["devices"], "invalid_team_key_devices");
   if (!Array.isArray(value.devices) || value.devices.length > 1024) throw new Error("invalid_team_key_devices");
   const devices = value.devices.map((device) => {
-    exactKeys(device, ["deviceID", "membershipEpoch", "membershipID", "publicKey", "publicKeyAlgorithm"], "invalid_team_key_devices");
+    exactKeys(device, ["deviceID", "hasWrapper", "membershipEpoch", "membershipID", "publicKey", "publicKeyAlgorithm"], "invalid_team_key_devices");
     if (device.publicKeyAlgorithm !== teamDevicePublicKeyAlgorithm
-      || !Number.isSafeInteger(device.membershipEpoch) || device.membershipEpoch < 1) {
+      || !Number.isSafeInteger(device.membershipEpoch) || device.membershipEpoch < 1
+      || typeof device.hasWrapper !== "boolean") {
       throw new Error("invalid_team_key_devices");
     }
     return {
@@ -111,6 +112,7 @@ function normalizedTeamKeyDevices(value, scope) {
       deviceID: normalizedUUID(device.deviceID, "invalid_team_key_devices"),
       publicKeyAlgorithm: teamDevicePublicKeyAlgorithm,
       publicKey: normalizeTeamDevicePublicKey(device.publicKey),
+      hasWrapper: device.hasWrapper,
     };
   });
   if (new Set(devices.map((device) => device.deviceID)).size !== devices.length) {
@@ -164,6 +166,42 @@ function normalizedRemoteTeamVault(value, scope) {
     wrapper: value.wrapper === null ? null : normalizedTeamWrapper(value.wrapper),
     createdAt: value.createdAt,
     updatedAt: value.updatedAt,
+  };
+}
+
+function normalizedAccountDevice(value) {
+  exactKeys(value, [
+    "app_version", "created_at", "id", "key_approved_at", "key_registered", "last_seen_at",
+    "name", "platform", "public_key", "public_key_algorithm", "revoked_at",
+  ], "invalid_devices");
+  if (typeof value.key_registered !== "boolean"
+    || (value.key_registered && value.public_key_algorithm !== teamDevicePublicKeyAlgorithm)
+    || (!value.key_registered && (value.public_key !== null || value.public_key_algorithm !== null))
+    || (value.key_approved_at !== null && !value.key_registered)) {
+    throw new Error("invalid_devices");
+  }
+  let publicKey = null;
+  if (value.key_registered) {
+    try {
+      publicKey = normalizeTeamDevicePublicKey(
+        typeof value.public_key === "string" ? JSON.parse(value.public_key) : value.public_key,
+      );
+    } catch {
+      throw new Error("invalid_devices");
+    }
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_devices"),
+    name: String(value.name ?? ""),
+    platform: String(value.platform ?? ""),
+    appVersion: String(value.app_version ?? ""),
+    createdAt: value.created_at,
+    lastSeenAt: value.last_seen_at,
+    revokedAt: value.revoked_at,
+    keyRegistered: value.key_registered,
+    keyApprovedAt: value.key_approved_at,
+    publicKeyAlgorithm: value.public_key_algorithm,
+    publicKey,
   };
 }
 
@@ -364,6 +402,10 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return user ? structuredClone(user) : null;
     },
 
+    deviceID() {
+      return currentDeviceID;
+    },
+
     async logout() {
       if (!token) return;
       try {
@@ -373,6 +415,22 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         user = null;
         currentDeviceID = null;
       }
+    },
+
+    async listDevices() {
+      const response = await authorizedRequest("/v1/devices");
+      const result = await responseJSON(response, "devices_download_failed");
+      if (!response.ok || !Array.isArray(result.devices) || result.devices.length > 1_000) {
+        throw new Error("devices_download_failed");
+      }
+      return result.devices.map(normalizedAccountDevice);
+    },
+
+    async revokeDevice(deviceID) {
+      const normalizedDeviceID = normalizedUUID(deviceID, "invalid_device");
+      const response = await authorizedRequest(`/v1/devices/${normalizedDeviceID}`, { method: "DELETE" });
+      if (response.status !== 204) throw new Error("device_revoke_failed");
+      return { revoked: true, deviceID: normalizedDeviceID };
     },
 
     async listTeams() {

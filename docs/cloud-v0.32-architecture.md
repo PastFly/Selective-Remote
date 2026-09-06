@@ -12,8 +12,9 @@ metadata structures, shared ciphertext revisions, approved P-256 devices,
 device-bound wrappers and fail-closed rotation completion plus explicitly
 scoped authenticated routes. The browser has the interoperable Team
 cryptographic/client layer, Team/member/shared-Vault UI and causal shared-record
-orchestration. Explicit new-device approval, rotation-completion UI and the
-macOS implementation remain required milestones within the final 0.32 scope.
+orchestration, fingerprint-confirmed new-device approval/revocation and safe
+rotation completion. The macOS implementation remains a required milestone
+within the final 0.32 scope.
 FIDO2 remains outside the initial 0.32 release scope.
 
 The first production deployment targets:
@@ -171,8 +172,13 @@ complete-set rotation. The browser Team client consumes explicit Team/Vault
 scopes, generates one wrapper per currently approved device, stores only local
 ciphertext and performs the same version-vector/tombstone merge used by the
 personal Vault. Concurrent entities require explicit choices and revocation
-states freeze writes. Rotation completion remains a separate required client
-milestone; the current UI never weakens the server's fail-closed gate.
+states freeze writes. Owner/Admin rotation prepares the next-generation key,
+complete wrapper set and full ciphertext in memory, then changes the local
+snapshot only after the conditional server commit. Competing rotation conflicts
+and unknown network outcomes preserve the previous local snapshot; the latter
+is accepted locally only after the exact committed content hash, generation and
+revision are observed. Retained devices can merge offline causal changes after
+adopting their new-generation wrapper.
 
 The mandatory role matrix, invitation lifecycle, device-bound key
 distribution, membership epochs and fail-closed rotation protocol are defined
