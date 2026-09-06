@@ -279,6 +279,23 @@ test("outbox claim uses multi-replica-safe SKIP LOCKED leasing", async () => {
   assert.deepEqual(f.queries[0].parameters, ["claim-owner"]);
 });
 
+test("Team key-device listing binds both the Team and Vault scope", async () => {
+  const f = fixture((sql) => {
+    if (sql.includes("SELECT membership.role")) return { rows: [{ role: "owner" }] };
+    if (sql.includes("wrapper.device_id IS NOT NULL AS has_wrapper")) {
+      return { rows: [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }] };
+    }
+    return { rows: [] };
+  });
+
+  assert.deepEqual(
+    await f.store.listTeamKeyDevices(teamID, vaultID, actorUserID),
+    [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }],
+  );
+  assert.deepEqual(f.queries[0].parameters, [teamID, vaultID, actorUserID]);
+  assert.deepEqual(f.queries[1].parameters, [teamID, vaultID]);
+});
+
 test("initial shared ciphertext and the complete device wrapper set commit atomically", async () => {
   const f = fixture((sql) => {
     const reservation = mutationReservation(sql);

@@ -858,7 +858,7 @@ export class PostgresStore {
          AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
          AND device.public_key IS NOT NULL
        ORDER BY membership.id, device.id`,
-      [teamID],
+      [teamID, vaultID],
     );
     return result.rows;
   }
