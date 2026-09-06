@@ -6,6 +6,7 @@ import {
   teamDevicePublicKeyFingerprint,
   teamVaultWrapperContext,
   teamVaultWrapperContextHash,
+  unwrapTeamVaultKeyForDevice,
 } from "../public/team-vault-crypto.js";
 
 const fixtureURL = new URL(
@@ -48,4 +49,43 @@ test("shared macOS/browser fixture locks Team crypto canonicalization", async ()
     decodeBase64URL(fixture.payload.authTag),
   ])).digest("base64url");
   assert.equal(contentHash, fixture.payload.contentHash);
+});
+
+test("browser unwraps the deterministic macOS Team Vault key wrapper", async () => {
+  const fixture = JSON.parse(await readFile(fixtureURL, "utf8"));
+  const privateKey = await webcrypto.subtle.importKey(
+    "jwk",
+    {
+      ...fixture.publicKey,
+      d: fixture.keyWrap.recipientPrivateScalar,
+      key_ops: ["deriveBits"],
+    },
+    { name: "ECDH", namedCurve: "P-256" },
+    false,
+    ["deriveBits"],
+  );
+  const wrapper = {
+    membershipID: fixture.wrapper.membershipID,
+    membershipEpoch: fixture.wrapper.membershipEpoch,
+    deviceID: fixture.wrapper.deviceID,
+    wrapperVersion: 1,
+    ephemeralPublicKey: fixture.keyWrap.ephemeralPublicKey,
+    ciphertext: fixture.keyWrap.ciphertext,
+    nonce: fixture.keyWrap.nonce,
+    authTag: fixture.keyWrap.authTag,
+    contextHash: fixture.wrapper.contextHash,
+  };
+  const key = await unwrapTeamVaultKeyForDevice({
+    privateKey,
+    wrapper,
+    teamID: fixture.wrapper.teamID,
+    vaultID: fixture.wrapper.vaultID,
+    keyGeneration: fixture.wrapper.keyGeneration,
+    deviceID: fixture.wrapper.deviceID,
+    cryptoValue: webcrypto,
+  });
+  assert.equal(
+    Buffer.from(await webcrypto.subtle.exportKey("raw", key)).toString("base64url"),
+    fixture.keyWrap.vaultKey,
+  );
 });

@@ -18,11 +18,20 @@ test("macOS Cloud foundation keeps sessions in device-only Keychain storage", as
 });
 
 test("macOS Team crypto source pins the browser protocol labels and strict JWK shape", async () => {
-  const source = await readFile(new URL("CloudTeamCrypto.swift", sourceRoot), "utf8");
+  const [source, identity] = await Promise.all([
+    readFile(new URL("CloudTeamCrypto.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
+  ]);
   assert.match(source, /selective-remote\/team-device-key\/v1/);
   assert.match(source, /selective-remote\/team-vault-wrapper\/v1/);
   assert.match(source, /selective-remote\/team-vault-wrapper-key\/v1/);
   assert.match(source, /selective-remote\/team-vault-payload\/v1/);
   assert.match(source, /actualKeys == \["crv", "ext", "key_ops", "kty", "x", "y"\]/);
   assert.match(source, /P256\.KeyAgreement\.PublicKey/);
+  assert.match(source, /hkdfDerivedSymmetricKey/);
+  assert.match(source, /AES\.GCM\.(seal|SealedBox)/);
+  assert.match(identity, /local\.selectiveremote\.cloud\.team-device-key\.v1/);
+  assert.match(identity, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(identity, /savePrivateKeyIfAbsent/);
+  assert.doesNotMatch(identity, /UserDefaults/);
 });

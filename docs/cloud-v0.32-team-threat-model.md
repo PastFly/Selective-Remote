@@ -8,9 +8,10 @@ per-device wrappers and atomic rotation completion are present. The browser has
 Team/member/shared-Vault UI, non-exportable device keys, fingerprint-confirmed
 device approval/revocation, causal shared-record synchronization and atomic
 rotation completion. The macOS foundation now pins device-only Keychain
-session storage and the exact P-256 fingerprint, wrapper-context and payload
-content-hash encodings through a fixture shared with browser tests. Full macOS
-key wrapping, Vault sync/UI and cross-client acceptance remain.
+session and P-256 identity storage, exact fingerprints/context hashes, and
+ECDH/HKDF/AES-GCM Team Vault-key wrapping. A deterministic synthetic wrapper
+created by Swift must decrypt in browser code. Full macOS payload encryption,
+Vault sync/UI and service-level cross-client acceptance remain.
 
 ## Security outcome
 

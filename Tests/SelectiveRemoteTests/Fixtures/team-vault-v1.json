@@ -19,6 +19,22 @@
     "contextBase64URL": "c2VsZWN0aXZlLXJlbW90ZS90ZWFtLXZhdWx0LXdyYXBwZXIvdjEAMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExADIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgA3AGFhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYQAzADQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NA",
     "contextHash": "hNGPo1pc4cy0J-eMx0RMOgiO4XQLlYlFPLsqZoCnWGE"
   },
+  "keyWrap": {
+    "recipientPrivateScalar": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAE",
+    "ephemeralPrivateScalar": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAI",
+    "ephemeralPublicKey": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "fPJ7GI0DT36KUjgDBLUaw8CJaeJ38hs1pgtI_EdmmXg",
+      "y": "B3dVENuO0EApPZrGn3Qw27p9reY86YIpngS3nSJ4c9E",
+      "ext": true,
+      "key_ops": []
+    },
+    "vaultKey": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "nonce": "AAECAwQFBgcICQoL",
+    "ciphertext": "V-HAtGNGImS9cQf9cENQpiFfyE3_uiwASobWUIi71Qc",
+    "authTag": "rsP1O7zoyyMMeQYL872k5Q"
+  },
   "payload": {
     "teamID": "11111111-1111-4111-8111-111111111111",
     "vaultID": "22222222-2222-4222-8222-222222222222",

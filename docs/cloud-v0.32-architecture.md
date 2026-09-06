@@ -14,10 +14,11 @@ scoped authenticated routes. The browser has the interoperable Team
 cryptographic/client layer, Team/member/shared-Vault UI and causal shared-record
 orchestration, fingerprint-confirmed new-device approval/revocation and safe
 rotation completion. The macOS client now has its first transport/security
-foundation: typed account/Team reads, a device-only Keychain session store and
-canonical P-256 fingerprint plus Team wrapper/payload context hashing verified
-against one shared browser/Swift fixture. Full macOS device-key persistence,
-Vault encryption/synchronization and UI remain required milestones within the
+foundation: typed account/Team reads, device-only Keychain session and P-256
+identity storage, canonical fingerprints/context hashing, and ECDH/HKDF/
+AES-GCM Team Vault-key wrapping. One deterministic synthetic fixture requires
+Swift to emit the exact wrapper that browser code decrypts. Full macOS payload
+encryption, Vault synchronization and UI remain required milestones within the
 final 0.32 scope.
 FIDO2 remains outside the initial 0.32 release scope.
 
