@@ -31,7 +31,8 @@ let package = Package(
         .testTarget(
             name: "SelectiveRemoteTests",
             dependencies: ["SelectiveRemote"],
-            path: "Tests/SelectiveRemoteTests"
+            path: "Tests/SelectiveRemoteTests",
+            resources: [.copy("Fixtures")]
         )
     ]
 )

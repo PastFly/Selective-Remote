@@ -21,7 +21,12 @@ atomically transfer ownership after password re-authentication, and archive a
 Team behind exact-name confirmation. Archiving immediately closes Team access,
 retires pending invitations/outbox work and rotation tasks, soft-archives its
 Vaults, and retains ciphertext and audit history. The remaining client
-milestone is the macOS implementation and cross-client acceptance.
+milestone is the complete macOS implementation and cross-client acceptance.
+The first macOS foundation now provides typed login/logout/current-user/Team
+transport, device-only Keychain bearer-session storage and strict P-256
+fingerprint/context/content-hash primitives. A shared JSON fixture is exercised
+by both Swift and browser tests; Vault encryption, sync UI and end-to-end
+interoperability remain pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually

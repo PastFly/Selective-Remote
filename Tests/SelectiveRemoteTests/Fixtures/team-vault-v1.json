@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "publicKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "axfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpY",
+    "y": "T-NC4v4af5uO5-tKfA-eFivOM1drMV7Oy7ZAaDe_UfU",
+    "ext": true,
+    "key_ops": []
+  },
+  "fingerprint": "6560-b930-44c0-5320-843e-3e19-6b51-f981-dae3-fb64-dcde-c93e-8978-2c49-c9bf-b874",
+  "wrapper": {
+    "teamID": "11111111-1111-4111-8111-111111111111",
+    "vaultID": "22222222-2222-4222-8222-222222222222",
+    "keyGeneration": 7,
+    "membershipID": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    "membershipEpoch": 3,
+    "deviceID": "44444444-4444-4444-8444-444444444444",
+    "contextBase64URL": "c2VsZWN0aXZlLXJlbW90ZS90ZWFtLXZhdWx0LXdyYXBwZXIvdjEAMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExADIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgA3AGFhYWFhYWFhLWFhYWEtNGFhYS04YWFhLWFhYWFhYWFhYWFhYQAzADQ0NDQ0NDQ0LTQ0NDQtNDQ0NC04NDQ0LTQ0NDQ0NDQ0NDQ0NA",
+    "contextHash": "hNGPo1pc4cy0J-eMx0RMOgiO4XQLlYlFPLsqZoCnWGE"
+  },
+  "payload": {
+    "teamID": "11111111-1111-4111-8111-111111111111",
+    "vaultID": "22222222-2222-4222-8222-222222222222",
+    "keyGeneration": 7,
+    "contextBase64URL": "c2VsZWN0aXZlLXJlbW90ZS90ZWFtLXZhdWx0LXBheWxvYWQvdjEAMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExADIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgA3",
+    "envelopeVersion": 1,
+    "nonce": "AAECAwQFBgcICQoL",
+    "ciphertext": "ABEiM0RVZneImaq7zN3u_w",
+    "authTag": "_-7dzLuqmYh3ZlVEMyIRAA",
+    "contentHash": "YtvpsswK9ghmnw0Z20FNE8KtfO2Cu3kZCreugkuyeFk"
+  }
+}
