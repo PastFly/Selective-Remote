@@ -15,6 +15,10 @@ test("four fixed Team roles enforce the 0.32 permission boundary", () => {
     assert.doesNotThrow(() => requireTeamPermission(role, "read"));
   }
   assert.doesNotThrow(() => requireTeamPermission("admin", "create_vault"));
+  for (const permission of ["rename_team", "transfer_ownership", "archive_team"]) {
+    assert.doesNotThrow(() => requireTeamPermission("owner", permission));
+    assert.throws(() => requireTeamPermission("admin", permission), /team_access_denied/);
+  }
   assert.throws(() => requireTeamPermission("editor", "create_vault"), /team_access_denied/);
   assert.throws(() => requireTeamPermission("viewer", "create_vault"), /team_access_denied/);
   assert.throws(() => validateTeamRole("custom"), /invalid_team_role/);

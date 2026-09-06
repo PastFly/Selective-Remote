@@ -235,6 +235,35 @@
           </div>
         </div>
 
+        <section class="team-lifecycle" id="team-lifecycle" hidden>
+          <h3>Управление Team</h3>
+          <p>Только Owner может переименовать Team, передать владение или архивировать её.</p>
+          <div class="team-lifecycle-forms">
+            <form id="team-rename-form">
+              <h4>Переименовать</h4>
+              <label for="team-rename-name">Новое название</label>
+              <input id="team-rename-name" name="name" maxlength="120" required>
+              <button type="submit">Сохранить название</button>
+            </form>
+            <form id="team-ownership-transfer-form">
+              <h4>Передать владение</h4>
+              <label for="team-ownership-member">Новый Owner</label>
+              <select id="team-ownership-member" name="membershipID" required></select>
+              <label for="team-ownership-password">Текущий пароль</label>
+              <input id="team-ownership-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+              <button type="submit">Передать владение</button>
+            </form>
+            <form id="team-archive-form" class="team-danger-zone">
+              <h4>Архивировать Team</h4>
+              <label for="team-archive-name">Введите точное название Team</label>
+              <input id="team-archive-name" name="expectedName" maxlength="120" autocomplete="off" required>
+              <label for="team-archive-password">Текущий пароль</label>
+              <input id="team-archive-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+              <button type="submit" class="danger">Архивировать Team</button>
+            </form>
+          </div>
+        </section>
+
         <div class="vault-workspace" id="team-vault-workspace" hidden>
           <div class="vault-toolbar">
             <div>

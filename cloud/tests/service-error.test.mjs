@@ -11,6 +11,10 @@ test("known operation errors map to stable public responses", () => {
     status: 429,
     code: "rate_limited",
   });
+  assert.deepEqual(publicOperationError(new Error("team_name_mismatch")), {
+    status: 409,
+    code: "team_name_mismatch",
+  });
   assert.equal(publicOperationError(new Error("email_exists")), null);
 });
 

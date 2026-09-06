@@ -39,6 +39,7 @@ const operationStatuses = Object.freeze({
   team_access_denied: 403,
   team_member_exists: 409,
   team_last_owner: 409,
+  team_name_mismatch: 409,
   shared_vault_exists: 409,
   shared_vault_wrapper_exists: 409,
 });

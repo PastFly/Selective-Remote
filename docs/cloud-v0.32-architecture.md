@@ -204,6 +204,9 @@ than overloading the personal route.
 | `PUT` | `/v1/vault` | Conditionally upload a revision |
 | `GET` | `/v1/teams` | List the current user's active Teams |
 | `POST` | `/v1/teams` | Create a Team and its first Owner membership |
+| `PATCH` | `/v1/teams/{teamID}` | Rename a Team (Owner only) |
+| `POST` | `/v1/teams/{teamID}/ownership-transfer` | Re-authenticate and atomically transfer Owner |
+| `DELETE` | `/v1/teams/{teamID}` | Re-authenticate, confirm exact name and soft-archive Team |
 | `GET` | `/v1/teams/{teamID}/members` | List active Team members |
 | `POST` | `/v1/teams/{teamID}/invitations` | Queue a role-bounded invitation |
 | `DELETE` | `/v1/teams/{teamID}/invitations/{invitationID}` | Cancel a pending invitation |
@@ -220,7 +223,12 @@ than overloading the personal route.
 Every Team mutation requires an `Idempotency-Key`. Role and membership state
 is locked and checked in the same PostgreSQL transaction as the mutation.
 Cross-Team identifiers do not accept a user/owner ID from the request body.
-Invitation creation and acceptance are separately rate-limited.
+Invitation creation and acceptance are separately rate-limited. Ownership
+transfer and Team archival share additional per-user and per-IP limits. A Team
+archive transaction cancels pending invitations and delivery jobs, cancels
+pending rotation tasks, archives active shared Vaults and finally archives the
+Team. Ciphertext, memberships, mutation receipts and audit events remain
+durable for recovery and forensic reconciliation.
 
 Google, Apple and Microsoft/Azure sign-in are represented as account identity
 providers in the schema for future compatibility. OAuth redirect and callback

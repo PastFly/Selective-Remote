@@ -88,10 +88,13 @@ test("rate-limit overrides reject partial and out-of-range numbers", () => {
   assert.deepEqual(config.authRateLimits.team_invitation_accept_ip, { limit: 20, windowSeconds: 3_600 });
   assert.deepEqual(config.authRateLimits.device_key_bootstrap_user, { limit: 5, windowSeconds: 900 });
   assert.deepEqual(config.authRateLimits.device_key_bootstrap_ip, { limit: 20, windowSeconds: 900 });
+  assert.deepEqual(config.authRateLimits.team_sensitive_user, { limit: 10, windowSeconds: 900 });
+  assert.deepEqual(config.authRateLimits.team_sensitive_ip, { limit: 30, windowSeconds: 900 });
   assert.throws(
     () => loadConfig({ ...baseEnv, AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT: "0" }),
     /AUTH_PASSWORD_RESET_REQUEST_IP_LIMIT/,
   );
+  assert.throws(() => loadConfig({ ...baseEnv, TEAM_SENSITIVE_USER_LIMIT: "0" }), /TEAM_SENSITIVE_USER_LIMIT/);
 });
 
 test("runtime security secrets cannot be reused across purposes", () => {

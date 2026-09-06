@@ -73,6 +73,15 @@ ownership transfer require recent re-authentication. A Viewer who has a Vault
 key can technically produce ciphertext, so the API must still reject Viewer
 writes.
 
+The implemented ownership-transfer transaction locks the active Team, actor
+membership and target membership, promotes the target to Owner, demotes the
+actor to Admin and writes one audit event before commit. Guarded Team deletion
+is a soft archive: after rate-limited password re-authentication it compares an
+exact current Team name under the same lock, cancels pending invitations and
+outbox delivery, cancels pending rotation tasks, archives active shared Vaults,
+writes an audit event and archives the Team last. It does not erase ciphertext
+or history, and all ordinary Team joins exclude archived Teams immediately.
+
 ## Invitation lifecycle
 
 1. Owner/Admin creates an invitation for one normalized email and an allowed
@@ -192,6 +201,8 @@ or wrappers.
 
 - Allow/deny tests for every role and operation, including Viewer writes,
   Admin-to-Owner escalation and cross-Team ID substitution.
+- Rename, self-transfer, atomic target promotion/actor demotion, wrong-password
+  re-authentication, exact-name mismatch and soft-archive cleanup.
 - Invitation expiry, cancellation, double acceptance, re-invitation and
   verified-email mismatch.
 - Browser/macOS cryptographic fixtures for key agreement, context binding,

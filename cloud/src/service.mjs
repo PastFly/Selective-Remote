@@ -267,6 +267,44 @@ export class CloudService {
     }) };
   }
 
+  async renameTeam(session, teamID, input, idempotencyKey) {
+    const result = await this.store.renameTeam({
+      actorUserID: session.user_id,
+      teamID,
+      name: validateTeamName(input?.name),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { team: publicTeam({
+      ...result.team,
+      membership_id: result.membership.id,
+      role: result.membership.role,
+      epoch: result.membership.epoch,
+    }) };
+  }
+
+  async transferTeamOwnership(session, teamID, input, idempotencyKey) {
+    await this.requirePasswordReauthentication(session, input?.password);
+    if (!isUUID(input?.membershipID)) throw new Error("team_not_found");
+    return this.store.transferTeamOwnership({
+      actorUserID: session.user_id,
+      teamID,
+      membershipID: input.membershipID.toLowerCase(),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async archiveTeam(session, teamID, input, idempotencyKey) {
+    await this.requirePasswordReauthentication(session, input?.password);
+    const expectedName = validateTeamName(input?.expectedName);
+    if (input?.expectedName !== expectedName) throw new Error("team_name_mismatch");
+    return this.store.archiveTeam({
+      actorUserID: session.user_id,
+      teamID,
+      expectedName,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
   async listTeamMembers(session, teamID) {
     const rows = await this.store.listTeamMembers(teamID, session.user_id);
     return { members: rows.map(publicTeamMember) };
@@ -363,7 +401,17 @@ export class CloudService {
   }
 
   async bootstrapDeviceKey(session, input, idempotencyKey) {
-    const password = validatePassword(input?.password);
+    await this.requirePasswordReauthentication(session, input?.password);
+    return this.store.bootstrapDeviceKey({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      expectedPublicKey: validateDevicePublicKey(input?.publicKey),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async requirePasswordReauthentication(session, value) {
+    const password = validatePassword(value);
     const identity = await this.store.passwordIdentity(session.email);
     const passwordMatches = await this.passwordVerifier(
       password,
@@ -372,12 +420,6 @@ export class CloudService {
     if (!identity || identity.id !== session.user_id || identity.disabled_at || !passwordMatches) {
       throw new Error("invalid_credentials");
     }
-    return this.store.bootstrapDeviceKey({
-      actorUserID: session.user_id,
-      actorDeviceID: session.device_id,
-      expectedPublicKey: validateDevicePublicKey(input?.publicKey),
-      idempotencyKey: validateIdempotencyKey(idempotencyKey),
-    });
   }
 
   async listTeamKeyDevices(session, teamID, vaultID) {

@@ -113,6 +113,129 @@ test("a repeated idempotency key replays the committed response without another 
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
 
+test("Team rename locks the Team, requires Owner and records both names", async () => {
+  const team = { id: teamID, name: "Platform", created_at: new Date(), updated_at: new Date() };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("UPDATE teams SET name")) return { rows: [team], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
+
+  const result = await f.store.renameTeam({
+    actorUserID,
+    teamID,
+    name: "Platform",
+    idempotencyKey: "request:team-rename-01",
+  });
+  assert.equal(result.team.name, "Platform");
+  assert.deepEqual(f.queries.find(({ sql }) => sql.includes("UPDATE teams SET name")).parameters, [teamID, "Platform"]);
+  const audit = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_audit_events"));
+  assert.match(audit.parameters.at(-1), /Operations/);
+  assert.match(audit.parameters.at(-1), /Platform/);
+});
+
+test("ownership transfer promotes the target and demotes the actor atomically", async () => {
+  const targetMembershipID = "87806d7b-d3a9-4701-8262-f247bd5de1e9";
+  const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("WHERE team_id = $1 AND id = $2") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: targetMembershipID, user_id: targetUserID, role: "editor", epoch: 2 }] };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.transferTeamOwnership({
+    actorUserID,
+    teamID,
+    membershipID: targetMembershipID,
+    idempotencyKey: "request:team-transfer-01",
+  }), {
+    transferred: true,
+    teamID,
+    previousOwnerMembershipID: membershipID,
+    ownerMembershipID: targetMembershipID,
+  });
+  const updates = f.queries.filter(({ sql }) => sql.includes("UPDATE team_memberships SET role"));
+  assert.equal(updates.length, 2);
+  assert.match(updates[0].sql, /role = 'owner'/);
+  assert.deepEqual(updates[0].parameters, [targetMembershipID, teamID]);
+  assert.match(updates[1].sql, /role = 'admin'/);
+  assert.deepEqual(updates[1].parameters, [membershipID, teamID]);
+  assert.ok(f.queries.indexOf(updates[0]) < f.queries.findIndex(({ sql }) => sql === "COMMIT"));
+
+  const self = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("WHERE team_id = $1 AND id = $2") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1 }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(self.store.transferTeamOwnership({
+    actorUserID,
+    teamID,
+    membershipID,
+    idempotencyKey: "request:team-transfer-self-01",
+  }), /team_access_denied/);
+  assert.equal(self.queries.some(({ sql }) => sql.includes("UPDATE team_memberships SET role")), false);
+});
+
+test("guarded Team archive cancels pending work and soft-archives Vaults before the Team", async () => {
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("UPDATE teams SET archived_at")) return { rows: [{ id: teamID }], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.archiveTeam({
+    actorUserID,
+    teamID,
+    expectedName: "Operations",
+    idempotencyKey: "request:team-archive-01",
+  }), { archived: true, teamID });
+  const invitation = f.queries.find(({ sql }) => sql.includes("UPDATE team_invitations SET cancelled_at"));
+  const rotation = f.queries.find(({ sql }) => sql.includes("shared_vault_rotation_tasks AS task"));
+  const vault = f.queries.find(({ sql }) => sql.includes("UPDATE shared_vaults SET archived_at"));
+  const team = f.queries.find(({ sql }) => sql.includes("UPDATE teams SET archived_at"));
+  assert.deepEqual(invitation.parameters, [teamID, actorUserID]);
+  assert.match(rotation.sql, /status = 'cancelled'/);
+  assert.ok(f.queries.indexOf(invitation) < f.queries.indexOf(rotation));
+  assert.ok(f.queries.indexOf(rotation) < f.queries.indexOf(vault));
+  assert.ok(f.queries.indexOf(vault) < f.queries.indexOf(team));
+
+  const mismatch = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(mismatch.store.archiveTeam({
+    actorUserID,
+    teamID,
+    expectedName: "Wrong",
+    idempotencyKey: "request:team-archive-02",
+  }), /team_name_mismatch/);
+  assert.equal(mismatch.queries.some(({ sql }) => sql.includes("UPDATE shared_vaults SET archived_at")), false);
+});
+
 test("invitation creation locks authorization and stores hash plus encrypted outbox only", async () => {
   const invitation = {
     id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d",

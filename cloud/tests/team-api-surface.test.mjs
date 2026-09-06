@@ -17,6 +17,8 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
     "teamVaultMatch",
     "teamVaultDevicesMatch",
     "teamVaultWrappersMatch",
+    "teamOwnershipMatch",
+    "teamMatch",
   ]) assert.match(serverSource, new RegExp(fragment.replaceAll("/", "\\/")));
   assert.match(serverSource, /idempotencyKey\(request\)/);
   assert.match(serverSource, /maxTeamBodyBytes = 16 \* 1024/);
@@ -31,6 +33,11 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
     < serverSource.indexOf("const deviceMatch"));
   assert.match(serverSource, /device_key_bootstrap_user/);
   assert.match(serverSource, /device_key_bootstrap_ip/);
+  assert.match(serverSource, /service\.renameTeam/);
+  assert.match(serverSource, /service\.transferTeamOwnership/);
+  assert.match(serverSource, /service\.archiveTeam/);
+  assert.match(serverSource, /team_sensitive_user/);
+  assert.match(serverSource, /team_sensitive_ip/);
 });
 
 test("malformed or cross-scope Team identifiers use the same not-found boundary", () => {
