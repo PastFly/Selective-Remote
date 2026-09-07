@@ -351,7 +351,8 @@ struct CloudMacOSFoundationTests {
             Issue.record("Expected the first remote revision to be synchronized")
             return
         }
-        #expect(initial.payload == (try fixture.payload.plaintext.base64URLData))
+        let initialPayload = try fixture.payload.plaintext.base64URLData
+        #expect(initial.payload == initialPayload)
         #expect(initial.snapshot.serverRevision == 5)
         #expect(initial.snapshot.localRevision == initial.snapshot.syncedLocalRevision)
 
