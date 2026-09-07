@@ -512,9 +512,12 @@ struct CloudMacOSFoundationTests {
                 identity: identity
             )
         }
-        let pendingResolution = try #require(
-            storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        let storedPendingResolution = try storage.load(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
         )
+        let pendingResolution = try #require(storedPendingResolution)
         #expect(pendingResolution.envelope.baseRevision == 7)
         #expect(pendingResolution.localRevision > pendingResolution.syncedLocalRevision)
 
