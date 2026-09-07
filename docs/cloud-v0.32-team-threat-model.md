@@ -190,6 +190,10 @@ or wrappers.
   timestamps never choose a winner.
 - Conflict resolution joins both histories, creates a new local causal event
   and uploads conditionally. The server never sees the selected plaintext.
+- The macOS coordinator revalidates the exact dirty local snapshot and observed
+  remote version before preparing a caller-resolved payload. A changed remote
+  version returns a new conflict without writing; an unknown upload outcome
+  leaves the resolution dirty for deterministic-idempotency retry.
 - Role changes and rotation cannot be smuggled inside an encrypted record
   revision; they use separate authorized endpoints and durable transactions.
 

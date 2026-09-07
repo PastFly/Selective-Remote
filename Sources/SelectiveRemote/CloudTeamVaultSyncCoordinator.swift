@@ -10,6 +10,7 @@ enum SelectiveRemoteTeamVaultSyncError: Error, Equatable {
     case remoteRevisionDivergence
     case invalidWriteAcknowledgement
     case invalidConflictResponse
+    case staleConflict
 }
 
 protocol SelectiveRemoteTeamVaultRemote: Sendable {
@@ -259,6 +260,92 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         )
         try snapshots.save(uploaded, endpoint: endpoint)
         return .uploaded(.init(snapshot: uploaded, payload: localVersion.payload))
+    }
+
+    /// Conditionally uploads a caller-resolved payload from the exact remote
+    /// revision that produced the conflict. The caller must resolve every
+    /// record-level conflict and join both causal histories before calling.
+    ///
+    /// The existing dirty snapshot is left untouched until the remote version
+    /// is revalidated. Once prepared, the resolution remains dirty on disk so
+    /// an unknown network outcome can be retried with the same idempotency key.
+    func resolveConflict(
+        _ conflict: SelectiveRemoteTeamVaultConflict,
+        resolvedPayload: Data,
+        teamID: UUID,
+        vaultID: UUID,
+        identity: SelectiveRemoteTeamDeviceIdentity
+    ) async throws -> SelectiveRemoteTeamVaultPushOutcome {
+        guard let current = try snapshots.load(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        ) else { throw SelectiveRemoteTeamVaultSyncError.noLocalSnapshot }
+        guard current == conflict.local.snapshot,
+              current.deviceID == identity.deviceID
+        else { throw SelectiveRemoteTeamVaultSyncError.staleConflict }
+        try validateLocalCausality(current)
+        let currentLocal = try decryptedLocalVersion(
+            current,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard currentLocal.payload == conflict.local.payload else {
+            throw SelectiveRemoteTeamVaultSyncError.staleConflict
+        }
+
+        let remoteEnvelope = try await remote.sharedVault(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        )
+        guard !remoteEnvelope.rotationRequired else {
+            throw SelectiveRemoteTeamVaultSyncError.rotationRequired
+        }
+        let latestRemote = try decryptedRemoteVersion(
+            remoteEnvelope,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard latestRemote.revision > current.serverRevision else {
+            throw SelectiveRemoteTeamVaultSyncError.invalidConflictResponse
+        }
+        guard latestRemote == conflict.remote else {
+            return .conflict(.init(local: currentLocal, remote: latestRemote))
+        }
+
+        let (nextLocalRevision, overflow) = current.localRevision.addingReportingOverflow(1)
+        guard !overflow else { throw SelectiveRemoteTeamVaultSyncError.invalidLocalSnapshot }
+        let vaultKey = try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+            latestRemote.wrapper,
+            with: identity,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: latestRemote.keyGeneration
+        )
+        let resolvedEnvelope = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            resolvedPayload,
+            vaultKey: vaultKey,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: latestRemote.keyGeneration,
+            baseRevision: latestRemote.revision
+        )
+        let prepared = try SelectiveRemoteTeamVaultSnapshot(
+            teamID: teamID,
+            vaultID: vaultID,
+            deviceID: identity.deviceID,
+            keyGeneration: latestRemote.keyGeneration,
+            localRevision: nextLocalRevision,
+            serverRevision: latestRemote.revision,
+            syncedLocalRevision: current.syncedLocalRevision,
+            envelope: resolvedEnvelope,
+            wrapper: latestRemote.wrapper
+        )
+        try snapshots.save(prepared, endpoint: endpoint)
+        return try await push(teamID: teamID, vaultID: vaultID, identity: identity)
     }
 
     private func accept(

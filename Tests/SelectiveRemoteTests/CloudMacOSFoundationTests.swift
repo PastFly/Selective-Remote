@@ -457,6 +457,92 @@ struct CloudMacOSFoundationTests {
         #expect(conflict.local.snapshot.envelope == staged.snapshot.envelope)
         let preserved = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
         #expect(preserved == staged.snapshot)
+
+        let newerRemotePayload = Data("synthetic newer remote conflict".utf8)
+        let newerRemoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            newerRemotePayload,
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 6,
+            nonce: Data(repeating: 0x24, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 7,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: newerRemoteCiphertext.envelopeVersion,
+            ciphertext: newerRemoteCiphertext.ciphertext,
+            nonce: newerRemoteCiphertext.nonce,
+            authTag: newerRemoteCiphertext.authTag,
+            contentHash: newerRemoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T01:00:00.000Z"
+        ))
+        let staleResolution = try await coordinator.resolveConflict(
+            conflict,
+            resolvedPayload: Data("must not upload".utf8),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .conflict(updatedConflict) = staleResolution else {
+            Issue.record("Expected a changed remote version to return a new conflict")
+            return
+        }
+        #expect(updatedConflict.remote.revision == 7)
+        #expect(updatedConflict.remote.payload == newerRemotePayload)
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+        let staleResolutionWrites = await remote.recordedWrites()
+        #expect(staleResolutionWrites.count == 1)
+
+        let resolvedPayload = Data("synthetic joined conflict resolution".utf8)
+        await remote.setWriteFailure(.unknownOutcome)
+        await #expect(throws: TeamVaultRemoteStubFailure.unknownOutcome) {
+            try await coordinator.resolveConflict(
+                updatedConflict,
+                resolvedPayload: resolvedPayload,
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+        let pendingResolution = try #require(
+            storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        )
+        #expect(pendingResolution.envelope.baseRevision == 7)
+        #expect(pendingResolution.localRevision > pendingResolution.syncedLocalRevision)
+
+        await remote.setWriteFailure(nil)
+        await remote.setWriteResult(.init(
+            conflict: false,
+            revision: 8,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationCompleted: false
+        ))
+        let resolution = try await coordinator.push(
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .uploaded(uploaded) = resolution else {
+            Issue.record("Expected the explicit conflict resolution to upload")
+            return
+        }
+        #expect(uploaded.payload == resolvedPayload)
+        #expect(uploaded.snapshot.serverRevision == 8)
+        #expect(uploaded.snapshot.envelope.baseRevision == 7)
+        #expect(uploaded.snapshot.localRevision == uploaded.snapshot.syncedLocalRevision)
+        let resolutionWrites = await remote.recordedWrites()
+        #expect(resolutionWrites.count == 3)
+        #expect(resolutionWrites.last?.upload.envelope.baseRevision == 7)
+        #expect(resolutionWrites[1].idempotencyKey == resolutionWrites[2].idempotencyKey)
+        #expect(resolutionWrites.last?.idempotencyKey != resolutionWrites.first?.idempotencyKey)
     }
 
     @Test("Team Vault coordinator fails closed while key rotation is required")
@@ -630,6 +716,10 @@ private final class CloudHTTPStub: @unchecked Sendable {
     }
 }
 
+private enum TeamVaultRemoteStubFailure: Error, Equatable, Sendable {
+    case unknownOutcome
+}
+
 private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     struct RecordedWrite: Equatable, Sendable {
         let upload: SelectiveRemoteCloudTeamVaultUpload
@@ -638,6 +728,7 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
 
     private var envelope: SelectiveRemoteCloudSharedVaultEnvelope
     private var writeResult: SelectiveRemoteCloudTeamVaultWriteResult
+    private var writeFailure: TeamVaultRemoteStubFailure?
     private var writes: [RecordedWrite] = []
 
     init(
@@ -668,11 +759,22 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
         #expect(envelope.teamID == teamID)
         #expect(envelope.id == vaultID)
         writes.append(.init(upload: upload, idempotencyKey: idempotencyKey))
+        if let writeFailure {
+            throw writeFailure
+        }
         return writeResult
     }
 
     func setEnvelope(_ value: SelectiveRemoteCloudSharedVaultEnvelope) {
         envelope = value
+    }
+
+    func setWriteResult(_ value: SelectiveRemoteCloudTeamVaultWriteResult) {
+        writeResult = value
+    }
+
+    func setWriteFailure(_ value: TeamVaultRemoteStubFailure?) {
+        writeFailure = value
     }
 
     func recordedWrites() -> [RecordedWrite] {
