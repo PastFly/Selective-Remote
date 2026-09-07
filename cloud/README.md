@@ -29,9 +29,13 @@ ECDH/HKDF/AES-GCM Team Vault-key wrap/unwrap. This bounded macOS layer adds
 scope/generation-bound Team payload encryption/decryption, strict shared-Vault
 list/key-device/download/conditional-upload transport and atomic local storage
 of ciphertext-only offline snapshots. A deterministic synthetic JSON fixture is
-produced exactly by Swift and decrypted by the browser tests. Full sync
-orchestration, personal-Vault recovery wrapping, sync UI and end-to-end service
-acceptance remain pending.
+produced exactly by Swift and decrypted by the browser tests. The bounded sync
+coordinator accepts clean remote revisions, stages encrypted offline edits with
+deterministic retry identity, rejects rollback or same-revision divergence,
+fails closed during rotation and preserves both decrypted versions plus the
+dirty ciphertext snapshot on a 409. Personal-Vault recovery wrapping, sync UI,
+explicit conflict-resolution writes and end-to-end service acceptance remain
+pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually

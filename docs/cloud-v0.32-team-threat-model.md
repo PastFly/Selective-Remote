@@ -13,8 +13,11 @@ ECDH/HKDF/AES-GCM Team Vault-key wrapping. A deterministic synthetic wrapper
 created by Swift must decrypt in browser code. The bounded follow-up also adds
 scope/generation-bound Team payload encryption, strict conditional API transport
 and atomic ciphertext-only offline snapshots; the browser decrypts the exact
-Swift payload fixture. Full sync orchestration, personal-Vault recovery
-wrapping, Vault UI and service-level cross-client acceptance remain.
+Swift payload fixture. The bounded macOS coordinator now stages causal encrypted
+edits, uses deterministic idempotency for retry, fails closed on rotation,
+rejects remote rollback/divergence and preserves local and remote versions on
+an optimistic conflict. Personal-Vault recovery wrapping, conflict-resolution
+writes, Vault UI and service-level cross-client acceptance remain.
 
 ## Security outcome
 
@@ -225,6 +228,7 @@ or wrappers.
   present.
 
 Team/shared Vault release status remains `planned_required`: the server-side
-protocol and browser Team UI/cryptography/causal sync/device approval/rotation
-completion are implemented, but macOS interoperability and the complete
+protocol, browser Team UI/cryptography/causal sync/device approval/rotation and
+the bounded macOS crypto/transport/offline coordinator are implemented, but
+macOS UI, explicit conflict-resolution writes and the complete cross-client
 acceptance suite must pass before Cloud 0.32 is complete.
