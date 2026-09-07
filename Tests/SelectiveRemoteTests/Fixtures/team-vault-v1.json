@@ -41,9 +41,11 @@
     "keyGeneration": 7,
     "contextBase64URL": "c2VsZWN0aXZlLXJlbW90ZS90ZWFtLXZhdWx0LXBheWxvYWQvdjEAMTExMTExMTEtMTExMS00MTExLTgxMTEtMTExMTExMTExMTExADIyMjIyMjIyLTIyMjItNDIyMi04MjIyLTIyMjIyMjIyMjIyMgA3",
     "envelopeVersion": 1,
+    "baseRevision": 4,
+    "plaintext": "eyJzY2hlbWFWZXJzaW9uIjoxLCJyZWNvcmRzIjpbXSwidG9tYnN0b25lcyI6W119",
     "nonce": "AAECAwQFBgcICQoL",
-    "ciphertext": "ABEiM0RVZneImaq7zN3u_w",
-    "authTag": "_-7dzLuqmYh3ZlVEMyIRAA",
-    "contentHash": "YtvpsswK9ghmnw0Z20FNE8KtfO2Cu3kZCreugkuyeFk"
+    "ciphertext": "PCCleK2Ar3rbJOX42IYWT7nnqxaCHjwTSgOWpycyXZ4jZMGRzbJm9xrBDM-y3HVF",
+    "authTag": "jqEFDz8qlc31mlD_P2EvwQ",
+    "contentHash": "El7H2EzE4PydPIKRZlBfzop391y015HyfqY6bf5NpFI"
   }
 }

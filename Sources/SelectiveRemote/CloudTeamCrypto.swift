@@ -9,6 +9,9 @@ enum SelectiveRemoteTeamCryptoError: Error, Equatable {
     case wrapperDeviceMismatch
     case wrapperContextMismatch
     case keyUnwrapFailed
+    case payloadContentHashMismatch
+    case payloadEncryptionFailed
+    case payloadDecryptionFailed
 }
 
 struct SelectiveRemoteTeamDevicePublicKey: Codable, Equatable, Sendable {
@@ -165,6 +168,67 @@ struct SelectiveRemoteTeamVaultKeyWrapper: Codable, Equatable, Sendable {
     }
 }
 
+struct SelectiveRemoteTeamVaultPayloadEnvelope: Codable, Equatable, Sendable {
+    let baseRevision: Int
+    let keyGeneration: Int
+    let envelopeVersion: Int
+    let ciphertext: String
+    let nonce: String
+    let authTag: String
+    let contentHash: String
+
+    enum CodingKeys: String, CodingKey {
+        case baseRevision, keyGeneration, envelopeVersion
+        case ciphertext, nonce, authTag, contentHash
+    }
+
+    init(
+        baseRevision: Int,
+        keyGeneration: Int,
+        envelopeVersion: Int = 1,
+        ciphertext: String,
+        nonce: String,
+        authTag: String,
+        contentHash: String
+    ) throws {
+        guard baseRevision >= 0,
+              keyGeneration > 0,
+              envelopeVersion == 1,
+              let ciphertextData = Data(selectiveRemoteBase64URL: ciphertext),
+              ciphertextData.count <= 24 * 1024 * 1024,
+              Data(selectiveRemoteBase64URL: nonce, expectedLength: 12) != nil,
+              Data(selectiveRemoteBase64URL: authTag, expectedLength: 16) != nil,
+              Data(selectiveRemoteBase64URL: contentHash, expectedLength: 32) != nil
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        self.baseRevision = baseRevision
+        self.keyGeneration = keyGeneration
+        self.envelopeVersion = envelopeVersion
+        self.ciphertext = ciphertext
+        self.nonce = nonce
+        self.authTag = authTag
+        self.contentHash = contentHash
+    }
+
+    init(from decoder: any Decoder) throws {
+        let actualKeys = try decoder.container(keyedBy: SelectiveRemoteAnyCodingKey.self)
+            .allKeys.map(\.stringValue).sorted()
+        guard actualKeys == [
+            "authTag", "baseRevision", "ciphertext", "contentHash",
+            "envelopeVersion", "keyGeneration", "nonce"
+        ] else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            baseRevision: try values.decode(Int.self, forKey: .baseRevision),
+            keyGeneration: try values.decode(Int.self, forKey: .keyGeneration),
+            envelopeVersion: try values.decode(Int.self, forKey: .envelopeVersion),
+            ciphertext: try values.decode(String.self, forKey: .ciphertext),
+            nonce: try values.decode(String.self, forKey: .nonce),
+            authTag: try values.decode(String.self, forKey: .authTag),
+            contentHash: try values.decode(String.self, forKey: .contentHash)
+        )
+    }
+}
+
 struct SelectiveRemoteTeamWrapperContext: Equatable, Sendable {
     let teamID: UUID
     let vaultID: UUID
@@ -258,6 +322,102 @@ enum SelectiveRemoteTeamVaultCrypto {
         let context = try payloadContext(teamID: teamID, vaultID: vaultID, keyGeneration: keyGeneration)
         let bytes = Data([envelopeVersion]) + context + nonceData + ciphertextData + authTagData
         return Data(SHA256.hash(data: bytes)).selectiveRemoteBase64URL
+    }
+
+    static func encryptPayload(
+        _ payload: Data,
+        vaultKey: Data,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int,
+        baseRevision: Int,
+        nonce: Data? = nil
+    ) throws -> SelectiveRemoteTeamVaultPayloadEnvelope {
+        guard vaultKey.count == 32,
+              payload.count <= 24 * 1024 * 1024,
+              baseRevision >= 0
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        let context = try payloadContext(
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: keyGeneration
+        )
+        let nonceData = nonce ?? Data(AES.GCM.Nonce())
+        guard nonceData.count == 12 else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        do {
+            let sealed = try AES.GCM.seal(
+                payload,
+                using: SymmetricKey(data: vaultKey),
+                nonce: AES.GCM.Nonce(data: nonceData),
+                authenticating: context
+            )
+            let ciphertext = sealed.ciphertext.selectiveRemoteBase64URL
+            let authTag = sealed.tag.selectiveRemoteBase64URL
+            return try SelectiveRemoteTeamVaultPayloadEnvelope(
+                baseRevision: baseRevision,
+                keyGeneration: keyGeneration,
+                ciphertext: ciphertext,
+                nonce: nonceData.selectiveRemoteBase64URL,
+                authTag: authTag,
+                contentHash: payloadContentHash(
+                    teamID: teamID,
+                    vaultID: vaultID,
+                    keyGeneration: keyGeneration,
+                    nonce: nonceData.selectiveRemoteBase64URL,
+                    ciphertext: ciphertext,
+                    authTag: authTag
+                )
+            )
+        } catch let error as SelectiveRemoteTeamCryptoError {
+            throw error
+        } catch {
+            throw SelectiveRemoteTeamCryptoError.payloadEncryptionFailed
+        }
+    }
+
+    static func decryptPayload(
+        _ envelope: SelectiveRemoteTeamVaultPayloadEnvelope,
+        vaultKey: Data,
+        teamID: UUID,
+        vaultID: UUID
+    ) throws -> Data {
+        guard vaultKey.count == 32,
+              let nonce = Data(selectiveRemoteBase64URL: envelope.nonce, expectedLength: 12),
+              let ciphertext = Data(selectiveRemoteBase64URL: envelope.ciphertext),
+              ciphertext.count <= 24 * 1024 * 1024,
+              let tag = Data(selectiveRemoteBase64URL: envelope.authTag, expectedLength: 16)
+        else { throw SelectiveRemoteTeamCryptoError.invalidEnvelope }
+        let expectedHash = try payloadContentHash(
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: envelope.keyGeneration,
+            nonce: envelope.nonce,
+            ciphertext: envelope.ciphertext,
+            authTag: envelope.authTag
+        )
+        guard envelope.contentHash == expectedHash else {
+            throw SelectiveRemoteTeamCryptoError.payloadContentHashMismatch
+        }
+        do {
+            let sealed = try AES.GCM.SealedBox(
+                nonce: AES.GCM.Nonce(data: nonce),
+                ciphertext: ciphertext,
+                tag: tag
+            )
+            return try AES.GCM.open(
+                sealed,
+                using: SymmetricKey(data: vaultKey),
+                authenticating: payloadContext(
+                    teamID: teamID,
+                    vaultID: vaultID,
+                    keyGeneration: envelope.keyGeneration
+                )
+            )
+        } catch let error as SelectiveRemoteTeamCryptoError {
+            throw error
+        } catch {
+            throw SelectiveRemoteTeamCryptoError.payloadDecryptionFailed
+        }
     }
 
     static func wrapVaultKey(
