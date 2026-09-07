@@ -73,3 +73,16 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /return try await push\(teamID: teamID, vaultID: vaultID, identity: identity\)/);
   assert.match(coordinator, /revalidated == current/);
 });
+
+test("macOS Team Vault record workflow mirrors the bounded browser causal model", async () => {
+  const model = await readFile(new URL("CloudVaultRecordModel.swift", sourceRoot), "utf8");
+  assert.match(model, /static let schemaVersion = 1/);
+  assert.match(model, /case host[\s\S]*case credential[\s\S]*case snippet[\s\S]*case forwarding/);
+  assert.match(model, /maximumBytes = 24 \* 1024 \* 1024/);
+  assert.match(model, /maximumEntities = 10_000/);
+  assert.match(model, /case left, right, equal, concurrent/);
+  assert.match(model, /incompleteConflictResolutions/);
+  assert.match(model, /func prepareRecordConflict\(/);
+  assert.match(model, /func resolveRecordConflicts\(/);
+  assert.match(model, /resolvedPayload: resolved\.encoded\(\)/);
+});

@@ -639,6 +639,129 @@ struct CloudMacOSFoundationTests {
         #expect(writes.count == 1)
     }
 
+    @Test("Team Vault record workflow requires a complete causal choice before upload")
+    func teamVaultRecordConflictWorkflow() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: try fixture.wrapper.deviceID.uuid,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: true, revision: 6, keyGeneration: 7, rotationCompleted: nil)
+        )
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: storage
+        )
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+
+        let deviceA = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let deviceB = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
+        let recordID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let localRecord = try SelectiveRemoteVaultRecord(
+            id: recordID,
+            type: .host,
+            version: .init([deviceA: 2]),
+            modifiedAt: "2026-09-07T01:00:00.000Z",
+            data: .object(["title": .string("Local")])
+        )
+        let remoteRecord = try SelectiveRemoteVaultRecord(
+            id: recordID,
+            type: .host,
+            version: .init([deviceA: 1, deviceB: 1]),
+            modifiedAt: "2026-09-07T02:00:00.000Z",
+            data: .object(["title": .string("Remote")])
+        )
+        let localDocument = try SelectiveRemoteVaultDocument(records: [localRecord])
+        let remoteDocument = try SelectiveRemoteVaultDocument(records: [remoteRecord])
+        _ = try await coordinator.stage(
+            localDocument.encoded(),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        let remoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            remoteDocument.encoded(),
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 5,
+            nonce: Data(repeating: 0x27, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 6,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: remoteCiphertext.envelopeVersion,
+            ciphertext: remoteCiphertext.ciphertext,
+            nonce: remoteCiphertext.nonce,
+            authTag: remoteCiphertext.authTag,
+            contentHash: remoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T02:00:00.000Z"
+        ))
+
+        let pushed = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+        guard case let .conflict(transportConflict) = pushed else {
+            Issue.record("Expected a transport conflict")
+            return
+        }
+        let prepared = try await coordinator.prepareRecordConflict(transportConflict)
+        #expect(prepared.mergedDocument.records.isEmpty)
+        #expect(prepared.recordConflicts.map(\.id) == [recordID])
+        await #expect(throws: SelectiveRemoteVaultDocumentError.incompleteConflictResolutions) {
+            try await coordinator.resolveRecordConflicts(
+                prepared,
+                resolutions: [],
+                resolvedAt: "2026-09-07T03:00:00.000Z",
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+
+        await remote.setWriteResult(.init(
+            conflict: false,
+            revision: 7,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationCompleted: false
+        ))
+        let resolved = try await coordinator.resolveRecordConflicts(
+            prepared,
+            resolutions: [.init(id: recordID, choice: .remote)],
+            resolvedAt: "2026-09-07T03:00:00.000Z",
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .uploaded(snapshot, document) = resolved else {
+            Issue.record("Expected a resolved record upload")
+            return
+        }
+        #expect(snapshot.snapshot.serverRevision == 7)
+        #expect(document.records[0].data == .object(["title": .string("Remote")]))
+        #expect(document.records[0].version.counters == [
+            deviceA: 2,
+            deviceB: 1,
+            identity.deviceID: 1
+        ])
+        let writes = await remote.recordedWrites()
+        #expect(writes.count == 2)
+        #expect(writes.last?.upload.envelope.baseRevision == 6)
+    }
+
     @Test("Team Vault coordinator fails closed while key rotation is required")
     func teamVaultSyncRotationGate() async throws {
         let fixture = try Self.fixture()
