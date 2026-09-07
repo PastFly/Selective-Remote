@@ -131,6 +131,25 @@ struct CloudVaultRecordModelTests {
                 resolvedAt: secondTime
             )
         }
+        #expect(throws: SelectiveRemoteVaultDocumentError.duplicateConflictResolution) {
+            try merge.document.resolving(
+                merge.conflicts,
+                with: [
+                    .init(id: recordB, choice: .local),
+                    .init(id: recordB, choice: .remote)
+                ],
+                deviceID: deviceC,
+                resolvedAt: secondTime
+            )
+        }
+        #expect(throws: SelectiveRemoteVaultDocumentError.unknownConflictResolution) {
+            try merge.document.resolving(
+                merge.conflicts,
+                with: [.init(id: recordC, choice: .local)],
+                deviceID: deviceC,
+                resolvedAt: secondTime
+            )
+        }
         let resolved = try merge.document.resolving(
             merge.conflicts,
             with: [.init(id: recordB, choice: .local)],
