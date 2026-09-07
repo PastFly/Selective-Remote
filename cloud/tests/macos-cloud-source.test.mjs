@@ -52,3 +52,19 @@ test("macOS Team payload transport persists ciphertext-only offline snapshots", 
   assert.match(snapshots, /posixPermissions: 0o600/);
   assert.doesNotMatch(snapshots, /\b(?:let|var)\s+(?:vaultKey|plaintext|password|token)\b/iu);
 });
+
+test("macOS Team Vault coordinator preserves causal dirty and conflict state", async () => {
+  const coordinator = await readFile(
+    new URL("CloudTeamVaultSyncCoordinator.swift", sourceRoot),
+    "utf8",
+  );
+  assert.match(coordinator, /actor SelectiveRemoteTeamVaultSyncCoordinator/);
+  assert.match(coordinator, /case rotationRequired/);
+  assert.match(coordinator, /case remoteRevisionRollback/);
+  assert.match(coordinator, /case remoteRevisionDivergence/);
+  assert.match(coordinator, /localRevision > local\.syncedLocalRevision/);
+  assert.match(coordinator, /return \.conflict\(\.init\(local: localVersion, remote: remoteVersion\)\)/);
+  assert.match(coordinator, /macos:team-vault:/);
+  assert.match(coordinator, /try snapshots\.save\(staged, endpoint: endpoint\)/);
+  assert.match(coordinator, /write\.revision == expectedServerRevision/);
+});
