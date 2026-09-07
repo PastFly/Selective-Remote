@@ -101,3 +101,26 @@ test("macOS exposes a complete-choice conflict review without rendering secrets"
   assert.match(settings, /Open Test Conflict/);
   assert.match(settings, /sends nothing to Cloud/);
 });
+
+test("macOS Cloud settings expose real device-bound sign-in and read-only Team inventory", async () => {
+  const [settings, accountViews, client, sessions] = await Promise.all([
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAccountViews.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(accountViews, /SecureField/);
+  assert.doesNotMatch(accountViews, /@AppStorage/);
+  assert.match(settings, /identityManager\.identity/);
+  assert.match(settings, /publicKey: identity\.publicKey/);
+  assert.match(settings, /restoreStoredSession/);
+  assert.match(settings, /client\.currentUser/);
+  assert.match(settings, /client\.teams/);
+  assert.match(settings, /client\.sharedVaults/);
+  assert.match(settings, /client\.logout/);
+  assert.match(accountViews, /Teams & Shared Vaults/);
+  assert.match(client, /validLoginJSON/);
+  assert.match(client, /validTeamsJSON/);
+  assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.doesNotMatch(sessions, /UserDefaults/);
+});

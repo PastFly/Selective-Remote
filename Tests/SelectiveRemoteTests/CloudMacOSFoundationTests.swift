@@ -61,6 +61,8 @@ struct CloudMacOSFoundationTests {
         )
         #expect(user == SelectiveRemoteCloudUser(id: userID, email: "user@example.invalid", displayName: "User"))
         #expect(try store.token(for: endpoint) == token)
+        let hasStoredSession = await client.hasStoredSession(endpoint: endpoint)
+        #expect(hasStoredSession)
         #expect(try await client.currentUser(endpoint: endpoint) == user)
         let teams = try await client.teams(endpoint: endpoint)
         #expect(teams.count == 1)
@@ -68,6 +70,51 @@ struct CloudMacOSFoundationTests {
         #expect(teams[0].membershipEpoch == 3)
         try await client.logout(endpoint: endpoint)
         #expect(try store.token(for: endpoint) == nil)
+    }
+
+    @Test("macOS account inventory rejects extended user and Team responses")
+    func accountInventoryRejectsExtendedResponses() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let token = String(repeating: "t", count: 43)
+        let userID = try #require(UUID(uuidString: "66666666-6666-4666-8666-666666666666"))
+        let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let teamID = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        try store.saveToken(token, for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                switch request.url?.path {
+                case "/v1/me":
+                    Self.response(request, status: 200, json: [
+                        "id": userID.canonicalCloudString,
+                        "email": "user@example.invalid",
+                        "displayName": "User",
+                        "unexpected": true
+                    ])
+                case "/v1/teams":
+                    Self.response(request, status: 200, json: ["teams": [[
+                        "id": teamID.canonicalCloudString,
+                        "name": "Platform",
+                        "membershipID": membershipID.canonicalCloudString,
+                        "role": "owner",
+                        "membershipEpoch": 3,
+                        "createdAt": "2026-09-07T00:00:00.000Z",
+                        "updatedAt": "2026-09-07T00:00:00.000Z",
+                        "unexpected": true
+                    ]]])
+                default:
+                    Self.response(request, status: 500, json: ["error": "unexpected_request"])
+                }
+            }
+        )
+
+        await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+            try await client.currentUser(endpoint: endpoint)
+        }
+        await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+            try await client.teams(endpoint: endpoint)
+        }
     }
 
     @Test("a 401 response deletes the stored macOS Cloud session")

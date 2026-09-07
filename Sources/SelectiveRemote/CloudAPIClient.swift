@@ -69,7 +69,7 @@ enum SelectiveRemoteCloudTeamRole: String, Codable, Equatable, Sendable {
     case viewer
 }
 
-struct SelectiveRemoteCloudTeam: Codable, Equatable, Sendable {
+struct SelectiveRemoteCloudTeam: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var name: String
     var membershipID: UUID
@@ -79,7 +79,7 @@ struct SelectiveRemoteCloudTeam: Codable, Equatable, Sendable {
     var updatedAt: String
 }
 
-struct SelectiveRemoteCloudSharedVault: Codable, Equatable, Sendable {
+struct SelectiveRemoteCloudSharedVault: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var teamID: UUID
     var name: String
@@ -300,9 +300,11 @@ actor SelectiveRemoteCloudAPIClient {
         guard (200..<300).contains(http.statusCode) else {
             throw serviceError(status: http.statusCode, data: data)
         }
-        guard let result = try? decoder.decode(LoginResponse.self, from: data),
+        guard Self.validLoginJSON(data),
+              let result = try? decoder.decode(LoginResponse.self, from: data),
               (32...256).contains(result.token.count),
-              result.deviceID == device.id
+              result.deviceID == device.id,
+              Self.validUser(result.user)
         else { throw SelectiveRemoteCloudError.invalidResponse }
         try tokenStore.saveToken(result.token, for: endpoint)
         return result.user
@@ -310,7 +312,10 @@ actor SelectiveRemoteCloudAPIClient {
 
     func currentUser(endpoint: URL) async throws -> SelectiveRemoteCloudUser {
         let data = try await authorizedData(endpoint: endpoint, path: "v1/me")
-        guard let user = try? decoder.decode(SelectiveRemoteCloudUser.self, from: data) else {
+        guard Self.validUserJSON(data),
+              let user = try? decoder.decode(SelectiveRemoteCloudUser.self, from: data),
+              Self.validUser(user)
+        else {
             throw SelectiveRemoteCloudError.invalidResponse
         }
         return user
@@ -318,9 +323,20 @@ actor SelectiveRemoteCloudAPIClient {
 
     func teams(endpoint: URL) async throws -> [SelectiveRemoteCloudTeam] {
         let data = try await authorizedData(endpoint: endpoint, path: "v1/teams")
-        guard let result = try? decoder.decode(TeamsResponse.self, from: data),
+        guard Self.validTeamsJSON(data),
+              let result = try? decoder.decode(TeamsResponse.self, from: data),
               result.teams.count <= 1_000,
-              result.teams.allSatisfy({ $0.membershipEpoch > 0 && !$0.name.isEmpty })
+              result.teams.allSatisfy({ team in
+                  team.id.isSelectiveRemoteCloudUUID
+                      && team.membershipID.isSelectiveRemoteCloudUUID
+                      && team.membershipEpoch > 0
+                      && !team.name.isEmpty
+                      && team.name.count <= 120
+                      && !team.createdAt.isEmpty
+                      && !team.updatedAt.isEmpty
+              }),
+              Set(result.teams.map(\.id)).count == result.teams.count,
+              Set(result.teams.map(\.membershipID)).count == result.teams.count
         else { throw SelectiveRemoteCloudError.invalidResponse }
         return result.teams
     }
@@ -501,6 +517,31 @@ actor SelectiveRemoteCloudAPIClient {
         return Set(object.keys) == expected
     }
 
+    private static func validUser(_ user: SelectiveRemoteCloudUser) -> Bool {
+        user.id.isSelectiveRemoteCloudUUID
+            && !user.email.isEmpty
+            && user.email.count <= 254
+            && !user.displayName.isEmpty
+            && user.displayName.count <= 120
+    }
+
+    private static func validUserObject(_ value: Any?) -> Bool {
+        exactKeys(value, expected: ["id", "email", "displayName"])
+    }
+
+    private static func validUserJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+        return validUserObject(object)
+    }
+
+    private static func validLoginJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["token", "user", "deviceID"]),
+              let user = (object as? [String: Any])?["user"]
+        else { return false }
+        return validUserObject(user)
+    }
+
     private static func validSharedVaultsJSON(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               exactKeys(object, expected: ["vaults"]),
@@ -511,6 +552,18 @@ actor SelectiveRemoteCloudAPIClient {
             "createdAt", "updatedAt"
         ]
         return vaults.allSatisfy { exactKeys($0, expected: keys) }
+    }
+
+    private static func validTeamsJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["teams"]),
+              let teams = (object as? [String: Any])?["teams"] as? [Any]
+        else { return false }
+        let keys: Set<String> = [
+            "id", "name", "membershipID", "role", "membershipEpoch",
+            "createdAt", "updatedAt"
+        ]
+        return teams.allSatisfy { exactKeys($0, expected: keys) }
     }
 
     private static func validTeamKeyDevicesJSON(_ data: Data) -> Bool {
