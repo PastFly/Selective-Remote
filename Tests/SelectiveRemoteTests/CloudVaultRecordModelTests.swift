@@ -143,6 +143,37 @@ struct CloudVaultRecordModelTests {
         #expect(resolved.records[0].modifiedAt == secondTime)
     }
 
+    @Test("A concurrent edit and deletion remain a conflict and can resolve to a tombstone")
+    func editDeletionResolution() throws {
+        let edited = try record(
+            id: recordA,
+            version: [deviceA: 2],
+            value: "edited-offline",
+            modifiedAt: secondTime
+        )
+        let deleted = try SelectiveRemoteVaultTombstone(
+            id: recordA,
+            version: .init([deviceA: 1, deviceB: 1]),
+            deletedAt: secondTime
+        )
+        let merge = try SelectiveRemoteVaultDocument(records: [edited]).merged(
+            with: SelectiveRemoteVaultDocument(tombstones: [deleted])
+        )
+
+        #expect(merge.conflicts.count == 1)
+        #expect(merge.conflicts[0].local == .record(edited))
+        #expect(merge.conflicts[0].remote == .tombstone(deleted))
+        let resolved = try merge.document.resolving(
+            merge.conflicts,
+            with: [.init(id: recordA, choice: .remote)],
+            deviceID: deviceC,
+            resolvedAt: secondTime
+        )
+        #expect(resolved.records.isEmpty)
+        #expect(resolved.tombstones[0].version.counters == [deviceA: 2, deviceB: 1, deviceC: 1])
+        #expect(resolved.tombstones[0].deletedAt == secondTime)
+    }
+
     private func record(
         id: UUID,
         version: [UUID: Int],
