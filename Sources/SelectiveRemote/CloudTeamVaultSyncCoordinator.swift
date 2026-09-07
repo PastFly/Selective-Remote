@@ -316,6 +316,17 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
             return .conflict(.init(local: currentLocal, remote: latestRemote))
         }
 
+        // Actor methods are re-entrant across the remote fetch above. Refuse
+        // to replace a newer local edit that was staged while this resolution
+        // was waiting for the network.
+        guard let revalidated = try snapshots.load(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        ), revalidated == current else {
+            throw SelectiveRemoteTeamVaultSyncError.staleConflict
+        }
+
         let (nextLocalRevision, overflow) = current.localRevision.addingReportingOverflow(1)
         guard !overflow else { throw SelectiveRemoteTeamVaultSyncError.invalidLocalSnapshot }
         let vaultKey = try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(

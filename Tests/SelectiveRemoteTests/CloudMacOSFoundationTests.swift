@@ -548,6 +548,97 @@ struct CloudMacOSFoundationTests {
         #expect(resolutionWrites.last?.idempotencyKey != resolutionWrites.first?.idempotencyKey)
     }
 
+    @Test("Team Vault conflict resolution preserves an edit staged during remote revalidation")
+    func teamVaultConflictResolutionReentrancy() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: try fixture.wrapper.deviceID.uuid,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: true, revision: 6, keyGeneration: 7, rotationCompleted: nil)
+        )
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: storage
+        )
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        _ = try await coordinator.stage(
+            Data("synthetic original local conflict".utf8),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+
+        let remotePayload = Data("synthetic remote conflict".utf8)
+        let remoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            remotePayload,
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 5,
+            nonce: Data(repeating: 0x26, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 6,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: remoteCiphertext.envelopeVersion,
+            ciphertext: remoteCiphertext.ciphertext,
+            nonce: remoteCiphertext.nonce,
+            authTag: remoteCiphertext.authTag,
+            contentHash: remoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T00:00:00.000Z"
+        ))
+        let pushed = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+        guard case let .conflict(conflict) = pushed else {
+            Issue.record("Expected an explicit conflict")
+            return
+        }
+
+        let barrier = TeamVaultReadBarrier()
+        await remote.setReadBarrier(barrier)
+        let resolving = Task {
+            try await coordinator.resolveConflict(
+                conflict,
+                resolvedPayload: Data("must not replace racing edit".utf8),
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+        await barrier.waitUntilSuspended()
+        let racingPayload = Data("synthetic racing local edit".utf8)
+        let racing = try await coordinator.stage(
+            racingPayload,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        await barrier.resume()
+
+        await #expect(throws: SelectiveRemoteTeamVaultSyncError.staleConflict) {
+            try await resolving.value
+        }
+        let preserved = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        #expect(preserved == racing.snapshot)
+        let writes = await remote.recordedWrites()
+        #expect(writes.count == 1)
+    }
+
     @Test("Team Vault coordinator fails closed while key rotation is required")
     func teamVaultSyncRotationGate() async throws {
         let fixture = try Self.fixture()
@@ -723,6 +814,29 @@ private enum TeamVaultRemoteStubFailure: Error, Equatable, Sendable {
     case unknownOutcome
 }
 
+private actor TeamVaultReadBarrier {
+    private var suspended = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        suspended = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        while !suspended {
+            await Task.yield()
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     struct RecordedWrite: Equatable, Sendable {
         let upload: SelectiveRemoteCloudTeamVaultUpload
@@ -732,6 +846,7 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     private var envelope: SelectiveRemoteCloudSharedVaultEnvelope
     private var writeResult: SelectiveRemoteCloudTeamVaultWriteResult
     private var writeFailure: TeamVaultRemoteStubFailure?
+    private var readBarrier: TeamVaultReadBarrier?
     private var writes: [RecordedWrite] = []
 
     init(
@@ -749,6 +864,10 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     ) async throws -> SelectiveRemoteCloudSharedVaultEnvelope {
         #expect(envelope.teamID == teamID)
         #expect(envelope.id == vaultID)
+        if let readBarrier {
+            self.readBarrier = nil
+            await readBarrier.suspend()
+        }
         return envelope
     }
 
@@ -778,6 +897,10 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
 
     func setWriteFailure(_ value: TeamVaultRemoteStubFailure?) {
         writeFailure = value
+    }
+
+    func setReadBarrier(_ value: TeamVaultReadBarrier?) {
+        readBarrier = value
     }
 
     func recordedWrites() -> [RecordedWrite] {

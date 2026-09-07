@@ -71,4 +71,5 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /latestRemote == conflict\.remote/);
   assert.match(coordinator, /baseRevision: latestRemote\.revision/);
   assert.match(coordinator, /return try await push\(teamID: teamID, vaultID: vaultID, identity: identity\)/);
+  assert.match(coordinator, /revalidated == current/);
 });
