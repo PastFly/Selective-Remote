@@ -61,6 +61,8 @@ struct CloudMacOSFoundationTests {
         )
         #expect(user == SelectiveRemoteCloudUser(id: userID, email: "user@example.invalid", displayName: "User"))
         #expect(try store.token(for: endpoint) == token)
+        let hasStoredSession = await client.hasStoredSession(endpoint: endpoint)
+        #expect(hasStoredSession)
         #expect(try await client.currentUser(endpoint: endpoint) == user)
         let teams = try await client.teams(endpoint: endpoint)
         #expect(teams.count == 1)
@@ -68,6 +70,51 @@ struct CloudMacOSFoundationTests {
         #expect(teams[0].membershipEpoch == 3)
         try await client.logout(endpoint: endpoint)
         #expect(try store.token(for: endpoint) == nil)
+    }
+
+    @Test("macOS account inventory rejects extended user and Team responses")
+    func accountInventoryRejectsExtendedResponses() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let token = String(repeating: "t", count: 43)
+        let userID = try #require(UUID(uuidString: "66666666-6666-4666-8666-666666666666"))
+        let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let teamID = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        try store.saveToken(token, for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                switch request.url?.path {
+                case "/v1/me":
+                    Self.response(request, status: 200, json: [
+                        "id": userID.canonicalCloudString,
+                        "email": "user@example.invalid",
+                        "displayName": "User",
+                        "unexpected": true
+                    ])
+                case "/v1/teams":
+                    Self.response(request, status: 200, json: ["teams": [[
+                        "id": teamID.canonicalCloudString,
+                        "name": "Platform",
+                        "membershipID": membershipID.canonicalCloudString,
+                        "role": "owner",
+                        "membershipEpoch": 3,
+                        "createdAt": "2026-09-07T00:00:00.000Z",
+                        "updatedAt": "2026-09-07T00:00:00.000Z",
+                        "unexpected": true
+                    ]]])
+                default:
+                    Self.response(request, status: 500, json: ["error": "unexpected_request"])
+                }
+            }
+        )
+
+        await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+            try await client.currentUser(endpoint: endpoint)
+        }
+        await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+            try await client.teams(endpoint: endpoint)
+        }
     }
 
     @Test("a 401 response deletes the stored macOS Cloud session")
@@ -457,6 +504,309 @@ struct CloudMacOSFoundationTests {
         #expect(conflict.local.snapshot.envelope == staged.snapshot.envelope)
         let preserved = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
         #expect(preserved == staged.snapshot)
+
+        let newerRemotePayload = Data("synthetic newer remote conflict".utf8)
+        let newerRemoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            newerRemotePayload,
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 6,
+            nonce: Data(repeating: 0x24, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 7,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: newerRemoteCiphertext.envelopeVersion,
+            ciphertext: newerRemoteCiphertext.ciphertext,
+            nonce: newerRemoteCiphertext.nonce,
+            authTag: newerRemoteCiphertext.authTag,
+            contentHash: newerRemoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T01:00:00.000Z"
+        ))
+        let staleResolution = try await coordinator.resolveConflict(
+            conflict,
+            resolvedPayload: Data("must not upload".utf8),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .conflict(updatedConflict) = staleResolution else {
+            Issue.record("Expected a changed remote version to return a new conflict")
+            return
+        }
+        #expect(updatedConflict.remote.revision == 7)
+        #expect(updatedConflict.remote.payload == newerRemotePayload)
+        #expect(try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == staged.snapshot)
+        let staleResolutionWrites = await remote.recordedWrites()
+        #expect(staleResolutionWrites.count == 1)
+
+        let resolvedPayload = Data("synthetic joined conflict resolution".utf8)
+        await remote.setWriteFailure(.unknownOutcome)
+        await #expect(throws: TeamVaultRemoteStubFailure.unknownOutcome) {
+            try await coordinator.resolveConflict(
+                updatedConflict,
+                resolvedPayload: resolvedPayload,
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+        let storedPendingResolution = try storage.load(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        )
+        let pendingResolution = try #require(storedPendingResolution)
+        #expect(pendingResolution.envelope.baseRevision == 7)
+        #expect(pendingResolution.localRevision > pendingResolution.syncedLocalRevision)
+
+        await remote.setWriteFailure(nil)
+        await remote.setWriteResult(.init(
+            conflict: false,
+            revision: 8,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationCompleted: false
+        ))
+        let resolution = try await coordinator.push(
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .uploaded(uploaded) = resolution else {
+            Issue.record("Expected the explicit conflict resolution to upload")
+            return
+        }
+        #expect(uploaded.payload == resolvedPayload)
+        #expect(uploaded.snapshot.serverRevision == 8)
+        #expect(uploaded.snapshot.envelope.baseRevision == 7)
+        #expect(uploaded.snapshot.localRevision == uploaded.snapshot.syncedLocalRevision)
+        let resolutionWrites = await remote.recordedWrites()
+        #expect(resolutionWrites.count == 3)
+        #expect(resolutionWrites.last?.upload.envelope.baseRevision == 7)
+        #expect(resolutionWrites[1].idempotencyKey == resolutionWrites[2].idempotencyKey)
+        #expect(resolutionWrites.last?.idempotencyKey != resolutionWrites.first?.idempotencyKey)
+    }
+
+    @Test("Team Vault conflict resolution preserves an edit staged during remote revalidation")
+    func teamVaultConflictResolutionReentrancy() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: try fixture.wrapper.deviceID.uuid,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: true, revision: 6, keyGeneration: 7, rotationCompleted: nil)
+        )
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: storage
+        )
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+        _ = try await coordinator.stage(
+            Data("synthetic original local conflict".utf8),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+
+        let remotePayload = Data("synthetic remote conflict".utf8)
+        let remoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            remotePayload,
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 5,
+            nonce: Data(repeating: 0x26, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 6,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: remoteCiphertext.envelopeVersion,
+            ciphertext: remoteCiphertext.ciphertext,
+            nonce: remoteCiphertext.nonce,
+            authTag: remoteCiphertext.authTag,
+            contentHash: remoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T00:00:00.000Z"
+        ))
+        let pushed = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+        guard case let .conflict(conflict) = pushed else {
+            Issue.record("Expected an explicit conflict")
+            return
+        }
+
+        let barrier = TeamVaultReadBarrier()
+        await remote.setReadBarrier(barrier)
+        let resolving = Task {
+            try await coordinator.resolveConflict(
+                conflict,
+                resolvedPayload: Data("must not replace racing edit".utf8),
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+        await barrier.waitUntilSuspended()
+        let racingPayload = Data("synthetic racing local edit".utf8)
+        let racing = try await coordinator.stage(
+            racingPayload,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        await barrier.resume()
+
+        await #expect(throws: SelectiveRemoteTeamVaultSyncError.staleConflict) {
+            try await resolving.value
+        }
+        let preserved = try storage.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
+        #expect(preserved == racing.snapshot)
+        let writes = await remote.recordedWrites()
+        #expect(writes.count == 1)
+    }
+
+    @Test("Team Vault record workflow requires a complete causal choice before upload")
+    func teamVaultRecordConflictWorkflow() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: try fixture.wrapper.deviceID.uuid,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(fixture, wrapper: wrapper),
+            writeResult: .init(conflict: true, revision: 6, keyGeneration: 7, rotationCompleted: nil)
+        )
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: storage
+        )
+        _ = try await coordinator.refresh(teamID: teamID, vaultID: vaultID, identity: identity)
+
+        let deviceA = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let deviceB = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
+        let recordID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let localRecord = try SelectiveRemoteVaultRecord(
+            id: recordID,
+            type: .host,
+            version: .init([deviceA: 2]),
+            modifiedAt: "2026-09-07T01:00:00.000Z",
+            data: .object(["title": .string("Local")])
+        )
+        let remoteRecord = try SelectiveRemoteVaultRecord(
+            id: recordID,
+            type: .host,
+            version: .init([deviceA: 1, deviceB: 1]),
+            modifiedAt: "2026-09-07T02:00:00.000Z",
+            data: .object(["title": .string("Remote")])
+        )
+        let localDocument = try SelectiveRemoteVaultDocument(records: [localRecord])
+        let remoteDocument = try SelectiveRemoteVaultDocument(records: [remoteRecord])
+        _ = try await coordinator.stage(
+            localDocument.encoded(),
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        let remoteCiphertext = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            remoteDocument.encoded(),
+            vaultKey: try fixture.keyWrap.vaultKey.base64URLData,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.payload.keyGeneration,
+            baseRevision: 5,
+            nonce: Data(repeating: 0x27, count: 12)
+        )
+        await remote.setEnvelope(.init(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: 6,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationRequired: false,
+            envelopeVersion: remoteCiphertext.envelopeVersion,
+            ciphertext: remoteCiphertext.ciphertext,
+            nonce: remoteCiphertext.nonce,
+            authTag: remoteCiphertext.authTag,
+            contentHash: remoteCiphertext.contentHash,
+            wrapper: wrapper,
+            createdAt: "2026-09-06T00:00:00.000Z",
+            updatedAt: "2026-09-07T02:00:00.000Z"
+        ))
+
+        let pushed = try await coordinator.push(teamID: teamID, vaultID: vaultID, identity: identity)
+        guard case let .conflict(transportConflict) = pushed else {
+            Issue.record("Expected a transport conflict")
+            return
+        }
+        let prepared = try await coordinator.prepareRecordConflict(transportConflict)
+        #expect(prepared.mergedDocument.records.isEmpty)
+        #expect(prepared.recordConflicts.map(\.id) == [recordID])
+        await #expect(throws: SelectiveRemoteVaultDocumentError.incompleteConflictResolutions) {
+            try await coordinator.resolveRecordConflicts(
+                prepared,
+                resolutions: [],
+                resolvedAt: "2026-09-07T03:00:00.000Z",
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+        }
+
+        await remote.setWriteResult(.init(
+            conflict: false,
+            revision: 7,
+            keyGeneration: fixture.payload.keyGeneration,
+            rotationCompleted: false
+        ))
+        let resolved = try await coordinator.resolveRecordConflicts(
+            prepared,
+            resolutions: [.init(id: recordID, choice: .remote)],
+            resolvedAt: "2026-09-07T03:00:00.000Z",
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        guard case let .uploaded(snapshot, document) = resolved else {
+            Issue.record("Expected a resolved record upload")
+            return
+        }
+        #expect(snapshot.snapshot.serverRevision == 7)
+        #expect(document.records[0].data == .object(["title": .string("Remote")]))
+        #expect(document.records[0].version.counters == [
+            deviceA: 2,
+            deviceB: 1,
+            identity.deviceID: 1
+        ])
+        let writes = await remote.recordedWrites()
+        #expect(writes.count == 2)
+        #expect(writes.last?.upload.envelope.baseRevision == 6)
     }
 
     @Test("Team Vault coordinator fails closed while key rotation is required")
@@ -630,6 +980,33 @@ private final class CloudHTTPStub: @unchecked Sendable {
     }
 }
 
+private enum TeamVaultRemoteStubFailure: Error, Equatable, Sendable {
+    case unknownOutcome
+}
+
+private actor TeamVaultReadBarrier {
+    private var suspended = false
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    func suspend() async {
+        suspended = true
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func waitUntilSuspended() async {
+        while !suspended {
+            await Task.yield()
+        }
+    }
+
+    func resume() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
 private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     struct RecordedWrite: Equatable, Sendable {
         let upload: SelectiveRemoteCloudTeamVaultUpload
@@ -638,6 +1015,8 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
 
     private var envelope: SelectiveRemoteCloudSharedVaultEnvelope
     private var writeResult: SelectiveRemoteCloudTeamVaultWriteResult
+    private var writeFailure: TeamVaultRemoteStubFailure?
+    private var readBarrier: TeamVaultReadBarrier?
     private var writes: [RecordedWrite] = []
 
     init(
@@ -655,6 +1034,10 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     ) async throws -> SelectiveRemoteCloudSharedVaultEnvelope {
         #expect(envelope.teamID == teamID)
         #expect(envelope.id == vaultID)
+        if let readBarrier {
+            self.readBarrier = nil
+            await readBarrier.suspend()
+        }
         return envelope
     }
 
@@ -668,11 +1051,26 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
         #expect(envelope.teamID == teamID)
         #expect(envelope.id == vaultID)
         writes.append(.init(upload: upload, idempotencyKey: idempotencyKey))
+        if let writeFailure {
+            throw writeFailure
+        }
         return writeResult
     }
 
     func setEnvelope(_ value: SelectiveRemoteCloudSharedVaultEnvelope) {
         envelope = value
+    }
+
+    func setWriteResult(_ value: SelectiveRemoteCloudTeamVaultWriteResult) {
+        writeResult = value
+    }
+
+    func setWriteFailure(_ value: TeamVaultRemoteStubFailure?) {
+        writeFailure = value
+    }
+
+    func setReadBarrier(_ value: TeamVaultReadBarrier?) {
+        readBarrier = value
     }
 
     func recordedWrites() -> [RecordedWrite] {

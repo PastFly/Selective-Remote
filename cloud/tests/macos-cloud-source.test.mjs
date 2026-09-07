@@ -67,4 +67,60 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /macos:team-vault:/);
   assert.match(coordinator, /try snapshots\.save\(staged, endpoint: endpoint\)/);
   assert.match(coordinator, /write\.revision == expectedServerRevision/);
+  assert.match(coordinator, /func resolveConflict\(/);
+  assert.match(coordinator, /latestRemote == conflict\.remote/);
+  assert.match(coordinator, /baseRevision: latestRemote\.revision/);
+  assert.match(coordinator, /return try await push\(teamID: teamID, vaultID: vaultID, identity: identity\)/);
+  assert.match(coordinator, /revalidated == current/);
+});
+
+test("macOS Team Vault record workflow mirrors the bounded browser causal model", async () => {
+  const model = await readFile(new URL("CloudVaultRecordModel.swift", sourceRoot), "utf8");
+  assert.match(model, /static let schemaVersion = 1/);
+  assert.match(model, /case host[\s\S]*case credential[\s\S]*case snippet[\s\S]*case forwarding/);
+  assert.match(model, /maximumBytes = 24 \* 1024 \* 1024/);
+  assert.match(model, /maximumEntities = 10_000/);
+  assert.match(model, /case left, right, equal, concurrent/);
+  assert.match(model, /incompleteConflictResolutions/);
+  assert.match(model, /func prepareRecordConflict\(/);
+  assert.match(model, /func resolveRecordConflicts\(/);
+  assert.match(model, /resolvedPayload: resolved\.encoded\(\)/);
+});
+
+test("macOS exposes a complete-choice conflict review without rendering secrets", async () => {
+  const [review, settings] = await Promise.all([
+    readFile(new URL("CloudVaultConflictReviewView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(review, /Resolve and Sync/);
+  assert.match(review, /choices\.count == conflicts\.count/);
+  assert.match(review, /conflicts\.allSatisfy \{ choices\[\$0\.id\] != nil \}/);
+  assert.match(review, /values\["title"\]/);
+  assert.doesNotMatch(review, /values\["(?:secret|body|username)"\]/);
+  assert.match(review, /must-not-render/);
+  assert.match(settings, /Open Test Conflict/);
+  assert.match(settings, /sends nothing to Cloud/);
+});
+
+test("macOS Cloud settings expose real device-bound sign-in and read-only Team inventory", async () => {
+  const [settings, accountViews, client, sessions] = await Promise.all([
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAccountViews.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(accountViews, /SecureField/);
+  assert.doesNotMatch(accountViews, /@AppStorage/);
+  assert.match(settings, /identityManager\.identity/);
+  assert.match(settings, /publicKey: identity\.publicKey/);
+  assert.match(settings, /restoreStoredSession/);
+  assert.match(settings, /client\.currentUser/);
+  assert.match(settings, /client\.teams/);
+  assert.match(settings, /client\.sharedVaults/);
+  assert.match(settings, /client\.logout/);
+  assert.match(accountViews, /Teams & Shared Vaults/);
+  assert.match(client, /validLoginJSON/);
+  assert.match(client, /validTeamsJSON/);
+  assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.doesNotMatch(sessions, /UserDefaults/);
 });

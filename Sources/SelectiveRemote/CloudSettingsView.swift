@@ -3,12 +3,25 @@ import SwiftUI
 struct CloudSettingsView: View {
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1")
+    private var storedDeviceID = ""
 
     @State private var phase = Phase.idle
     @State private var metadata: SelectiveRemoteCloudMetadata?
     @State private var errorMessage: String?
+    @State private var accountPhase = AccountPhase.signedOut
+    @State private var accountUser: SelectiveRemoteCloudUser?
+    @State private var teams: [SelectiveRemoteCloudTeam] = []
+    @State private var vaultsByTeam: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
+    @State private var accountErrorMessage: String?
+    @State private var inventoryErrorMessage: String?
+    @State private var accountEndpoint: String?
+    @State private var showsSignIn = false
+    @State private var showsConflictReview = false
+    @State private var conflictReviewMessage: String?
 
     private let client = SelectiveRemoteCloudAPIClient()
+    private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
 
     var body: some View {
         Form {
@@ -56,11 +69,7 @@ struct CloudSettingsView: View {
 
             Section(UpdateLocalization.text(ru: "Аккаунт и Vault", en: "Account & Vault")) {
                 LabeledContent(UpdateLocalization.text(ru: "Состояние", en: "Status")) {
-                    Text(UpdateLocalization.text(
-                        ru: "Не подключён",
-                        en: "Not connected"
-                    ))
-                    .foregroundStyle(.secondary)
+                    accountStatus
                 }
                 LabeledContent("API") {
                     Text(metadata.map { "v\($0.apiVersion)" } ?? "—")
@@ -71,17 +80,64 @@ struct CloudSettingsView: View {
                         .monospacedDigit()
                 }
 
-                Button(UpdateLocalization.text(ru: "Войти в Selective Remote Cloud…", en: "Sign In to Selective Remote Cloud…"), systemImage: "person.crop.circle.badge.checkmark") {}
+                if let accountUser {
+                    LabeledContent(UpdateLocalization.text(ru: "Пользователь", en: "User")) {
+                        VStack(alignment: .trailing, spacing: 2) {
+                            Text(accountUser.displayName)
+                            Text(accountUser.email)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+
+                    Button(
+                        UpdateLocalization.text(ru: "Выйти из Cloud", en: "Sign Out of Cloud"),
+                        systemImage: "rectangle.portrait.and.arrow.right",
+                        role: .destructive
+                    ) {
+                        signOut()
+                    }
+                    .disabled(accountPhase.isBusy)
+                } else {
+                    Button(
+                        UpdateLocalization.text(
+                            ru: "Войти в Selective Remote Cloud…",
+                            en: "Sign In to Selective Remote Cloud…"
+                        ),
+                        systemImage: "person.crop.circle.badge.checkmark"
+                    ) {
+                        accountErrorMessage = nil
+                        showsSignIn = true
+                    }
                     .buttonStyle(.borderedProminent)
-                    .disabled(true)
+                    .disabled(accountPhase.isBusy)
+                }
+
+                if let accountErrorMessage {
+                    Label(accountErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
 
                 Text(UpdateLocalization.text(
-                    ru: "Вход будет включён после развёртывания API и проверки первого зашифрованного обмена. Пароль аккаунта не используется как ключ Vault.",
-                    en: "Sign-in will be enabled after the API is deployed and the first encrypted exchange is verified. The account password is not used as the Vault key."
+                    ru: "Токен сессии и закрытый ключ устройства хранятся в Keychain только на этом Mac. Пароль аккаунта не сохраняется и не используется как ключ Vault.",
+                    en: "The session token and device private key are stored in Keychain on this Mac only. The account password is not saved and is not used as the Vault key."
                 ))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if accountUser != nil {
+                SelectiveRemoteCloudTeamInventoryView(
+                    teams: teams,
+                    vaultsByTeam: vaultsByTeam,
+                    isRefreshing: accountPhase == .refreshing,
+                    errorMessage: inventoryErrorMessage,
+                    onRefresh: refreshInventory
+                )
             }
 
             Section(UpdateLocalization.text(ru: "Конфиденциальность", en: "Privacy")) {
@@ -100,8 +156,74 @@ struct CloudSettingsView: View {
                     systemImage: "server.rack"
                 )
             }
+
+            Section(UpdateLocalization.text(ru: "Ручная проверка", en: "Manual Test")) {
+                Button(
+                    UpdateLocalization.text(
+                        ru: "Открыть тестовый конфликт…",
+                        en: "Open Test Conflict…"
+                    ),
+                    systemImage: "arrow.triangle.branch"
+                ) {
+                    conflictReviewMessage = nil
+                    showsConflictReview = true
+                }
+
+                if let conflictReviewMessage {
+                    Label(conflictReviewMessage, systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
+
+                Text(UpdateLocalization.text(
+                    ru: "Офлайн-сценарий использует только синтетические записи. Он проверяет полный выбор версий, скрытие секретов и итоговое объединение, но ничего не отправляет в Cloud.",
+                    en: "This offline scenario uses synthetic records only. It checks complete choices, secret redaction and the final merge, but sends nothing to Cloud."
+                ))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
+        .task {
+            await restoreStoredSessionIfNeeded()
+        }
+        .sheet(isPresented: $showsSignIn) {
+            signInSheet
+        }
+        .sheet(isPresented: $showsConflictReview) {
+            conflictReviewSheet
+        }
+    }
+
+    @ViewBuilder
+    private var accountStatus: some View {
+        switch accountPhase {
+        case .signedOut:
+            Text(UpdateLocalization.text(ru: "Не подключён", en: "Not connected"))
+                .foregroundStyle(.secondary)
+        case .restoring:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(UpdateLocalization.text(ru: "Восстановление сессии…", en: "Restoring session…"))
+            }
+            .foregroundStyle(.secondary)
+        case .signingIn:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(UpdateLocalization.text(ru: "Вход…", en: "Signing in…"))
+            }
+            .foregroundStyle(.secondary)
+        case .signedIn:
+            Label(UpdateLocalization.text(ru: "Подключён", en: "Connected"), systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.green)
+        case .refreshing:
+            Label(UpdateLocalization.text(ru: "Обновление…", en: "Refreshing…"), systemImage: "arrow.clockwise")
+                .foregroundStyle(.secondary)
+        case .signingOut:
+            Text(UpdateLocalization.text(ru: "Выход…", en: "Signing out…"))
+                .foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
@@ -136,10 +258,193 @@ struct CloudSettingsView: View {
                 endpoint = url.absoluteString
                 metadata = try await client.metadata(endpoint: url)
                 phase = .available
+                await restoreStoredSession(at: url, force: true)
             } catch {
                 errorMessage = error.localizedDescription
                 phase = .failed
             }
+        }
+    }
+
+    @ViewBuilder
+    private var signInSheet: some View {
+        if let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) {
+            SelectiveRemoteCloudSignInView(
+                endpoint: url,
+                isSigningIn: accountPhase == .signingIn,
+                errorMessage: accountErrorMessage,
+                onCancel: {
+                    guard accountPhase != .signingIn else { return }
+                    showsSignIn = false
+                    accountErrorMessage = nil
+                },
+                onSignIn: { email, password in
+                    signIn(email: email, password: password, endpoint: url)
+                }
+            )
+        } else {
+            ContentUnavailableView(
+                UpdateLocalization.text(ru: "Некорректный адрес Cloud", en: "Invalid Cloud Address"),
+                systemImage: "exclamationmark.triangle"
+            )
+            .frame(width: 500, height: 300)
+        }
+    }
+
+    private func restoreStoredSessionIfNeeded() async {
+        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return }
+        await restoreStoredSession(at: url, force: false)
+    }
+
+    @MainActor
+    private func restoreStoredSession(at url: URL, force: Bool) async {
+        if !force, accountEndpoint == url.absoluteString { return }
+        resetAccountPresentation(endpoint: url)
+        guard await client.hasStoredSession(endpoint: url) else { return }
+        accountPhase = .restoring
+        do {
+            accountUser = try await client.currentUser(endpoint: url)
+            accountPhase = .signedIn
+            await loadInventory(endpoint: url)
+        } catch {
+            resetAccountPresentation(endpoint: url)
+            accountErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func signIn(email: String, password: String, endpoint url: URL) {
+        accountPhase = .signingIn
+        accountErrorMessage = nil
+        inventoryErrorMessage = nil
+        Task { @MainActor in
+            do {
+                let deviceID = resolvedDeviceID()
+                let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
+                accountUser = try await client.login(
+                    endpoint: url,
+                    email: email,
+                    password: password,
+                    device: .thisMac(id: deviceID, publicKey: identity.publicKey)
+                )
+                accountEndpoint = url.absoluteString
+                accountPhase = .signedIn
+                showsSignIn = false
+                await loadInventory(endpoint: url)
+            } catch {
+                accountPhase = .signedOut
+                accountErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func refreshInventory() {
+        guard let accountUser,
+              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint)
+        else { return }
+        Task { @MainActor in
+            do {
+                self.accountUser = try await client.currentUser(endpoint: url)
+                await loadInventory(endpoint: url)
+            } catch {
+                if error as? SelectiveRemoteCloudError == .authenticationRequired {
+                    resetAccountPresentation(endpoint: url)
+                } else {
+                    self.accountUser = accountUser
+                    accountPhase = .signedIn
+                }
+                accountErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    private func loadInventory(endpoint url: URL) async {
+        accountPhase = .refreshing
+        inventoryErrorMessage = nil
+        do {
+            let loadedTeams = try await client.teams(endpoint: url)
+            var loadedVaults: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
+            for team in loadedTeams {
+                loadedVaults[team.id] = try await client.sharedVaults(endpoint: url, teamID: team.id)
+            }
+            teams = loadedTeams.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            vaultsByTeam = loadedVaults.mapValues {
+                $0.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+            }
+        } catch {
+            if error as? SelectiveRemoteCloudError == .authenticationRequired {
+                resetAccountPresentation(endpoint: url)
+                accountErrorMessage = error.localizedDescription
+                return
+            }
+            teams = []
+            vaultsByTeam = [:]
+            inventoryErrorMessage = error.localizedDescription
+        }
+        accountPhase = .signedIn
+    }
+
+    private func signOut() {
+        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return }
+        accountPhase = .signingOut
+        accountErrorMessage = nil
+        Task { @MainActor in
+            do {
+                try await client.logout(endpoint: url)
+                resetAccountPresentation(endpoint: url)
+            } catch {
+                resetAccountPresentation(endpoint: url)
+                accountErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    @MainActor
+    private func resetAccountPresentation(endpoint url: URL) {
+        accountEndpoint = url.absoluteString
+        accountPhase = .signedOut
+        accountUser = nil
+        teams = []
+        vaultsByTeam = [:]
+        accountErrorMessage = nil
+        inventoryErrorMessage = nil
+    }
+
+    @MainActor
+    private func resolvedDeviceID() -> UUID {
+        if let existing = UUID(uuidString: storedDeviceID), existing.isSelectiveRemoteCloudUUID {
+            return existing
+        }
+        let generated = UUID()
+        storedDeviceID = generated.canonicalCloudString
+        return generated
+    }
+
+    @ViewBuilder
+    private var conflictReviewSheet: some View {
+        if let scenario = try? SelectiveRemoteVaultConflictReviewScenario.synthetic() {
+            SelectiveRemoteVaultConflictReviewView(
+                mergedDocument: scenario.mergedDocument,
+                conflicts: scenario.conflicts,
+                onCancel: { showsConflictReview = false },
+                onResolve: { resolutions in
+                    do {
+                        let resolved = try scenario.resolve(resolutions)
+                        conflictReviewMessage = UpdateLocalization.text(
+                            ru: "Проверка пройдена: разрешено \(resolutions.count), итоговых записей \(resolved.records.count), удалений \(resolved.tombstones.count).",
+                            en: "Test passed: resolved \(resolutions.count), final records \(resolved.records.count), deletions \(resolved.tombstones.count)."
+                        )
+                        showsConflictReview = false
+                    } catch {
+                        conflictReviewMessage = nil
+                    }
+                }
+            )
+        } else {
+            ContentUnavailableView(
+                UpdateLocalization.text(ru: "Тест недоступен", en: "Test Unavailable"),
+                systemImage: "exclamationmark.triangle"
+            )
         }
     }
 
@@ -148,5 +453,21 @@ struct CloudSettingsView: View {
         case checking
         case available
         case failed
+    }
+
+    private enum AccountPhase: Equatable {
+        case signedOut
+        case restoring
+        case signingIn
+        case signedIn
+        case refreshing
+        case signingOut
+
+        var isBusy: Bool {
+            switch self {
+            case .restoring, .signingIn, .refreshing, .signingOut: true
+            case .signedOut, .signedIn: false
+            }
+        }
     }
 }

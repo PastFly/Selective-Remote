@@ -33,9 +33,12 @@ produced exactly by Swift and decrypted by the browser tests. The bounded sync
 coordinator accepts clean remote revisions, stages encrypted offline edits with
 deterministic retry identity, rejects rollback or same-revision divergence,
 fails closed during rotation and preserves both decrypted versions plus the
-dirty ciphertext snapshot on a 409. Personal-Vault recovery wrapping, sync UI,
-explicit conflict-resolution writes and end-to-end service acceptance remain
-pending.
+dirty ciphertext snapshot on a 409. An explicit caller-provided resolution is
+accepted only while both the dirty local snapshot and observed remote version
+still match; it is re-encrypted from the observed remote revision and stays
+dirty until the exact conditional upload acknowledgement. Personal-Vault
+recovery wrapping, record-level conflict UI and end-to-end service acceptance
+remain pending.
 
 The browser portal can create and unlock a client-encrypted personal Vault,
 perform local CRUD, sign in with an existing verified account and manually
