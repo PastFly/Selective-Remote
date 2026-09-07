@@ -86,3 +86,18 @@ test("macOS Team Vault record workflow mirrors the bounded browser causal model"
   assert.match(model, /func resolveRecordConflicts\(/);
   assert.match(model, /resolvedPayload: resolved\.encoded\(\)/);
 });
+
+test("macOS exposes a complete-choice conflict review without rendering secrets", async () => {
+  const [review, settings] = await Promise.all([
+    readFile(new URL("CloudVaultConflictReviewView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(review, /Resolve and Sync/);
+  assert.match(review, /choices\.count == conflicts\.count/);
+  assert.match(review, /conflicts\.allSatisfy \{ choices\[\$0\.id\] != nil \}/);
+  assert.match(review, /values\["title"\]/);
+  assert.doesNotMatch(review, /values\["(?:secret|body|username)"\]/);
+  assert.match(review, /must-not-render/);
+  assert.match(settings, /Open Test Conflict/);
+  assert.match(settings, /sends nothing to Cloud/);
+});

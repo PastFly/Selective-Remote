@@ -272,7 +272,7 @@ struct SelectiveRemoteVaultMerge: Equatable, Sendable {
     let conflicts: [SelectiveRemoteVaultConflict]
 }
 
-enum SelectiveRemoteVaultConflictChoice: String, Codable, Sendable {
+enum SelectiveRemoteVaultConflictChoice: String, Codable, Equatable, Hashable, Sendable {
     case local
     case remote
 }

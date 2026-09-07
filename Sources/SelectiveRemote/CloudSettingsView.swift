@@ -7,6 +7,8 @@ struct CloudSettingsView: View {
     @State private var phase = Phase.idle
     @State private var metadata: SelectiveRemoteCloudMetadata?
     @State private var errorMessage: String?
+    @State private var showsConflictReview = false
+    @State private var conflictReviewMessage: String?
 
     private let client = SelectiveRemoteCloudAPIClient()
 
@@ -100,8 +102,38 @@ struct CloudSettingsView: View {
                     systemImage: "server.rack"
                 )
             }
+
+            Section(UpdateLocalization.text(ru: "Ручная проверка", en: "Manual Test")) {
+                Button(
+                    UpdateLocalization.text(
+                        ru: "Открыть тестовый конфликт…",
+                        en: "Open Test Conflict…"
+                    ),
+                    systemImage: "arrow.triangle.branch"
+                ) {
+                    conflictReviewMessage = nil
+                    showsConflictReview = true
+                }
+
+                if let conflictReviewMessage {
+                    Label(conflictReviewMessage, systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
+
+                Text(UpdateLocalization.text(
+                    ru: "Офлайн-сценарий использует только синтетические записи. Он проверяет полный выбор версий, скрытие секретов и итоговое объединение, но ничего не отправляет в Cloud.",
+                    en: "This offline scenario uses synthetic records only. It checks complete choices, secret redaction and the final merge, but sends nothing to Cloud."
+                ))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $showsConflictReview) {
+            conflictReviewSheet
+        }
     }
 
     @ViewBuilder
@@ -140,6 +172,34 @@ struct CloudSettingsView: View {
                 errorMessage = error.localizedDescription
                 phase = .failed
             }
+        }
+    }
+
+    @ViewBuilder
+    private var conflictReviewSheet: some View {
+        if let scenario = try? SelectiveRemoteVaultConflictReviewScenario.synthetic() {
+            SelectiveRemoteVaultConflictReviewView(
+                mergedDocument: scenario.mergedDocument,
+                conflicts: scenario.conflicts,
+                onCancel: { showsConflictReview = false },
+                onResolve: { resolutions in
+                    do {
+                        let resolved = try scenario.resolve(resolutions)
+                        conflictReviewMessage = UpdateLocalization.text(
+                            ru: "Проверка пройдена: разрешено \(resolutions.count), итоговых записей \(resolved.records.count), удалений \(resolved.tombstones.count).",
+                            en: "Test passed: resolved \(resolutions.count), final records \(resolved.records.count), deletions \(resolved.tombstones.count)."
+                        )
+                        showsConflictReview = false
+                    } catch {
+                        conflictReviewMessage = nil
+                    }
+                }
+            )
+        } else {
+            ContentUnavailableView(
+                UpdateLocalization.text(ru: "Тест недоступен", en: "Test Unavailable"),
+                systemImage: "exclamationmark.triangle"
+            )
         }
     }
 
