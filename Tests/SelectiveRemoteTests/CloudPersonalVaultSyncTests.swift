@@ -86,7 +86,7 @@ struct CloudPersonalVaultSyncTests {
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             switch (request.httpMethod, request.url?.path) {
             case ("GET", "/v1/vault"):
-                return Self.response(request, status: 200, json: [
+                return try Self.response(request, status: 200, json: [
                     "id": vaultID.canonicalCloudString,
                     "revision": 0,
                     "envelopeVersion": NSNull(),
@@ -108,10 +108,10 @@ struct CloudPersonalVaultSyncTests {
                 let wrappedKey = try #require(object["wrappedKey"] as? [String: Any])
                 #expect(Set(wrappedKey.keys) == ["algorithm", "iterations", "salt", "value"])
                 #expect(object["baseRevision"] as? Int == 0)
-                return Self.response(request, status: 200, json: ["conflict": false, "revision": 1])
+                return try Self.response(request, status: 200, json: ["conflict": false, "revision": 1])
             default:
                 Issue.record("Unexpected request: \(request.httpMethod ?? "nil") \(request.url?.path ?? "nil")")
-                return Self.response(request, status: 500, json: ["error": "unexpected_request"])
+                return try Self.response(request, status: 500, json: ["error": "unexpected_request"])
             }
         }
         let client = SelectiveRemoteCloudAPIClient(
@@ -124,7 +124,7 @@ struct CloudPersonalVaultSyncTests {
         #expect(remote.revision == 0)
         #expect(remote.envelope == nil)
 
-        let document = try SelectiveRemoteVaultDocument(records: [try syntheticRecord()])
+        let document = try SelectiveRemoteVaultDocument(records: [Self.syntheticRecord()])
         let envelope = try SelectiveRemotePersonalVaultCrypto.seal(
             document,
             recoveryPhrase: "correct horse battery staple",
@@ -147,7 +147,7 @@ struct CloudPersonalVaultSyncTests {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
         let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
         try tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
-        let document = try SelectiveRemoteVaultDocument(records: [try syntheticRecord()])
+        let document = try SelectiveRemoteVaultDocument(records: [Self.syntheticRecord()])
         let envelope = try SelectiveRemotePersonalVaultCrypto.seal(
             document,
             recoveryPhrase: "correct horse battery staple",
@@ -159,7 +159,7 @@ struct CloudPersonalVaultSyncTests {
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: tokenStore,
             dataLoader: { request in
-                Self.response(request, status: 200, json: [
+                try Self.response(request, status: 200, json: [
                     "id": "77777777-7777-4777-8777-777777777777",
                     "revision": 1,
                     "envelopeVersion": 1,
@@ -202,14 +202,20 @@ struct CloudPersonalVaultSyncTests {
         json: Any?
     ) throws -> (Data, URLResponse) {
         let data = try json.map { try JSONSerialization.data(withJSONObject: $0) } ?? Data()
-        let response = try #require(HTTPURLResponse(
-            url: try #require(request.url),
+        guard let url = request.url,
+              let response = HTTPURLResponse(
+            url: url,
             statusCode: status,
             httpVersion: nil,
             headerFields: ["Content-Type": "application/json"]
-        ))
+              )
+        else { throw PersonalVaultTestError.invalidHTTPResponse }
         return (data, response)
     }
+}
+
+private enum PersonalVaultTestError: Error {
+    case invalidHTTPResponse
 }
 
 private final class PersonalVaultHTTPStub: @unchecked Sendable {
