@@ -248,6 +248,23 @@ struct SelectiveRemoteApp: App {
                 Text(AppBuildInfo.fullText)
                 }
             }
+            CommandMenu("Cloud") {
+                Button(
+                    UpdateLocalization.text(ru: "Открыть настройки Cloud…", en: "Open Cloud Settings…"),
+                    systemImage: "cloud"
+                ) {
+                    UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+                .disabled(appLock.isLocked)
+
+                Button(
+                    UpdateLocalization.text(ru: "Открыть Cloud в браузере…", en: "Open Cloud in Browser…"),
+                    systemImage: "safari"
+                ) {
+                    NSWorkspace.shared.open(URL(string: "https://cloud.pastfly.ru/login")!)
+                }
+            }
         }
 
         Settings {

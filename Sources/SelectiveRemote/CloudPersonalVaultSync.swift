@@ -402,8 +402,12 @@ extension SelectiveRemoteCloudAPIClient {
             throw SelectiveRemoteCloudError.invalidResponse
         }
         if revision == 0 {
-            let emptyKeys = ["envelopeVersion", "wrappedKey", "ciphertext", "nonce", "authTag", "contentHash"]
-            guard emptyKeys.allSatisfy({ object[$0] is NSNull }) else {
+            let emptyPayloadKeys = ["wrappedKey", "ciphertext", "nonce", "authTag", "contentHash"]
+            let emptyEnvelopeVersion = object["envelopeVersion"] is NSNull
+                || object["envelopeVersion"] as? Int == 1
+            guard emptyEnvelopeVersion,
+                  emptyPayloadKeys.allSatisfy({ object[$0] is NSNull })
+            else {
                 throw SelectiveRemoteCloudError.invalidResponse
             }
             return .init(id: id, revision: 0, envelope: nil, updatedAt: updatedAt)

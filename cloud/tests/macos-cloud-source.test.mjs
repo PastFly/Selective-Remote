@@ -133,6 +133,17 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   assert.doesNotMatch(sessions, /UserDefaults/);
 });
 
+test("connection checks preserve the signed-in account and inventory failures stay isolated", async () => {
+  const settings = await readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8");
+  const checkConnection = settings.match(/private func checkConnection\(\)[\s\S]*?\n    \}\n\n    @MainActor/u)?.[0] ?? "";
+  assert.match(checkConnection, /refreshCloudMetadata/);
+  assert.doesNotMatch(checkConnection, /restoreStoredSession|resetAccountPresentation|loadInventory/);
+  assert.match(settings, /private func refreshCloudMetadata\(\) async -> URL\?/);
+  assert.match(settings, /personalVaultLoadErrorMessage/);
+  assert.match(settings, /do \{[\s\S]*client\.personalVault[\s\S]*\} catch \{[\s\S]*personalVaultLoadErrorMessage[\s\S]*\}\n\n        do \{[\s\S]*client\.teams/u);
+  assert.match(settings, /Register on the Website/);
+});
+
 test("macOS Personal Vault first upload is encrypted, explicit and non-destructive", async () => {
   const [sync, settings, appSettings] = await Promise.all([
     readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),

@@ -19,6 +19,7 @@ struct CloudSettingsView: View {
     @State private var registrationErrorMessage: String?
     @State private var registeredEmail: String?
     @State private var inventoryErrorMessage: String?
+    @State private var personalVaultLoadErrorMessage: String?
     @State private var accountEndpoint: String?
     @State private var showsAccountSheet = false
     @State private var accountSheetMode = AccountSheetMode.signIn
@@ -129,6 +130,16 @@ struct CloudSettingsView: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(accountPhase.isBusy)
 
+                    if let registrationURL {
+                        Link(
+                            UpdateLocalization.text(
+                                ru: "Регистрация на сайте…",
+                                en: "Register on the Website…"
+                            ),
+                            destination: registrationURL
+                        )
+                    }
+
                     if metadata?.registrationEnabled == true {
                         Button(
                             UpdateLocalization.text(ru: "Создать аккаунт…", en: "Create Account…"),
@@ -204,6 +215,13 @@ struct CloudSettingsView: View {
                         .foregroundStyle(personalVaultMessageIsError ? Color.orange : Color.green)
                         .font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    if let personalVaultLoadErrorMessage {
+                        Label(personalVaultLoadErrorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Text(UpdateLocalization.text(
@@ -343,30 +361,31 @@ struct CloudSettingsView: View {
 
     private func checkConnection() {
         Task { @MainActor in
-            await loadCloudState(force: true)
+            _ = await refreshCloudMetadata()
         }
     }
 
     @MainActor
     private func loadCloudStateIfNeeded() async {
         guard phase == .idle else { return }
-        await loadCloudState(force: false)
+        guard let url = await refreshCloudMetadata() else { return }
+        await restoreStoredSession(at: url)
     }
 
     @MainActor
-    private func loadCloudState(force: Bool) async {
+    private func refreshCloudMetadata() async -> URL? {
         phase = .checking
-        metadata = nil
         errorMessage = nil
         do {
             let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
             endpoint = url.absoluteString
             metadata = try await client.metadata(endpoint: url)
             phase = .available
-            await restoreStoredSession(at: url, force: force)
+            return url
         } catch {
             errorMessage = error.localizedDescription
             phase = .failed
+            return nil
         }
     }
 
@@ -436,8 +455,8 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func restoreStoredSession(at url: URL, force: Bool) async {
-        if !force, accountEndpoint == url.absoluteString { return }
+    private func restoreStoredSession(at url: URL) async {
+        if accountEndpoint == url.absoluteString, accountUser != nil { return }
         resetAccountPresentation(endpoint: url)
         guard await client.hasStoredSession(endpoint: url) else { return }
         accountPhase = .restoring
@@ -530,9 +549,21 @@ struct CloudSettingsView: View {
     private func loadInventory(endpoint url: URL) async {
         accountPhase = .refreshing
         inventoryErrorMessage = nil
+        personalVaultLoadErrorMessage = nil
         do {
             let personalVault = try await client.personalVault(endpoint: url)
             personalVaultRevision = personalVault.revision
+        } catch {
+            if error as? SelectiveRemoteCloudError == .authenticationRequired {
+                resetAccountPresentation(endpoint: url)
+                accountErrorMessage = error.localizedDescription
+                return
+            }
+            personalVaultRevision = nil
+            personalVaultLoadErrorMessage = error.localizedDescription
+        }
+
+        do {
             let loadedTeams = try await client.teams(endpoint: url)
             var loadedVaults: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
             for team in loadedTeams {
@@ -550,10 +581,11 @@ struct CloudSettingsView: View {
             }
             teams = []
             vaultsByTeam = [:]
-            personalVaultRevision = nil
             inventoryErrorMessage = error.localizedDescription
         }
-        accountPhase = .signedIn
+        if accountUser != nil {
+            accountPhase = .signedIn
+        }
     }
 
     private func signOut() {
@@ -583,6 +615,12 @@ struct CloudSettingsView: View {
         personalVaultMessageIsError = false
         accountErrorMessage = nil
         inventoryErrorMessage = nil
+        personalVaultLoadErrorMessage = nil
+    }
+
+    private var registrationURL: URL? {
+        guard let base = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return nil }
+        return base.appending(path: "login")
     }
 
     @MainActor
