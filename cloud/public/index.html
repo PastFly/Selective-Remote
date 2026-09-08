@@ -39,42 +39,81 @@
       <a href="/" id="password-reset-home" hidden>Вернуться на главную</a>
     </section>
 
-    <section class="hero">
-      <div>
+    <section class="hero hero-with-auth">
+      <div class="hero-copy">
         <p class="kicker">Ваши подключения — на ваших устройствах</p>
         <h2>Синхронизация без доступа сервера к данным.</h2>
         <p class="lead">Профили, Snippets и секреты шифруются на Mac до отправки. Cloud хранит только зашифрованные ревизии.</p>
+        <div class="trust-row" aria-label="Свойства безопасности">
+          <span>Локальное шифрование</span>
+          <span>Сессия только в памяти</span>
+          <span>HTTPS</span>
+        </div>
       </div>
-      <div class="vault-visual" aria-label="Схема защищённого хранилища">
-        <div class="orbit orbit-one"></div>
-        <div class="orbit orbit-two"></div>
-        <div class="vault-core"><span>256</span><small>AES-GCM</small></div>
-      </div>
+
+      <section class="auth-card" id="cloud-account" aria-labelledby="cloud-account-title">
+        <div class="auth-card-heading">
+          <div class="auth-icon" aria-hidden="true">SR</div>
+          <div>
+            <p class="eyebrow">SELECTIVE REMOTE CLOUD</p>
+            <h2 id="cloud-account-title">Добро пожаловать</h2>
+          </div>
+        </div>
+
+        <div class="auth-tabs" role="tablist" aria-label="Аккаунт Cloud">
+          <button type="button" role="tab" id="cloud-login-tab" aria-controls="cloud-login-form" aria-selected="true">Войти</button>
+          <button type="button" role="tab" id="cloud-register-tab" aria-controls="cloud-registration-form" aria-selected="false">Регистрация</button>
+        </div>
+
+        <p class="auth-message" id="cloud-account-message" aria-live="polite">Проверяем доступность Cloud…</p>
+
+        <form class="auth-form" id="cloud-login-form" method="post" action="/v1/auth/login">
+          <label for="cloud-email">Электронная почта</label>
+          <input id="cloud-email" name="email" type="email" maxlength="254" autocomplete="username" placeholder="name@example.com" required>
+          <label for="cloud-password">Пароль Selective Remote</label>
+          <input id="cloud-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" placeholder="Минимум 12 символов" required>
+          <button type="submit">Войти в Cloud</button>
+          <button type="button" class="text-button" id="cloud-show-recovery">Не удаётся войти?</button>
+        </form>
+
+        <form class="auth-form" id="cloud-registration-form" method="post" action="/v1/auth/register" hidden>
+          <label for="cloud-registration-name">Ваше имя</label>
+          <input id="cloud-registration-name" name="displayName" maxlength="120" autocomplete="name" placeholder="Как к вам обращаться" required>
+          <label for="cloud-registration-email">Электронная почта</label>
+          <input id="cloud-registration-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="На неё придёт подтверждение" required>
+          <label for="cloud-registration-password">Новый пароль Selective Remote</label>
+          <input id="cloud-registration-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" placeholder="Минимум 12 символов" required>
+          <label for="cloud-registration-confirmation">Повторите пароль</label>
+          <input id="cloud-registration-confirmation" name="confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+          <button type="submit">Создать аккаунт</button>
+          <p class="auth-note">Мы отправим одноразовую ссылку подтверждения. Пароли по почте не отправляются и не сохраняются в браузере.</p>
+        </form>
+
+        <form class="auth-form compact" id="cloud-recovery-form" method="post" action="/v1/auth/request-password-reset" hidden>
+          <label for="cloud-recovery-email">Электронная почта аккаунта</label>
+          <input id="cloud-recovery-email" name="email" type="email" maxlength="254" autocomplete="email" required>
+          <button type="submit">Отправить ссылку для смены пароля</button>
+          <button type="button" class="text-button" id="cloud-hide-recovery">Вернуться ко входу</button>
+        </form>
+
+        <div class="auth-success" id="cloud-registration-success" hidden>
+          <div class="auth-success-icon" aria-hidden="true">✓</div>
+          <h3>Проверьте почту</h3>
+          <p id="cloud-registration-success-message"></p>
+          <button type="button" class="secondary" id="cloud-registration-done">Вернуться ко входу</button>
+        </div>
+
+        <div id="cloud-signed-in" hidden>
+          <p id="cloud-account-name"></p>
+          <button type="button" class="secondary" id="cloud-logout">Выйти и удалить токен из памяти</button>
+        </div>
+      </section>
     </section>
 
     <section class="grid" aria-label="Возможности первой версии">
       <article><span>01</span><h3>Личный Vault</h3><p>Одна зашифрованная библиотека с историей ревизий и защитой от перезаписи.</p></article>
       <article><span>02</span><h3>Ваши устройства</h3><p>Список активных Mac, дата последнего доступа и мгновенный отзыв сессии.</p></article>
       <article><span>03</span><h3>Локальный режим</h3><p>Аккаунт необязателен: приложение продолжает полноценно работать автономно.</p></article>
-    </section>
-
-    <section class="cloud-account" id="cloud-account" aria-labelledby="cloud-account-title">
-      <div>
-        <p class="eyebrow">CLOUD SESSION · MEMORY ONLY</p>
-        <h2 id="cloud-account-title">Вход для зашифрованной синхронизации</h2>
-        <p id="cloud-account-message" aria-live="polite">Токен не сохраняется в localStorage, sessionStorage или IndexedDB.</p>
-      </div>
-      <form id="cloud-login-form" method="post" action="/v1/auth/login">
-        <label for="cloud-email">Email</label>
-        <input id="cloud-email" name="email" type="email" maxlength="254" autocomplete="username" required>
-        <label for="cloud-password">Пароль аккаунта</label>
-        <input id="cloud-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
-        <button type="submit">Войти</button>
-      </form>
-      <div id="cloud-signed-in" hidden>
-        <p id="cloud-account-name"></p>
-        <button type="button" class="secondary" id="cloud-logout">Выйти и удалить токен из памяти</button>
-      </div>
     </section>
 
     <section class="local-vault" id="local-vault" aria-labelledby="local-vault-title">
@@ -307,8 +346,8 @@
     </section>
 
     <section class="access">
-      <div><p class="eyebrow">V0.32 FOUNDATION</p><h2>Портал готовится к первому входу</h2></div>
-      <p>Регистрация будет открыта после завершения сброса пароля, ограничения запросов, защиты от злоупотреблений и ручной проверки безопасности.</p>
+      <div><p class="eyebrow">V0.32 FOUNDATION</p><h2>Cloud управляется вами</h2></div>
+      <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
   <script type="module" src="/app.js"></script>

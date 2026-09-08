@@ -371,6 +371,57 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   }
 
   return {
+    async register({ displayName, email, password, deviceID, publicKey = null }) {
+      const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
+      if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
+      const normalizedName = String(displayName ?? "").trim();
+      if (!normalizedName || normalizedName.length > 120) throw new Error("invalid_display_name");
+      const normalizedPublicKey = publicKey === null ? null : normalizeTeamDevicePublicKey(publicKey);
+      const response = await fetchValue("/v1/auth/register", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({
+          displayName: normalizedName,
+          email: String(email ?? "").trim(),
+          password: normalizedPassword(password),
+          device: {
+            id: normalizedDeviceID,
+            name: "Web browser",
+            platform: "web",
+            appVersion: "0.32",
+            publicKey: normalizedPublicKey,
+          },
+        }),
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      const result = await responseJSON(response, "registration_failed");
+      if (!response.ok) {
+        const code = ["registration_disabled", "rate_limited", "smtp_not_configured"].includes(result.error)
+          ? result.error : "registration_failed";
+        throw new Error(code);
+      }
+      if (result.verificationRequired !== true || Object.keys(result).length !== 1) {
+        throw new Error("registration_failed");
+      }
+      return { verificationRequired: true };
+    },
+
+    async requestPasswordReset(email) {
+      const response = await fetchValue("/v1/auth/request-password-reset", {
+        method: "POST",
+        headers: { Accept: "application/json", "Content-Type": "application/json" },
+        body: JSON.stringify({ email: String(email ?? "").trim() }),
+        cache: "no-store",
+        credentials: "omit",
+        referrerPolicy: "no-referrer",
+      });
+      const result = await responseJSON(response, "recovery_failed");
+      if (!response.ok || result.accepted !== true) throw new Error("recovery_failed");
+      return { accepted: true };
+    },
+
     async login({ email, password, deviceID, publicKey = null }) {
       const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
       if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
@@ -393,8 +444,12 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         credentials: "omit",
         referrerPolicy: "no-referrer",
       });
-      if (!response.ok) throw new Error("login_failed");
       const result = await responseJSON(response, "login_failed");
+      if (!response.ok) {
+        const code = ["invalid_credentials", "email_not_verified", "rate_limited"].includes(result.error)
+          ? result.error : "login_failed";
+        throw new Error(code);
+      }
       if (typeof result.token !== "string" || result.token.length < 32 || result.token.length > 256) {
         throw new Error("login_failed");
       }
