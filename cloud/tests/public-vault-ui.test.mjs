@@ -81,8 +81,9 @@ test("conflict choices expose only bounded metadata and never record secrets or 
 });
 
 test("portal exposes memory-only login and explicit manual synchronization controls", async () => {
-  const [html, application, synchronization, teamSynchronization] = await Promise.all([
+  const [html, styles, application, synchronization, teamSynchronization] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../public/vault-sync.js", import.meta.url), "utf8"),
     readFile(new URL("../public/team-vault-sync.js", import.meta.url), "utf8"),
@@ -107,6 +108,7 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
+  assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
