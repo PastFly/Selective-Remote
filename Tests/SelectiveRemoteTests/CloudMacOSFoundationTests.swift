@@ -502,6 +502,72 @@ struct CloudMacOSFoundationTests {
         #expect(writes.first?.idempotencyKey.contains(staged.snapshot.envelope.contentHash) == true)
     }
 
+    @Test("Team Vault coordinator initializes encrypted host data for the approved device set")
+    func teamVaultInitialization() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let vaultID = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID,
+            privateKeyRepresentation: Data(repeating: 0x31, count: 32)
+        )
+        let empty = SelectiveRemoteCloudSharedVaultEnvelope(
+            id: vaultID, teamID: teamID, name: "Operations", revision: 0,
+            keyGeneration: 1, rotationRequired: false, envelopeVersion: nil,
+            ciphertext: nil, nonce: nil, authTag: nil, contentHash: nil, wrapper: nil,
+            createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z"
+        )
+        let remote = TeamVaultRemoteStub(
+            envelope: empty,
+            writeResult: .init(conflict: false, revision: 1, keyGeneration: 1, rotationCompleted: false)
+        )
+        let storage = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint, remote: remote, snapshots: storage
+        )
+        let payload = Data(#"{"records":["synthetic-host"]}"#.utf8)
+        let outcome = try await coordinator.initialize(
+            payload: payload,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity,
+            keyDevices: [.init(
+                membershipID: membershipID,
+                membershipEpoch: 1,
+                deviceID: deviceID,
+                publicKeyAlgorithm: "p256-ecdh-v1",
+                publicKey: identity.publicKey,
+                hasWrapper: false
+            )]
+        )
+        guard case let .uploaded(uploaded) = outcome else {
+            Issue.record("Expected initialization to commit")
+            return
+        }
+        #expect(uploaded.payload == payload)
+        #expect(uploaded.snapshot.serverRevision == 1)
+        #expect(uploaded.snapshot.syncedLocalRevision == 1)
+        let writes = await remote.recordedWrites()
+        #expect(writes.count == 1)
+        #expect(writes[0].upload.wrappers?.count == 1)
+        #expect(writes[0].upload.envelope.baseRevision == 0)
+        let vaultKey = try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+            uploaded.snapshot.wrapper,
+            with: identity,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: 1
+        )
+        #expect(try SelectiveRemoteTeamVaultCrypto.decryptPayload(
+            uploaded.snapshot.envelope,
+            vaultKey: vaultKey,
+            teamID: teamID,
+            vaultID: vaultID
+        ) == payload)
+    }
+
     @Test("Team Vault coordinator preserves the dirty snapshot and both conflict versions")
     func teamVaultSyncConflict() async throws {
         let fixture = try Self.fixture()

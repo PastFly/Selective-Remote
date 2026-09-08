@@ -114,6 +114,7 @@ struct ContentView: View {
     @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
+    @State private var profileToShare: ConnectionProfile?
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -263,6 +264,9 @@ struct ContentView: View {
             ) { request, session in
                 model.generateSSHKey(request, session: session)
             }
+        }
+        .sheet(item: $profileToShare) { profile in
+            SelectiveRemoteCloudProfileShareView(profile: profile)
         }
         .onAppear {
             selectedTab = restoredProfileTab(for: profile.id)
@@ -811,6 +815,12 @@ struct ContentView: View {
         Button("Создать копию", systemImage: "doc.on.doc") {
             model.selectProfile(item.id)
             model.duplicateSelectedProfile()
+        }
+        Button(
+            UpdateLocalization.text(ru: "Поделиться с командой…", en: "Share with Team…"),
+            systemImage: "person.2.badge.plus"
+        ) {
+            profileToShare = item
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) {

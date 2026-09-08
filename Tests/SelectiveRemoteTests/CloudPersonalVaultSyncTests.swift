@@ -89,7 +89,7 @@ struct CloudPersonalVaultSyncTests {
                 return try Self.response(request, status: 200, json: [
                     "id": vaultID.canonicalCloudString,
                     "revision": 0,
-                    "envelopeVersion": NSNull(),
+                    "envelopeVersion": 1,
                     "wrappedKey": NSNull(),
                     "ciphertext": NSNull(),
                     "nonce": NSNull(),
@@ -140,6 +140,39 @@ struct CloudPersonalVaultSyncTests {
         #expect(envelope.contentHash == "H2eTTOL2LATd622JBSfi6-vwew2LdNCo8v1kSoVshyk")
         #expect(try await client.putPersonalVault(endpoint: endpoint, envelope: envelope)
             == .init(conflict: false, revision: 1))
+    }
+
+    @Test("an empty Personal Vault accepts only the deployed envelope marker")
+    func emptyVaultEnvelopeMarker() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
+        try tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
+
+        for marker: Any in [NSNull(), 1] {
+            let payload = try JSONSerialization.data(withJSONObject: Self.emptyVault(marker: marker))
+            let client = SelectiveRemoteCloudAPIClient(
+                tokenStore: tokenStore,
+                dataLoader: { request in
+                    let json = try JSONSerialization.jsonObject(with: payload)
+                    return try Self.response(request, status: 200, json: json)
+                }
+            )
+            #expect(try await client.personalVault(endpoint: endpoint).revision == 0)
+        }
+
+        for marker: Any in [0, 2, "1"] {
+            let payload = try JSONSerialization.data(withJSONObject: Self.emptyVault(marker: marker))
+            let client = SelectiveRemoteCloudAPIClient(
+                tokenStore: tokenStore,
+                dataLoader: { request in
+                    let json = try JSONSerialization.jsonObject(with: payload)
+                    return try Self.response(request, status: 200, json: json)
+                }
+            )
+            await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+                try await client.personalVault(endpoint: endpoint)
+            }
+        }
     }
 
     @Test("extended wrapped-key responses are rejected")
@@ -194,6 +227,20 @@ struct CloudPersonalVaultSyncTests {
             modifiedAt: "2026-09-08T00:00:00.000Z",
             data: .object(["title": .string("Synthetic Host")])
         )
+    }
+
+    private static func emptyVault(marker: Any) -> [String: Any] {
+        [
+            "id": "77777777-7777-4777-8777-777777777777",
+            "revision": 0,
+            "envelopeVersion": marker,
+            "wrappedKey": NSNull(),
+            "ciphertext": NSNull(),
+            "nonce": NSNull(),
+            "authTag": NSNull(),
+            "contentHash": NSNull(),
+            "updatedAt": "2026-09-08T00:00:00.000Z"
+        ]
     }
 
     private static func response(

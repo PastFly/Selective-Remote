@@ -1527,6 +1527,11 @@ export function initializePortalNavigation({
   };
 
   const initialPath = String(locationValue.pathname || "/");
+  const requestedAuthMode = new URLSearchParams(locationValue.search).get("auth");
+  if (requestedAuthMode === "login" || requestedAuthMode === "registration") {
+    showAuthentication(requestedAuthMode, { replace: true });
+    return view;
+  }
   if (initialPath === "/login" || initialPath === "/app") {
     showAuthentication("login", { replace: initialPath === "/app" });
   } else {

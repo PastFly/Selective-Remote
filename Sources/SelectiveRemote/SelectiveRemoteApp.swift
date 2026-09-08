@@ -97,6 +97,31 @@ private struct SFTPMenuBarTransferControls: View {
     }
 }
 
+private struct SelectiveRemoteCloudCommands: Commands {
+    @ObservedObject var appLock: AppLockStore
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some Commands {
+        CommandMenu("Cloud") {
+            Button(
+                UpdateLocalization.text(ru: "Открыть настройки Cloud…", en: "Open Cloud Settings…"),
+                systemImage: "cloud"
+            ) {
+                UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
+                openSettings()
+            }
+            .disabled(appLock.isLocked)
+
+            Button(
+                UpdateLocalization.text(ru: "Открыть Cloud в браузере…", en: "Open Cloud in Browser…"),
+                systemImage: "safari"
+            ) {
+                NSWorkspace.shared.open(SelectiveRemoteCloudPortalURL.login)
+            }
+        }
+    }
+}
+
 @main
 struct SelectiveRemoteApp: App {
     @NSApplicationDelegateAdaptor(SelectiveRemoteApplicationDelegate.self)
@@ -248,6 +273,7 @@ struct SelectiveRemoteApp: App {
                 Text(AppBuildInfo.fullText)
                 }
             }
+            SelectiveRemoteCloudCommands(appLock: appLock)
         }
 
         Settings {

@@ -72,6 +72,22 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /baseRevision: latestRemote\.revision/);
   assert.match(coordinator, /return try await push\(teamID: teamID, vaultID: vaultID, identity: identity\)/);
   assert.match(coordinator, /revalidated == current/);
+  assert.match(coordinator, /func initialize\(/);
+  assert.match(coordinator, /wrappers: wrappers/);
+});
+
+test("Host context menu opens a real encrypted Team Vault share flow", async () => {
+  const [content, sharing] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudProfileShareView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(content, /Share with Team/);
+  assert.match(content, /SelectiveRemoteCloudProfileShareView/);
+  assert.match(sharing, /client\.teamKeyDevices/);
+  assert.match(sharing, /coordinator\.initialize/);
+  assert.match(sharing, /coordinator\.stage/);
+  assert.match(sharing, /coordinator\.push/);
+  assert.match(sharing, /without its saved password/);
 });
 
 test("macOS Team Vault record workflow mirrors the bounded browser causal model", async () => {
@@ -131,6 +147,32 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   assert.match(client, /validTeamsJSON/);
   assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.doesNotMatch(sessions, /UserDefaults/);
+});
+
+test("connection checks preserve the signed-in account and inventory failures stay isolated", async () => {
+  const settings = await readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8");
+  const checkConnection = settings.match(/private func checkConnection\(\)[\s\S]*?\n    \}\n\n    @MainActor/u)?.[0] ?? "";
+  assert.match(checkConnection, /refreshCloudMetadata/);
+  assert.doesNotMatch(checkConnection, /restoreStoredSession|resetAccountPresentation|loadInventory/);
+  assert.match(settings, /private func refreshCloudMetadata\(\) async -> URL\?/);
+  assert.match(settings, /personalVaultLoadErrorMessage/);
+  assert.match(settings, /do \{[\s\S]*client\.personalVault[\s\S]*\} catch \{[\s\S]*personalVaultLoadErrorMessage[\s\S]*\}\n\n        do \{[\s\S]*client\.teams/u);
+  assert.match(settings, /Register on the Website/);
+});
+
+test("macOS Cloud commands use the supported settings action and backwards-compatible portal URLs", async () => {
+  const [application, client, settings] = await Promise.all([
+    readFile(new URL("SelectiveRemoteApp.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(application, /@Environment\(\\\.openSettings\)/);
+  assert.match(application, /openSettings\(\)/);
+  assert.doesNotMatch(application, /showSettingsWindow:/);
+  assert.match(client, /cloud\.pastfly\.ru\/\?auth=login/);
+  assert.match(client, /URLQueryItem\(name: "auth", value: "registration"\)/);
+  assert.match(settings, /SelectiveRemoteCloudPortalURL\.registration/);
+  assert.doesNotMatch(`${application}\n${settings}`, /appending\(path: "login"\)|cloud\.pastfly\.ru\/login/);
 });
 
 test("macOS Personal Vault first upload is encrypted, explicit and non-destructive", async () => {

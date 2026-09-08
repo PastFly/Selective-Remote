@@ -4,9 +4,10 @@ struct AppSettingsView: View {
     @ObservedObject var model: AppModel
     @ObservedObject var appearance: AppAppearanceStore
     @ObservedObject var appLock: AppLockStore
+    @AppStorage("SelectiveRemote.settings.selected-tab.v1") private var selectedTab = "appearance"
 
     var body: some View {
-        TabView {
+        TabView(selection: $selectedTab) {
             Form {
                 AppAppearanceSettingsSection(store: appearance)
                 Section {
@@ -15,18 +16,23 @@ struct AppSettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Оформление", systemImage: "paintpalette") }
+            .tag("appearance")
 
             UpdateSettingsView(model: model)
                 .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+                .tag("updates")
 
             AppLockSettingsView(store: appLock)
                 .tabItem { Label("Безопасность", systemImage: "lock.shield") }
+                .tag("security")
 
             CloudSettingsView(model: model)
                 .tabItem { Label("Cloud", systemImage: "cloud") }
+                .tag("cloud")
 
             BackupSettingsView(model: model)
                 .tabItem { Label("Резервная копия", systemImage: "externaldrive.badge.timemachine") }
+                .tag("backup")
         }
         .frame(width: 610, height: 520)
         .background {

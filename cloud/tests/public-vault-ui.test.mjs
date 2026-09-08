@@ -124,6 +124,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
   assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /URLSearchParams\(locationValue\.search\)/u);
+  assert.match(application, /requestedAuthMode === "login" \|\| requestedAuthMode === "registration"/u);
   assert.match(application, /setPath\("\/login"/u);
   assert.match(application, /setPath\("\/app"/u);
   assert.match(server, /\["\/", "\/login", "\/app"\]\.includes\(pathname\)/u);
