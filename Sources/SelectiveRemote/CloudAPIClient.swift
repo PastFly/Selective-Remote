@@ -545,7 +545,7 @@ actor SelectiveRemoteCloudAPIClient {
         return data
     }
 
-    private func authorizedResponse(
+    func authorizedResponse(
         endpoint: URL,
         path: String,
         method: String = "GET",

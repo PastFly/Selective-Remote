@@ -9,12 +9,16 @@
 </head>
 <body>
   <main class="shell">
-    <header class="brand">
+    <header class="brand" id="site-brand">
       <div class="mark" aria-hidden="true">SR</div>
       <div>
         <p class="eyebrow">SELECTIVE REMOTE</p>
         <h1>Cloud</h1>
       </div>
+      <nav class="brand-actions" id="public-actions" aria-label="Аккаунт">
+        <button type="button" class="secondary" data-open-auth="login">Войти</button>
+        <button type="button" data-open-auth="registration">Создать аккаунт</button>
+      </nav>
       <span class="status" id="service-status">Проверка сервиса…</span>
     </header>
 
@@ -39,8 +43,8 @@
       <a href="/" id="password-reset-home" hidden>Вернуться на главную</a>
     </section>
 
-    <section class="hero hero-with-auth">
-      <div class="hero-copy">
+    <section class="hero hero-with-auth" id="public-hero">
+      <div class="hero-copy" id="public-hero-copy">
         <p class="kicker">Ваши подключения — на ваших устройствах</p>
         <h2>Синхронизация без доступа сервера к данным.</h2>
         <p class="lead">Профили, Snippets и секреты шифруются на Mac до отправки. Cloud хранит только зашифрованные ревизии.</p>
@@ -49,9 +53,25 @@
           <span>Сессия только в памяти</span>
           <span>HTTPS</span>
         </div>
+        <div class="hero-actions">
+          <button type="button" data-open-auth="login">Войти в Cloud</button>
+          <button type="button" class="secondary" data-open-auth="registration">Создать аккаунт</button>
+        </div>
       </div>
 
-      <section class="auth-card" id="cloud-account" aria-labelledby="cloud-account-title">
+      <aside class="hero-preview" id="cloud-hero-preview" aria-label="Возможности Cloud">
+        <p class="eyebrow">CLOUD WORKSPACE</p>
+        <h3>Одна рабочая область для всех подключений</h3>
+        <div class="hero-preview-grid">
+          <span><strong>Hosts</strong><small>RDP и SSH</small></span>
+          <span><strong>Vault</strong><small>Личный и Team</small></span>
+          <span><strong>Snippets</strong><small>Команды</small></span>
+          <span><strong>Devices</strong><small>Контроль доступа</small></span>
+        </div>
+      </aside>
+
+      <section class="auth-card" id="cloud-account" aria-labelledby="cloud-account-title" hidden>
+        <button type="button" class="auth-back" id="cloud-auth-back">← На главную</button>
         <div class="auth-card-heading">
           <div class="auth-icon" aria-hidden="true">SR</div>
           <div>
@@ -103,24 +123,58 @@
           <button type="button" class="secondary" id="cloud-registration-done">Вернуться ко входу</button>
         </div>
 
-        <div id="cloud-signed-in" hidden>
-          <p id="cloud-account-name"></p>
-          <button type="button" class="secondary" id="cloud-logout">Выйти и удалить токен из памяти</button>
-        </div>
       </section>
     </section>
 
-    <section class="grid" aria-label="Возможности первой версии">
+    <section class="grid" id="public-grid" aria-label="Возможности первой версии">
       <article><span>01</span><h3>Личный Vault</h3><p>Одна зашифрованная библиотека с историей ревизий и защитой от перезаписи.</p></article>
       <article><span>02</span><h3>Ваши устройства</h3><p>Список активных Mac, дата последнего доступа и мгновенный отзыв сессии.</p></article>
       <article><span>03</span><h3>Локальный режим</h3><p>Аккаунт необязателен: приложение продолжает полноценно работать автономно.</p></article>
     </section>
 
-    <section class="local-vault" id="local-vault" aria-labelledby="local-vault-title">
+    <section class="workspace-layout" id="cloud-workspace" hidden>
+      <aside class="workspace-sidebar">
+        <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
+        <nav aria-label="Разделы Cloud">
+          <button type="button" class="active" data-workspace-target="workspace-overview">Обзор</button>
+          <button type="button" data-workspace-target="local-vault">Personal Vault</button>
+          <button type="button" data-workspace-target="team-vault">Teams и Vaults</button>
+          <button type="button" data-workspace-target="workspace-devices">Устройства</button>
+        </nav>
+        <div class="workspace-security"><span>●</span> E2EE включено</div>
+      </aside>
+
+      <div class="workspace-main">
+        <header class="workspace-header">
+          <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
+          <div id="cloud-signed-in" hidden>
+            <p id="cloud-account-name"></p>
+            <button type="button" class="secondary" id="cloud-logout">Выйти</button>
+          </div>
+        </header>
+
+        <section class="workspace-panel workspace-overview" id="workspace-overview">
+          <div class="workspace-welcome">
+            <div><p class="eyebrow">ВАША РАБОЧАЯ ОБЛАСТЬ</p><h2>Подключения и Vaults</h2></div>
+            <button type="button" data-workspace-target="local-vault">Открыть Personal Vault</button>
+          </div>
+          <div class="workspace-stats">
+            <button type="button" data-workspace-target="local-vault" data-record-filter="host"><span id="workspace-host-count">0</span><strong>Hosts</strong><small>RDP и SSH подключения</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="credential"><span id="workspace-credential-count">0</span><strong>Credentials</strong><small>Секреты и учётные записи</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="snippet"><span id="workspace-snippet-count">0</span><strong>Snippets</strong><small>Сохранённые команды</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding"><span id="workspace-forwarding-count">0</span><strong>Forwarding</strong><small>Туннели и правила</small></button>
+          </div>
+          <div class="workspace-notice">
+            <strong>Ожидается первая синхронизация с Mac</strong>
+            <p>Локальные подключения из установленного приложения появятся здесь после отправки Personal Vault с Mac. Текущая версия macOS-клиента ещё не выполняет этот импорт автоматически.</p>
+          </div>
+        </section>
+
+    <section class="local-vault workspace-panel" id="local-vault" aria-labelledby="local-vault-title" hidden>
       <div class="vault-heading">
         <div>
-          <p class="eyebrow">PERSONAL VAULT · LOCAL PREVIEW</p>
-          <h2 id="local-vault-title">Зашифрованное хранилище в браузере</h2>
+          <p class="eyebrow">PERSONAL VAULT · E2EE</p>
+          <h2 id="local-vault-title">Личный Vault</h2>
         </div>
         <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
       </div>
@@ -168,6 +222,13 @@
             <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
           </div>
         </div>
+        <nav class="record-filters" id="personal-vault-filters" aria-label="Типы записей">
+          <button type="button" class="active" data-record-filter="all">Все</button>
+          <button type="button" data-record-filter="host">Hosts</button>
+          <button type="button" data-record-filter="credential">Credentials</button>
+          <button type="button" data-record-filter="snippet">Snippets</button>
+          <button type="button" data-record-filter="forwarding">Forwarding</button>
+        </nav>
         <form class="record-form" id="local-vault-record-form">
           <label for="local-record-type">Тип записи</label>
           <select id="local-record-type" name="type">
@@ -196,24 +257,27 @@
       </div>
     </section>
 
-    <section class="team-vault" id="team-vault" aria-labelledby="team-vault-title" hidden>
+    <section class="workspace-panel workspace-devices" id="workspace-devices" hidden>
+      <div class="vault-heading">
+        <div><p class="eyebrow">ACCOUNT DEVICES</p><h2>Устройства доступа</h2></div>
+        <p>Одобряйте только свои устройства и сравнивайте SHA-256 отпечаток на обоих экранах.</p>
+      </div>
+      <div class="team-devices-panel">
+        <div class="team-devices-heading">
+          <div><h3>Mac и браузеры</h3><p>Отзыв устройства немедленно завершает связанные сессии. Для Shared Vaults после отзыва потребуется ротация ключа.</p></div>
+          <button type="button" class="secondary" id="team-devices-refresh">Обновить устройства</button>
+        </div>
+        <div class="team-devices" id="team-devices"></div>
+      </div>
+    </section>
+
+    <section class="team-vault workspace-panel" id="team-vault" aria-labelledby="team-vault-title" hidden>
       <div class="vault-heading">
         <div>
           <p class="eyebrow">TEAM VAULTS · CLIENT-SIDE E2EE</p>
           <h2 id="team-vault-title">Командные хранилища</h2>
         </div>
         <p id="team-vault-message" aria-live="polite">Загрузка Teams…</p>
-      </div>
-
-      <div class="team-devices-panel">
-        <div class="team-devices-heading">
-          <div>
-            <h3>Устройства Team-доступа</h3>
-            <p>Перед одобрением сравните SHA-256 отпечаток на обоих устройствах. Отозванное устройство немедленно теряет сессии, а Shared Vaults требуют ротации.</p>
-          </div>
-          <button type="button" class="secondary" id="team-devices-refresh">Обновить устройства</button>
-        </div>
-        <div class="team-devices" id="team-devices"></div>
       </div>
 
       <div class="team-onboarding">
@@ -345,7 +409,10 @@
       </div>
     </section>
 
-    <section class="access">
+      </div>
+    </section>
+
+    <section class="access" id="public-access">
       <div><p class="eyebrow">V0.32 FOUNDATION</p><h2>Cloud управляется вами</h2></div>
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>

@@ -424,7 +424,7 @@ async function readJSON(request, maximumBytes = maxBodyBytes) {
 }
 
 async function serveStatic(pathname, response, head) {
-  const relative = pathname === "/" ? "index.html" : pathname.slice(1);
+  const relative = ["/", "/login", "/app"].includes(pathname) ? "index.html" : pathname.slice(1);
   if (!/^[a-zA-Z0-9._/-]+$/.test(relative) || relative.includes("..")) return sendError(response, 404, "not_found");
   try {
     const data = await readFile(join(publicDirectory, relative));

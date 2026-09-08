@@ -132,3 +132,24 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.doesNotMatch(sessions, /UserDefaults/);
 });
+
+test("macOS Personal Vault first upload is encrypted, explicit and non-destructive", async () => {
+  const [sync, settings, appSettings] = await Promise.all([
+    readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+    readFile(new URL("UpdateExperienceView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(sync, /PBKDF2-SHA256\+A256KW/);
+  assert.match(sync, /600_000/);
+  assert.match(sync, /selective-remote:vault-envelope:v1/);
+  assert.match(sync, /AES\.GCM\.seal/);
+  assert.match(sync, /wrapRFC3394/);
+  assert.match(sync, /remoteVaultNotEmpty/);
+  assert.match(sync, /uploadConflict/);
+  assert.match(settings, /includePersonalVaultCredentials = false/);
+  assert.match(settings, /authenticateDeviceOwner/);
+  assert.match(settings, /guard remote\.revision == 0/);
+  assert.match(settings, /Task\.detached/);
+  assert.match(settings, /personalVaultRecoveryPhrase = ""/);
+  assert.match(appSettings, /CloudSettingsView\(model: model\)/);
+});
