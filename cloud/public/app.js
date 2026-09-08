@@ -129,8 +129,10 @@ export async function initializeLocalVault({
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
+  const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
+  let activeRecordFilter = "all";
 
   function clearConflictUI() {
     conflictPanel.hidden = true;
@@ -173,15 +175,27 @@ export async function initializeLocalVault({
 
   function render() {
     const current = controller.document();
+    const counts = { host: 0, credential: 0, snippet: 0, forwarding: 0 };
+    for (const record of current.records) {
+      if (Object.hasOwn(counts, record.type)) counts[record.type] += 1;
+    }
+    for (const [recordType, count] of Object.entries(counts)) {
+      setText(documentValue.querySelector(`#workspace-${recordType}-count`), String(count));
+    }
+    const visibleRecords = activeRecordFilter === "all"
+      ? current.records
+      : current.records.filter((record) => record.type === activeRecordFilter);
     records.replaceChildren();
-    if (current.records.length === 0) {
+    if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
-      empty.textContent = "Vault пока пуст.";
+      empty.textContent = current.records.length === 0
+        ? "Personal Vault пока пуст. Данные появятся после первой синхронизации с Mac или ручного добавления."
+        : "Записей этого типа пока нет.";
       records.append(empty);
       return;
     }
-    for (const record of current.records) {
+    for (const record of visibleRecords) {
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");
@@ -275,6 +289,15 @@ export async function initializeLocalVault({
   });
 
   type.addEventListener("change", updateLabels);
+  for (const button of filterButtons) {
+    button.addEventListener("click", () => {
+      activeRecordFilter = button.dataset.recordFilter || "all";
+      for (const candidate of filterButtons) {
+        candidate.classList.toggle("active", candidate === button);
+      }
+      if (!workspace.hidden) render();
+    });
+  }
   lockButton.addEventListener("click", () => {
     controller.lock();
     hideRecovery();
@@ -300,6 +323,13 @@ export async function initializeLocalVault({
     render,
     clearConflictUI,
     setConflictMode,
+    setFilter(value) {
+      activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(value) ? value : "all";
+      for (const button of filterButtons) {
+        button.classList.toggle("active", button.dataset.recordFilter === activeRecordFilter);
+      }
+      if (!workspace.hidden) render();
+    },
     setConflictResetListener(listener) {
       conflictResetListener = typeof listener === "function" ? listener : () => {};
     },
@@ -1018,7 +1048,6 @@ export function initializeTeamWorkspace({
   return {
     async activate(nextIdentity) {
       identity = nextIdentity;
-      section.hidden = false;
       await Promise.all([loadDevices(), loadTeams()]);
     },
     deactivate() {
@@ -1032,7 +1061,6 @@ export function initializeTeamWorkspace({
       devices.replaceChildren();
       members.replaceChildren();
       selectedPanel.hidden = true;
-      section.hidden = true;
     },
   };
 }
@@ -1042,6 +1070,7 @@ export async function initializeCloudAccount({
   vaultUI,
   fetchValue = fetch,
   metadata = null,
+  onSessionChange = () => {},
 } = {}) {
   const vault = vaultUI?.controller;
   const section = documentValue.querySelector("#cloud-account");
@@ -1157,6 +1186,7 @@ export async function initializeCloudAccount({
     signedIn.hidden = !user;
     syncButton.disabled = !user;
     setText(accountName, user ? `${user.displayName || user.email} · ${user.email}` : "");
+    onSessionChange(user);
   }
 
   loginTab.addEventListener("click", () => setAuthMode("login"));
@@ -1383,7 +1413,131 @@ export async function initializeCloudAccount({
 
   showSession(null);
   setAuthMode("login");
-  return client;
+  return { client, showAuth: setAuthMode };
+}
+
+export function initializePortalNavigation({
+  documentValue = document,
+  locationValue = location,
+  historyValue = history,
+  vaultUI = null,
+  showAuthMode = () => {},
+} = {}) {
+  const brand = documentValue.querySelector("#site-brand");
+  const publicActions = documentValue.querySelector("#public-actions");
+  const hero = documentValue.querySelector("#public-hero");
+  const heroCopy = documentValue.querySelector("#public-hero-copy");
+  const heroPreview = documentValue.querySelector("#cloud-hero-preview");
+  const auth = documentValue.querySelector("#cloud-account");
+  const authBack = documentValue.querySelector("#cloud-auth-back");
+  const publicGrid = documentValue.querySelector("#public-grid");
+  const publicAccess = documentValue.querySelector("#public-access");
+  const workspace = documentValue.querySelector("#cloud-workspace");
+  const workspaceTitle = documentValue.querySelector("#workspace-title");
+  const workspacePanels = [...documentValue.querySelectorAll(".workspace-panel")];
+  const workspaceButtons = [...documentValue.querySelectorAll("[data-workspace-target]")];
+  const sidebarButtons = [...documentValue.querySelectorAll(".workspace-sidebar [data-workspace-target]")];
+  const titles = {
+    "workspace-overview": "Обзор",
+    "local-vault": "Personal Vault",
+    "team-vault": "Teams и Vaults",
+    "workspace-devices": "Устройства",
+  };
+  let sessionActive = false;
+
+  function setPath(path, replace = false) {
+    if (locationValue.pathname === path) return;
+    const method = replace ? "replaceState" : "pushState";
+    historyValue[method]?.({}, "", path);
+  }
+
+  function selectWorkspacePanel(target, recordFilter = null) {
+    const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
+    for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
+    for (const button of sidebarButtons) button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
+    setText(workspaceTitle, titles[panelID]);
+    if (recordFilter) vaultUI?.setFilter(recordFilter);
+  }
+
+  function showLanding({ replace = false } = {}) {
+    brand.hidden = false;
+    publicActions.hidden = false;
+    hero.hidden = false;
+    hero.classList.remove("auth-active");
+    heroCopy.hidden = false;
+    heroPreview.hidden = false;
+    auth.hidden = true;
+    publicGrid.hidden = false;
+    publicAccess.hidden = false;
+    workspace.hidden = true;
+    setPath("/", replace);
+  }
+
+  function showAuthentication(mode = "login", { replace = false } = {}) {
+    brand.hidden = false;
+    publicActions.hidden = true;
+    hero.hidden = false;
+    hero.classList.add("auth-active");
+    heroCopy.hidden = true;
+    heroPreview.hidden = true;
+    auth.hidden = false;
+    publicGrid.hidden = true;
+    publicAccess.hidden = true;
+    workspace.hidden = true;
+    showAuthMode(mode);
+    setPath("/login", replace);
+    documentValue.querySelector(mode === "registration" ? "#cloud-registration-name" : "#cloud-email")?.focus();
+  }
+
+  function showWorkspace({ replace = false } = {}) {
+    brand.hidden = true;
+    hero.hidden = true;
+    publicGrid.hidden = true;
+    publicAccess.hidden = true;
+    workspace.hidden = false;
+    selectWorkspacePanel("workspace-overview");
+    setPath("/app", replace);
+  }
+
+  for (const button of documentValue.querySelectorAll("[data-open-auth]")) {
+    button.addEventListener("click", () => showAuthentication(button.dataset.openAuth || "login"));
+  }
+  authBack.addEventListener("click", () => showLanding());
+  for (const button of workspaceButtons) {
+    button.addEventListener("click", () => selectWorkspacePanel(
+      button.dataset.workspaceTarget,
+      button.dataset.recordFilter || null,
+    ));
+  }
+
+  const view = {
+    sessionChanged(user) {
+      if (user) {
+        sessionActive = true;
+        showWorkspace();
+      } else if (sessionActive) {
+        sessionActive = false;
+        showAuthentication("login", { replace: true });
+      }
+    },
+    showAuthentication,
+    showLanding,
+    showWorkspace,
+    selectWorkspacePanel,
+  };
+
+  const initialPath = String(locationValue.pathname || "/");
+  if (initialPath === "/login" || initialPath === "/app") {
+    showAuthentication("login", { replace: initialPath === "/app" });
+  } else {
+    showLanding({ replace: initialPath !== "/" });
+  }
+  documentValue.defaultView?.addEventListener("popstate", () => {
+    if (sessionActive && locationValue.pathname === "/app") showWorkspace({ replace: true });
+    else if (locationValue.pathname === "/login") showAuthentication("login", { replace: true });
+    else showLanding({ replace: true });
+  });
+  return view;
 }
 
 async function updateServiceStatus(documentValue, fetchValue) {
@@ -1474,7 +1628,21 @@ export async function initializePortal({
   }
   const metadata = await updateServiceStatus(documentValue, fetchValue);
   const vaultUI = await initializeLocalVault({ documentValue });
-  await initializeCloudAccount({ documentValue, vaultUI, fetchValue, metadata });
+  let navigation = null;
+  const account = await initializeCloudAccount({
+    documentValue,
+    vaultUI,
+    fetchValue,
+    metadata,
+    onSessionChange: (user) => navigation?.sessionChanged(user),
+  });
+  navigation = initializePortalNavigation({
+    documentValue,
+    locationValue,
+    historyValue,
+    vaultUI,
+    showAuthMode: account?.showAuth,
+  });
 }
 
 if (typeof document !== "undefined") await initializePortal();

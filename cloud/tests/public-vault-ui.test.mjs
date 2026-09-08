@@ -80,15 +80,20 @@ test("conflict choices expose only bounded metadata and never record secrets or 
   );
 });
 
-test("portal exposes memory-only login and explicit manual synchronization controls", async () => {
-  const [html, styles, application, synchronization, teamSynchronization] = await Promise.all([
+test("portal exposes separate public, authentication and workspace states", async () => {
+  const [html, styles, application, synchronization, teamSynchronization, server] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
     readFile(new URL("../public/vault-sync.js", import.meta.url), "utf8"),
     readFile(new URL("../public/team-vault-sync.js", import.meta.url), "utf8"),
+    readFile(new URL("../src/server.mjs", import.meta.url), "utf8"),
   ]);
 
+  assert.match(html, /id="cloud-account"[^>]*hidden/u);
+  assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
+  assert.match(html, /data-open-auth="login"/u);
+  assert.match(html, /data-open-auth="registration"/u);
   assert.match(html, /id="cloud-login-form"/u);
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
@@ -108,7 +113,20 @@ test("portal exposes memory-only login and explicit manual synchronization contr
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
+  assert.match(html, /id="workspace-overview"/u);
+  assert.match(html, /data-workspace-target="local-vault"/u);
+  assert.match(html, /data-workspace-target="workspace-devices"/u);
+  assert.match(html, /data-record-filter="host"/u);
+  assert.match(html, /data-record-filter="credential"/u);
+  assert.match(html, /data-record-filter="snippet"/u);
+  assert.match(html, /data-record-filter="forwarding"/u);
+  assert.match(html, /Текущая версия macOS-клиента ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
+  assert.match(styles, /\.workspace-layout/u);
+  assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /setPath\("\/login"/u);
+  assert.match(application, /setPath\("\/app"/u);
+  assert.match(server, /\["\/", "\/login", "\/app"\]\.includes\(pathname\)/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
