@@ -620,7 +620,7 @@ struct CloudSettingsView: View {
 
     private var registrationURL: URL? {
         guard let base = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return nil }
-        return base.appending(path: "login")
+        return SelectiveRemoteCloudPortalURL.registration(endpoint: base)
     }
 
     @MainActor

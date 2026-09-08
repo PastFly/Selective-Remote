@@ -239,6 +239,18 @@ enum SelectiveRemoteCloudEndpoint {
     }
 }
 
+enum SelectiveRemoteCloudPortalURL {
+    static let login = URL(string: "https://cloud.pastfly.ru/?auth=login")!
+
+    static func registration(endpoint: URL) -> URL {
+        var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
+        components.path = "/"
+        components.queryItems = [URLQueryItem(name: "auth", value: "registration")]
+        components.fragment = nil
+        return components.url!
+    }
+}
+
 actor SelectiveRemoteCloudAPIClient {
     private let dataLoader: SelectiveRemoteCloudDataLoader
     private let tokenStore: any SelectiveRemoteCloudTokenStore
