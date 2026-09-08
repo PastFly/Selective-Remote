@@ -1041,11 +1041,22 @@ export async function initializeCloudAccount({
   documentValue = document,
   vaultUI,
   fetchValue = fetch,
+  metadata = null,
 } = {}) {
   const vault = vaultUI?.controller;
   const section = documentValue.querySelector("#cloud-account");
   if (!section || !vault) return null;
   const form = documentValue.querySelector("#cloud-login-form");
+  const registrationForm = documentValue.querySelector("#cloud-registration-form");
+  const recoveryFormAccount = documentValue.querySelector("#cloud-recovery-form");
+  const loginTab = documentValue.querySelector("#cloud-login-tab");
+  const registrationTab = documentValue.querySelector("#cloud-register-tab");
+  const tabs = documentValue.querySelector(".auth-tabs");
+  const registrationSuccess = documentValue.querySelector("#cloud-registration-success");
+  const registrationSuccessMessage = documentValue.querySelector("#cloud-registration-success-message");
+  const registrationDone = documentValue.querySelector("#cloud-registration-done");
+  const showRecovery = documentValue.querySelector("#cloud-show-recovery");
+  const hideRecovery = documentValue.querySelector("#cloud-hide-recovery");
   const signedIn = documentValue.querySelector("#cloud-signed-in");
   const accountName = documentValue.querySelector("#cloud-account-name");
   const message = documentValue.querySelector("#cloud-account-message");
@@ -1066,6 +1077,34 @@ export async function initializeCloudAccount({
     activeConflicts = null;
     conflictApply.disabled = true;
   });
+
+  function setAccountMessage(value, tone = null) {
+    setText(message, value);
+    message.classList.toggle("error", tone === "error");
+    message.classList.toggle("success", tone === "success");
+  }
+
+  function setAuthMode(mode) {
+    const registrationAvailable = metadata?.registrationEnabled === true;
+    form.hidden = mode !== "login";
+    registrationForm.hidden = mode !== "registration";
+    recoveryFormAccount.hidden = mode !== "recovery";
+    registrationSuccess.hidden = true;
+    loginTab.setAttribute("aria-selected", String(mode === "login"));
+    registrationTab.setAttribute("aria-selected", String(mode === "registration"));
+    for (const control of registrationForm.querySelectorAll("input, button")) {
+      control.disabled = mode === "registration" && !registrationAvailable;
+    }
+    if (mode === "registration") {
+      setAccountMessage(registrationAvailable
+        ? "Создайте пароль Selective Remote — на почту придёт только одноразовая ссылка подтверждения."
+        : "Регистрация временно закрыта. Уже подтверждённые аккаунты могут войти.", registrationAvailable ? null : "error");
+    } else if (mode === "recovery") {
+      setAccountMessage("Мы отправим одноразовую ссылку для смены пароля, если аккаунт существует.");
+    } else {
+      setAccountMessage("Сессионный токен хранится только в памяти этой вкладки.");
+    }
+  }
 
   function hideConflicts() {
     activeConflicts = null;
@@ -1110,11 +1149,81 @@ export async function initializeCloudAccount({
   }
 
   function showSession(user) {
+    tabs.hidden = Boolean(user);
     form.hidden = Boolean(user);
+    registrationForm.hidden = true;
+    recoveryFormAccount.hidden = true;
+    registrationSuccess.hidden = true;
     signedIn.hidden = !user;
     syncButton.disabled = !user;
     setText(accountName, user ? `${user.displayName || user.email} · ${user.email}` : "");
   }
+
+  loginTab.addEventListener("click", () => setAuthMode("login"));
+  registrationTab.addEventListener("click", () => setAuthMode("registration"));
+  showRecovery.addEventListener("click", () => setAuthMode("recovery"));
+  hideRecovery.addEventListener("click", () => setAuthMode("login"));
+  registrationDone.addEventListener("click", () => setAuthMode("login"));
+
+  registrationForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (metadata?.registrationEnabled !== true) {
+      setAccountMessage("Регистрация временно закрыта. Обновите страницу после открытия регистрационного окна.", "error");
+      return;
+    }
+    const button = registrationForm.querySelector('button[type="submit"]');
+    const password = registrationForm.elements.password.value;
+    if (password !== registrationForm.elements.confirmation.value) {
+      setAccountMessage("Пароли не совпадают.", "error");
+      return;
+    }
+    button.disabled = true;
+    try {
+      const deviceID = await vault.deviceID();
+      let identity = null;
+      try { identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }); } catch {}
+      await client.register({
+        displayName: registrationForm.elements.displayName.value,
+        email: registrationForm.elements.email.value,
+        password,
+        deviceID,
+        publicKey: identity?.publicKey ?? null,
+      });
+      const email = registrationForm.elements.email.value.trim();
+      registrationForm.reset();
+      registrationForm.hidden = true;
+      registrationSuccess.hidden = false;
+      setText(registrationSuccessMessage, `Одноразовая ссылка отправлена на ${email}. Подтвердите адрес, затем войдите с созданным паролем.`);
+      setAccountMessage("Аккаунт создан. Пароль не отправлялся по почте и не был сохранён в браузере.", "success");
+    } catch (error) {
+      const code = String(error?.message ?? "");
+      const messages = {
+        registration_disabled: "Регистрационное окно уже закрыто. Обновите страницу позже.",
+        rate_limited: "Слишком много попыток. Повторите позже.",
+        smtp_not_configured: "Почтовый сервис временно не настроен.",
+      };
+      setAccountMessage(messages[code] ?? "Не удалось создать аккаунт. Проверьте поля и повторите попытку.", "error");
+    } finally {
+      registrationForm.elements.password.value = "";
+      registrationForm.elements.confirmation.value = "";
+      button.disabled = false;
+    }
+  });
+
+  recoveryFormAccount.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = recoveryFormAccount.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      await client.requestPasswordReset(recoveryFormAccount.elements.email.value);
+      recoveryFormAccount.reset();
+      setAccountMessage("Если аккаунт существует, ссылка для смены пароля уже отправлена.", "success");
+    } catch {
+      setAccountMessage("Не удалось запросить восстановление. Повторите позже.", "error");
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -1158,8 +1267,14 @@ export async function initializeCloudAccount({
           setText(message, "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.");
         }
       }
-    } catch {
-      setText(message, "Не удалось войти. Проверьте email, пароль и подтверждение аккаунта.");
+    } catch (error) {
+      const code = String(error?.message ?? "");
+      const messages = {
+        invalid_credentials: "Неверная электронная почта или пароль.",
+        email_not_verified: "Сначала подтвердите почту по ссылке из письма.",
+        rate_limited: "Слишком много попыток входа. Повторите позже.",
+      };
+      setAccountMessage(messages[code] ?? "Не удалось войти. Проверьте соединение и повторите попытку.", "error");
     } finally {
       button.disabled = false;
     }
@@ -1267,6 +1382,7 @@ export async function initializeCloudAccount({
   });
 
   showSession(null);
+  setAuthMode("login");
   return client;
 }
 
@@ -1281,8 +1397,10 @@ async function updateServiceStatus(documentValue, fetchValue) {
     const meta = await response.json();
     status.textContent = `API v${meta.apiVersion} · сервис доступен`;
     status.classList.add("ok");
+    return meta;
   } catch {
     status.textContent = "Сервис недоступен";
+    return null;
   }
 }
 
@@ -1354,9 +1472,9 @@ export async function initializePortal({
       });
     }
   }
+  const metadata = await updateServiceStatus(documentValue, fetchValue);
   const vaultUI = await initializeLocalVault({ documentValue });
-  await initializeCloudAccount({ documentValue, vaultUI, fetchValue });
-  await updateServiceStatus(documentValue, fetchValue);
+  await initializeCloudAccount({ documentValue, vaultUI, fetchValue, metadata });
 }
 
 if (typeof document !== "undefined") await initializePortal();

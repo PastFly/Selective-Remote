@@ -11,79 +11,122 @@ struct SelectiveRemoteCloudSignInView: View {
 
     @State private var email = ""
     @State private var password = ""
+    @State private var revealsPassword = false
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section {
-                    TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
-                        .textContentType(.username)
-                        .disabled(isSigningIn)
-                    SecureField(UpdateLocalization.text(ru: "Пароль", en: "Password"), text: $password)
-                        .textContentType(.password)
-                        .disabled(isSigningIn)
-                        .onSubmit(submit)
-                }
-
-                Section {
-                    LabeledContent(UpdateLocalization.text(ru: "Сервер", en: "Server")) {
-                        Text(endpoint.host ?? endpoint.absoluteString)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-
-                    Label(
-                        UpdateLocalization.text(
-                            ru: "Сессия хранится в Keychain только на этом Mac. Пароль существует только в этой форме и не становится ключом Vault.",
-                            en: "The session is stored in Keychain on this Mac only. The password exists only in this form and never becomes a Vault key."
-                        ),
-                        systemImage: "lock.shield"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                }
-
-                Section {
-                    if registrationEnabled == true {
-                        Button(
-                            UpdateLocalization.text(ru: "Создать новый аккаунт…", en: "Create New Account…"),
-                            systemImage: "person.crop.circle.badge.plus",
-                            action: onCreateAccount
-                        )
-                        .disabled(isSigningIn)
-                    } else if registrationEnabled == false {
-                        Label(
-                            UpdateLocalization.text(
-                                ru: "Регистрация на этом сервере пока отключена. Для входа нужен уже созданный и подтверждённый аккаунт.",
-                                en: "Registration is currently disabled on this server. Sign-in requires an existing verified account."
-                            ),
-                            systemImage: "person.crop.circle.badge.exclamationmark"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    } else {
-                        Label(
-                            UpdateLocalization.text(
-                                ru: "Сначала проверьте соединение, чтобы узнать, разрешена ли регистрация.",
-                                en: "Check the connection first to learn whether registration is available."
-                            ),
-                            systemImage: "network"
-                        )
-                        .font(.caption)
+            VStack(spacing: 0) {
+                HStack(spacing: 14) {
+                    Image(systemName: "cloud.fill")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 48, height: 48)
+                        .background(.blue.gradient, in: RoundedRectangle(cornerRadius: 14))
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(UpdateLocalization.text(ru: "Selective Remote Cloud", en: "Selective Remote Cloud"))
+                            .font(.title3.weight(.semibold))
+                        Text(UpdateLocalization.text(
+                            ru: "Войдите для защищённой синхронизации между устройствами",
+                            en: "Sign in for protected synchronization across devices"
+                        ))
+                        .font(.callout)
                         .foregroundStyle(.secondary)
                     }
+                    Spacer()
                 }
+                .padding(22)
 
-                if let errorMessage {
+                Divider()
+
+                Form {
                     Section {
-                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
+                        TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
+                            .textContentType(.username)
+                            .disabled(isSigningIn)
+                        HStack {
+                            Group {
+                                if revealsPassword {
+                                    TextField(UpdateLocalization.text(ru: "Пароль Selective Remote", en: "Selective Remote Password"), text: $password)
+                                } else {
+                                    SecureField(UpdateLocalization.text(ru: "Пароль Selective Remote", en: "Selective Remote Password"), text: $password)
+                                }
+                            }
+                            .textContentType(.password)
+                            .disabled(isSigningIn)
+                            .onSubmit(submit)
+                            Button {
+                                revealsPassword.toggle()
+                            } label: {
+                                Image(systemName: revealsPassword ? "eye.slash" : "eye")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(UpdateLocalization.text(ru: "Показать или скрыть пароль", en: "Show or hide password"))
+                        }
+                    }
+
+                    Section {
+                        LabeledContent(UpdateLocalization.text(ru: "Сервер", en: "Server")) {
+                            Text(endpoint.host ?? endpoint.absoluteString)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Сессия хранится в Keychain только на этом Mac. Пароль существует только в этой форме и не становится ключом Vault.",
+                                en: "The session is stored in Keychain on this Mac only. The password exists only in this form and never becomes a Vault key."
+                            ),
+                            systemImage: "lock.shield"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+
+                    Section {
+                        if registrationEnabled == true {
+                            Button(
+                                UpdateLocalization.text(ru: "Создать новый аккаунт…", en: "Create New Account…"),
+                                systemImage: "person.crop.circle.badge.plus",
+                                action: onCreateAccount
+                            )
+                            .buttonStyle(.bordered)
+                            .controlSize(.large)
+                            .disabled(isSigningIn)
+                        } else if registrationEnabled == false {
+                            Label(
+                                UpdateLocalization.text(
+                                    ru: "Регистрация на этом сервере пока отключена. Для входа нужен уже созданный и подтверждённый аккаунт.",
+                                    en: "Registration is currently disabled on this server. Sign-in requires an existing verified account."
+                                ),
+                                systemImage: "person.crop.circle.badge.exclamationmark"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        } else {
+                            Label(
+                                UpdateLocalization.text(
+                                    ru: "Сначала проверьте соединение, чтобы узнать, разрешена ли регистрация.",
+                                    en: "Check the connection first to learn whether registration is available."
+                                ),
+                                systemImage: "network"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    if let errorMessage {
+                        Section {
+                            Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                 }
+                .formStyle(.grouped)
             }
-            .formStyle(.grouped)
-            .navigationTitle(UpdateLocalization.text(ru: "Вход в Cloud", en: "Cloud Sign In"))
+            .navigationTitle(UpdateLocalization.text(ru: "Вход", en: "Sign In"))
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), action: onCancel)
@@ -96,7 +139,7 @@ struct SelectiveRemoteCloudSignInView: View {
                 }
             }
         }
-        .frame(width: 500, height: 390)
+        .frame(width: 540, height: 470)
     }
 
     private var canSubmit: Bool {
