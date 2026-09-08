@@ -72,6 +72,22 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /baseRevision: latestRemote\.revision/);
   assert.match(coordinator, /return try await push\(teamID: teamID, vaultID: vaultID, identity: identity\)/);
   assert.match(coordinator, /revalidated == current/);
+  assert.match(coordinator, /func initialize\(/);
+  assert.match(coordinator, /wrappers: wrappers/);
+});
+
+test("Host context menu opens a real encrypted Team Vault share flow", async () => {
+  const [content, sharing] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudProfileShareView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(content, /Share with Team/);
+  assert.match(content, /SelectiveRemoteCloudProfileShareView/);
+  assert.match(sharing, /client\.teamKeyDevices/);
+  assert.match(sharing, /coordinator\.initialize/);
+  assert.match(sharing, /coordinator\.stage/);
+  assert.match(sharing, /coordinator\.push/);
+  assert.match(sharing, /without its saved password/);
 });
 
 test("macOS Team Vault record workflow mirrors the bounded browser causal model", async () => {

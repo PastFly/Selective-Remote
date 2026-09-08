@@ -11,6 +11,7 @@ enum SelectiveRemoteTeamVaultSyncError: Error, Equatable {
     case invalidWriteAcknowledgement
     case invalidConflictResponse
     case staleConflict
+    case invalidKeyDevices
 }
 
 protocol SelectiveRemoteTeamVaultRemote: Sendable {
@@ -74,6 +75,98 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         self.endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
         self.remote = remote
         self.snapshots = snapshots
+    }
+
+    func initialize(
+        payload: Data,
+        teamID: UUID,
+        vaultID: UUID,
+        identity: SelectiveRemoteTeamDeviceIdentity,
+        keyDevices: [SelectiveRemoteCloudTeamKeyDevice]
+    ) async throws -> SelectiveRemoteTeamVaultPushOutcome {
+        guard try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == nil,
+              !keyDevices.isEmpty,
+              keyDevices.count <= 1_024,
+              Set(keyDevices.map(\.deviceID)).count == keyDevices.count,
+              keyDevices.contains(where: { $0.deviceID == identity.deviceID })
+        else { throw SelectiveRemoteTeamVaultSyncError.invalidKeyDevices }
+
+        var generator = SystemRandomNumberGenerator()
+        let vaultKey = Data((0..<32).map { _ in UInt8.random(in: 0...255, using: &generator) })
+        let wrappers = try keyDevices.map { recipient in
+            try SelectiveRemoteTeamVaultCrypto.wrapVaultKey(
+                vaultKey,
+                for: recipient.publicKey,
+                context: SelectiveRemoteTeamWrapperContext(
+                    teamID: teamID,
+                    vaultID: vaultID,
+                    keyGeneration: 1,
+                    membershipID: recipient.membershipID,
+                    membershipEpoch: recipient.membershipEpoch,
+                    deviceID: recipient.deviceID
+                )
+            )
+        }
+        guard let currentWrapper = wrappers.first(where: { $0.deviceID == identity.deviceID }) else {
+            throw SelectiveRemoteTeamVaultSyncError.invalidKeyDevices
+        }
+        let envelope = try SelectiveRemoteTeamVaultCrypto.encryptPayload(
+            payload,
+            vaultKey: vaultKey,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: 1,
+            baseRevision: 0
+        )
+        let prepared = try SelectiveRemoteTeamVaultSnapshot(
+            teamID: teamID,
+            vaultID: vaultID,
+            deviceID: identity.deviceID,
+            keyGeneration: 1,
+            localRevision: 1,
+            serverRevision: 0,
+            syncedLocalRevision: 0,
+            envelope: envelope,
+            wrapper: currentWrapper
+        )
+        try snapshots.save(prepared, endpoint: endpoint)
+
+        let write = try await remote.putSharedVault(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID,
+            upload: .init(envelope: envelope, wrappers: wrappers),
+            idempotencyKey: "macos:team-vault:initialize:\(UUID().canonicalCloudString)"
+        )
+        if write.conflict {
+            let refreshed = try await refresh(
+                teamID: teamID,
+                vaultID: vaultID,
+                identity: identity
+            )
+            guard case let .conflict(conflict) = refreshed else {
+                throw SelectiveRemoteTeamVaultSyncError.invalidConflictResponse
+            }
+            return .conflict(conflict)
+        }
+        guard write.revision == 1,
+              write.keyGeneration == 1,
+              write.rotationCompleted == false
+        else { throw SelectiveRemoteTeamVaultSyncError.invalidWriteAcknowledgement }
+
+        let uploaded = try SelectiveRemoteTeamVaultSnapshot(
+            teamID: teamID,
+            vaultID: vaultID,
+            deviceID: identity.deviceID,
+            keyGeneration: 1,
+            localRevision: 1,
+            serverRevision: 1,
+            syncedLocalRevision: 1,
+            envelope: envelope,
+            wrapper: currentWrapper
+        )
+        try snapshots.save(uploaded, endpoint: endpoint)
+        return .uploaded(.init(snapshot: uploaded, payload: payload))
     }
 
     func refresh(

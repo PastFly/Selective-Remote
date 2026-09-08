@@ -149,20 +149,24 @@ struct CloudPersonalVaultSyncTests {
         try tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
 
         for marker: Any in [NSNull(), 1] {
+            let payload = try JSONSerialization.data(withJSONObject: Self.emptyVault(marker: marker))
             let client = SelectiveRemoteCloudAPIClient(
                 tokenStore: tokenStore,
                 dataLoader: { request in
-                    try Self.response(request, status: 200, json: Self.emptyVault(marker: marker))
+                    let json = try JSONSerialization.jsonObject(with: payload)
+                    return try Self.response(request, status: 200, json: json)
                 }
             )
             #expect(try await client.personalVault(endpoint: endpoint).revision == 0)
         }
 
         for marker: Any in [0, 2, "1"] {
+            let payload = try JSONSerialization.data(withJSONObject: Self.emptyVault(marker: marker))
             let client = SelectiveRemoteCloudAPIClient(
                 tokenStore: tokenStore,
                 dataLoader: { request in
-                    try Self.response(request, status: 200, json: Self.emptyVault(marker: marker))
+                    let json = try JSONSerialization.jsonObject(with: payload)
+                    return try Self.response(request, status: 200, json: json)
                 }
             )
             await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
