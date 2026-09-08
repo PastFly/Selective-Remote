@@ -22,7 +22,7 @@ struct AppSettingsView: View {
             AppLockSettingsView(store: appLock)
                 .tabItem { Label("Безопасность", systemImage: "lock.shield") }
 
-            CloudSettingsView()
+            CloudSettingsView(model: model)
                 .tabItem { Label("Cloud", systemImage: "cloud") }
 
             BackupSettingsView(model: model)

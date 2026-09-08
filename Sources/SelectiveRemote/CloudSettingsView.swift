@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CloudSettingsView: View {
+    @ObservedObject var model: AppModel
+
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1")
@@ -22,6 +24,14 @@ struct CloudSettingsView: View {
     @State private var accountSheetMode = AccountSheetMode.signIn
     @State private var showsConflictReview = false
     @State private var conflictReviewMessage: String?
+    @State private var personalVaultRevision: Int?
+    @State private var personalVaultMessage: String?
+    @State private var personalVaultMessageIsError = false
+    @State private var personalVaultUploading = false
+    @State private var showsPersonalVaultUpload = false
+    @State private var personalVaultRecoveryPhrase = ""
+    @State private var personalVaultRecoveryConfirmation = ""
+    @State private var includePersonalVaultCredentials = false
 
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
@@ -160,6 +170,51 @@ struct CloudSettingsView: View {
             }
 
             if accountUser != nil {
+                Section("Personal Vault") {
+                    LabeledContent(UpdateLocalization.text(ru: "Ревизия в Cloud", en: "Cloud revision")) {
+                        Text(personalVaultRevision.map { "r\($0)" } ?? "—")
+                            .monospacedDigit()
+                    }
+                    LabeledContent(UpdateLocalization.text(ru: "Локальные данные", en: "Local data")) {
+                        Text(localPersonalVaultSummary)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Button(
+                        UpdateLocalization.text(
+                            ru: "Зашифровать и отправить локальные данные…",
+                            en: "Encrypt and Upload Local Data…"
+                        ),
+                        systemImage: "lock.doc.fill"
+                    ) {
+                        personalVaultMessage = nil
+                        personalVaultMessageIsError = false
+                        showsPersonalVaultUpload = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(personalVaultUploading || personalVaultRevision != 0)
+
+                    if let personalVaultMessage {
+                        Label(
+                            personalVaultMessage,
+                            systemImage: personalVaultMessageIsError
+                                ? "exclamationmark.triangle.fill"
+                                : "checkmark.circle.fill"
+                        )
+                        .foregroundStyle(personalVaultMessageIsError ? Color.orange : Color.green)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Text(UpdateLocalization.text(
+                        ru: "Первая отправка доступна только для пустого Cloud Vault. Recovery-фраза и открытые данные не сохраняются на сервере; существующая ревизия никогда не перезаписывается этим действием.",
+                        en: "The first upload is available only for an empty Cloud Vault. The recovery phrase and plaintext are never stored on the server; this action never replaces an existing revision."
+                    ))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+
                 SelectiveRemoteCloudTeamInventoryView(
                     teams: teams,
                     vaultsByTeam: vaultsByTeam,
@@ -222,6 +277,9 @@ struct CloudSettingsView: View {
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
+        }
+        .sheet(isPresented: $showsPersonalVaultUpload) {
+            personalVaultUploadSheet
         }
     }
 
@@ -473,6 +531,8 @@ struct CloudSettingsView: View {
         accountPhase = .refreshing
         inventoryErrorMessage = nil
         do {
+            let personalVault = try await client.personalVault(endpoint: url)
+            personalVaultRevision = personalVault.revision
             let loadedTeams = try await client.teams(endpoint: url)
             var loadedVaults: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
             for team in loadedTeams {
@@ -490,6 +550,7 @@ struct CloudSettingsView: View {
             }
             teams = []
             vaultsByTeam = [:]
+            personalVaultRevision = nil
             inventoryErrorMessage = error.localizedDescription
         }
         accountPhase = .signedIn
@@ -517,6 +578,9 @@ struct CloudSettingsView: View {
         accountUser = nil
         teams = []
         vaultsByTeam = [:]
+        personalVaultRevision = nil
+        personalVaultMessage = nil
+        personalVaultMessageIsError = false
         accountErrorMessage = nil
         inventoryErrorMessage = nil
     }
@@ -529,6 +593,236 @@ struct CloudSettingsView: View {
         let generated = UUID()
         storedDeviceID = generated.canonicalCloudString
         return generated
+    }
+
+    @MainActor
+    private var localPersonalVaultSummary: String {
+        let hosts = model.profiles.filter {
+            !$0.host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !$0.serialDevicePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }.count
+        let snippets = TerminalCommandHistoryStore.shared.templates().count
+        let forwarding = model.independentPortForwards.count
+        return UpdateLocalization.text(
+            ru: "Hosts: \(hosts) · Snippets: \(snippets) · Forwarding: \(forwarding)",
+            en: "Hosts: \(hosts) · Snippets: \(snippets) · Forwarding: \(forwarding)"
+        )
+    }
+
+    @MainActor @ViewBuilder
+    private var personalVaultUploadSheet: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(UpdateLocalization.text(ru: "Первая отправка Personal Vault", en: "First Personal Vault Upload"))
+                .font(.title2.bold())
+            Text(UpdateLocalization.text(
+                ru: "Придумайте отдельную recovery-фразу длиной не менее 16 символов. Она шифрует ключ Vault на этом Mac и не отправляется в Cloud. Сохраните её в надёжном месте: восстановить её на сервере нельзя.",
+                en: "Create a separate recovery phrase of at least 16 characters. It protects the Vault key on this Mac and is never sent to Cloud. Keep it somewhere safe: the server cannot recover it."
+            ))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            SecureField(
+                UpdateLocalization.text(ru: "Recovery-фраза", en: "Recovery phrase"),
+                text: $personalVaultRecoveryPhrase
+            )
+            .textFieldStyle(.roundedBorder)
+            SecureField(
+                UpdateLocalization.text(ru: "Повторите recovery-фразу", en: "Confirm recovery phrase"),
+                text: $personalVaultRecoveryConfirmation
+            )
+            .textFieldStyle(.roundedBorder)
+
+            Toggle(
+                UpdateLocalization.text(
+                    ru: "Добавить сохранённые пароли (потребуется Touch ID или пароль Mac)",
+                    en: "Include saved passwords (Touch ID or Mac password required)"
+                ),
+                isOn: $includePersonalVaultCredentials
+            )
+
+            if personalVaultUploading {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(UpdateLocalization.text(ru: "Шифрование и отправка…", en: "Encrypting and uploading…"))
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            if let personalVaultMessage, personalVaultMessageIsError {
+                Label(personalVaultMessage, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) {
+                    closePersonalVaultUploadSheet()
+                }
+                .disabled(personalVaultUploading)
+                Button(UpdateLocalization.text(ru: "Зашифровать и отправить", en: "Encrypt and Upload")) {
+                    uploadPersonalVault()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(
+                    personalVaultUploading
+                        || personalVaultRecoveryPhrase.utf8.count < 16
+                        || personalVaultRecoveryPhrase != personalVaultRecoveryConfirmation
+                )
+            }
+        }
+        .padding(24)
+        .frame(width: 540)
+    }
+
+    @MainActor
+    private func closePersonalVaultUploadSheet() {
+        guard !personalVaultUploading else { return }
+        personalVaultRecoveryPhrase = ""
+        personalVaultRecoveryConfirmation = ""
+        includePersonalVaultCredentials = false
+        showsPersonalVaultUpload = false
+    }
+
+    @MainActor
+    private func uploadPersonalVault() {
+        let recoveryPhrase = personalVaultRecoveryPhrase
+        guard recoveryPhrase == personalVaultRecoveryConfirmation,
+              (16...1_024).contains(recoveryPhrase.precomposedStringWithCanonicalMapping.utf8.count),
+              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
+              accountUser != nil
+        else {
+            personalVaultMessage = SelectiveRemotePersonalVaultError.invalidRecoveryPhrase.localizedDescription
+            personalVaultMessageIsError = true
+            return
+        }
+
+        personalVaultUploading = true
+        personalVaultMessage = nil
+        personalVaultMessageIsError = false
+        Task { @MainActor in
+            do {
+                let remote = try await client.personalVault(endpoint: url)
+                guard remote.revision == 0 else {
+                    throw SelectiveRemotePersonalVaultError.remoteVaultNotEmpty(remote.revision)
+                }
+                let credentials = try await personalVaultCredentialsIfRequested()
+                let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+                    profiles: model.profiles,
+                    credentials: credentials,
+                    snippets: TerminalCommandHistoryStore.shared.templates(),
+                    forwarding: model.independentPortForwards,
+                    deviceID: resolvedDeviceID()
+                )
+                let document = exported.document
+                let envelope = try await Task.detached(priority: .userInitiated) {
+                    try SelectiveRemotePersonalVaultCrypto.seal(
+                        document,
+                        recoveryPhrase: recoveryPhrase,
+                        baseRevision: 0
+                    )
+                }.value
+                let result = try await client.putPersonalVault(endpoint: url, envelope: envelope)
+                guard !result.conflict else {
+                    throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
+                }
+                personalVaultRevision = result.revision
+                personalVaultMessage = UpdateLocalization.text(
+                    ru: "Personal Vault отправлен: Hosts \(exported.summary.hosts), Credentials \(exported.summary.credentials), Snippets \(exported.summary.snippets), Forwarding \(exported.summary.forwarding). Ревизия r\(result.revision).",
+                    en: "Personal Vault uploaded: Hosts \(exported.summary.hosts), Credentials \(exported.summary.credentials), Snippets \(exported.summary.snippets), Forwarding \(exported.summary.forwarding). Revision r\(result.revision)."
+                )
+                personalVaultMessageIsError = false
+                personalVaultUploading = false
+                closePersonalVaultUploadSheet()
+            } catch {
+                personalVaultUploading = false
+                personalVaultMessage = error.localizedDescription
+                personalVaultMessageIsError = true
+            }
+        }
+    }
+
+    @MainActor
+    private func personalVaultCredentialsIfRequested() async throws
+        -> [SelectiveRemotePersonalVaultCredentialInput]
+    {
+        guard includePersonalVaultCredentials else { return [] }
+        try await KeychainService.authenticateDeviceOwner(reason: UpdateLocalization.text(
+            ru: "Разрешить Selective Remote прочитать сохранённые пароли для шифрования Personal Vault",
+            en: "Allow Selective Remote to read saved passwords for Personal Vault encryption"
+        ))
+        var result: [SelectiveRemotePersonalVaultCredentialInput] = []
+        for profile in model.profiles {
+            switch profile.connectionType {
+            case .rdp:
+                try appendPersonalVaultCredential(
+                    to: &result,
+                    sourceID: profile.id,
+                    kind: .rdp,
+                    title: "\(profile.friendlyName) · RDP",
+                    username: profile.username
+                )
+                if !profile.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    try appendPersonalVaultCredential(
+                        to: &result,
+                        sourceID: profile.id,
+                        kind: .gateway,
+                        title: "\(profile.friendlyName) · Gateway",
+                        username: profile.gatewayUsername
+                    )
+                }
+            case .ssh, .telnet:
+                try appendPersonalVaultCredential(
+                    to: &result,
+                    sourceID: profile.id,
+                    kind: .ssh,
+                    title: "\(profile.friendlyName) · \(profile.connectionType.title)",
+                    username: profile.username
+                )
+                if profile.sshProxyMode != .none {
+                    try appendPersonalVaultCredential(
+                        to: &result,
+                        sourceID: profile.id,
+                        kind: .proxy,
+                        title: "\(profile.friendlyName) · Proxy",
+                        username: profile.sshProxyUsername
+                    )
+                }
+            case .serial:
+                break
+            }
+        }
+        for forwarding in model.independentPortForwards {
+            try appendPersonalVaultCredential(
+                to: &result,
+                sourceID: forwarding.id,
+                kind: .forwarding,
+                title: "\(forwarding.rule.displayName) · Forwarding",
+                username: forwarding.connection.username
+            )
+        }
+        return result
+    }
+
+    @MainActor
+    private func appendPersonalVaultCredential(
+        to values: inout [SelectiveRemotePersonalVaultCredentialInput],
+        sourceID: UUID,
+        kind: KeychainCredentialKind,
+        title: String,
+        username: String
+    ) throws {
+        guard let secret = try KeychainService.readPassword(profileID: sourceID, kind: kind),
+              !secret.isEmpty
+        else { return }
+        values.append(.init(
+            sourceID: sourceID,
+            kind: kind,
+            title: title,
+            username: username,
+            secret: secret
+        ))
     }
 
     @ViewBuilder
