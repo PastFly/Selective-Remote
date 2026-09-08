@@ -129,6 +129,10 @@ export async function initializeLocalVault({
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
+  const hostDetail = documentValue.querySelector("#host-detail-dialog");
+  const hostDetailTitle = documentValue.querySelector("#host-detail-title");
+  const hostDetailAddress = documentValue.querySelector("#host-detail-address");
+  const hostDetailModified = documentValue.querySelector("#host-detail-modified");
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
@@ -220,6 +224,27 @@ export async function initializeLocalVault({
           remove.disabled = false;
         }
       });
+      if (record.type === "host") {
+        card.classList.add("resource-card", "resource-card-clickable");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.setAttribute("aria-label", `Открыть Host ${heading.textContent}`);
+        const openHost = () => {
+          setText(hostDetailTitle, String(record.data.title ?? "Host"));
+          setText(hostDetailAddress, String(record.data.address ?? "—"));
+          setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          hostDetail?.showModal();
+        };
+        card.addEventListener("click", (event) => {
+          if (event.target === remove) return;
+          openHost();
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          openHost();
+        });
+      }
       card.append(heading, summary, metadata, remove);
       records.append(card);
     }
@@ -1443,6 +1468,13 @@ export function initializePortalNavigation({
     "team-vault": "Teams и Vaults",
     "workspace-devices": "Устройства",
   };
+  const resourceTitles = {
+    host: "Хосты",
+    snippet: "Сниппеты",
+    credential: "Учётные данные",
+    forwarding: "Forwarding",
+    all: "Personal Vault",
+  };
   let sessionActive = false;
 
   function setPath(path, replace = false) {
@@ -1454,8 +1486,15 @@ export function initializePortalNavigation({
   function selectWorkspacePanel(target, recordFilter = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
-    for (const button of sidebarButtons) button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
-    setText(workspaceTitle, titles[panelID]);
+    for (const button of sidebarButtons) {
+      const matchesPanel = button.dataset.workspaceTarget === panelID;
+      const matchesFilter = panelID !== "local-vault"
+        || (button.dataset.recordFilter || "all") === (recordFilter || "all");
+      button.classList.toggle("active", matchesPanel && matchesFilter);
+    }
+    setText(workspaceTitle, panelID === "local-vault"
+      ? resourceTitles[recordFilter || "all"]
+      : titles[panelID]);
     if (recordFilter) vaultUI?.setFilter(recordFilter);
   }
 

@@ -137,8 +137,15 @@
         <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
         <nav aria-label="Разделы Cloud">
           <button type="button" class="active" data-workspace-target="workspace-overview">Обзор</button>
-          <button type="button" data-workspace-target="local-vault">Personal Vault</button>
-          <button type="button" data-workspace-target="team-vault">Teams и Vaults</button>
+          <p class="workspace-nav-label">Ресурсы</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="host">Хосты</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
+          <p class="workspace-nav-label">Хранилища</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
+          <button type="button" data-workspace-target="team-vault">Команды и Team Vaults</button>
+          <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
         </nav>
         <div class="workspace-security"><span>●</span> E2EE включено</div>
@@ -246,6 +253,24 @@
           <button type="submit">Зашифровать и сохранить</button>
         </form>
         <div class="vault-records" id="local-vault-records"></div>
+        <dialog class="resource-detail" id="host-detail-dialog" aria-labelledby="host-detail-title">
+          <form method="dialog" class="resource-detail-card">
+            <div class="resource-detail-heading">
+              <div><p class="eyebrow">HOST · PERSONAL VAULT</p><h3 id="host-detail-title">Host</h3></div>
+              <button type="submit" class="secondary" aria-label="Закрыть карточку Host">Закрыть</button>
+            </div>
+            <dl class="resource-detail-fields">
+              <div><dt>Адрес</dt><dd id="host-detail-address">—</dd></div>
+              <div><dt>Изменён</dt><dd id="host-detail-modified">—</dd></div>
+              <div><dt>Источник</dt><dd>Personal Vault · расшифровано только в браузере</dd></div>
+            </dl>
+            <section class="resource-detail-next">
+              <h4>Удалённое выполнение</h4>
+              <p>Для запуска Snippet потребуется доверенный онлайн‑Mac. Cloud не получает SSH‑пароль или приватный ключ.</p>
+              <span class="resource-readiness">Агент выполнения ещё не подключён</span>
+            </section>
+          </form>
+        </dialog>
         <section class="vault-conflicts" id="local-vault-conflicts" aria-labelledby="local-vault-conflicts-title" hidden>
           <h3 id="local-vault-conflicts-title">Требуется разрешить конфликты</h3>
           <p>Выберите одну версию для каждой записи. Секретные поля и содержимое записей здесь не показываются.</p>
