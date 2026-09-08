@@ -14,9 +14,12 @@ struct CloudSettingsView: View {
     @State private var teams: [SelectiveRemoteCloudTeam] = []
     @State private var vaultsByTeam: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
     @State private var accountErrorMessage: String?
+    @State private var registrationErrorMessage: String?
+    @State private var registeredEmail: String?
     @State private var inventoryErrorMessage: String?
     @State private var accountEndpoint: String?
-    @State private var showsSignIn = false
+    @State private var showsAccountSheet = false
+    @State private var accountSheetMode = AccountSheetMode.signIn
     @State private var showsConflictReview = false
     @State private var conflictReviewMessage: String?
 
@@ -108,10 +111,36 @@ struct CloudSettingsView: View {
                         systemImage: "person.crop.circle.badge.checkmark"
                     ) {
                         accountErrorMessage = nil
-                        showsSignIn = true
+                        registrationErrorMessage = nil
+                        registeredEmail = nil
+                        accountSheetMode = .signIn
+                        showsAccountSheet = true
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(accountPhase.isBusy)
+
+                    if metadata?.registrationEnabled == true {
+                        Button(
+                            UpdateLocalization.text(ru: "Создать аккаунт…", en: "Create Account…"),
+                            systemImage: "person.crop.circle.badge.plus"
+                        ) {
+                            registrationErrorMessage = nil
+                            registeredEmail = nil
+                            accountSheetMode = .registration
+                            showsAccountSheet = true
+                        }
+                        .disabled(accountPhase.isBusy)
+                    } else if metadata?.registrationEnabled == false {
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Регистрация новых аккаунтов на этом сервере отключена. Войти можно только с уже созданным и подтверждённым аккаунтом.",
+                                en: "New-account registration is disabled on this server. You can only sign in with an existing verified account."
+                            ),
+                            systemImage: "person.crop.circle.badge.exclamationmark"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
 
                 if let accountErrorMessage {
@@ -186,10 +215,10 @@ struct CloudSettingsView: View {
         }
         .formStyle(.grouped)
         .task {
-            await restoreStoredSessionIfNeeded()
+            await loadCloudStateIfNeeded()
         }
-        .sheet(isPresented: $showsSignIn) {
-            signInSheet
+        .sheet(isPresented: $showsAccountSheet) {
+            accountSheet
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
@@ -212,6 +241,12 @@ struct CloudSettingsView: View {
             HStack(spacing: 7) {
                 ProgressView().controlSize(.small)
                 Text(UpdateLocalization.text(ru: "Вход…", en: "Signing in…"))
+            }
+            .foregroundStyle(.secondary)
+        case .registering:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(UpdateLocalization.text(ru: "Создание аккаунта…", en: "Creating account…"))
             }
             .foregroundStyle(.secondary)
         case .signedIn:
@@ -249,39 +284,82 @@ struct CloudSettingsView: View {
     }
 
     private func checkConnection() {
+        Task { @MainActor in
+            await loadCloudState(force: true)
+        }
+    }
+
+    @MainActor
+    private func loadCloudStateIfNeeded() async {
+        guard phase == .idle else { return }
+        await loadCloudState(force: false)
+    }
+
+    @MainActor
+    private func loadCloudState(force: Bool) async {
         phase = .checking
         metadata = nil
         errorMessage = nil
-        Task { @MainActor in
-            do {
-                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
-                endpoint = url.absoluteString
-                metadata = try await client.metadata(endpoint: url)
-                phase = .available
-                await restoreStoredSession(at: url, force: true)
-            } catch {
-                errorMessage = error.localizedDescription
-                phase = .failed
-            }
+        do {
+            let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+            endpoint = url.absoluteString
+            metadata = try await client.metadata(endpoint: url)
+            phase = .available
+            await restoreStoredSession(at: url, force: force)
+        } catch {
+            errorMessage = error.localizedDescription
+            phase = .failed
         }
     }
 
     @ViewBuilder
-    private var signInSheet: some View {
+    private var accountSheet: some View {
         if let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) {
-            SelectiveRemoteCloudSignInView(
-                endpoint: url,
-                isSigningIn: accountPhase == .signingIn,
-                errorMessage: accountErrorMessage,
-                onCancel: {
-                    guard accountPhase != .signingIn else { return }
-                    showsSignIn = false
-                    accountErrorMessage = nil
-                },
-                onSignIn: { email, password in
-                    signIn(email: email, password: password, endpoint: url)
+            switch accountSheetMode {
+            case .signIn:
+                SelectiveRemoteCloudSignInView(
+                    endpoint: url,
+                    registrationEnabled: metadata?.registrationEnabled,
+                    isSigningIn: accountPhase == .signingIn,
+                    errorMessage: accountErrorMessage,
+                    onCancel: closeAccountSheet,
+                    onCreateAccount: {
+                        registrationErrorMessage = nil
+                        registeredEmail = nil
+                        accountSheetMode = .registration
+                    },
+                    onSignIn: { email, password in
+                        signIn(email: email, password: password, endpoint: url)
+                    }
+                )
+            case .registration:
+                if let registeredEmail {
+                    SelectiveRemoteCloudRegistrationConfirmationView(
+                        email: registeredEmail,
+                        onDone: closeAccountSheet
+                    )
+                } else {
+                    SelectiveRemoteCloudRegistrationView(
+                        endpoint: url,
+                        isRegistering: accountPhase == .registering,
+                        errorMessage: registrationErrorMessage,
+                        onBack: {
+                            guard accountPhase != .registering else { return }
+                            registrationErrorMessage = nil
+                            accountSheetMode = .signIn
+                        },
+                        onCancel: closeAccountSheet,
+                        onRegister: { displayName, email, password in
+                            register(
+                                displayName: displayName,
+                                email: email,
+                                password: password,
+                                endpoint: url
+                            )
+                        }
+                    )
                 }
-            )
+            }
         } else {
             ContentUnavailableView(
                 UpdateLocalization.text(ru: "Некорректный адрес Cloud", en: "Invalid Cloud Address"),
@@ -291,9 +369,12 @@ struct CloudSettingsView: View {
         }
     }
 
-    private func restoreStoredSessionIfNeeded() async {
-        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return }
-        await restoreStoredSession(at: url, force: false)
+    private func closeAccountSheet() {
+        guard !accountPhase.isBusy else { return }
+        showsAccountSheet = false
+        accountErrorMessage = nil
+        registrationErrorMessage = nil
+        registeredEmail = nil
     }
 
     @MainActor
@@ -328,11 +409,41 @@ struct CloudSettingsView: View {
                 )
                 accountEndpoint = url.absoluteString
                 accountPhase = .signedIn
-                showsSignIn = false
+                showsAccountSheet = false
                 await loadInventory(endpoint: url)
             } catch {
                 accountPhase = .signedOut
                 accountErrorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func register(displayName: String, email: String, password: String, endpoint url: URL) {
+        guard metadata?.registrationEnabled == true else {
+            registrationErrorMessage = UpdateLocalization.text(
+                ru: "Регистрация новых аккаунтов отключена на этом сервере.",
+                en: "New-account registration is disabled on this server."
+            )
+            return
+        }
+        accountPhase = .registering
+        registrationErrorMessage = nil
+        Task { @MainActor in
+            do {
+                let deviceID = resolvedDeviceID()
+                let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
+                try await client.register(
+                    endpoint: url,
+                    displayName: displayName,
+                    email: email,
+                    password: password,
+                    device: .thisMac(id: deviceID, publicKey: identity.publicKey)
+                )
+                registeredEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+                accountPhase = .signedOut
+            } catch {
+                accountPhase = .signedOut
+                registrationErrorMessage = error.localizedDescription
             }
         }
     }
@@ -455,17 +566,23 @@ struct CloudSettingsView: View {
         case failed
     }
 
+    private enum AccountSheetMode {
+        case signIn
+        case registration
+    }
+
     private enum AccountPhase: Equatable {
         case signedOut
         case restoring
         case signingIn
+        case registering
         case signedIn
         case refreshing
         case signingOut
 
         var isBusy: Bool {
             switch self {
-            case .restoring, .signingIn, .refreshing, .signingOut: true
+            case .restoring, .signingIn, .registering, .refreshing, .signingOut: true
             case .signedOut, .signedIn: false
             }
         }

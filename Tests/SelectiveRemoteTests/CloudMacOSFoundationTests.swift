@@ -72,6 +72,76 @@ struct CloudMacOSFoundationTests {
         #expect(try store.token(for: endpoint) == nil)
     }
 
+    @Test("registration sends the device public identity and requires exact verification response")
+    func registrationFoundation() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        let stub = CloudHTTPStub { request in
+            #expect(request.httpMethod == "POST")
+            #expect(request.url?.path == "/v1/auth/register")
+            let body = try #require(request.httpBody)
+            let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+            #expect(Set(object.keys) == ["email", "password", "displayName", "device"])
+            #expect(object["email"] as? String == "user@example.invalid")
+            #expect(object["password"] as? String == "synthetic-password")
+            #expect(object["displayName"] as? String == "User")
+            let device = try #require(object["device"] as? [String: Any])
+            #expect(device["id"] as? String == deviceID.canonicalCloudString)
+            #expect(device["name"] as? String == "Synthetic Mac")
+            #expect(device["platform"] as? String == "macos")
+            return Self.response(request, status: 201, json: ["verificationRequired": true])
+        }
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in try stub.data(for: request) }
+        )
+
+        try await client.register(
+            endpoint: endpoint,
+            displayName: " User ",
+            email: " user@example.invalid ",
+            password: "synthetic-password",
+            device: .thisMac(id: deviceID, name: "Synthetic Mac")
+        )
+        #expect(try store.token(for: endpoint) == nil)
+    }
+
+    @Test("registration rejects an extended or false verification response")
+    func registrationRejectsInvalidResponses() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let invalidResponses: [[String: Any]] = [
+            ["verificationRequired": false],
+            ["verificationRequired": true, "unexpected": true]
+        ]
+        for json in invalidResponses {
+            let payload = try JSONSerialization.data(withJSONObject: json)
+            let client = SelectiveRemoteCloudAPIClient(
+                tokenStore: SelectiveRemoteCloudMemoryTokenStore(),
+                dataLoader: { request in
+                    let url = try #require(request.url)
+                    let response = try #require(HTTPURLResponse(
+                        url: url,
+                        statusCode: 201,
+                        httpVersion: nil,
+                        headerFields: ["Content-Type": "application/json"]
+                    ))
+                    return (payload, response)
+                }
+            )
+            await #expect(throws: SelectiveRemoteCloudError.invalidResponse) {
+                try await client.register(
+                    endpoint: endpoint,
+                    displayName: "User",
+                    email: "user@example.invalid",
+                    password: "synthetic-password",
+                    device: .thisMac(id: deviceID, name: "Synthetic Mac")
+                )
+            }
+        }
+    }
+
     @Test("macOS account inventory rejects extended user and Team responses")
     func accountInventoryRejectsExtendedResponses() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")

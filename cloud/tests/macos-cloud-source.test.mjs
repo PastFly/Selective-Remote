@@ -111,6 +111,10 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   ]);
   assert.match(accountViews, /SecureField/);
   assert.doesNotMatch(accountViews, /@AppStorage/);
+  assert.match(accountViews, /Create New Account/);
+  assert.match(accountViews, /Registration is currently disabled on this server/);
+  assert.match(accountViews, /Confirm Password/);
+  assert.match(accountViews, /Verify Your Email/);
   assert.match(settings, /identityManager\.identity/);
   assert.match(settings, /publicKey: identity\.publicKey/);
   assert.match(settings, /restoreStoredSession/);
@@ -118,7 +122,11 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   assert.match(settings, /client\.teams/);
   assert.match(settings, /client\.sharedVaults/);
   assert.match(settings, /client\.logout/);
+  assert.match(settings, /client\.register/);
+  assert.match(settings, /metadata\?\.registrationEnabled == true/);
   assert.match(accountViews, /Teams & Shared Vaults/);
+  assert.match(client, /v1\/auth\/register/);
+  assert.match(client, /verificationRequired/);
   assert.match(client, /validLoginJSON/);
   assert.match(client, /validTeamsJSON/);
   assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
