@@ -140,6 +140,7 @@
           <button type="button" data-workspace-target="local-vault">Personal Vault</button>
           <button type="button" data-workspace-target="team-vault">Teams и Vaults</button>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
+          <button type="button" data-workspace-target="workspace-settings">Настройки</button>
         </nav>
         <div class="workspace-security"><span>●</span> E2EE включено</div>
       </aside>
@@ -269,6 +270,27 @@
         </div>
         <div class="team-devices" id="team-devices"></div>
       </div>
+    </section>
+
+    <section class="workspace-panel workspace-settings" id="workspace-settings" hidden>
+      <div class="vault-heading">
+        <div><p class="eyebrow">ACCOUNT SETTINGS</p><h2>Настройки аккаунта</h2></div>
+        <p>Управление аккаунтом Selective Remote Cloud.</p>
+      </div>
+      <section class="account-danger-zone" aria-labelledby="account-delete-title">
+        <h3 id="account-delete-title">Удалить аккаунт</h3>
+        <p>Будут безвозвратно удалены Personal Vault, устройства и все сессии. Доступ к Team Vaults будет отозван.</p>
+        <p class="account-delete-warning">Если вы Owner активной Team, сначала передайте владение другому участнику или архивируйте Team.</p>
+        <form id="account-delete-form">
+          <label for="account-delete-email">Введите точный email аккаунта</label>
+          <input id="account-delete-email" name="email" type="email" maxlength="254" autocomplete="email" required>
+          <label for="account-delete-password">Текущий пароль</label>
+          <input id="account-delete-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+          <label class="account-delete-confirmation"><input name="confirmation" type="checkbox" required> Я понимаю, что Personal Vault и аккаунт восстановить нельзя.</label>
+          <button type="submit" class="danger">Удалить аккаунт безвозвратно</button>
+          <p id="account-delete-message" aria-live="polite"></p>
+        </form>
+      </section>
     </section>
 
     <section class="team-vault workspace-panel" id="team-vault" aria-labelledby="team-vault-title" hidden>

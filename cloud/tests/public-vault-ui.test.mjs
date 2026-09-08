@@ -116,6 +116,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="workspace-overview"/u);
   assert.match(html, /data-workspace-target="local-vault"/u);
   assert.match(html, /data-workspace-target="workspace-devices"/u);
+  assert.match(html, /data-workspace-target="workspace-settings"/u);
+  assert.match(html, /id="account-delete-form"/u);
+  assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /data-record-filter="host"/u);
   assert.match(html, /data-record-filter="credential"/u);
   assert.match(html, /data-record-filter="snippet"/u);
@@ -124,6 +127,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
   assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /client\.deleteAccount/u);
+  assert.match(application, /account_owns_teams/u);
   assert.match(application, /URLSearchParams\(locationValue\.search\)/u);
   assert.match(application, /requestedAuthMode === "login" \|\| requestedAuthMode === "registration"/u);
   assert.match(application, /setPath\("\/login"/u);

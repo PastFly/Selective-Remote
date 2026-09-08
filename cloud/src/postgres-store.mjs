@@ -16,6 +16,71 @@ export class PostgresStore {
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
 
+  async deleteAccount(userID) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const user = await client.query(
+        "SELECT id FROM users WHERE id = $1 AND disabled_at IS NULL FOR UPDATE",
+        [userID],
+      );
+      if (!user.rows[0]) throw new Error("account_not_found");
+      const ownerships = await client.query(
+        `SELECT team.name FROM team_memberships AS member
+         JOIN teams AS team ON team.id = member.team_id AND team.archived_at IS NULL
+         WHERE member.user_id = $1 AND member.role = 'owner' AND member.revoked_at IS NULL
+         ORDER BY team.id FOR UPDATE`,
+        [userID],
+      );
+      if (ownerships.rows[0]) throw new Error("account_owns_teams");
+      const memberships = await client.query(
+        `SELECT member.id, member.team_id, member.role, member.epoch
+         FROM team_memberships AS member
+         JOIN teams AS team ON team.id = member.team_id AND team.archived_at IS NULL
+         WHERE member.user_id = $1 AND member.revoked_at IS NULL
+         ORDER BY member.team_id, member.id FOR UPDATE`,
+        [userID],
+      );
+      for (const membership of memberships.rows) {
+        await client.query(
+          `UPDATE team_memberships SET revoked_at = now(), revoked_by_user_id = NULL
+           WHERE id = $1 AND revoked_at IS NULL`,
+          [membership.id],
+        );
+        const affected = await client.query(
+          `WITH affected AS (
+             UPDATE shared_vaults SET rotation_required = true, updated_at = now()
+             WHERE team_id = $1 AND archived_at IS NULL
+             RETURNING id, key_generation
+           )
+           INSERT INTO shared_vault_rotation_tasks
+             (vault_id, from_generation, removed_membership_id)
+           SELECT id, key_generation, $2 FROM affected
+           ON CONFLICT (vault_id, from_generation, removed_membership_id) DO NOTHING
+           RETURNING vault_id AS id`,
+          [membership.team_id, membership.id],
+        );
+        await writeTeamAudit(client, {
+          teamID: membership.team_id,
+          actorUserID: null,
+          action: "team.member_account_deleted",
+          targetUserID: userID,
+          targetMembershipID: membership.id,
+          metadata: { role: membership.role, epoch: Number(membership.epoch), affectedVaults: affected.rowCount },
+        });
+      }
+      const removed = await client.query("DELETE FROM users WHERE id = $1 RETURNING id", [userID]);
+      if (!removed.rows[0]) throw new Error("account_not_found");
+      await client.query("COMMIT");
+      return { deleted: true };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async createUser({ email, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
     try {

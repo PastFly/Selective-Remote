@@ -228,6 +228,22 @@ export class CloudService {
     return this.store.session(hashSessionToken(token, this.config.sessionPepper));
   }
 
+  async deleteAccount(session, input) {
+    const confirmedEmail = normalizeEmail(input?.email);
+    if (confirmedEmail !== session.email) throw new Error("account_email_mismatch");
+    const password = validatePassword(input?.password);
+    const identity = await this.store.passwordIdentity(session.email);
+    const passwordMatches = await this.passwordVerifier(
+      password,
+      identity?.password_hash ?? invalidLoginPasswordHash,
+    );
+    if (!identity || identity.id !== session.user_id || identity.disabled_at || !passwordMatches) {
+      throw new Error("invalid_credentials");
+    }
+    await this.store.deleteAccount(session.user_id);
+    return { deleted: true };
+  }
+
   async getVault(session) {
     const vault = await this.store.getVault(session.user_id);
     if (!vault) throw new Error("vault_missing");

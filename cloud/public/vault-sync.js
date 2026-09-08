@@ -486,6 +486,24 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       }
     },
 
+    async deleteAccount({ email, password }) {
+      const response = await authorizedRequest("/v1/me", {
+        method: "DELETE",
+        body: JSON.stringify({ email: String(email ?? "").trim(), password: normalizedPassword(password) }),
+      });
+      const result = await responseJSON(response, "account_delete_failed");
+      if (!response.ok) {
+        const code = ["invalid_credentials", "account_email_mismatch", "account_owns_teams"].includes(result.error)
+          ? result.error : "account_delete_failed";
+        throw new Error(code);
+      }
+      if (result.deleted !== true || Object.keys(result).length !== 1) throw new Error("account_delete_failed");
+      token = null;
+      user = null;
+      currentDeviceID = null;
+      return { deleted: true };
+    },
+
     async listDevices() {
       const response = await authorizedRequest("/v1/devices");
       const result = await responseJSON(response, "devices_download_failed");

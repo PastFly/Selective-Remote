@@ -1090,6 +1090,8 @@ export async function initializeCloudAccount({
   const accountName = documentValue.querySelector("#cloud-account-name");
   const message = documentValue.querySelector("#cloud-account-message");
   const logoutButton = documentValue.querySelector("#cloud-logout");
+  const deleteAccountForm = documentValue.querySelector("#account-delete-form");
+  const deleteAccountMessage = documentValue.querySelector("#account-delete-message");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
   const vaultMessage = documentValue.querySelector("#local-vault-message");
   const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
@@ -1324,6 +1326,38 @@ export async function initializeCloudAccount({
     }
   });
 
+  deleteAccountForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const currentUser = client.session();
+    const email = deleteAccountForm.elements.email.value.trim().toLowerCase();
+    const button = deleteAccountForm.querySelector('button[type="submit"]');
+    if (!currentUser || email !== currentUser.email.toLowerCase()) {
+      setText(deleteAccountMessage, "Email должен точно совпадать с адресом текущего аккаунта.");
+      return;
+    }
+    if (!globalThis.confirm(`Безвозвратно удалить аккаунт ${currentUser.email}?`)) return;
+    button.disabled = true;
+    try {
+      await client.deleteAccount({ email, password: deleteAccountForm.elements.password.value });
+      deleteAccountForm.reset();
+      teamWorkspace?.deactivate();
+      hideConflicts();
+      await vaultUI.hideRecoveryAndRestoreMode();
+      showSession(null);
+      setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
+    } catch (error) {
+      const messages = {
+        invalid_credentials: "Текущий пароль неверен.",
+        account_email_mismatch: "Email не совпадает с адресом аккаунта.",
+        account_owns_teams: "Сначала передайте владение активной Team или архивируйте её.",
+      };
+      setText(deleteAccountMessage, messages[String(error?.message ?? "")] ?? "Аккаунт не удалён. Повторите попытку позже.");
+    } finally {
+      deleteAccountForm.elements.password.value = "";
+      button.disabled = false;
+    }
+  });
+
   syncButton.addEventListener("click", async () => {
     syncButton.disabled = true;
     try {
@@ -1442,6 +1476,7 @@ export function initializePortalNavigation({
     "local-vault": "Personal Vault",
     "team-vault": "Teams и Vaults",
     "workspace-devices": "Устройства",
+    "workspace-settings": "Настройки",
   };
   let sessionActive = false;
 

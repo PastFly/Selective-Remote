@@ -14,8 +14,18 @@ test("numbered migrations have stable checksums", async () => {
     { version: 4, name: "004_password_reset.sql" },
     { version: 5, name: "005_team_foundation.sql" },
     { version: 6, name: "006_team_vault_crypto.sql" },
+    { version: 7, name: "007_account_deletion.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("account deletion preserves Team history while removing account-owned secrets", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const deletion = migrations.find(({ version }) => version === 7);
+  assert.match(deletion.sql, /team_memberships[\s\S]*user_id[\s\S]*ON DELETE SET NULL/u);
+  assert.match(deletion.sql, /shared_vault_revisions[\s\S]*updated_by_device_id[\s\S]*ON DELETE SET NULL/u);
+  assert.match(deletion.sql, /shared_vault_key_wrappers[\s\S]*created_by_device_id[\s\S]*ON DELETE SET NULL/u);
+  assert.doesNotMatch(deletion.sql, /DROP TABLE|TRUNCATE/u);
 });
 
 test("Team Vault crypto migration persists ciphertext, device wrappers and rotation subjects", async () => {

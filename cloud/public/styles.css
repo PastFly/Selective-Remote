@@ -107,6 +107,7 @@ body { margin:0; min-height:100vh; background:radial-gradient(circle at 70% 15%,
 .team-lifecycle-forms { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:16px; }
 .team-lifecycle form { display:grid; align-content:start; gap:10px; padding:16px; border:1px solid var(--line); border-radius:12px; }
 .team-lifecycle .team-danger-zone { border-color:#ff8f7a66; }
+.account-danger-zone { margin-top:24px; padding:24px; border:1px solid #ff8f7a66; border-radius:16px; background:#2b100d; }.account-danger-zone h3 { margin-top:0; color:#ffb4a6; }.account-danger-zone form { display:grid; gap:10px; max-width:620px; margin-top:20px; }.account-danger-zone input[type="email"],.account-danger-zone input[type="password"] { width:100%; box-sizing:border-box; }.account-delete-warning,#account-delete-message { color:#ffd58f; }.account-delete-confirmation { display:flex; gap:10px; align-items:flex-start; margin:8px 0; }.account-danger-zone button.danger { justify-self:start; border:1px solid #ff8f7a88; background:#b93f32; color:white; }
 .vault-heading,.vault-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:32px; }
 .vault-heading h2,.vault-toolbar h3 { margin:8px 0 0; }.vault-heading>p,.vault-toolbar p,.vault-panel>p { max-width:520px; color:var(--muted); line-height:1.55; margin:0; }
 .vault-panel,.vault-workspace { margin-top:28px; padding-top:28px; border-top:1px solid var(--line); }.vault-panel h3 { margin-top:0; }
