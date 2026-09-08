@@ -116,6 +116,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="workspace-overview"/u);
   assert.match(html, /data-workspace-target="local-vault"/u);
   assert.match(html, /data-workspace-target="workspace-devices"/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="teams"/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults"/u);
+  assert.match(html, /id="personal-host-detail"[^>]*hidden/u);
+  assert.match(html, /id="personal-host-detail-target"/u);
+  assert.match(html, /Требуется trusted agent/u);
   assert.match(html, /data-record-filter="host"/u);
   assert.match(html, /data-record-filter="credential"/u);
   assert.match(html, /data-record-filter="snippet"/u);
@@ -128,6 +133,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /requestedAuthMode === "login" \|\| requestedAuthMode === "registration"/u);
   assert.match(application, /setPath\("\/login"/u);
   assert.match(application, /setPath\("\/app"/u);
+  assert.match(application, /function openHostDetail\(record\)/u);
+  assert.match(application, /button\.dataset\.teamView/u);
   assert.match(server, /\["\/", "\/login", "\/app"\]\.includes\(pathname\)/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);

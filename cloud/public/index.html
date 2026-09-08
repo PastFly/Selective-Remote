@@ -137,9 +137,16 @@
         <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
         <nav aria-label="Разделы Cloud">
           <button type="button" class="active" data-workspace-target="workspace-overview">Обзор</button>
-          <button type="button" data-workspace-target="local-vault">Personal Vault</button>
-          <button type="button" data-workspace-target="team-vault">Teams и Vaults</button>
-          <button type="button" data-workspace-target="workspace-devices">Устройства</button>
+          <p>Данные</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="host">Hosts</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Credentials</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="snippet">Snippets</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
+          <p>Хранилища</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="teams">Teams</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Shared Vaults</button>
+          <button type="button" data-workspace-target="workspace-devices">Devices</button>
         </nav>
         <div class="workspace-security"><span>●</span> E2EE включено</div>
       </aside>
@@ -229,6 +236,22 @@
           <button type="button" data-record-filter="snippet">Snippets</button>
           <button type="button" data-record-filter="forwarding">Forwarding</button>
         </nav>
+        <section class="host-detail" id="personal-host-detail" aria-labelledby="personal-host-detail-title" hidden>
+          <button type="button" class="secondary" id="personal-host-detail-back">← Все Hosts</button>
+          <div class="host-detail-heading">
+            <div><p class="eyebrow">HOST · PERSONAL VAULT</p><h3 id="personal-host-detail-title">Host</h3></div>
+            <p id="personal-host-detail-meta"></p>
+          </div>
+          <dl>
+            <div><dt>Адрес</dt><dd id="personal-host-detail-target">—</dd></div>
+            <div><dt>Credential</dt><dd>Связывается локально на доверенном устройстве</dd></div>
+            <div><dt>Синхронизация</dt><dd>Зашифрованная ревизия Personal Vault</dd></div>
+          </dl>
+          <div class="host-execution-preview">
+            <div><h4>Запустить Snippet</h4><p>Безопасный удалённый запуск появится после подключения доверенного Mac-агента. Cloud не получит SSH-пароль, ключ, команду или открытый результат.</p></div>
+            <button type="button" disabled>Требуется trusted agent</button>
+          </div>
+        </section>
         <form class="record-form" id="local-vault-record-form">
           <label for="local-record-type">Тип записи</label>
           <select id="local-record-type" name="type">

@@ -129,10 +129,34 @@ export async function initializeLocalVault({
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
+  const filters = documentValue.querySelector("#personal-vault-filters");
+  const hostDetail = documentValue.querySelector("#personal-host-detail");
+  const hostDetailBack = documentValue.querySelector("#personal-host-detail-back");
+  const hostDetailTitle = documentValue.querySelector("#personal-host-detail-title");
+  const hostDetailTarget = documentValue.querySelector("#personal-host-detail-target");
+  const hostDetailMeta = documentValue.querySelector("#personal-host-detail-meta");
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
   let activeRecordFilter = "all";
+
+  function closeHostDetail() {
+    hostDetail.hidden = true;
+    filters.hidden = false;
+    recordForm.hidden = false;
+    records.hidden = false;
+  }
+
+  function openHostDetail(record) {
+    if (record.type !== "host") return;
+    setText(hostDetailTitle, String(record.data.title ?? "Без названия"));
+    setText(hostDetailTarget, String(record.data.target ?? "—"));
+    setText(hostDetailMeta, `Изменён ${record.modifiedAt}`);
+    filters.hidden = true;
+    recordForm.hidden = true;
+    records.hidden = true;
+    hostDetail.hidden = false;
+  }
 
   function clearConflictUI() {
     conflictPanel.hidden = true;
@@ -174,6 +198,7 @@ export async function initializeLocalVault({
   }
 
   function render() {
+    closeHostDetail();
     const current = controller.document();
     const counts = { host: 0, credential: 0, snippet: 0, forwarding: 0 };
     for (const record of current.records) {
@@ -201,6 +226,7 @@ export async function initializeLocalVault({
       const summary = documentValue.createElement("p");
       const metadata = documentValue.createElement("small");
       const remove = documentValue.createElement("button");
+      const open = record.type === "host" ? documentValue.createElement("button") : null;
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
       metadata.textContent = `${record.type} · ${record.modifiedAt}`;
@@ -220,7 +246,15 @@ export async function initializeLocalVault({
           remove.disabled = false;
         }
       });
-      card.append(heading, summary, metadata, remove);
+      if (open) {
+        open.type = "button";
+        open.className = "secondary";
+        open.textContent = "Открыть";
+        open.addEventListener("click", () => openHostDetail(record));
+      }
+      card.append(heading, summary, metadata);
+      if (open) card.append(open);
+      card.append(remove);
       records.append(card);
     }
   }
@@ -289,6 +323,7 @@ export async function initializeLocalVault({
   });
 
   type.addEventListener("change", updateLabels);
+  hostDetailBack.addEventListener("click", closeHostDetail);
   for (const button of filterButtons) {
     button.addEventListener("click", () => {
       activeRecordFilter = button.dataset.recordFilter || "all";
@@ -1440,8 +1475,8 @@ export function initializePortalNavigation({
   const titles = {
     "workspace-overview": "Обзор",
     "local-vault": "Personal Vault",
-    "team-vault": "Teams и Vaults",
-    "workspace-devices": "Устройства",
+    "team-vault": "Teams",
+    "workspace-devices": "Devices",
   };
   let sessionActive = false;
 
@@ -1451,11 +1486,19 @@ export function initializePortalNavigation({
     historyValue[method]?.({}, "", path);
   }
 
-  function selectWorkspacePanel(target, recordFilter = null) {
+  function selectWorkspacePanel(target, recordFilter = null, teamView = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
-    for (const button of sidebarButtons) button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
-    setText(workspaceTitle, titles[panelID]);
+    for (const button of sidebarButtons) {
+      const samePanel = button.dataset.workspaceTarget === panelID;
+      const sameFilter = panelID !== "local-vault" || (button.dataset.recordFilter || "all") === (recordFilter || "all");
+      const sameTeamView = panelID !== "team-vault" || (button.dataset.teamView || "teams") === (teamView || "teams");
+      button.classList.toggle("active", samePanel && sameFilter && sameTeamView);
+    }
+    const resourceTitles = { host: "Hosts", credential: "Credentials", snippet: "Snippets", forwarding: "Forwarding", all: "Personal Vault" };
+    setText(workspaceTitle, panelID === "local-vault"
+      ? (resourceTitles[recordFilter || "all"] || titles[panelID])
+      : panelID === "team-vault" && teamView === "vaults" ? "Shared Vaults" : titles[panelID]);
     if (recordFilter) vaultUI?.setFilter(recordFilter);
   }
 
@@ -1507,6 +1550,7 @@ export function initializePortalNavigation({
     button.addEventListener("click", () => selectWorkspacePanel(
       button.dataset.workspaceTarget,
       button.dataset.recordFilter || null,
+      button.dataset.teamView || null,
     ));
   }
 
