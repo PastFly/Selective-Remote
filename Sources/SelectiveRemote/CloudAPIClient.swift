@@ -37,10 +37,33 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
                 en: "Cloud returned an invalid response."
             )
         case let .serviceError(status, code):
-            UpdateLocalization.text(
-                ru: "Cloud недоступен (HTTP \(status)\(code.map { ": \($0)" } ?? "")).",
-                en: "Cloud is unavailable (HTTP \(status)\(code.map { ": \($0)" } ?? ""))."
-            )
+            switch code {
+            case "invalid_credentials":
+                UpdateLocalization.text(
+                    ru: "Неверная электронная почта или пароль.",
+                    en: "The email or password is incorrect."
+                )
+            case "email_not_verified":
+                UpdateLocalization.text(
+                    ru: "Сначала подтвердите электронную почту по ссылке из письма.",
+                    en: "Verify your email using the link in the message first."
+                )
+            case "registration_disabled":
+                UpdateLocalization.text(
+                    ru: "Регистрация новых аккаунтов отключена на этом сервере.",
+                    en: "New-account registration is disabled on this server."
+                )
+            case "smtp_not_configured":
+                UpdateLocalization.text(
+                    ru: "Сервер ещё не настроен для отправки письма подтверждения.",
+                    en: "The server is not configured to send verification email yet."
+                )
+            default:
+                UpdateLocalization.text(
+                    ru: "Cloud недоступен (HTTP \(status)\(code.map { ": \($0)" } ?? "")).",
+                    en: "Cloud is unavailable (HTTP \(status)\(code.map { ": \($0)" } ?? ""))."
+                )
+            }
         case let .incompatibleAPI(version):
             UpdateLocalization.text(
                 ru: "Версия Cloud API \(version) пока не поддерживается.",
@@ -308,6 +331,55 @@ actor SelectiveRemoteCloudAPIClient {
         else { throw SelectiveRemoteCloudError.invalidResponse }
         try tokenStore.saveToken(result.token, for: endpoint)
         return result.user
+    }
+
+    func register(
+        endpoint: URL,
+        displayName: String,
+        email: String,
+        password: String,
+        device: SelectiveRemoteCloudDeviceRegistration
+    ) async throws {
+        let normalizedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDeviceName = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedDisplayName.isEmpty, normalizedDisplayName.count <= 120,
+              !normalizedEmail.isEmpty, normalizedEmail.count <= 254,
+              password.count >= 12, password.count <= 1_024,
+              !normalizedDeviceName.isEmpty, normalizedDeviceName.count <= 120,
+              !device.platform.isEmpty, device.platform.count <= 80,
+              device.appVersion.count <= 40
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+
+        let body = RegistrationRequest(
+            email: normalizedEmail,
+            password: password,
+            displayName: normalizedDisplayName,
+            device: .init(
+                id: device.id,
+                name: normalizedDeviceName,
+                platform: device.platform,
+                appVersion: device.appVersion,
+                publicKey: device.publicKey
+            )
+        )
+        let request = JSONRequest(
+            url: endpoint.appending(path: "v1/auth/register"),
+            method: "POST",
+            body: try encoder.encode(body)
+        ).value
+        let (data, response) = try await dataLoader(request)
+        let http = try httpResponse(response)
+        guard http.statusCode == 201 else {
+            throw serviceError(status: http.statusCode, data: data)
+        }
+        guard Self.exactKeys(
+            try? JSONSerialization.jsonObject(with: data),
+            expected: ["verificationRequired"]
+        ),
+        let result = try? decoder.decode(RegistrationResponse.self, from: data),
+        result.verificationRequired
+        else { throw SelectiveRemoteCloudError.invalidResponse }
     }
 
     func currentUser(endpoint: URL) async throws -> SelectiveRemoteCloudUser {
@@ -697,6 +769,17 @@ private struct LoginRequest: Encodable {
     var email: String
     var password: String
     var device: SelectiveRemoteCloudDeviceRegistration
+}
+
+private struct RegistrationRequest: Encodable {
+    var email: String
+    var password: String
+    var displayName: String
+    var device: SelectiveRemoteCloudDeviceRegistration
+}
+
+private struct RegistrationResponse: Decodable {
+    var verificationRequired: Bool
 }
 
 private struct LoginResponse: Decodable {

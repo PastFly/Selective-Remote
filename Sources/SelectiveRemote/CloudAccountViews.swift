@@ -2,9 +2,11 @@ import SwiftUI
 
 struct SelectiveRemoteCloudSignInView: View {
     let endpoint: URL
+    let registrationEnabled: Bool?
     let isSigningIn: Bool
     let errorMessage: String?
     let onCancel: () -> Void
+    let onCreateAccount: () -> Void
     let onSignIn: (String, String) -> Void
 
     @State private var email = ""
@@ -41,6 +43,37 @@ struct SelectiveRemoteCloudSignInView: View {
                     .foregroundStyle(.secondary)
                 }
 
+                Section {
+                    if registrationEnabled == true {
+                        Button(
+                            UpdateLocalization.text(ru: "Создать новый аккаунт…", en: "Create New Account…"),
+                            systemImage: "person.crop.circle.badge.plus",
+                            action: onCreateAccount
+                        )
+                        .disabled(isSigningIn)
+                    } else if registrationEnabled == false {
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Регистрация на этом сервере пока отключена. Для входа нужен уже созданный и подтверждённый аккаунт.",
+                                en: "Registration is currently disabled on this server. Sign-in requires an existing verified account."
+                            ),
+                            systemImage: "person.crop.circle.badge.exclamationmark"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    } else {
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Сначала проверьте соединение, чтобы узнать, разрешена ли регистрация.",
+                                en: "Check the connection first to learn whether registration is available."
+                            ),
+                            systemImage: "network"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
                 if let errorMessage {
                     Section {
                         Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
@@ -74,6 +107,136 @@ struct SelectiveRemoteCloudSignInView: View {
     private func submit() {
         guard canSubmit, !isSigningIn else { return }
         onSignIn(email, password)
+    }
+}
+
+struct SelectiveRemoteCloudRegistrationView: View {
+    let endpoint: URL
+    let isRegistering: Bool
+    let errorMessage: String?
+    let onBack: () -> Void
+    let onCancel: () -> Void
+    let onRegister: (String, String, String) -> Void
+
+    @State private var displayName = ""
+    @State private var email = ""
+    @State private var password = ""
+    @State private var confirmation = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField(UpdateLocalization.text(ru: "Имя", en: "Display Name"), text: $displayName)
+                        .textContentType(.name)
+                        .disabled(isRegistering)
+                    TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
+                        .textContentType(.emailAddress)
+                        .disabled(isRegistering)
+                    SecureField(UpdateLocalization.text(ru: "Новый пароль", en: "New Password"), text: $password)
+                        .textContentType(.newPassword)
+                        .disabled(isRegistering)
+                    SecureField(UpdateLocalization.text(ru: "Повторите пароль", en: "Confirm Password"), text: $confirmation)
+                        .textContentType(.newPassword)
+                        .disabled(isRegistering)
+                        .onSubmit(submit)
+                }
+
+                Section {
+                    LabeledContent(UpdateLocalization.text(ru: "Сервер", en: "Server")) {
+                        Text(endpoint.host ?? endpoint.absoluteString)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                    Label(
+                        UpdateLocalization.text(
+                            ru: "Используйте свою доступную почту и придумайте новый пароль минимум из 12 символов. После регистрации откройте письмо и подтвердите адрес.",
+                            en: "Use an email address you can access and create a new password of at least 12 characters. Then open the message and verify the address."
+                        ),
+                        systemImage: "envelope.badge.shield.half.filled"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if !confirmation.isEmpty, password != confirmation {
+                    Section {
+                        Label(
+                            UpdateLocalization.text(ru: "Пароли не совпадают.", en: "Passwords do not match."),
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
+                        .foregroundStyle(.orange)
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            .formStyle(.grouped)
+            .navigationTitle(UpdateLocalization.text(ru: "Регистрация в Cloud", en: "Create Cloud Account"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(UpdateLocalization.text(ru: "Назад", en: "Back"), action: onBack)
+                        .disabled(isRegistering)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(UpdateLocalization.text(ru: "Зарегистрироваться", en: "Register"), action: submit)
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!canSubmit || isRegistering)
+                }
+                ToolbarItem(placement: .automatic) {
+                    Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), action: onCancel)
+                        .disabled(isRegistering)
+                }
+            }
+        }
+        .frame(width: 540, height: 520)
+    }
+
+    private var canSubmit: Bool {
+        let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !name.isEmpty && name.count <= 120
+            && !mail.isEmpty && mail.count <= 254
+            && (12...1_024).contains(password.count)
+            && password == confirmation
+    }
+
+    private func submit() {
+        guard canSubmit, !isRegistering else { return }
+        onRegister(displayName, email, password)
+    }
+}
+
+struct SelectiveRemoteCloudRegistrationConfirmationView: View {
+    let email: String
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ContentUnavailableView {
+                Label(
+                    UpdateLocalization.text(ru: "Подтвердите почту", en: "Verify Your Email"),
+                    systemImage: "envelope.badge"
+                )
+            } description: {
+                Text(UpdateLocalization.text(
+                    ru: "Мы отправили одноразовую ссылку на \(email). Откройте её, затем вернитесь в приложение и войдите с созданным паролем.",
+                    en: "We sent a one-time link to \(email). Open it, then return to the app and sign in with the password you created."
+                ))
+            } actions: {
+                Button(UpdateLocalization.text(ru: "Готово", en: "Done"), action: onDone)
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(36)
+            .navigationTitle(UpdateLocalization.text(ru: "Аккаунт создан", en: "Account Created"))
+        }
+        .frame(width: 540, height: 360)
     }
 }
 
