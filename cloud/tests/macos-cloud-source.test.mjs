@@ -77,9 +77,10 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
 });
 
 test("Host context menu opens a real encrypted Team Vault share flow", async () => {
-  const [content, sharing] = await Promise.all([
+  const [content, sharing, coordinator] = await Promise.all([
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudProfileShareView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultSyncCoordinator.swift", sourceRoot), "utf8"),
   ]);
   assert.match(content, /Share with Team/);
   assert.match(content, /SelectiveRemoteCloudProfileShareView/);
@@ -88,6 +89,11 @@ test("Host context menu opens a real encrypted Team Vault share flow", async () 
   assert.match(sharing, /coordinator\.stage/);
   assert.match(sharing, /coordinator\.push/);
   assert.match(sharing, /without its saved password/);
+  assert.match(coordinator, /enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable/);
+  assert.match(coordinator, /case \.missingDeviceWrapper:[\s\S]*?не выдан ключ выбранного Team Vault/);
+  assert.match(sharing, /catch SelectiveRemoteTeamVaultSyncError\.missingDeviceWrapper/);
+  assert.match(sharing, /needsDeviceWrapper = true/);
+  assert.match(sharing, /Открыть Team Vaults в браузере/);
 });
 
 test("macOS Team Vault record workflow mirrors the bounded browser causal model", async () => {

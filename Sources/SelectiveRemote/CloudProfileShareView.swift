@@ -33,6 +33,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
     let profile: ConnectionProfile
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @AppStorage("SelectiveRemote.cloud.endpoint.v1") private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
     @State private var teams: [SelectiveRemoteCloudTeam] = []
@@ -43,6 +44,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
     @State private var isSharing = false
     @State private var message: String?
     @State private var messageIsError = false
+    @State private var needsDeviceWrapper = false
 
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
@@ -75,9 +77,23 @@ struct SelectiveRemoteCloudProfileShareView: View {
             .foregroundStyle(.secondary)
 
             if let message {
-                Label(message, systemImage: messageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
-                    .foregroundStyle(messageIsError ? Color.orange : Color.green)
-                    .font(.caption)
+                VStack(alignment: .leading, spacing: 10) {
+                    Label(message, systemImage: messageIsError ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(messageIsError ? Color.orange : Color.green)
+                        .font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if needsDeviceWrapper {
+                        Button(
+                            UpdateLocalization.text(
+                                ru: "Открыть Team Vaults в браузере…",
+                                en: "Open Team Vaults in Browser…"
+                            ),
+                            systemImage: "safari"
+                        ) {
+                            openCloudWorkspace()
+                        }
+                    }
+                }
             }
 
             HStack {
@@ -142,6 +158,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
         else { return }
         isSharing = true
         message = nil
+        needsDeviceWrapper = false
         Task { @MainActor in
             defer { isSharing = false }
             do {
@@ -192,11 +209,21 @@ struct SelectiveRemoteCloudProfileShareView: View {
                 guard case .uploaded = outcome else { throw SelectiveRemoteCloudProfileShareError.conflict }
                 message = UpdateLocalization.text(ru: "Host зашифрован и добавлен в Team Vault.", en: "The Host was encrypted and added to the Team Vault.")
                 messageIsError = false
+            } catch SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper {
+                message = SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper.localizedDescription
+                messageIsError = true
+                needsDeviceWrapper = true
             } catch {
                 message = error.localizedDescription
                 messageIsError = true
             }
         }
+    }
+
+    @MainActor
+    private func openCloudWorkspace() {
+        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) else { return }
+        openURL(url)
     }
 
     @MainActor

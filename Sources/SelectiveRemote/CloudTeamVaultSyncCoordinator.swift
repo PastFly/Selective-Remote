@@ -1,6 +1,6 @@
 import Foundation
 
-enum SelectiveRemoteTeamVaultSyncError: Error, Equatable {
+enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
     case rotationRequired
     case missingDeviceWrapper
     case noLocalSnapshot
@@ -12,6 +12,61 @@ enum SelectiveRemoteTeamVaultSyncError: Error, Equatable {
     case invalidConflictResponse
     case staleConflict
     case invalidKeyDevices
+
+    var errorDescription: String? {
+        switch self {
+        case .rotationRequired:
+            UpdateLocalization.text(
+                ru: "Для Team Vault требуется ротация ключа. Завершите её в Cloud и повторите операцию.",
+                en: "The Team Vault key must be rotated. Complete the rotation in Cloud and try again."
+            )
+        case .missingDeviceWrapper:
+            UpdateLocalization.text(
+                ru: "Для этого Mac ещё не выдан ключ выбранного Team Vault. Откройте Vault в уже доверенном браузере или на другом устройстве, выдайте недостающие wrappers и повторите операцию.",
+                en: "This Mac does not have a key for the selected Team Vault yet. Open the Vault in an already trusted browser or on another device, grant the missing wrappers, and try again."
+            )
+        case .noLocalSnapshot:
+            UpdateLocalization.text(
+                ru: "Локальная копия Team Vault ещё не создана. Обновите Vault и повторите операцию.",
+                en: "The local Team Vault snapshot has not been created yet. Refresh the Vault and try again."
+            )
+        case .noLocalChanges:
+            UpdateLocalization.text(
+                ru: "В Team Vault нет локальных изменений для отправки.",
+                en: "There are no local Team Vault changes to upload."
+            )
+        case .invalidLocalSnapshot:
+            UpdateLocalization.text(
+                ru: "Локальная копия Team Vault повреждена или несовместима.",
+                en: "The local Team Vault snapshot is invalid or incompatible."
+            )
+        case .remoteRevisionRollback:
+            UpdateLocalization.text(
+                ru: "Cloud вернул более старую ревизию Team Vault. Запись остановлена для защиты данных.",
+                en: "Cloud returned an older Team Vault revision. The write was stopped to protect your data."
+            )
+        case .remoteRevisionDivergence:
+            UpdateLocalization.text(
+                ru: "Ревизия Team Vault расходится с локальной копией. Обновите Vault и разрешите конфликт.",
+                en: "The Team Vault revision diverges from the local snapshot. Refresh the Vault and resolve the conflict."
+            )
+        case .invalidWriteAcknowledgement, .invalidConflictResponse:
+            UpdateLocalization.text(
+                ru: "Cloud не подтвердил безопасную запись в Team Vault. Данные не были перезаписаны.",
+                en: "Cloud did not confirm a safe Team Vault write. No data was overwritten."
+            )
+        case .staleConflict:
+            UpdateLocalization.text(
+                ru: "Team Vault снова изменился во время разрешения конфликта. Обновите его и повторите выбор.",
+                en: "The Team Vault changed again while resolving the conflict. Refresh it and repeat your choice."
+            )
+        case .invalidKeyDevices:
+            UpdateLocalization.text(
+                ru: "Cloud вернул неполный список доверенных устройств. Инициализация Team Vault остановлена.",
+                en: "Cloud returned an incomplete trusted-device list. Team Vault initialization was stopped."
+            )
+        }
+    }
 }
 
 protocol SelectiveRemoteTeamVaultRemote: Sendable {
