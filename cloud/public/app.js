@@ -379,16 +379,19 @@ export function initializeTeamWorkspace({
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
+  const sectionTitle = documentValue.querySelector("#team-vault-title");
   const message = documentValue.querySelector("#team-vault-message");
   const devices = documentValue.querySelector("#team-devices");
   const devicesRefresh = documentValue.querySelector("#team-devices-refresh");
   const createTeamForm = documentValue.querySelector("#team-create-form");
   const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
+  const onboarding = documentValue.querySelector("#team-onboarding");
   const teamSelect = documentValue.querySelector("#team-select");
   const teamRefresh = documentValue.querySelector("#team-refresh");
   const selectedPanel = documentValue.querySelector("#team-selected");
   const teamRole = documentValue.querySelector("#team-role");
   const members = documentValue.querySelector("#team-members");
+  const membersView = documentValue.querySelector("#team-members-view");
   const inviteForm = documentValue.querySelector("#team-invite-form");
   const lifecyclePanel = documentValue.querySelector("#team-lifecycle");
   const renameTeamForm = documentValue.querySelector("#team-rename-form");
@@ -396,6 +399,7 @@ export function initializeTeamWorkspace({
   const transferOwnershipMember = documentValue.querySelector("#team-ownership-member");
   const archiveTeamForm = documentValue.querySelector("#team-archive-form");
   const createVaultForm = documentValue.querySelector("#team-vault-create-form");
+  const vaultDirectoryView = documentValue.querySelector("#team-vault-directory-view");
   const vaultSelect = documentValue.querySelector("#team-vault-select");
   const vaultOpen = documentValue.querySelector("#team-vault-open");
   const workspace = documentValue.querySelector("#team-vault-workspace");
@@ -425,6 +429,7 @@ export function initializeTeamWorkspace({
   let selectedVault = null;
   let controller = null;
   let activeConflicts = null;
+  let activeView = "teams";
 
   function canManage() {
     return ["owner", "admin"].includes(selectedTeam?.role);
@@ -439,6 +444,7 @@ export function initializeTeamWorkspace({
       control.disabled = disabled || !canEdit();
     }
     for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
+    recordType.disabled = disabled || !canEdit() || activeView === "hosts";
   }
 
   function clearConflicts() {
@@ -475,7 +481,7 @@ export function initializeTeamWorkspace({
       records.append(empty);
       return;
     }
-    for (const record of current.records) {
+    for (const record of current.records.filter((value) => activeView !== "hosts" || value.type === "host")) {
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");
@@ -681,6 +687,25 @@ export function initializeTeamWorkspace({
     clearConflicts();
   }
 
+  function setView(view) {
+    activeView = ["teams", "vaults", "hosts"].includes(view) ? view : "teams";
+    section.dataset.teamView = activeView;
+    setText(sectionTitle, { teams: "Команды", vaults: "Командные хранилища", hosts: "Командные хосты" }[activeView]);
+    onboarding.hidden = activeView !== "teams";
+    membersView.hidden = activeView !== "teams";
+    vaultDirectoryView.hidden = activeView === "teams";
+    lifecyclePanel.hidden = activeView !== "teams" || selectedTeam?.role !== "owner";
+    createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    workspace.hidden = activeView === "teams" || !controller;
+    if (activeView === "hosts") recordType.value = "host";
+    updateRecordLabels();
+    if (controller) {
+      clearConflicts();
+      renderRecords();
+      setWorkspaceControls(false);
+    }
+  }
+
   async function openSelectedVault() {
     const vault = vaults.find((value) => value.id === vaultSelect.value);
     if (!vault || !identity) return;
@@ -692,7 +717,7 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
-    workspace.hidden = false;
+    workspace.hidden = activeView === "teams";
     rotateButton.hidden = !vault.rotationRequired || !canManage();
     rotateButton.disabled = !vault.rotationRequired || !canManage();
     grantWrappersButton.hidden = vault.rotationRequired || !canManage();
@@ -735,8 +760,8 @@ export function initializeTeamWorkspace({
     selectedPanel.hidden = false;
     teamRole.textContent = `${selectedTeam.name} · ${selectedTeam.role}`;
     inviteForm.hidden = !canManage();
-    createVaultForm.hidden = !canManage();
-    lifecyclePanel.hidden = selectedTeam.role !== "owner";
+    createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    lifecyclePanel.hidden = activeView !== "teams" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
     transferOwnershipForm.reset();
@@ -1070,7 +1095,9 @@ export function initializeTeamWorkspace({
   });
 
   updateRecordLabels();
+  setView("teams");
   return {
+    setView,
     async activate(nextIdentity) {
       identity = nextIdentity;
       await Promise.all([loadDevices(), loadTeams()]);
@@ -1472,7 +1499,7 @@ export async function initializeCloudAccount({
 
   showSession(null);
   setAuthMode("login");
-  return { client, showAuth: setAuthMode };
+  return { client, showAuth: setAuthMode, teamWorkspace };
 }
 
 export function initializePortalNavigation({
@@ -1480,6 +1507,7 @@ export function initializePortalNavigation({
   locationValue = location,
   historyValue = history,
   vaultUI = null,
+  teamUI = null,
   showAuthMode = () => {},
 } = {}) {
   const brand = documentValue.querySelector("#site-brand");
@@ -1499,7 +1527,7 @@ export function initializePortalNavigation({
   const titles = {
     "workspace-overview": "Обзор",
     "local-vault": "Personal Vault",
-    "team-vault": "Teams и Vaults",
+    "team-vault": "Команды",
     "workspace-devices": "Устройства",
     "workspace-settings": "Настройки",
   };
@@ -1510,6 +1538,7 @@ export function initializePortalNavigation({
     forwarding: "Forwarding",
     all: "Personal Vault",
   };
+  const teamTitles = { teams: "Команды", vaults: "Team Vaults", hosts: "Team Hosts" };
   let sessionActive = false;
 
   function setPath(path, replace = false) {
@@ -1518,19 +1547,22 @@ export function initializePortalNavigation({
     historyValue[method]?.({}, "", path);
   }
 
-  function selectWorkspacePanel(target, recordFilter = null) {
+  function selectWorkspacePanel(target, recordFilter = null, teamView = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
     for (const button of sidebarButtons) {
       const matchesPanel = button.dataset.workspaceTarget === panelID;
       const matchesFilter = panelID !== "local-vault"
         || (button.dataset.recordFilter || "all") === (recordFilter || "all");
-      button.classList.toggle("active", matchesPanel && matchesFilter);
+      const matchesTeamView = panelID !== "team-vault"
+        || (button.dataset.teamView || "teams") === (teamView || "teams");
+      button.classList.toggle("active", matchesPanel && matchesFilter && matchesTeamView);
     }
     setText(workspaceTitle, panelID === "local-vault"
       ? resourceTitles[recordFilter || "all"]
-      : titles[panelID]);
+      : panelID === "team-vault" ? teamTitles[teamView || "teams"] : titles[panelID]);
     if (recordFilter) vaultUI?.setFilter(recordFilter);
+    if (panelID === "team-vault") teamUI?.setView(teamView || "teams");
   }
 
   function showLanding({ replace = false } = {}) {
@@ -1581,6 +1613,7 @@ export function initializePortalNavigation({
     button.addEventListener("click", () => selectWorkspacePanel(
       button.dataset.workspaceTarget,
       button.dataset.recordFilter || null,
+      button.dataset.teamView || null,
     ));
   }
 
@@ -1720,6 +1753,7 @@ export async function initializePortal({
     locationValue,
     historyValue,
     vaultUI,
+    teamUI: account?.teamWorkspace,
     showAuthMode: account?.showAuth,
   });
 }

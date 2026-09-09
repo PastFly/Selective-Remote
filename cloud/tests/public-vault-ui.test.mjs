@@ -146,7 +146,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="host">Хосты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="credential">Учётные данные/u);
-  assert.match(html, /data-workspace-target="team-vault">Команды и Team Vaults/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="teams">Команды/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults">Team Vaults/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Team Hosts/u);
   assert.match(html, /id="host-detail-dialog"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
   assert.match(html, /id="account-delete-form"/u);
@@ -165,6 +167,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
+  assert.match(application, /activeView !== "hosts" \|\| value\.type === "host"/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
