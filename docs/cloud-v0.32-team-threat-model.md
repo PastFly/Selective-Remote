@@ -190,6 +190,18 @@ logout. The interval grants no new role capability: Viewer writes still fail at
 the client and server, while any role may provision only after current-wrapper
 proof.
 
+While the macOS app is unlocked, its app-lifetime 15-second cycle enumerates
+only Teams and Vaults authorized by the current bearer session. For each
+non-empty, non-rotating Vault it first proves possession of the exact
+current-device wrapper, locally wraps the current Vault key for missing
+membership-epoch-scoped devices, and submits each wrapper through the same
+server proof gate. It then uses the existing causal coordinator to download a
+dominant ciphertext revision or conditionally upload an already-dirty local
+snapshot. Empty Vaults are never initialized in the background, conflicts are
+reported without choosing a winner, rotation freezes the Vault, and App Lock
+cancels the cycle. The file snapshot remains ciphertext and a device wrapper;
+plaintext and raw Vault keys are never persisted there.
+
 ## Removal and rotation
 
 Membership removal is a fail-closed state transition:
@@ -272,6 +284,7 @@ or wrappers.
 
 Team/shared Vault release status remains `planned_required`: the server-side
 protocol, browser Team UI/cryptography/causal sync/device approval/rotation and
-the bounded macOS crypto/transport/offline coordinator are implemented, but
-macOS UI, explicit conflict-resolution writes and the complete cross-client
+the bounded macOS crypto/transport/offline coordinator plus automatic wrapper
+delivery and background ciphertext synchronization are implemented, but macOS
+Team Hosts UI, explicit conflict-resolution writes and the complete cross-client
 acceptance suite must pass before Cloud 0.32 is complete.

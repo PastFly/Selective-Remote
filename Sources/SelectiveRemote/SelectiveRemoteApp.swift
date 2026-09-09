@@ -131,6 +131,7 @@ struct SelectiveRemoteApp: App {
     @StateObject private var appAppearance = AppAppearanceStore.shared
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
+    private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync()
 
     private var menuBarSystemImage: String {
         if appLock.isLocked { return "lock.fill" }
@@ -156,12 +157,16 @@ struct SelectiveRemoteApp: App {
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
                         schedulePersonalVaultAutoSync()
+                        updateTeamVaultAutoSync()
                     }
                     .onChange(of: model.profiles) { _, _ in schedulePersonalVaultAutoSync() }
                     .onChange(of: model.independentPortForwards) { _, _ in schedulePersonalVaultAutoSync() }
                     .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision) { _ in
                         schedulePersonalVaultAutoSync()
                     }
+            }
+            .onChange(of: appLock.isLocked) { _, _ in
+                updateTeamVaultAutoSync()
             }
         }
         .windowResizability(.contentMinSize)
@@ -393,6 +398,17 @@ struct SelectiveRemoteApp: App {
         }
         .menuBarExtraStyle(.menu)
         .environment(\.locale, language.locale)
+    }
+
+    private func updateTeamVaultAutoSync() {
+        let shouldRun = !appLock.isLocked
+        Task {
+            if shouldRun {
+                await teamVaultAutoSync.start()
+            } else {
+                await teamVaultAutoSync.stop()
+            }
+        }
     }
 
     private func schedulePersonalVaultAutoSync() {

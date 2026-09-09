@@ -76,6 +76,25 @@ test("macOS Team Vault coordinator preserves causal dirty and conflict state", a
   assert.match(coordinator, /wrappers: wrappers/);
 });
 
+test("macOS automatically provisions and synchronizes Team Vaults while unlocked", async () => {
+  const [client, coordinator, autoSync, app] = await Promise.all([
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultSyncCoordinator.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("SelectiveRemoteApp.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(client, /func grantSharedVaultWrapper\(/);
+  assert.match(client, /\/wrappers/);
+  assert.match(coordinator, /func provisionMissingWrappers\(/);
+  assert.match(coordinator, /actor\.membershipID == remoteVersion\.wrapper\.membershipID/);
+  assert.match(autoSync, /pollInterval: Duration = \.seconds\(15\)/);
+  assert.match(autoSync, /case \.localChanges:/);
+  assert.match(autoSync, /case \.conflict:/);
+  assert.doesNotMatch(autoSync, /func initialize\(/);
+  assert.match(app, /appLock\.isLocked/);
+  assert.match(app, /teamVaultAutoSync\.stop\(\)/);
+});
+
 test("Host context menu opens a real encrypted Team Vault share flow", async () => {
   const [content, sharing, coordinator] = await Promise.all([
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
