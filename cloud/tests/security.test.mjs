@@ -4,7 +4,9 @@ import {
   createEmailVerificationToken,
   createPasswordResetToken,
   createTeamInvitationToken,
+  decryptTeamInvitationLinkSecret,
   decryptOutboxPayload,
+  encryptTeamInvitationLinkSecret,
   encryptOutboxPayload,
   hashAbuseKey,
   hashPasswordResetToken,
@@ -104,6 +106,26 @@ test("Team invitation tokens are hash-only and outbox payloads are authenticated
     /invalid_outbox_payload/,
   );
   assert.throws(() => hashTeamInvitationToken("", tokenPepper), /invalid_team_invitation/);
+});
+
+test("single-use Team invitation links keep recoverable tokens encrypted and domain-separated", () => {
+  const token = createTeamInvitationToken();
+  const key = "l".repeat(32);
+  const payload = {
+    token,
+    teamID: "84f6c860-0d26-4ef5-8652-27cb8b991b70",
+    role: "viewer",
+    expiresAt: "2030-01-03T00:00:00.000Z",
+  };
+  const envelope = encryptTeamInvitationLinkSecret(payload, key);
+
+  assert.doesNotMatch(JSON.stringify(envelope), new RegExp(token));
+  assert.deepEqual(decryptTeamInvitationLinkSecret(envelope, key), payload);
+  assert.throws(() => decryptOutboxPayload(envelope, key), /invalid_outbox_payload/);
+  assert.throws(
+    () => decryptTeamInvitationLinkSecret({ ...envelope, nonce: "A".repeat(16) }, key),
+    /invalid_team_invitation_link_secret/,
+  );
 });
 
 test("vault envelope rejects unversioned and oversized values", () => {

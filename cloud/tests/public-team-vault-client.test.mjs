@@ -282,6 +282,30 @@ test("browser Team management covers lifecycle, members, invitations and shared 
     rotationRequired: false,
     ...timestamps,
   };
+  const usernameInvitation = {
+    id: "66666666-6666-4666-8666-666666666666",
+    teamID,
+    teamName: "Operations",
+    type: "username",
+    targetUsername: "member",
+    role: "viewer",
+    status: "pending",
+    createdAt: timestamps.createdAt,
+    expiresAt: "2026-09-07T00:00:00.000Z",
+    acceptanceURL: null,
+  };
+  const linkInvitation = {
+    ...usernameInvitation,
+    id: "77777777-7777-4777-8777-777777777777",
+    type: "link",
+    targetUsername: null,
+    acceptanceURL: `https://cloud.example.invalid/#accept-team-invitation?token=${"x".repeat(43)}`,
+  };
+  const pendingInvitation = {
+    ...usernameInvitation,
+    id: "88888888-8888-4888-8888-888888888888",
+    targetUsername: "user",
+  };
   const client = createAuthenticatedVaultClient({
     fetchValue: async (path, options = {}) => {
       calls.push({ path, options });
@@ -305,15 +329,20 @@ test("browser Team management covers lifecycle, members, invitations and shared 
         return jsonResponse(200, { archived: true, teamID });
       }
       if (path.endsWith("/members") && !options.method) return jsonResponse(200, { members: [member] });
-      if (path.endsWith("/invitations")) return jsonResponse(201, { invitation: {
-        id: "66666666-6666-4666-8666-666666666666",
-        teamID,
-        email: "member@example.invalid",
-        role: "viewer",
-        status: "pending",
-        createdAt: timestamps.createdAt,
-        expiresAt: "2026-09-07T00:00:00.000Z",
-      } });
+      if (path === `/v1/teams/${teamID}/invitations` && !options.method) {
+        return jsonResponse(200, { invitations: [usernameInvitation, { ...linkInvitation, acceptanceURL: null }] });
+      }
+      if (path === "/v1/team-invitations" && !options.method) {
+        return jsonResponse(200, { invitations: [pendingInvitation] });
+      }
+      if (path === `/v1/teams/${teamID}/invitations` && options.method === "POST") {
+        return jsonResponse(201, {
+          invitation: JSON.parse(options.body).type === "link" ? linkInvitation : usernameInvitation,
+        });
+      }
+      if (path === `/v1/teams/${teamID}/invitations/${linkInvitation.id}` && options.method === "DELETE") {
+        return jsonResponse(200, { cancelled: true });
+      }
       if (path === "/v1/team-invitations/accept") return jsonResponse(200, { membership: member });
       if (path.endsWith(`/${membershipID}`) && options.method === "PATCH") {
         return jsonResponse(200, { membership: { ...member, role: "editor" } });
@@ -355,10 +384,16 @@ test("browser Team management covers lifecycle, members, invitations and shared 
   }), /team_name_mismatch/);
   assert.equal(calls.filter(({ path, options }) => path === `/v1/teams/${teamID}` && options.method === "DELETE").length, 1);
   assert.deepEqual(await client.listTeamMembers(teamID), [member]);
-  const invitation = await client.inviteTeamMember({ teamID, email: "MEMBER@example.invalid", role: "viewer" });
-  assert.equal(invitation.email, "member@example.invalid");
+  assert.deepEqual(await client.listTeamInvitations(teamID), [usernameInvitation, { ...linkInvitation, acceptanceURL: null }]);
+  assert.deepEqual(await client.listPendingTeamInvitations(), [pendingInvitation]);
+  const invitation = await client.inviteTeamMember({ teamID, username: "@MEMBER", role: "viewer" });
+  assert.equal(invitation.targetUsername, "member");
   assert.equal("token" in invitation, false);
+  const link = await client.inviteTeamMember({ teamID, type: "link", role: "viewer" });
+  assert.match(link.acceptanceURL, /#accept-team-invitation\?token=/u);
   assert.deepEqual(await client.acceptTeamInvitation({ token: "x".repeat(48) }), member);
+  assert.deepEqual(await client.acceptTeamInvitation({ invitationID: usernameInvitation.id }), member);
+  assert.deepEqual(await client.cancelTeamInvitation({ teamID, invitationID: linkInvitation.id }), { cancelled: true });
   assert.equal((await client.updateTeamMemberRole({ teamID, membershipID, role: "editor" })).role, "editor");
   assert.deepEqual(await client.revokeTeamMember({ teamID, membershipID }), {
     revoked: true, rotationRequiredVaults: 1,

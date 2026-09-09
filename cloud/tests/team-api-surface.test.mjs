@@ -24,6 +24,9 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
   assert.match(serverSource, /maxTeamBodyBytes = 16 \* 1024/);
   assert.match(serverSource, /team_invitation_create_user/);
   assert.match(serverSource, /team_invitation_accept_ip/);
+  assert.match(serverSource, /url\.pathname === "\/v1\/team-invitations"/);
+  assert.match(serverSource, /service\.listTeamInvitations/);
+  assert.match(serverSource, /service\.listPendingTeamInvitations/);
   assert.match(serverSource, /service\.putSharedVault/);
   assert.match(serverSource, /service\.approveDeviceKey/);
   assert.match(serverSource, /service\.bootstrapDeviceKey/);

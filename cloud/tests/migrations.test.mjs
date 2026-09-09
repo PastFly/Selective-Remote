@@ -16,6 +16,7 @@ test("numbered migrations have stable checksums", async () => {
     { version: 6, name: "006_team_vault_crypto.sql" },
     { version: 7, name: "007_account_deletion.sql" },
     { version: 8, name: "008_usernames.sql" },
+    { version: 9, name: "009_team_invitation_modes.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
 });
@@ -27,6 +28,18 @@ test("usernames are unique public handles and existing accounts receive a stable
   assert.match(usernames.sql, /users_username_unique/);
   assert.match(usernames.sql, /users_username_shape/);
   assert.doesNotMatch(usernames.sql, /email.*DROP|DROP.*email/iu);
+});
+
+test("Team invitation modes bind usernames and seal revocable single-use links", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const invitations = migrations.find(({ version }) => version === 9);
+
+  assert.match(invitations.sql, /invitation_type IN \('email', 'username', 'link'\)/u);
+  assert.match(invitations.sql, /target_user_id uuid REFERENCES users\(id\) ON DELETE CASCADE/u);
+  assert.match(invitations.sql, /team_invitations_one_pending_user/u);
+  assert.match(invitations.sql, /CREATE TABLE team_invitation_link_secrets/u);
+  assert.match(invitations.sql, /payload_ciphertext text NOT NULL/u);
+  assert.doesNotMatch(invitations.sql, /\btoken\s+text\b|\bplaintext\b|\bvault_key\b/u);
 });
 
 test("account deletion preserves Team history while removing account-owned secrets", async () => {

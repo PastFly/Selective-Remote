@@ -743,14 +743,67 @@ export class PostgresStore {
     return result.rows;
   }
 
+  async listTeamInvitations(teamID, actorUserID) {
+    const result = await this.pool.query(
+      `SELECT actor.role AS actor_role, invitation.id, invitation.team_id,
+         invitation.invitation_type, invitation.role, invitation.created_at,
+         invitation.expires_at, target.username AS target_username, team.name AS team_name
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       LEFT JOIN team_invitations AS invitation
+         ON invitation.team_id = team.id
+        AND invitation.accepted_at IS NULL AND invitation.cancelled_at IS NULL
+        AND invitation.expires_at > now()
+       LEFT JOIN users AS target
+         ON target.id = invitation.target_user_id
+       WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
+       ORDER BY invitation.created_at, invitation.id`,
+      [teamID, actorUserID],
+    );
+    const actor = result.rows[0];
+    if (!actor) throw new Error("team_not_found");
+    requireTeamPermission(actor.actor_role, "invite_member");
+    return result.rows.filter((row) => {
+      if (!row.id) return false;
+      try {
+        requireInvitationPermission(actor.actor_role, row.role);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  async listPendingTeamInvitations(actorUserID) {
+    const result = await this.pool.query(
+      `SELECT invitation.id, invitation.team_id, invitation.invitation_type,
+         invitation.role, invitation.created_at, invitation.expires_at,
+         target.username AS target_username, team.name AS team_name
+       FROM team_invitations AS invitation
+       JOIN teams AS team ON team.id = invitation.team_id AND team.archived_at IS NULL
+       JOIN users AS target
+         ON target.id = invitation.target_user_id AND target.disabled_at IS NULL
+       WHERE invitation.invitation_type = 'username'
+         AND invitation.target_user_id = $1
+         AND invitation.accepted_at IS NULL AND invitation.cancelled_at IS NULL
+         AND invitation.expires_at > now()
+       ORDER BY invitation.created_at, invitation.id`,
+      [actorUserID],
+    );
+    return result.rows;
+  }
+
   async createTeamInvitation({
     actorUserID,
     teamID,
+    invitationType,
     email,
+    username,
     role,
     tokenHash,
     expiresAt,
     outboxEnvelope,
+    linkSecretEnvelope,
     idempotencyKey,
   }) {
     return this.withTeamMutation(actorUserID, "team.invitation.create", idempotencyKey, async (client) => {
@@ -758,61 +811,118 @@ export class PostgresStore {
       if (!actor) throw new Error("team_not_found");
       requireInvitationPermission(actor.role, role);
 
-      const existingMember = await client.query(
-        `SELECT membership.id FROM team_memberships AS membership
-         JOIN users AS account ON account.id = membership.user_id
-         WHERE membership.team_id = $1 AND membership.revoked_at IS NULL AND account.email = $2
-         FOR UPDATE OF membership`,
-        [teamID, email],
-      );
-      if (existingMember.rows[0]) throw new Error("team_member_exists");
+      if (!["email", "username", "link"].includes(invitationType)) {
+        throw new Error("invalid_team_invitation");
+      }
 
-      await client.query(
-        `WITH cancelled AS (
-           UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $3
-           WHERE team_id = $1 AND email = $2 AND accepted_at IS NULL AND cancelled_at IS NULL
-           RETURNING id
-         )
-         UPDATE team_outbox_jobs AS job SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
-         FROM cancelled WHERE job.aggregate_id = cancelled.id AND job.delivered_at IS NULL`,
-        [teamID, email, actorUserID],
-      );
+      let targetUser = null;
+      if (invitationType === "username") {
+        const targetResult = await client.query(
+          `SELECT id, username FROM users
+           WHERE username = $1 AND disabled_at IS NULL AND email_verified_at IS NOT NULL
+           FOR UPDATE`,
+          [username],
+        );
+        targetUser = targetResult.rows[0] ?? null;
+        if (!targetUser) throw new Error("account_not_found");
+      }
+
+      if (invitationType !== "link") {
+        const existingMember = await client.query(
+          `SELECT membership.id FROM team_memberships AS membership
+           JOIN users AS account ON account.id = membership.user_id
+           WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
+             AND (($2::uuid IS NOT NULL AND account.id = $2)
+               OR ($3::text IS NOT NULL AND account.email = $3))
+           FOR UPDATE OF membership`,
+          [teamID, targetUser?.id ?? null, email],
+        );
+        if (existingMember.rows[0]) throw new Error("team_member_exists");
+      }
+
+      if (invitationType === "email") {
+        await client.query(
+          `WITH cancelled AS (
+             UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $3
+             WHERE team_id = $1 AND invitation_type = 'email' AND email = $2
+               AND accepted_at IS NULL AND cancelled_at IS NULL
+             RETURNING id
+           )
+           UPDATE team_outbox_jobs AS job SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
+           FROM cancelled WHERE job.aggregate_id = cancelled.id AND job.delivered_at IS NULL`,
+          [teamID, email, actorUserID],
+        );
+      } else if (invitationType === "username") {
+        await client.query(
+          `UPDATE team_invitations SET cancelled_at = now(), cancelled_by_user_id = $3
+           WHERE team_id = $1 AND invitation_type = 'username' AND target_user_id = $2
+             AND accepted_at IS NULL AND cancelled_at IS NULL`,
+          [teamID, targetUser.id, actorUserID],
+        );
+      }
       const invitationResult = await client.query(
         `INSERT INTO team_invitations
-          (team_id, email, role, token_hash, invited_by_user_id, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         RETURNING id, team_id, email, role, created_at, expires_at`,
-        [teamID, email, role, tokenHash, actorUserID, expiresAt],
+          (team_id, invitation_type, email, target_user_id, role, token_hash,
+           invited_by_user_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id, team_id, invitation_type, role, created_at, expires_at`,
+        [teamID, invitationType, email, targetUser?.id ?? null, role, tokenHash, actorUserID, expiresAt],
       );
-      const invitation = invitationResult.rows[0];
-      await client.query(
-        `INSERT INTO team_outbox_jobs
-          (kind, aggregate_id, idempotency_key, payload_ciphertext, nonce, auth_tag)
-         VALUES ('team_invitation_email', $1, $2, $3, $4, $5)`,
-        [invitation.id, `team-invitation:${invitation.id}`, outboxEnvelope.ciphertext,
-          outboxEnvelope.nonce, outboxEnvelope.authTag],
-      );
+      const invitation = {
+        ...invitationResult.rows[0],
+        target_username: targetUser?.username ?? null,
+        team_name: actor.team_name,
+      };
+      if (invitationType === "email") {
+        await client.query(
+          `INSERT INTO team_outbox_jobs
+            (kind, aggregate_id, idempotency_key, payload_ciphertext, nonce, auth_tag)
+           VALUES ('team_invitation_email', $1, $2, $3, $4, $5)`,
+          [invitation.id, `team-invitation:${invitation.id}`, outboxEnvelope.ciphertext,
+            outboxEnvelope.nonce, outboxEnvelope.authTag],
+        );
+      } else if (invitationType === "link") {
+        await client.query(
+          `INSERT INTO team_invitation_link_secrets
+            (invitation_id, payload_ciphertext, nonce, auth_tag)
+           VALUES ($1, $2, $3, $4)`,
+          [invitation.id, linkSecretEnvelope.ciphertext,
+            linkSecretEnvelope.nonce, linkSecretEnvelope.authTag],
+        );
+      }
       await writeTeamAudit(client, {
         teamID,
         actorUserID,
         action: "team.invitation_created",
-        metadata: { role },
+        targetUserID: targetUser?.id ?? null,
+        metadata: { role, invitationType },
       });
-      return { invitation };
+      return { invitation, linkSecretEnvelope: invitationType === "link" ? linkSecretEnvelope : null };
     });
   }
 
-  async acceptTeamInvitation({ actorUserID, actorEmail, tokenHash, idempotencyKey }) {
+  async acceptTeamInvitation({ actorUserID, actorEmail, invitationID, tokenHash, idempotencyKey }) {
     return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client) => {
       const invitationResult = await client.query(
-        `SELECT invitation.id, invitation.team_id, invitation.email, invitation.role
+        `SELECT invitation.id, invitation.team_id, invitation.invitation_type, invitation.role,
+           account.username, account.display_name
          FROM team_invitations AS invitation
          JOIN teams AS team ON team.id = invitation.team_id
-         WHERE invitation.token_hash = $1 AND invitation.email = $2
+         JOIN users AS account
+           ON account.id = $4 AND account.disabled_at IS NULL
+          AND account.email_verified_at IS NOT NULL
+         WHERE (
+             ($1::text IS NOT NULL AND invitation.token_hash = $1
+               AND (invitation.invitation_type = 'link'
+                 OR (invitation.invitation_type = 'email' AND invitation.email = $3)))
+             OR ($2::uuid IS NOT NULL AND invitation.id = $2
+               AND invitation.invitation_type = 'username'
+               AND invitation.target_user_id = $4)
+           )
            AND invitation.accepted_at IS NULL AND invitation.cancelled_at IS NULL
            AND invitation.expires_at > now() AND team.archived_at IS NULL
          FOR UPDATE OF invitation, team`,
-        [tokenHash, actorEmail],
+        [tokenHash, invitationID, actorEmail, actorUserID],
       );
       const invitation = invitationResult.rows[0];
       if (!invitation) throw new Error("invalid_team_invitation");
@@ -833,7 +943,11 @@ export class PostgresStore {
          RETURNING id, team_id, user_id, role, epoch, joined_at`,
         [invitation.team_id, actorUserID, invitation.role, nextEpoch],
       );
-      const membership = membershipResult.rows[0];
+      const membership = {
+        ...membershipResult.rows[0],
+        username: invitation.username,
+        display_name: invitation.display_name,
+      };
       const accepted = await client.query(
         `UPDATE team_invitations SET accepted_at = now(), accepted_by_user_id = $2
          WHERE id = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
@@ -841,6 +955,10 @@ export class PostgresStore {
         [invitation.id, actorUserID],
       );
       if (!accepted.rows[0]) throw new Error("invalid_team_invitation");
+      await client.query(
+        "DELETE FROM team_invitation_link_secrets WHERE invitation_id = $1",
+        [invitation.id],
+      );
       await writeTeamAudit(client, {
         teamID: invitation.team_id,
         actorUserID,
@@ -874,6 +992,10 @@ export class PostgresStore {
       await client.query(
         `UPDATE team_outbox_jobs SET delivered_at = now(), claimed_at = NULL, claim_owner = NULL
          WHERE aggregate_id = $1 AND delivered_at IS NULL`,
+        [invitationID],
+      );
+      await client.query(
+        "DELETE FROM team_invitation_link_secrets WHERE invitation_id = $1",
         [invitationID],
       );
       await writeTeamAudit(client, {

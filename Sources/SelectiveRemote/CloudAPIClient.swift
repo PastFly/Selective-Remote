@@ -124,14 +124,23 @@ struct SelectiveRemoteCloudTeamMember: Codable, Equatable, Identifiable, Sendabl
     var joinedAt: String
 }
 
+enum SelectiveRemoteCloudTeamInvitationType: String, Codable, Equatable, Sendable {
+    case email
+    case username
+    case link
+}
+
 struct SelectiveRemoteCloudTeamInvitation: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var teamID: UUID
-    var email: String
+    var teamName: String?
+    var type: SelectiveRemoteCloudTeamInvitationType
+    var targetUsername: String?
     var role: SelectiveRemoteCloudTeamRole
     var status: String
     var createdAt: String
     var expiresAt: String
+    var acceptanceURL: String?
 }
 
 struct SelectiveRemoteCloudTeamKeyDevice: Codable, Equatable, Sendable {
@@ -488,31 +497,136 @@ actor SelectiveRemoteCloudAPIClient {
         return result.members
     }
 
+    func teamInvitations(
+        endpoint: URL,
+        teamID: UUID
+    ) async throws -> [SelectiveRemoteCloudTeamInvitation] {
+        guard teamID.isSelectiveRemoteCloudUUID else { throw SelectiveRemoteCloudError.invalidRequest }
+        let data = try await authorizedData(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/invitations"
+        )
+        return try Self.decodeTeamInvitations(data, expectedTeamID: teamID, endpoint: endpoint)
+    }
+
+    func pendingTeamInvitations(endpoint: URL) async throws -> [SelectiveRemoteCloudTeamInvitation] {
+        let data = try await authorizedData(endpoint: endpoint, path: "v1/team-invitations")
+        let invitations = try Self.decodeTeamInvitations(data, expectedTeamID: nil, endpoint: endpoint)
+        guard invitations.allSatisfy({ $0.type == .username }) else {
+            throw SelectiveRemoteCloudError.invalidResponse
+        }
+        return invitations
+    }
+
     func inviteTeamMember(
         endpoint: URL,
         teamID: UUID,
-        email: String,
+        username: String,
         role: SelectiveRemoteCloudTeamRole
     ) async throws -> SelectiveRemoteCloudTeamInvitation {
-        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let trimmedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedUsername = trimmedUsername.hasPrefix("@")
+            ? String(trimmedUsername.dropFirst())
+            : trimmedUsername
         guard teamID.isSelectiveRemoteCloudUUID,
-              !normalizedEmail.isEmpty,
-              normalizedEmail.count <= 254,
+              normalizedUsername.range(
+                  of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#,
+                  options: .regularExpression
+              ) != nil,
               role != .owner
         else { throw SelectiveRemoteCloudError.invalidRequest }
+        let invitation = try await createTeamInvitation(
+            endpoint: endpoint,
+            teamID: teamID,
+            request: TeamInvitationRequest(username: normalizedUsername, type: nil, role: role)
+        )
+        guard invitation.type == .username,
+              invitation.targetUsername == normalizedUsername,
+              invitation.acceptanceURL == nil
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return invitation
+    }
+
+    func createTeamInvitationLink(
+        endpoint: URL,
+        teamID: UUID,
+        role: SelectiveRemoteCloudTeamRole
+    ) async throws -> SelectiveRemoteCloudTeamInvitation {
+        guard teamID.isSelectiveRemoteCloudUUID, role != .owner else {
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        let invitation = try await createTeamInvitation(
+            endpoint: endpoint,
+            teamID: teamID,
+            request: TeamInvitationRequest(username: nil, type: "link", role: role)
+        )
+        guard invitation.type == .link, invitation.acceptanceURL != nil else {
+            throw SelectiveRemoteCloudError.invalidResponse
+        }
+        return invitation
+    }
+
+    private func createTeamInvitation(
+        endpoint: URL,
+        teamID: UUID,
+        request: TeamInvitationRequest
+    ) async throws -> SelectiveRemoteCloudTeamInvitation {
         let (data, http) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/teams/\(teamID.canonicalCloudString)/invitations",
             method: "POST",
-            body: try encoder.encode(TeamInvitationRequest(email: normalizedEmail, role: role)),
+            body: try encoder.encode(request),
             headers: ["Idempotency-Key": Self.idempotencyKey("team-invite")]
         )
         guard http.statusCode == 201 else { throw serviceError(status: http.statusCode, data: data) }
         guard Self.validTeamInvitationJSON(data),
               let result = try? decoder.decode(TeamInvitationResponse.self, from: data),
-              Self.validTeamInvitation(result.invitation, teamID: teamID)
+              Self.validTeamInvitation(result.invitation, teamID: teamID, endpoint: endpoint)
         else { throw SelectiveRemoteCloudError.invalidResponse }
         return result.invitation
+    }
+
+    func acceptTeamInvitation(endpoint: URL, invitationID: UUID) async throws -> SelectiveRemoteCloudTeamMember {
+        guard invitationID.isSelectiveRemoteCloudUUID else { throw SelectiveRemoteCloudError.invalidRequest }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/team-invitations/accept",
+            method: "POST",
+            body: try encoder.encode(TeamInvitationAcceptanceRequest(invitationID: invitationID)),
+            headers: ["Idempotency-Key": Self.idempotencyKey("team-invite-accept")]
+        )
+        guard http.statusCode == 200,
+              Self.validTeamInvitationAcceptanceJSON(data),
+              let result = try? decoder.decode(TeamInvitationAcceptanceResponse.self, from: data),
+              Self.validTeamMember(result.membership)
+        else {
+            if http.statusCode != 200 { throw serviceError(status: http.statusCode, data: data) }
+            throw SelectiveRemoteCloudError.invalidResponse
+        }
+        return result.membership
+    }
+
+    func cancelTeamInvitation(
+        endpoint: URL,
+        teamID: UUID,
+        invitationID: UUID
+    ) async throws {
+        guard teamID.isSelectiveRemoteCloudUUID, invitationID.isSelectiveRemoteCloudUUID else {
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/invitations/\(invitationID.canonicalCloudString)",
+            method: "DELETE",
+            headers: ["Idempotency-Key": Self.idempotencyKey("team-invite-cancel")]
+        )
+        guard http.statusCode == 200,
+              Self.validTeamInvitationCancellationJSON(data),
+              (try? decoder.decode(TeamInvitationCancellationResponse.self, from: data).cancelled) == true
+        else {
+            if http.statusCode != 200 { throw serviceError(status: http.statusCode, data: data) }
+            throw SelectiveRemoteCloudError.invalidResponse
+        }
     }
 
     func sharedVaults(endpoint: URL, teamID: UUID) async throws -> [SelectiveRemoteCloudSharedVault] {
@@ -815,21 +929,95 @@ actor SelectiveRemoteCloudAPIClient {
               let invitation = (object as? [String: Any])?["invitation"]
         else { return false }
         return exactKeys(invitation, expected: [
-            "id", "teamID", "email", "role", "status", "createdAt", "expiresAt"
+            "id", "teamID", "teamName", "type", "targetUsername", "role", "status",
+            "createdAt", "expiresAt", "acceptanceURL"
         ])
     }
 
     private static func validTeamInvitation(
         _ invitation: SelectiveRemoteCloudTeamInvitation,
-        teamID: UUID
+        teamID: UUID,
+        endpoint: URL
     ) -> Bool {
-        invitation.id.isSelectiveRemoteCloudUUID
+        guard invitation.id.isSelectiveRemoteCloudUUID
             && invitation.teamID == teamID
-            && !invitation.email.isEmpty && invitation.email.count <= 254
             && invitation.role != .owner
             && invitation.status == "pending"
             && !invitation.createdAt.isEmpty
             && !invitation.expiresAt.isEmpty
+            && invitation.teamName.map({ !$0.isEmpty && $0.count <= 120 }) ?? true
+        else { return false }
+        switch invitation.type {
+        case .username:
+            guard let username = invitation.targetUsername,
+                  username.range(
+                    of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#,
+                    options: .regularExpression
+                  ) != nil,
+                  invitation.acceptanceURL == nil
+            else { return false }
+        case .email:
+            guard invitation.targetUsername == nil, invitation.acceptanceURL == nil else { return false }
+        case .link:
+            guard invitation.targetUsername == nil else { return false }
+            if let value = invitation.acceptanceURL {
+                guard let url = URL(string: value),
+                      url.scheme == endpoint.scheme,
+                      url.host == endpoint.host,
+                      url.port == endpoint.port,
+                      url.user == nil,
+                      url.password == nil,
+                      url.path == "/",
+                      url.query == nil,
+                      url.fragment?.range(
+                        of: #"^accept-team-invitation\?token=[A-Za-z0-9_-]{43}$"#,
+                        options: .regularExpression
+                      ) != nil
+                else { return false }
+            }
+        }
+        return true
+    }
+
+    private static func decodeTeamInvitations(
+        _ data: Data,
+        expectedTeamID: UUID?,
+        endpoint: URL
+    ) throws -> [SelectiveRemoteCloudTeamInvitation] {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["invitations"]),
+              let invitations = (object as? [String: Any])?["invitations"] as? [Any],
+              invitations.allSatisfy({ value in
+                  exactKeys(value, expected: [
+                    "id", "teamID", "teamName", "type", "targetUsername", "role", "status",
+                    "createdAt", "expiresAt", "acceptanceURL"
+                  ])
+              }),
+              let result = try? JSONDecoder().decode(TeamInvitationsResponse.self, from: data),
+              result.invitations.count <= 10_000,
+              Set(result.invitations.map(\.id)).count == result.invitations.count,
+              result.invitations.allSatisfy({ invitation in
+                  (expectedTeamID == nil || invitation.teamID == expectedTeamID)
+                      && validTeamInvitation(invitation, teamID: invitation.teamID, endpoint: endpoint)
+              })
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.invitations
+    }
+
+    private static func validTeamInvitationAcceptanceJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["membership"]),
+              let membership = (object as? [String: Any])?["membership"]
+        else { return false }
+        return exactKeys(membership, expected: [
+            "id", "userID", "username", "displayName", "role", "epoch", "joinedAt"
+        ])
+    }
+
+    private static func validTeamInvitationCancellationJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+        return exactKeys(object, expected: ["cancelled"])
+            && (object as? [String: Any])?["cancelled"] as? Bool == true
     }
 
     private static func validSingleSharedVaultJSON(_ data: Data) -> Bool {
@@ -1014,6 +1202,18 @@ private struct TeamInvitationResponse: Decodable {
     var invitation: SelectiveRemoteCloudTeamInvitation
 }
 
+private struct TeamInvitationsResponse: Decodable {
+    var invitations: [SelectiveRemoteCloudTeamInvitation]
+}
+
+private struct TeamInvitationAcceptanceResponse: Decodable {
+    var membership: SelectiveRemoteCloudTeamMember
+}
+
+private struct TeamInvitationCancellationResponse: Decodable {
+    var cancelled: Bool
+}
+
 private struct SharedVaultResponse: Decodable {
     var vault: SelectiveRemoteCloudSharedVault
 }
@@ -1023,8 +1223,13 @@ private struct TeamNameRequest: Encodable {
 }
 
 private struct TeamInvitationRequest: Encodable {
-    var email: String
+    var username: String?
+    var type: String?
     var role: SelectiveRemoteCloudTeamRole
+}
+
+private struct TeamInvitationAcceptanceRequest: Encodable {
+    var invitationID: UUID
 }
 
 private struct SharedVaultsResponse: Decodable {

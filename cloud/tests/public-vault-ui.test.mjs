@@ -130,6 +130,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="team-vault"[^>]*hidden/u);
   assert.match(html, /id="team-create-form"/u);
   assert.match(html, /id="team-invitation-accept-form"/u);
+  assert.match(html, /id="team-pending-invitations"/u);
+  assert.match(html, /id="team-invite-username"/u);
+  assert.match(html, /id="team-invite-link-create"/u);
+  assert.match(html, /id="team-active-invitations"/u);
+  assert.doesNotMatch(html, /id="team-invite-email"/u);
   assert.match(html, /id="team-select"/u);
   assert.match(html, /id="team-lifecycle"[^>]*hidden/u);
   assert.match(html, /id="team-rename-form"/u);

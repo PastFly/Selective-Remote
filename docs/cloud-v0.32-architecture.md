@@ -213,9 +213,11 @@ than overloading the personal route.
 | `POST` | `/v1/teams/{teamID}/ownership-transfer` | Re-authenticate and atomically transfer Owner |
 | `DELETE` | `/v1/teams/{teamID}` | Re-authenticate, confirm exact name and soft-archive Team |
 | `GET` | `/v1/teams/{teamID}/members` | List active Team members |
-| `POST` | `/v1/teams/{teamID}/invitations` | Queue a role-bounded invitation |
+| `GET` | `/v1/teams/{teamID}/invitations` | List active role-manageable invitations |
+| `POST` | `/v1/teams/{teamID}/invitations` | Create an `@username` or single-use-link invitation |
 | `DELETE` | `/v1/teams/{teamID}/invitations/{invitationID}` | Cancel a pending invitation |
-| `POST` | `/v1/team-invitations/accept` | Accept one matching invitation token |
+| `GET` | `/v1/team-invitations` | List invitations bound to the current `@username` |
+| `POST` | `/v1/team-invitations/accept` | Accept one matching invitation ID or link token |
 | `PATCH` | `/v1/teams/{teamID}/members/{membershipID}` | Change a member role |
 | `DELETE` | `/v1/teams/{teamID}/members/{membershipID}` | Revoke membership and require rotation |
 | `GET` | `/v1/teams/{teamID}/vaults` | List shared-Vault metadata |

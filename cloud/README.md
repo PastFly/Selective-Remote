@@ -6,7 +6,8 @@ devices.
 
 The final v0.32 product scope also includes Teams and shared Vaults. The backend
 foundation implements durable Teams, memberships, the fixed four-role policy,
-single-use 48-hour invitations, encrypted durable invitation delivery and
+account-bound `@username` invitations, revocable 48-hour single-use links,
+legacy encrypted email invitation delivery and
 explicit Team/shared-Vault metadata endpoints. Shared ciphertext revisions,
 P-256 device registration/approval, per-device key wrappers and fail-closed
 rotation completion are implemented in the backend. The browser now has the
@@ -59,7 +60,9 @@ The mandatory Team/shared-Vault security contract is documented in
 invitation lifecycle, device-bound wrappers, membership epochs and fail-closed
 key rotation. Migration `005_team_foundation.sql` implements durable
 identity/access metadata; `006_team_vault_crypto.sql` adds the plaintext-blind
-ciphertext, device-wrapper and rotation transaction layer.
+ciphertext, device-wrapper and rotation transaction layer;
+`008_usernames.sql` adds public account handles; and
+`009_team_invitation_modes.sql` binds the new invitation transports.
 
 ## Team API foundation
 
@@ -76,12 +79,16 @@ the database stores and replays the committed response atomically.
   and exact current-name confirmation, then transactionally soft-archives the
   Team and Vaults while retiring pending invitations, delivery and rotations.
 - `GET /v1/teams/{teamID}/members` lists active members.
-- `POST /v1/teams/{teamID}/invitations` queues a rate-limited invitation;
-  Admins cannot invite Admins and invitations cannot directly grant Owner.
+- `GET|POST /v1/teams/{teamID}/invitations` lists manageable active
+  invitations or creates a rate-limited invitation by public `@username` or a
+  revocable 48-hour single-use link. Admins cannot invite Admins and
+  invitations cannot directly grant Owner.
+- `GET /v1/team-invitations` lists active account-bound invitations for the
+  authenticated user's public `@username` without exposing account email.
 - `DELETE /v1/teams/{teamID}/invitations/{invitationID}` cancels a pending
-  invitation and retires its undelivered outbox job.
-- `POST /v1/team-invitations/accept` accepts a token once, only for the
-  authenticated verified email, and creates the next membership epoch.
+  invitation, retires any undelivered legacy outbox job and invalidates a link.
+- `POST /v1/team-invitations/accept` accepts either an account-bound invitation
+  ID or an opaque link token once and creates the next membership epoch.
 - `PATCH|DELETE /v1/teams/{teamID}/members/{membershipID}` changes a role or
   revokes membership under a transactionally locked role check. Self-mutation,
   Admin escalation and removal of the last Owner fail closed.
@@ -102,10 +109,15 @@ the database stores and replays the committed response atomically.
 - `POST /v1/teams/{teamID}/vaults/{vaultID}/wrappers` grants a current-
   generation wrapper to one newly authorized device under Owner/Admin checks.
 
-The invitation table stores only an HMAC hash. The opaque token and recipient
-are held in an AES-256-GCM outbox envelope under an independent runtime key;
-multi-replica delivery uses a bounded `FOR UPDATE SKIP LOCKED` lease. Logs do
-not contain recipients, tokens or mail-provider responses. Revoking a member
+The invitation table stores only an HMAC token hash plus the public target
+account ID for `@username` invitations. A link's recoverable token is held only
+in a domain-separated AES-256-GCM envelope so an idempotent create retry can
+return the same URL; cancellation or acceptance makes its hash unusable and
+deletes the dedicated envelope. Legacy email delivery keeps the opaque token
+and recipient in a separate AES-256-GCM outbox envelope under the runtime key;
+multi-replica delivery uses a bounded `FOR UPDATE SKIP LOCKED` lease. Public
+invitation responses, logs and audit metadata contain no email, token or
+mail-provider response. Revoking a member
 immediately marks every active shared Vault `rotation_required`; revoking an
 approved device does the same and invalidates all of its sessions. Writes then
 remain frozen until Owner/Admin conditionally commits a new full ciphertext,

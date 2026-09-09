@@ -86,6 +86,7 @@ struct CloudMacOSFoundationTests {
         let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
         let userID = try #require(UUID(uuidString: "66666666-6666-4666-8666-666666666666"))
         let invitationID = try #require(UUID(uuidString: "77777777-7777-4777-8777-777777777777"))
+        let linkInvitationID = try #require(UUID(uuidString: "88888888-8888-4888-8888-888888888888"))
         let vaultID = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
         let store = SelectiveRemoteCloudMemoryTokenStore()
         try store.saveToken(String(repeating: "t", count: 43), for: endpoint)
@@ -107,13 +108,46 @@ struct CloudMacOSFoundationTests {
                     "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
                 ]]])
             case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/invitations"):
-                #expect(Self.stringBodyValue(request, key: "email") == "viewer@example.invalid")
                 #expect(Self.stringBodyValue(request, key: "role") == "viewer")
+                if Self.stringBodyValue(request, key: "type") == "link" {
+                    return Self.response(request, status: 201, json: ["invitation": [
+                        "id": linkInvitationID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                        "teamName": "Platform", "type": "link", "targetUsername": NSNull(),
+                        "role": "viewer", "status": "pending",
+                        "acceptanceURL": "https://cloud.example.invalid/#accept-team-invitation?token=\(String(repeating: "x", count: 43))",
+                        "createdAt": "2026-09-09T00:00:00.000Z", "expiresAt": "2026-09-11T00:00:00.000Z"
+                    ]])
+                }
+                #expect(Self.stringBodyValue(request, key: "username") == "viewer")
                 return Self.response(request, status: 201, json: ["invitation": [
                     "id": invitationID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
-                    "email": "viewer@example.invalid", "role": "viewer", "status": "pending",
+                    "teamName": "Platform", "type": "username", "targetUsername": "viewer",
+                    "role": "viewer", "status": "pending", "acceptanceURL": NSNull(),
                     "createdAt": "2026-09-09T00:00:00.000Z", "expiresAt": "2026-09-11T00:00:00.000Z"
                 ]])
+            case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/invitations"):
+                return Self.response(request, status: 200, json: ["invitations": [[
+                    "id": invitationID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                    "teamName": "Platform", "type": "username", "targetUsername": "viewer",
+                    "role": "viewer", "status": "pending", "acceptanceURL": NSNull(),
+                    "createdAt": "2026-09-09T00:00:00.000Z", "expiresAt": "2026-09-11T00:00:00.000Z"
+                ]]])
+            case ("GET", "/v1/team-invitations"):
+                return Self.response(request, status: 200, json: ["invitations": [[
+                    "id": invitationID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                    "teamName": "Platform", "type": "username", "targetUsername": "viewer",
+                    "role": "viewer", "status": "pending", "acceptanceURL": NSNull(),
+                    "createdAt": "2026-09-09T00:00:00.000Z", "expiresAt": "2026-09-11T00:00:00.000Z"
+                ]]])
+            case ("POST", "/v1/team-invitations/accept"):
+                #expect(Self.stringBodyValue(request, key: "invitationID") == invitationID.canonicalCloudString)
+                return Self.response(request, status: 200, json: ["membership": [
+                    "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
+                    "username": "viewer", "displayName": "Viewer", "role": "viewer",
+                    "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
+                ]])
+            case ("DELETE", "/v1/teams/\(teamID.canonicalCloudString)/invitations/\(linkInvitationID.canonicalCloudString)"):
+                return Self.response(request, status: 200, json: ["cancelled": true])
             case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/vaults"):
                 #expect(Self.stringBodyValue(request, key: "name") == "Production")
                 return Self.response(request, status: 201, json: ["vault": [
@@ -134,8 +168,19 @@ struct CloudMacOSFoundationTests {
         #expect(try await client.createTeam(endpoint: endpoint, name: " Platform ").name == "Platform")
         #expect(try await client.teamMembers(endpoint: endpoint, teamID: teamID).first?.role == .owner)
         #expect(try await client.inviteTeamMember(
-            endpoint: endpoint, teamID: teamID, email: " VIEWER@example.invalid ", role: .viewer
-        ).email == "viewer@example.invalid")
+            endpoint: endpoint, teamID: teamID, username: " @Viewer ", role: .viewer
+        ).targetUsername == "viewer")
+        #expect(try await client.teamInvitations(endpoint: endpoint, teamID: teamID).count == 1)
+        #expect(try await client.pendingTeamInvitations(endpoint: endpoint).first?.teamName == "Platform")
+        let link = try await client.createTeamInvitationLink(endpoint: endpoint, teamID: teamID, role: .viewer)
+        #expect(link.id == linkInvitationID)
+        #expect(link.acceptanceURL?.hasSuffix(String(repeating: "x", count: 43)) == true)
+        #expect(try await client.acceptTeamInvitation(
+            endpoint: endpoint, invitationID: invitationID
+        ).username == "viewer")
+        try await client.cancelTeamInvitation(
+            endpoint: endpoint, teamID: teamID, invitationID: linkInvitationID
+        )
         #expect(try await client.createSharedVault(
             endpoint: endpoint, teamID: teamID, name: " Production "
         ).id == vaultID)

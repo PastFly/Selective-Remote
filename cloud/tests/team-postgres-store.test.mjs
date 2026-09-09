@@ -71,6 +71,23 @@ function mutationReservation(sql) {
   return sql.includes("INSERT INTO team_mutation_receipts") ? { rows: [{ actor_user_id: actorUserID }] } : null;
 }
 
+test("Team invitation listing exposes only active invitations manageable by the actor", async () => {
+  const viewerInvitation = {
+    actor_role: "admin", id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d", role: "viewer",
+  };
+  const adminInvitation = {
+    actor_role: "admin", id: "571c3424-b6aa-41a0-959f-aeaa1e3ef79d", role: "admin",
+  };
+  const f = fixture((sql) => sql.includes("LEFT JOIN team_invitations")
+    ? { rows: [viewerInvitation, adminInvitation] }
+    : { rows: [] });
+
+  assert.deepEqual(await f.store.listTeamInvitations(teamID, actorUserID), [viewerInvitation]);
+  assert.deepEqual(f.queries[0].parameters, [teamID, actorUserID]);
+  assert.match(f.queries[0].sql, /invitation\.expires_at > now\(\)/u);
+  assert.doesNotMatch(f.queries[0].sql, /invitation\.email/u);
+});
+
 test("Team creation atomically creates its first Owner and audit receipt", async () => {
   const team = { id: teamID, name: "Operations", created_at: new Date(), updated_at: new Date() };
   const membership = { id: membershipID, role: "owner", epoch: 1, joined_at: new Date() };
@@ -240,7 +257,7 @@ test("invitation creation locks authorization and stores hash plus encrypted out
   const invitation = {
     id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d",
     team_id: teamID,
-    email: "member@example.com",
+    invitation_type: "email",
     role: "editor",
   };
   const f = fixture((sql) => {
@@ -259,22 +276,108 @@ test("invitation creation locks authorization and stores hash plus encrypted out
   await f.store.createTeamInvitation({
     actorUserID,
     teamID,
+    invitationType: "email",
     email: "member@example.com",
+    username: null,
     role: "editor",
     tokenHash,
     expiresAt: new Date("2030-01-03T00:00:00.000Z"),
     outboxEnvelope,
+    linkSecretEnvelope: null,
     idempotencyKey: "request:team-invite-01",
   });
 
   const actorLock = f.queries.find(({ sql }) => sql.includes("FOR UPDATE OF membership, team"));
   assert.deepEqual(actorLock.parameters, [teamID, actorUserID]);
   const invitationInsert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_invitations"));
-  assert.equal(invitationInsert.parameters[3], tokenHash);
+  assert.equal(invitationInsert.parameters[5], tokenHash);
   const outboxInsert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_outbox_jobs"));
   assert.deepEqual(outboxInsert.parameters.slice(2), ["ciphertext", "n".repeat(16), "a".repeat(22)]);
   assert.equal(f.queries.some(({ sql }) => sql.includes(tokenHash)), false);
   assert.equal(f.queries.at(-2).sql, "COMMIT");
+});
+
+test("username invitation resolves one verified account without storing its private email", async () => {
+  const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";
+  const invitation = {
+    id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d",
+    team_id: teamID,
+    invitation_type: "username",
+    role: "viewer",
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FROM team_memberships AS membership") && sql.includes("JOIN teams AS team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("SELECT id, username FROM users")) {
+      return { rows: [{ id: targetUserID, username: "member" }] };
+    }
+    if (sql.includes("JOIN users AS account")) return { rows: [] };
+    if (sql.includes("INSERT INTO team_invitations")) return { rows: [invitation] };
+    return { rows: [], rowCount: 0 };
+  });
+
+  const result = await f.store.createTeamInvitation({
+    actorUserID,
+    teamID,
+    invitationType: "username",
+    email: null,
+    username: "member",
+    role: "viewer",
+    tokenHash: "d".repeat(64),
+    expiresAt: new Date("2030-01-03T00:00:00.000Z"),
+    outboxEnvelope: null,
+    linkSecretEnvelope: null,
+    idempotencyKey: "request:team-username-01",
+  });
+
+  assert.equal(result.invitation.target_username, "member");
+  assert.equal(result.invitation.team_name, "Operations");
+  const insert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_invitations"));
+  assert.deepEqual(insert.parameters.slice(1, 5), ["username", null, targetUserID, "viewer"]);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("target_user_id = $2")));
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_outbox_jobs")), false);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_invitation_link_secrets")), false);
+});
+
+test("link invitation stores only its hash and domain-separated encrypted recovery envelope", async () => {
+  const invitation = {
+    id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d",
+    team_id: teamID,
+    invitation_type: "link",
+    role: "editor",
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FROM team_memberships AS membership") && sql.includes("JOIN teams AS team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("INSERT INTO team_invitations")) return { rows: [invitation] };
+    return { rows: [], rowCount: 0 };
+  });
+  const linkSecretEnvelope = { ciphertext: "sealed", nonce: "n".repeat(16), authTag: "a".repeat(22) };
+
+  const result = await f.store.createTeamInvitation({
+    actorUserID,
+    teamID,
+    invitationType: "link",
+    email: null,
+    username: null,
+    role: "editor",
+    tokenHash: "e".repeat(64),
+    expiresAt: new Date("2030-01-03T00:00:00.000Z"),
+    outboxEnvelope: null,
+    linkSecretEnvelope,
+    idempotencyKey: "request:team-link-01",
+  });
+
+  assert.deepEqual(result.linkSecretEnvelope, linkSecretEnvelope);
+  const secretInsert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_invitation_link_secrets"));
+  assert.deepEqual(secretInsert.parameters, [invitation.id, "sealed", "n".repeat(16), "a".repeat(22)]);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_outbox_jobs")), false);
 });
 
 test("an Admin cannot invite another Admin even inside the transaction", async () => {
@@ -290,11 +393,14 @@ test("an Admin cannot invite another Admin even inside the transaction", async (
   await assert.rejects(f.store.createTeamInvitation({
     actorUserID,
     teamID,
+    invitationType: "email",
     email: "admin@example.com",
+    username: null,
     role: "admin",
     tokenHash: "b".repeat(64),
     expiresAt: new Date("2030-01-03T00:00:00.000Z"),
     outboxEnvelope: { ciphertext: "ciphertext", nonce: "n".repeat(16), authTag: "a".repeat(22) },
+    linkSecretEnvelope: null,
     idempotencyKey: "request:team-invite-02",
   }), /team_access_denied/);
 
@@ -332,6 +438,8 @@ test("invitation acceptance locks one token and advances a revoked membership ep
     id: membershipID,
     team_id: teamID,
     user_id: actorUserID,
+    username: "member",
+    display_name: "Member",
     role: "viewer",
     epoch: 3,
   };
@@ -339,7 +447,10 @@ test("invitation acceptance locks one token and advances a revoked membership ep
     const reservation = mutationReservation(sql);
     if (reservation) return reservation;
     if (sql.includes("FROM team_invitations AS invitation")) {
-      return { rows: [{ id: "invite-1", team_id: teamID, email: "member@example.com", role: "viewer" }] };
+      return { rows: [{
+        id: "invite-1", team_id: teamID, invitation_type: "email", role: "viewer",
+        username: "member", display_name: "Member",
+      }] };
     }
     if (sql.includes("ORDER BY epoch DESC")) return { rows: [{ id: "old", epoch: 2, revoked_at: new Date() }] };
     if (sql.includes("INSERT INTO team_memberships")) return { rows: [acceptedMembership] };
@@ -350,6 +461,7 @@ test("invitation acceptance locks one token and advances a revoked membership ep
   const result = await f.store.acceptTeamInvitation({
     actorUserID,
     actorEmail: "member@example.com",
+    invitationID: null,
     tokenHash: "c".repeat(64),
     idempotencyKey: "request:team-accept-01",
   });
@@ -357,8 +469,49 @@ test("invitation acceptance locks one token and advances a revoked membership ep
   assert.deepEqual(result, { membership: acceptedMembership });
   const membershipInsert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_memberships"));
   assert.equal(membershipInsert.parameters[3], 3);
-  assert.ok(f.queries.some(({ sql }) => sql.includes("FOR UPDATE OF invitation, team")));
+  const invitationLock = f.queries.find(({ sql }) => sql.includes("FOR UPDATE OF invitation, team"));
+  assert.deepEqual(invitationLock.parameters, ["c".repeat(64), null, "member@example.com", actorUserID]);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("DELETE FROM team_invitation_link_secrets")));
   assert.equal(f.queries.at(-2).sql, "COMMIT");
+});
+
+test("username invitation acceptance is bound to the authenticated target user ID", async () => {
+  const invitationID = "471c3424-b6aa-41a0-959f-aeaa1e3ef79d";
+  const acceptedMembership = {
+    id: membershipID,
+    team_id: teamID,
+    user_id: actorUserID,
+    username: "member",
+    display_name: "Member",
+    role: "editor",
+    epoch: 1,
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FROM team_invitations AS invitation")) {
+      return { rows: [{
+        id: invitationID, team_id: teamID, invitation_type: "username", role: "editor",
+        username: "member", display_name: "Member",
+      }] };
+    }
+    if (sql.includes("ORDER BY epoch DESC")) return { rows: [] };
+    if (sql.includes("INSERT INTO team_memberships")) return { rows: [acceptedMembership] };
+    if (sql.includes("UPDATE team_invitations SET accepted_at")) return { rows: [{ id: invitationID }] };
+    return { rows: [], rowCount: 0 };
+  });
+
+  await f.store.acceptTeamInvitation({
+    actorUserID,
+    actorEmail: "private@example.invalid",
+    invitationID,
+    tokenHash: null,
+    idempotencyKey: "request:team-username-accept-01",
+  });
+
+  const invitationLock = f.queries.find(({ sql }) => sql.includes("FOR UPDATE OF invitation, team"));
+  assert.deepEqual(invitationLock.parameters, [null, invitationID, "private@example.invalid", actorUserID]);
+  assert.match(invitationLock.sql, /invitation\.target_user_id = \$4/u);
 });
 
 test("membership revocation immediately freezes every active shared Vault", async () => {

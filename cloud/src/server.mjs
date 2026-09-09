@@ -219,14 +219,24 @@ async function route(request, response) {
         },
       );
     }
+    if (method === "GET" && url.pathname === "/v1/team-invitations") {
+      return handleOperation(response, () => service.listPendingTeamInvitations(session));
+    }
     const teamMembersMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/members$/i);
     if (method === "GET" && teamMembersMatch) {
       if (!isUUID(teamMembersMatch[1])) return sendError(response, 404, "team_not_found");
       return handleOperation(response, () => service.listTeamMembers(session, teamMembersMatch[1]));
     }
     const teamInvitationsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations$/i);
-    if (method === "POST" && teamInvitationsMatch) {
+    if (teamInvitationsMatch) {
       if (!isUUID(teamInvitationsMatch[1])) return sendError(response, 404, "team_not_found");
+      if (method === "GET") {
+        return handleOperation(
+          response,
+          () => service.listTeamInvitations(session, teamInvitationsMatch[1]),
+        );
+      }
+      if (method !== "POST") return sendError(response, 404, "not_found");
       return handleOperation(
         response,
         async () => {
