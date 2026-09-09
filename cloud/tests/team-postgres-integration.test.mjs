@@ -41,12 +41,12 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
   try {
     await applyMigrations(pool, migrationsDirectory, { info() {} });
     const users = await pool.query(
-      `INSERT INTO users (email, display_name, email_verified_at) VALUES
-         ('owner@example.com', 'Owner', now()),
-         ('admin@example.com', 'Admin', now()),
-         ('viewer@example.com', 'Viewer', now()),
-         ('other@example.com', 'Other', now()),
-         ('legacy@example.com', 'Legacy', now())
+      `INSERT INTO users (email, username, display_name, email_verified_at) VALUES
+         ('owner@example.com', 'owner', 'Owner', now()),
+         ('admin@example.com', 'admin', 'Admin', now()),
+         ('viewer@example.com', 'viewer', 'Viewer', now()),
+         ('other@example.com', 'other', 'Other', now()),
+         ('legacy@example.com', 'legacy', 'Legacy', now())
        RETURNING id, email`,
     );
     const byEmail = Object.fromEntries(users.rows.map((row) => [row.email, row.id]));
