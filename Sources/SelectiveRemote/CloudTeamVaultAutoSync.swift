@@ -41,7 +41,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
             try SelectiveRemoteTeamVaultFileSnapshotStore()
         },
         snapshotConsumer: @escaping SelectiveRemoteTeamVaultMaterializedSnapshotConsumer = {
-            await SelectiveRemoteTeamHostStore.shared.replace(with: $0)
+            SelectiveRemoteTeamHostStore.shared.replace(with: $0)
         },
         pollInterval: Duration = .seconds(15)
     ) {
