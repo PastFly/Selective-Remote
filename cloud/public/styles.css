@@ -83,6 +83,7 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--ink); 
 .local-vault { margin:50px 0; padding:34px; border:1px solid var(--line); border-radius:22px; background:#0c1714e8; }
 .team-vault { margin:50px 0; padding:34px; border:1px solid #75e0b45c; border-radius:22px; background:linear-gradient(145deg,#0c1714f2,#102019e8); }
 .team-onboarding,.team-columns { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; margin-top:26px; }
+#team-selected .team-columns { grid-template-columns:1fr; }
 .team-onboarding form,.team-columns>div { padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
 .team-onboarding form,.team-columns form { display:grid; gap:10px; }
 .team-onboarding h3,.team-columns h3,.team-columns h4 { margin:0 0 8px; }

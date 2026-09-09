@@ -147,7 +147,9 @@
           <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
           <p class="workspace-nav-label">Хранилища</p>
           <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
-          <button type="button" data-workspace-target="team-vault">Команды и Team Vaults</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Team Vaults</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Team Hosts</button>
           <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
           <button type="button" data-workspace-target="workspace-settings">Настройки</button>
@@ -337,7 +339,7 @@
         <p id="team-vault-message" aria-live="polite">Загрузка Teams…</p>
       </div>
 
-      <div class="team-onboarding">
+      <div class="team-onboarding" id="team-onboarding">
         <form id="team-create-form">
           <h3>Создать Team</h3>
           <label for="team-create-name">Название</label>
@@ -364,7 +366,7 @@
           <p>Роли и ключи проверяются сервером независимо от зашифрованного содержимого.</p>
         </div>
         <div class="team-columns">
-          <div>
+          <div id="team-members-view">
             <h3>Участники</h3>
             <div class="team-members" id="team-members"></div>
             <form id="team-invite-form">
@@ -380,7 +382,7 @@
               <button type="submit">Отправить приглашение</button>
             </form>
           </div>
-          <div>
+          <div id="team-vault-directory-view">
             <h3>Shared Vaults</h3>
             <form id="team-vault-create-form">
               <label for="team-vault-create-name">Название Vault</label>
