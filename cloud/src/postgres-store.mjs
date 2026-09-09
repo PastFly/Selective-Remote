@@ -443,7 +443,11 @@ export class PostgresStore {
         "UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
         [userID, deviceID],
       );
-      if (result.rows[0].key_approved_at) {
+      const wrapper = await client.query(
+        "SELECT 1 FROM shared_vault_key_wrappers WHERE device_id = $1 LIMIT 1",
+        [deviceID],
+      );
+      if (result.rows[0].key_approved_at || wrapper.rows[0]) {
         await client.query(
           `WITH affected AS (
              UPDATE shared_vaults AS vault SET rotation_required = true, updated_at = now()
@@ -935,24 +939,13 @@ export class PostgresStore {
       if (!invitation) throw new Error("invalid_team_invitation");
 
       const deviceResult = await client.query(
-        `SELECT id, key_approved_at FROM devices
+        `SELECT id FROM devices
          WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
            AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
          FOR UPDATE`,
         [actorDeviceID, actorUserID],
       );
-      const acceptingDevice = deviceResult.rows[0];
-      if (!acceptingDevice) throw new Error("device_approval_required");
-      const deviceAutoApproved = !acceptingDevice.key_approved_at;
-      if (deviceAutoApproved) {
-        await client.query(
-          `UPDATE devices SET key_approved_at = now(), key_approved_by_device_id = NULL
-           WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
-             AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
-             AND key_approved_at IS NULL`,
-          [actorDeviceID, actorUserID],
-        );
-      }
+      if (!deviceResult.rows[0]) throw new Error("device_approval_required");
 
       const priorResult = await client.query(
         `SELECT id, epoch, revoked_at FROM team_memberships
@@ -975,6 +968,12 @@ export class PostgresStore {
         username: invitation.username,
         display_name: invitation.display_name,
       };
+      await client.query(
+        `INSERT INTO team_membership_device_admissions
+          (membership_id, membership_epoch, device_id, invitation_id)
+         VALUES ($1, $2, $3, $4)`,
+        [membership.id, nextEpoch, actorDeviceID, invitation.id],
+      );
       const accepted = await client.query(
         `UPDATE team_invitations SET accepted_at = now(), accepted_by_user_id = $2
          WHERE id = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
@@ -996,7 +995,7 @@ export class PostgresStore {
           role: membership.role,
           epoch: nextEpoch,
           acceptingDeviceID: actorDeviceID,
-          deviceAutoApproved,
+          deviceAdmittedByInvitation: true,
         },
       });
       return { membership };
@@ -1156,13 +1155,20 @@ export class PostgresStore {
 
   async listTeamKeyDevices(teamID, vaultID, actorUserID, actorDeviceID) {
     const access = await this.pool.query(
-      `SELECT membership.role, device.key_approved_at,
+      `SELECT membership.role,
+         (device.key_approved_at IS NOT NULL OR actor_admission.device_id IS NOT NULL)
+           AS actor_key_authorized,
          actor_wrapper.device_id IS NOT NULL AS actor_has_wrapper
        FROM team_memberships AS membership
        JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
        JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
          AND device.revoked_at IS NULL
+         AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
+       LEFT JOIN team_membership_device_admissions AS actor_admission
+         ON actor_admission.membership_id = membership.id
+        AND actor_admission.membership_epoch = membership.epoch
+        AND actor_admission.device_id = device.id
        LEFT JOIN shared_vault_key_wrappers AS actor_wrapper
          ON actor_wrapper.vault_id = vault.id
         AND actor_wrapper.key_generation = vault.key_generation
@@ -1174,7 +1180,7 @@ export class PostgresStore {
       [teamID, vaultID, actorUserID, actorDeviceID],
     );
     if (!access.rows[0]) throw new Error("team_not_found");
-    if (!access.rows[0].key_approved_at) throw new Error("device_approval_required");
+    if (!access.rows[0].actor_key_authorized) throw new Error("device_approval_required");
     if (!access.rows[0].actor_has_wrapper) {
       try {
         requireTeamPermission(access.rows[0].role, "manage_vault_keys");
@@ -1188,6 +1194,10 @@ export class PostgresStore {
          wrapper.device_id IS NOT NULL AS has_wrapper
        FROM team_memberships AS membership
        JOIN devices AS device ON device.user_id = membership.user_id
+       LEFT JOIN team_membership_device_admissions AS admission
+         ON admission.membership_id = membership.id
+        AND admission.membership_epoch = membership.epoch
+        AND admission.device_id = device.id
        JOIN shared_vaults AS vault ON vault.id = $2 AND vault.team_id = membership.team_id
          AND vault.archived_at IS NULL
        LEFT JOIN shared_vault_key_wrappers AS wrapper
@@ -1195,8 +1205,9 @@ export class PostgresStore {
          AND wrapper.membership_id = membership.id AND wrapper.membership_epoch = membership.epoch
          AND wrapper.device_id = device.id
        WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
-         AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
-         AND device.public_key IS NOT NULL
+         AND device.revoked_at IS NULL
+         AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)
+         AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
        ORDER BY membership.id, device.id`,
       [teamID, vaultID],
     );
@@ -1209,7 +1220,9 @@ export class PostgresStore {
          vault.rotation_required, vault.envelope_version, vault.ciphertext, vault.nonce,
          vault.auth_tag, vault.content_hash, vault.created_at, vault.updated_at,
          membership.id AS membership_id, membership.epoch AS membership_epoch,
-         device.id AS device_id, device.key_approved_at,
+         device.id AS device_id,
+         (device.key_approved_at IS NOT NULL OR actor_admission.device_id IS NOT NULL)
+           AS device_key_authorized,
          wrapper.wrapper_version, wrapper.ephemeral_public_key,
          wrapper.ciphertext AS wrapper_ciphertext, wrapper.nonce AS wrapper_nonce,
          wrapper.auth_tag AS wrapper_auth_tag, wrapper.context_hash
@@ -1218,6 +1231,11 @@ export class PostgresStore {
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
        JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
          AND device.revoked_at IS NULL
+         AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
+       LEFT JOIN team_membership_device_admissions AS actor_admission
+         ON actor_admission.membership_id = membership.id
+        AND actor_admission.membership_epoch = membership.epoch
+        AND actor_admission.device_id = device.id
        LEFT JOIN shared_vault_key_wrappers AS wrapper
          ON wrapper.vault_id = vault.id AND wrapper.key_generation = vault.key_generation
          AND wrapper.membership_id = membership.id AND wrapper.membership_epoch = membership.epoch
@@ -1228,7 +1246,7 @@ export class PostgresStore {
     );
     const row = result.rows[0];
     if (!row) throw new Error("team_not_found");
-    if (!row.key_approved_at) throw new Error("device_approval_required");
+    if (!row.device_key_authorized) throw new Error("device_approval_required");
     return row;
   }
 
@@ -1243,7 +1261,7 @@ export class PostgresStore {
     return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client) => {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) throw new Error("team_not_found");
-      if (!context.key_approved_at) throw new Error("device_approval_required");
+      if (!context.device_key_authorized) throw new Error("device_approval_required");
       requireTeamPermission(context.role, "write_vault");
       const currentRevision = Number(context.revision);
       const currentGeneration = Number(context.key_generation);
@@ -1334,7 +1352,7 @@ export class PostgresStore {
     return this.withTeamMutation(actorUserID, "team.vault.wrapper.grant", idempotencyKey, async (client) => {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) throw new Error("team_not_found");
-      if (!context.key_approved_at) throw new Error("device_approval_required");
+      if (!context.device_key_authorized) throw new Error("device_approval_required");
       if (!Number.isSafeInteger(keyGeneration) || keyGeneration !== Number(context.key_generation)
         || Number(context.revision) === 0 || context.rotation_required === true) {
         throw new Error("invalid_key_generation");
@@ -1476,12 +1494,19 @@ async function lockTeamMembership(client, teamID, membershipID) {
 async function lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID) {
   const result = await client.query(
     `SELECT membership.id AS membership_id, membership.role, membership.epoch,
-       device.key_approved_at, vault.revision, vault.key_generation, vault.rotation_required
+       (device.key_approved_at IS NOT NULL OR actor_admission.device_id IS NOT NULL)
+         AS device_key_authorized,
+       vault.revision, vault.key_generation, vault.rotation_required
      FROM team_memberships AS membership
      JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
      JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
      JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
        AND device.revoked_at IS NULL
+       AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
+     LEFT JOIN team_membership_device_admissions AS actor_admission
+       ON actor_admission.membership_id = membership.id
+      AND actor_admission.membership_epoch = membership.epoch
+      AND actor_admission.device_id = device.id
      WHERE membership.team_id = $1 AND vault.id = $2 AND membership.user_id = $3
        AND membership.revoked_at IS NULL
      FOR UPDATE OF membership, team, vault, device`,
@@ -1496,9 +1521,14 @@ async function lockEligibleTeamDevices(client, teamID) {
        device.id AS device_id
      FROM team_memberships AS membership
      JOIN devices AS device ON device.user_id = membership.user_id
+     LEFT JOIN team_membership_device_admissions AS admission
+       ON admission.membership_id = membership.id
+      AND admission.membership_epoch = membership.epoch
+      AND admission.device_id = device.id
      WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
-       AND device.revoked_at IS NULL AND device.key_approved_at IS NOT NULL
-       AND device.public_key IS NOT NULL
+       AND device.revoked_at IS NULL
+       AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)
+       AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
      ORDER BY membership.id, device.id
      FOR UPDATE OF membership, device`,
     [teamID],

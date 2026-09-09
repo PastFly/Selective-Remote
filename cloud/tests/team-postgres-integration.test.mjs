@@ -156,12 +156,22 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     assert.equal(accepted.membership.username, "admin");
     assert.equal(accepted.membership.display_name, "Admin");
     assert.equal(Number(accepted.membership.epoch), 1);
-    const approvedAdminDevice = await pool.query(
+    const admittedAdminDevice = await pool.query(
       "SELECT key_approved_at, key_approved_by_device_id FROM devices WHERE id = $1",
       [adminDeviceID],
     );
-    assert.ok(approvedAdminDevice.rows[0].key_approved_at);
-    assert.equal(approvedAdminDevice.rows[0].key_approved_by_device_id, null);
+    assert.equal(admittedAdminDevice.rows[0].key_approved_at, null);
+    assert.equal(admittedAdminDevice.rows[0].key_approved_by_device_id, null);
+    const scopedAdmission = await pool.query(
+      `SELECT membership_id, membership_epoch, device_id, invitation_id
+       FROM team_membership_device_admissions
+       WHERE membership_id = $1 AND membership_epoch = $2 AND device_id = $3`,
+      [accepted.membership.id, accepted.membership.epoch, adminDeviceID],
+    );
+    assert.equal(scopedAdmission.rows[0].membership_id, accepted.membership.id);
+    assert.equal(Number(scopedAdmission.rows[0].membership_epoch), 1);
+    assert.equal(scopedAdmission.rows[0].device_id, adminDeviceID);
+    assert.equal(scopedAdmission.rows[0].invitation_id, adminInvite.invitation.id);
     await assert.rejects(store.acceptTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
       actorDeviceID: adminDeviceID,
