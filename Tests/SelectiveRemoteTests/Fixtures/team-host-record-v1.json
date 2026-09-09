@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "type": "host",
+      "version": {
+        "44444444-4444-4444-8444-444444444444": 1
+      },
+      "modifiedAt": "2026-09-10T00:00:00.000Z",
+      "data": {
+        "title": "Browser Bastion",
+        "address": "ssh://deployer@bastion.example.invalid:2222"
+      }
+    },
+    {
+      "id": "77777777-7777-4777-8777-777777777777",
+      "type": "host",
+      "version": {
+        "44444444-4444-4444-8444-444444444444": 2
+      },
+      "modifiedAt": "2026-09-10T00:01:00.000Z",
+      "data": {
+        "title": "Mac RDP",
+        "address": "rdp.example.invalid",
+        "username": "operator",
+        "connectionType": "rdp",
+        "profile": "eyJjb25uZWN0aW9uVHlwZSI6InJkcCIsImZyaWVuZGx5TmFtZSI6Ik1hYyBSRFAiLCJob3N0IjoicmRwLmV4YW1wbGUuaW52YWxpZCIsImlkIjoiNzc3Nzc3NzctNzc3Ny00Nzc3LTg3NzctNzc3Nzc3Nzc3Nzc3IiwidXNlcm5hbWUiOiJvcGVyYXRvciJ9"
+      }
+    }
+  ],
+  "tombstones": []
+}

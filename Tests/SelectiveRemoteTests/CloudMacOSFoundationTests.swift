@@ -732,10 +732,12 @@ struct CloudMacOSFoundationTests {
             deviceID: deviceID
         )
         let snapshots = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let materialized = TeamVaultMaterializedSnapshotSink()
         let autoSync = SelectiveRemoteTeamVaultAutoSync(
             remote: remote,
             identityManager: SelectiveRemoteTeamDeviceIdentityManager(store: keyStore),
-            snapshotStore: { snapshots }
+            snapshotStore: { snapshots },
+            snapshotConsumer: { await materialized.replace(with: $0) }
         )
 
         let report = try await autoSync.synchronizeOnce(
@@ -748,6 +750,13 @@ struct CloudMacOSFoundationTests {
         #expect(report.pendingWrappers == 0)
         #expect(report.failures == 0)
         #expect(try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) != nil)
+        let published = await materialized.snapshots()
+        #expect(published.count == 1)
+        #expect(published.first?.teamID == teamID)
+        #expect(published.first?.vaultID == vaultID)
+        #expect(published.first?.role == .viewer)
+        let expectedPayload = try fixture.payload.plaintext.base64URLData
+        #expect(published.first?.payload == expectedPayload)
     }
 
     @Test("Team Vault coordinator stages and acknowledges one causal upload")
@@ -1675,5 +1684,18 @@ private extension Data {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+}
+
+
+private actor TeamVaultMaterializedSnapshotSink {
+    private var values: [SelectiveRemoteTeamVaultMaterializedSnapshot] = []
+
+    func replace(with snapshots: [SelectiveRemoteTeamVaultMaterializedSnapshot]) {
+        values = snapshots
+    }
+
+    func snapshots() -> [SelectiveRemoteTeamVaultMaterializedSnapshot] {
+        values
     }
 }

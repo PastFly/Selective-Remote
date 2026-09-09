@@ -23,10 +23,14 @@ struct SelectiveRemoteTeamVaultAutoSyncReport: Equatable, Sendable {
 typealias SelectiveRemoteTeamVaultSnapshotStoreFactory =
     @Sendable () throws -> any SelectiveRemoteTeamVaultSnapshotStore
 
+typealias SelectiveRemoteTeamVaultMaterializedSnapshotConsumer =
+    @Sendable ([SelectiveRemoteTeamVaultMaterializedSnapshot]) async -> Void
+
 actor SelectiveRemoteTeamVaultAutoSync {
     private let remote: any SelectiveRemoteTeamVaultAutoSyncRemote
     private let identityManager: SelectiveRemoteTeamDeviceIdentityManager
     private let snapshotStore: SelectiveRemoteTeamVaultSnapshotStoreFactory
+    private let snapshotConsumer: SelectiveRemoteTeamVaultMaterializedSnapshotConsumer
     private let pollInterval: Duration
     private var cycle: Task<Void, Never>?
 
@@ -36,11 +40,15 @@ actor SelectiveRemoteTeamVaultAutoSync {
         snapshotStore: @escaping SelectiveRemoteTeamVaultSnapshotStoreFactory = {
             try SelectiveRemoteTeamVaultFileSnapshotStore()
         },
+        snapshotConsumer: @escaping SelectiveRemoteTeamVaultMaterializedSnapshotConsumer = {
+            await SelectiveRemoteTeamHostStore.shared.replace(with: $0)
+        },
         pollInterval: Duration = .seconds(15)
     ) {
         self.remote = remote
         self.identityManager = identityManager
         self.snapshotStore = snapshotStore
+        self.snapshotConsumer = snapshotConsumer
         self.pollInterval = pollInterval
     }
 
@@ -51,9 +59,10 @@ actor SelectiveRemoteTeamVaultAutoSync {
         }
     }
 
-    func stop() {
+    func stop() async {
         cycle?.cancel()
         cycle = nil
+        await snapshotConsumer([])
     }
 
     func synchronizeOnce(
@@ -65,10 +74,14 @@ actor SelectiveRemoteTeamVaultAutoSync {
             throw SelectiveRemoteCloudError.invalidRequest
         }
         var report = SelectiveRemoteTeamVaultAutoSyncReport()
-        guard await remote.hasStoredSession(endpoint: endpoint) else { return report }
+        guard await remote.hasStoredSession(endpoint: endpoint) else {
+            await snapshotConsumer([])
+            return report
+        }
 
         let identity = try await identityManager.identity(endpoint: endpoint, deviceID: deviceID)
         let teams = try await remote.teams(endpoint: endpoint)
+        var materialized: [SelectiveRemoteTeamVaultMaterializedSnapshot] = []
         for team in teams {
             try Task.checkCancellation()
             let vaults: [SelectiveRemoteCloudSharedVault]
@@ -108,8 +121,13 @@ actor SelectiveRemoteTeamVaultAutoSync {
                     switch refreshed {
                     case .empty:
                         report.emptyVaults += 1
-                    case .synchronized:
+                    case let .synchronized(value):
                         report.synchronizedVaults += 1
+                        materialized.append(Self.materializedSnapshot(
+                            team: team,
+                            vault: vault,
+                            value: value
+                        ))
                     case .localChanges:
                         let pushed = try await coordinator.push(
                             teamID: team.id,
@@ -117,8 +135,13 @@ actor SelectiveRemoteTeamVaultAutoSync {
                             identity: identity
                         )
                         switch pushed {
-                        case .uploaded:
+                        case let .uploaded(value):
                             report.uploadedVaults += 1
+                            materialized.append(Self.materializedSnapshot(
+                                team: team,
+                                vault: vault,
+                                value: value
+                            ))
                         case .conflict:
                             report.conflicts += 1
                         }
@@ -136,7 +159,26 @@ actor SelectiveRemoteTeamVaultAutoSync {
                 }
             }
         }
+        try Task.checkCancellation()
+        await snapshotConsumer(materialized)
         return report
+    }
+
+    private static func materializedSnapshot(
+        team: SelectiveRemoteCloudTeam,
+        vault: SelectiveRemoteCloudSharedVault,
+        value: SelectiveRemoteTeamVaultDecryptedSnapshot
+    ) -> SelectiveRemoteTeamVaultMaterializedSnapshot {
+        .init(
+            teamID: team.id,
+            teamName: team.name,
+            role: team.role,
+            vaultID: vault.id,
+            vaultName: vault.name,
+            revision: value.snapshot.serverRevision,
+            keyGeneration: value.snapshot.keyGeneration,
+            payload: value.payload
+        )
     }
 
     private func runLoop() async {
@@ -147,6 +189,8 @@ actor SelectiveRemoteTeamVaultAutoSync {
                         endpoint: account.endpoint,
                         deviceID: account.deviceID
                     )
+                } else {
+                    await snapshotConsumer([])
                 }
                 try await Task.sleep(for: pollInterval)
             } catch is CancellationError {

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { validateVaultDocument } from "../public/vault-model.js";
 
 const sourceRoot = new URL("../../Sources/SelectiveRemote/", import.meta.url);
 
@@ -236,4 +237,65 @@ test("macOS Personal Vault first upload is encrypted, explicit and non-destructi
   assert.match(settings, /Task\.detached/);
   assert.match(settings, /personalVaultRecoveryPhrase = ""/);
   assert.match(appSettings, /CloudSettingsView\(model: model\)/);
+});
+
+
+test("browser and macOS share the bounded Team Host record fixture", async () => {
+  const fixtureURL = new URL(
+    "../../Tests/SelectiveRemoteTests/Fixtures/team-host-record-v1.json",
+    import.meta.url,
+  );
+  const fixture = validateVaultDocument(JSON.parse(await readFile(fixtureURL, "utf8")));
+  assert.equal(fixture.records.length, 2);
+
+  const browser = fixture.records.find((record) => record.id === "33333333-3333-4333-8333-333333333333");
+  assert.deepEqual(Object.keys(browser.data).sort(), ["address", "title"]);
+  assert.equal(browser.data.address, "ssh://deployer@bastion.example.invalid:2222");
+
+  const mac = fixture.records.find((record) => record.id === "77777777-7777-4777-8777-777777777777");
+  assert.deepEqual(
+    Object.keys(mac.data).sort(),
+    ["address", "connectionType", "profile", "title", "username"],
+  );
+  const decodedProfile = JSON.parse(Buffer.from(mac.data.profile, "base64url").toString("utf8"));
+  assert.equal(decodedProfile.id, mac.id);
+  assert.equal(decodedProfile.connectionType, "rdp");
+  assert.equal(decodedProfile.host, mac.data.address);
+  assert.equal(decodedProfile.username, mac.data.username);
+});
+
+test("macOS projects Team Hosts separately and connects without Personal persistence", async () => {
+  const [hosts, autoSync, content, appModel, terminal] = await Promise.all([
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("AppModel.swift", sourceRoot), "utf8"),
+    readFile(new URL("TerminalWorkspace.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(hosts, /final class SelectiveRemoteTeamHostStore: ObservableObject/);
+  assert.match(hosts, /browserKeys[\s\S]*"title", "address"/);
+  assert.match(hosts, /macOSKeys[\s\S]*"connectionType", "profile"/);
+  assert.match(hosts, /selective-remote\/team-host\/v1/);
+  assert.match(hosts, /sshIdentityID = nil/);
+  assert.match(hosts, /redirectedFolders = \[\]/);
+  assert.match(hosts, /clipboardMode = \.disabled/);
+  assert.doesNotMatch(hosts, /profiles\.append|model\.profiles/);
+
+  assert.match(autoSync, /case let \.synchronized\(value\)/);
+  assert.match(autoSync, /case let \.uploaded\(value\)/);
+  assert.match(autoSync, /await snapshotConsumer\(materialized\)/);
+  assert.match(autoSync, /func stop\(\) async[\s\S]*snapshotConsumer\(\[\]\)/);
+
+  assert.match(content, /case teamHosts = "Team Hosts"/);
+  assert.match(content, /SelectiveRemoteTeamHostsView/);
+  assert.match(content, /ephemeral: true/);
+  assert.match(appModel, /func connectTeamHost\(/);
+  assert.match(appModel, /allowsStoredCredentials: false/);
+  assert.match(appModel, /persistsProfileState: false/);
+  assert.doesNotMatch(
+    appModel.match(/func connectTeamHost\([\s\S]*?\n    \}\n\n    func sshConnectionSettings/u)?.[0] ?? "",
+    /profiles\.append/,
+  );
+  assert.match(terminal, /var isEphemeral: Bool/);
+  assert.match(terminal, /tabs\.filter \{ !\$0\.isEphemeral \}\.map/);
 });
