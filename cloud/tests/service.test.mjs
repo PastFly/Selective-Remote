@@ -15,6 +15,7 @@ class MemoryStore {
     this.replacementPasswordResetHash = null;
     this.lastPasswordResetExpiry = null;
     this.lastPasswordHash = null;
+    this.deletedUserID = null;
   }
   async createUser(input) {
     this.lastVerificationHash = input.verificationHash;
@@ -63,6 +64,7 @@ class MemoryStore {
     this.sessions.clear();
     return true;
   }
+  async deleteAccount(userID) { this.deletedUserID = userID; this.sessions.clear(); return { deleted: true }; }
   async getVault() { return { id: "vault-1", revision: this.revision, envelope_version: 1, wrapped_key: null, ciphertext: null, nonce: null, auth_tag: null, content_hash: null, updated_at: new Date() }; }
   async putVault(_userID, _deviceID, envelope) {
     if (envelope.baseRevision !== this.revision) return { conflict: true, revision: this.revision };
@@ -124,6 +126,31 @@ test("vault writes use optimistic revisions", async () => {
   };
   assert.deepEqual(await service.putVault(session, body), { conflict: false, revision: 1 });
   assert.deepEqual(await service.putVault(session, body), { conflict: true, revision: 1 });
+});
+
+test("account deletion requires password reauthentication and exact account email", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1", email: "user@example.com", display_name: "User",
+    password_hash: "stored-password-hash", email_verified_at: new Date(), disabled_at: null,
+  };
+  const verifier = async (password, hash) => password === "correct horse battery" && hash === "stored-password-hash";
+  const service = new CloudService(store, config, null, console, verifier);
+  const session = { user_id: "user-1", email: "user@example.com", device_id: device.id };
+  await assert.rejects(
+    service.deleteAccount(session, { email: "other@example.com", password: "correct horse battery" }),
+    /account_email_mismatch/,
+  );
+  await assert.rejects(
+    service.deleteAccount(session, { email: "user@example.com", password: "incorrect password" }),
+    /invalid_credentials/,
+  );
+  assert.equal(store.deletedUserID, null);
+  assert.deepEqual(
+    await service.deleteAccount(session, { email: "USER@example.com", password: "correct horse battery" }),
+    { deleted: true },
+  );
+  assert.equal(store.deletedUserID, "user-1");
 });
 
 test("registration can be disabled until SMTP is configured", async () => {

@@ -374,6 +374,22 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const roleByUser = Object.fromEntries(transferredRoles.rows.map((row) => [row.user_id, row.role]));
     assert.equal(roleByUser[byEmail["owner@example.com"]], "admin");
     assert.equal(roleByUser[byEmail["viewer@example.com"]], "owner");
+    assert.deepEqual(await store.deleteAccount(byEmail["owner@example.com"]), { deleted: true });
+    const deletedAccountState = await pool.query(
+      `SELECT
+         (SELECT count(*)::int FROM users WHERE id = $1) AS users,
+         (SELECT count(*)::int FROM devices WHERE user_id = $1) AS devices,
+         (SELECT count(*)::int FROM sessions WHERE user_id = $1) AS sessions,
+         (SELECT count(*)::int FROM personal_vaults WHERE user_id = $1) AS personal_vaults,
+         (SELECT count(*)::int FROM team_memberships WHERE id = $2 AND user_id IS NULL AND revoked_at IS NOT NULL) AS retained_memberships,
+         (SELECT count(*)::int FROM shared_vaults WHERE team_id = $3 AND rotation_required) AS frozen_vaults,
+         (SELECT count(*)::int FROM shared_vault_rotation_tasks WHERE removed_membership_id = $2 AND status = 'pending') AS rotation_tasks`,
+      [byEmail["owner@example.com"], created.membership.id, created.team.id],
+    );
+    assert.deepEqual(deletedAccountState.rows[0], {
+      users: 0, devices: 0, sessions: 0, personal_vaults: 0,
+      retained_memberships: 1, frozen_vaults: 1, rotation_tasks: 1,
+    });
     await assert.rejects(store.archiveTeam({
       actorUserID: byEmail["viewer@example.com"],
       teamID: created.team.id,
