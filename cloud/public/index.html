@@ -137,9 +137,17 @@
         <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
         <nav aria-label="Разделы Cloud">
           <button type="button" class="active" data-workspace-target="workspace-overview">Обзор</button>
-          <button type="button" data-workspace-target="local-vault">Personal Vault</button>
-          <button type="button" data-workspace-target="team-vault">Teams и Vaults</button>
+          <p class="workspace-nav-label">Ресурсы</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="host">Хосты</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
+          <p class="workspace-nav-label">Хранилища</p>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
+          <button type="button" data-workspace-target="team-vault">Команды и Team Vaults</button>
+          <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
+          <button type="button" data-workspace-target="workspace-settings">Настройки</button>
         </nav>
         <div class="workspace-security"><span>●</span> E2EE включено</div>
       </aside>
@@ -246,6 +254,24 @@
           <button type="submit">Зашифровать и сохранить</button>
         </form>
         <div class="vault-records" id="local-vault-records"></div>
+        <dialog class="resource-detail" id="host-detail-dialog" aria-labelledby="host-detail-title">
+          <form method="dialog" class="resource-detail-card">
+            <div class="resource-detail-heading">
+              <div><p class="eyebrow">HOST · PERSONAL VAULT</p><h3 id="host-detail-title">Host</h3></div>
+              <button type="submit" class="secondary" aria-label="Закрыть карточку Host">Закрыть</button>
+            </div>
+            <dl class="resource-detail-fields">
+              <div><dt>Адрес</dt><dd id="host-detail-address">—</dd></div>
+              <div><dt>Изменён</dt><dd id="host-detail-modified">—</dd></div>
+              <div><dt>Источник</dt><dd>Personal Vault · расшифровано только в браузере</dd></div>
+            </dl>
+            <section class="resource-detail-next">
+              <h4>Удалённое выполнение</h4>
+              <p>Для запуска Snippet потребуется доверенный онлайн‑Mac. Cloud не получает SSH‑пароль или приватный ключ.</p>
+              <span class="resource-readiness">Агент выполнения ещё не подключён</span>
+            </section>
+          </form>
+        </dialog>
         <section class="vault-conflicts" id="local-vault-conflicts" aria-labelledby="local-vault-conflicts-title" hidden>
           <h3 id="local-vault-conflicts-title">Требуется разрешить конфликты</h3>
           <p>Выберите одну версию для каждой записи. Секретные поля и содержимое записей здесь не показываются.</p>
@@ -269,6 +295,27 @@
         </div>
         <div class="team-devices" id="team-devices"></div>
       </div>
+    </section>
+
+    <section class="workspace-panel workspace-settings" id="workspace-settings" hidden>
+      <div class="vault-heading">
+        <div><p class="eyebrow">ACCOUNT SETTINGS</p><h2>Настройки аккаунта</h2></div>
+        <p>Управление аккаунтом Selective Remote Cloud.</p>
+      </div>
+      <section class="account-danger-zone" aria-labelledby="account-delete-title">
+        <h3 id="account-delete-title">Удалить аккаунт</h3>
+        <p>Будут безвозвратно удалены Personal Vault, устройства и все сессии. Доступ к Team Vaults будет отозван.</p>
+        <p class="account-delete-warning">Если вы Owner активной Team, сначала передайте владение другому участнику или архивируйте Team.</p>
+        <form id="account-delete-form">
+          <label for="account-delete-email">Введите точный email аккаунта</label>
+          <input id="account-delete-email" name="email" type="email" maxlength="254" autocomplete="email" required>
+          <label for="account-delete-password">Текущий пароль</label>
+          <input id="account-delete-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+          <label class="account-delete-confirmation"><input name="confirmation" type="checkbox" required> Я понимаю, что Personal Vault и аккаунт восстановить нельзя.</label>
+          <button type="submit" class="danger">Удалить аккаунт безвозвратно</button>
+          <p id="account-delete-message" aria-live="polite"></p>
+        </form>
+      </section>
     </section>
 
     <section class="team-vault workspace-panel" id="team-vault" aria-labelledby="team-vault-title" hidden>

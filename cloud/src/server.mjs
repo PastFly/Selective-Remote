@@ -94,6 +94,12 @@ async function route(request, response) {
         deviceID: session.device_id,
       });
     }
+    if (method === "DELETE" && url.pathname === "/v1/me") {
+      return handleOperation(
+        response,
+        async () => service.deleteAccount(session, await readJSON(request, maxTeamBodyBytes)),
+      );
+    }
     if (method === "GET" && url.pathname === "/v1/devices") {
       return sendJSON(response, 200, { devices: await store.listDevices(session.user_id) });
     }

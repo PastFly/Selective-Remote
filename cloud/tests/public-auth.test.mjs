@@ -63,6 +63,25 @@ test("password recovery uses a generic no-store response", async () => {
   assert.deepEqual(JSON.parse(request[1].body), { email: "owner@example.com" });
 });
 
+test("authenticated account deletion clears the in-memory session", async () => {
+  const calls = [];
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+    calls.push([path, options]);
+    if (path === "/v1/auth/login") return new Response(JSON.stringify({
+      token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", displayName: "Owner" }, deviceID,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (path === "/v1/me" && options.method === "DELETE") {
+      return new Response(JSON.stringify({ deleted: true }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    throw new Error(`unexpected:${path}`);
+  } });
+  await client.login({ email: "owner@example.com", password: "a sufficiently long password", deviceID });
+  assert.deepEqual(await client.deleteAccount({ email: "owner@example.com", password: "a sufficiently long password" }), { deleted: true });
+  assert.equal(client.session(), null);
+  assert.deepEqual(JSON.parse(calls.at(-1)[1].body), { email: "owner@example.com", password: "a sufficiently long password" });
+  assert.match(calls.at(-1)[1].headers.Authorization, /^Bearer /u);
+});
+
 test("portal exposes visible login and registration modes and never promises emailed passwords", async () => {
   const [html, server] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),

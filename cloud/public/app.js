@@ -129,6 +129,10 @@ export async function initializeLocalVault({
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
+  const hostDetail = documentValue.querySelector("#host-detail-dialog");
+  const hostDetailTitle = documentValue.querySelector("#host-detail-title");
+  const hostDetailAddress = documentValue.querySelector("#host-detail-address");
+  const hostDetailModified = documentValue.querySelector("#host-detail-modified");
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
@@ -220,6 +224,27 @@ export async function initializeLocalVault({
           remove.disabled = false;
         }
       });
+      if (record.type === "host") {
+        card.classList.add("resource-card", "resource-card-clickable");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.setAttribute("aria-label", `Открыть Host ${heading.textContent}`);
+        const openHost = () => {
+          setText(hostDetailTitle, String(record.data.title ?? "Host"));
+          setText(hostDetailAddress, String(record.data.address ?? "—"));
+          setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          hostDetail?.showModal();
+        };
+        card.addEventListener("click", (event) => {
+          if (event.target === remove) return;
+          openHost();
+        });
+        card.addEventListener("keydown", (event) => {
+          if (event.key !== "Enter" && event.key !== " ") return;
+          event.preventDefault();
+          openHost();
+        });
+      }
       card.append(heading, summary, metadata, remove);
       records.append(card);
     }
@@ -1090,6 +1115,8 @@ export async function initializeCloudAccount({
   const accountName = documentValue.querySelector("#cloud-account-name");
   const message = documentValue.querySelector("#cloud-account-message");
   const logoutButton = documentValue.querySelector("#cloud-logout");
+  const deleteAccountForm = documentValue.querySelector("#account-delete-form");
+  const deleteAccountMessage = documentValue.querySelector("#account-delete-message");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
   const vaultMessage = documentValue.querySelector("#local-vault-message");
   const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
@@ -1324,6 +1351,38 @@ export async function initializeCloudAccount({
     }
   });
 
+  deleteAccountForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const currentUser = client.session();
+    const email = deleteAccountForm.elements.email.value.trim().toLowerCase();
+    const button = deleteAccountForm.querySelector('button[type="submit"]');
+    if (!currentUser || email !== currentUser.email.toLowerCase()) {
+      setText(deleteAccountMessage, "Email должен точно совпадать с адресом текущего аккаунта.");
+      return;
+    }
+    if (!globalThis.confirm(`Безвозвратно удалить аккаунт ${currentUser.email}?`)) return;
+    button.disabled = true;
+    try {
+      await client.deleteAccount({ email, password: deleteAccountForm.elements.password.value });
+      deleteAccountForm.reset();
+      teamWorkspace?.deactivate();
+      hideConflicts();
+      await vaultUI.hideRecoveryAndRestoreMode();
+      showSession(null);
+      setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
+    } catch (error) {
+      const messages = {
+        invalid_credentials: "Текущий пароль неверен.",
+        account_email_mismatch: "Email не совпадает с адресом аккаунта.",
+        account_owns_teams: "Сначала передайте владение активной Team или архивируйте её.",
+      };
+      setText(deleteAccountMessage, messages[String(error?.message ?? "")] ?? "Аккаунт не удалён. Повторите попытку позже.");
+    } finally {
+      deleteAccountForm.elements.password.value = "";
+      button.disabled = false;
+    }
+  });
+
   syncButton.addEventListener("click", async () => {
     syncButton.disabled = true;
     try {
@@ -1442,6 +1501,14 @@ export function initializePortalNavigation({
     "local-vault": "Personal Vault",
     "team-vault": "Teams и Vaults",
     "workspace-devices": "Устройства",
+    "workspace-settings": "Настройки",
+  };
+  const resourceTitles = {
+    host: "Хосты",
+    snippet: "Сниппеты",
+    credential: "Учётные данные",
+    forwarding: "Forwarding",
+    all: "Personal Vault",
   };
   let sessionActive = false;
 
@@ -1454,8 +1521,15 @@ export function initializePortalNavigation({
   function selectWorkspacePanel(target, recordFilter = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
-    for (const button of sidebarButtons) button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
-    setText(workspaceTitle, titles[panelID]);
+    for (const button of sidebarButtons) {
+      const matchesPanel = button.dataset.workspaceTarget === panelID;
+      const matchesFilter = panelID !== "local-vault"
+        || (button.dataset.recordFilter || "all") === (recordFilter || "all");
+      button.classList.toggle("active", matchesPanel && matchesFilter);
+    }
+    setText(workspaceTitle, panelID === "local-vault"
+      ? resourceTitles[recordFilter || "all"]
+      : titles[panelID]);
     if (recordFilter) vaultUI?.setFilter(recordFilter);
   }
 
