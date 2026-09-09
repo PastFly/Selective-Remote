@@ -69,7 +69,13 @@ struct CloudMacOSFoundationTests {
         #expect(teams.count == 1)
         #expect(teams[0].role == .owner)
         #expect(teams[0].membershipEpoch == 3)
-        try await client.logout(endpoint: endpoint)
+        let restoredClient = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in try stub.data(for: request) }
+        )
+        #expect(await restoredClient.hasStoredSession(endpoint: endpoint))
+        #expect(try await restoredClient.currentUser(endpoint: endpoint) == user)
+        try await restoredClient.logout(endpoint: endpoint)
         #expect(try store.token(for: endpoint) == nil)
     }
 
