@@ -901,7 +901,14 @@ export class PostgresStore {
     });
   }
 
-  async acceptTeamInvitation({ actorUserID, actorEmail, invitationID, tokenHash, idempotencyKey }) {
+  async acceptTeamInvitation({
+    actorUserID,
+    actorDeviceID,
+    actorEmail,
+    invitationID,
+    tokenHash,
+    idempotencyKey,
+  }) {
     return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client) => {
       const invitationResult = await client.query(
         `SELECT invitation.id, invitation.team_id, invitation.invitation_type, invitation.role,
@@ -926,6 +933,26 @@ export class PostgresStore {
       );
       const invitation = invitationResult.rows[0];
       if (!invitation) throw new Error("invalid_team_invitation");
+
+      const deviceResult = await client.query(
+        `SELECT id, key_approved_at FROM devices
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+           AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+         FOR UPDATE`,
+        [actorDeviceID, actorUserID],
+      );
+      const acceptingDevice = deviceResult.rows[0];
+      if (!acceptingDevice) throw new Error("device_approval_required");
+      const deviceAutoApproved = !acceptingDevice.key_approved_at;
+      if (deviceAutoApproved) {
+        await client.query(
+          `UPDATE devices SET key_approved_at = now(), key_approved_by_device_id = NULL
+           WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+             AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+             AND key_approved_at IS NULL`,
+          [actorDeviceID, actorUserID],
+        );
+      }
 
       const priorResult = await client.query(
         `SELECT id, epoch, revoked_at FROM team_memberships
@@ -965,7 +992,12 @@ export class PostgresStore {
         action: "team.invitation_accepted",
         targetUserID: actorUserID,
         targetMembershipID: membership.id,
-        metadata: { role: membership.role, epoch: nextEpoch },
+        metadata: {
+          role: membership.role,
+          epoch: nextEpoch,
+          acceptingDeviceID: actorDeviceID,
+          deviceAutoApproved,
+        },
       });
       return { membership };
     });
@@ -1122,18 +1154,34 @@ export class PostgresStore {
     });
   }
 
-  async listTeamKeyDevices(teamID, vaultID, actorUserID) {
+  async listTeamKeyDevices(teamID, vaultID, actorUserID, actorDeviceID) {
     const access = await this.pool.query(
-      `SELECT membership.role
+      `SELECT membership.role, device.key_approved_at,
+         actor_wrapper.device_id IS NOT NULL AS actor_has_wrapper
        FROM team_memberships AS membership
        JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+       JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
+         AND device.revoked_at IS NULL
+       LEFT JOIN shared_vault_key_wrappers AS actor_wrapper
+         ON actor_wrapper.vault_id = vault.id
+        AND actor_wrapper.key_generation = vault.key_generation
+        AND actor_wrapper.membership_id = membership.id
+        AND actor_wrapper.membership_epoch = membership.epoch
+        AND actor_wrapper.device_id = device.id
        WHERE membership.team_id = $1 AND vault.id = $2 AND membership.user_id = $3
          AND membership.revoked_at IS NULL`,
-      [teamID, vaultID, actorUserID],
+      [teamID, vaultID, actorUserID, actorDeviceID],
     );
     if (!access.rows[0]) throw new Error("team_not_found");
-    requireTeamPermission(access.rows[0].role, "manage_vault_keys");
+    if (!access.rows[0].key_approved_at) throw new Error("device_approval_required");
+    if (!access.rows[0].actor_has_wrapper) {
+      try {
+        requireTeamPermission(access.rows[0].role, "manage_vault_keys");
+      } catch {
+        throw new Error("team_vault_key_unavailable");
+      }
+    }
     const result = await this.pool.query(
       `SELECT membership.id AS membership_id, membership.epoch AS membership_epoch,
          device.id AS device_id, device.public_key_algorithm, device.public_key,
@@ -1287,11 +1335,18 @@ export class PostgresStore {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
       if (!context) throw new Error("team_not_found");
       if (!context.key_approved_at) throw new Error("device_approval_required");
-      requireTeamPermission(context.role, "manage_vault_keys");
       if (!Number.isSafeInteger(keyGeneration) || keyGeneration !== Number(context.key_generation)
         || Number(context.revision) === 0 || context.rotation_required === true) {
         throw new Error("invalid_key_generation");
       }
+      const actorWrapper = await client.query(
+        `SELECT 1 FROM shared_vault_key_wrappers
+         WHERE vault_id = $1 AND key_generation = $2 AND membership_id = $3
+           AND membership_epoch = $4 AND device_id = $5
+         FOR UPDATE`,
+        [vaultID, keyGeneration, context.membership_id, context.epoch, actorDeviceID],
+      );
+      if (!actorWrapper.rows[0]) throw new Error("team_vault_key_unavailable");
       const eligible = await lockEligibleTeamDevices(client, teamID);
       const target = eligible.find((row) => row.device_id === wrapper.deviceID);
       if (!target || target.membership_id !== wrapper.membershipID
@@ -1299,11 +1354,15 @@ export class PostgresStore {
         throw new Error("team_not_found");
       }
       requireWrapperContextHashes(teamID, vaultID, keyGeneration, [wrapper]);
-      try {
-        await insertSharedVaultWrappers(client, vaultID, keyGeneration, actorDeviceID, [wrapper]);
-      } catch (error) {
-        if (error?.code === "23505") throw new Error("shared_vault_wrapper_exists");
-        throw error;
+      const inserted = await insertSharedVaultWrapperIdempotently(
+        client,
+        vaultID,
+        keyGeneration,
+        actorDeviceID,
+        wrapper,
+      );
+      if (!inserted) {
+        return { granted: true, keyGeneration, deviceID: wrapper.deviceID };
       }
       await writeTeamAudit(client, {
         teamID,
@@ -1473,6 +1532,28 @@ function requireWrapperContextHashes(teamID, vaultID, keyGeneration, wrappers) {
     });
     if (wrapper.contextHash !== expected) throw new Error("invalid_team_vault_wrapper_context");
   }
+}
+
+async function insertSharedVaultWrapperIdempotently(
+  client,
+  vaultID,
+  keyGeneration,
+  actorDeviceID,
+  wrapper,
+) {
+  const result = await client.query(
+    `INSERT INTO shared_vault_key_wrappers
+      (vault_id, key_generation, membership_id, membership_epoch, device_id,
+       wrapper_version, ephemeral_public_key, ciphertext, nonce, auth_tag,
+       context_hash, created_by_device_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12)
+     ON CONFLICT (vault_id, key_generation, device_id) DO NOTHING
+     RETURNING device_id`,
+    [vaultID, keyGeneration, wrapper.membershipID, wrapper.membershipEpoch,
+      wrapper.deviceID, wrapper.wrapperVersion, JSON.stringify(wrapper.ephemeralPublicKey),
+      wrapper.ciphertext, wrapper.nonce, wrapper.authTag, wrapper.contextHash, actorDeviceID],
+  );
+  return Boolean(result.rows[0]);
 }
 
 async function insertSharedVaultWrappers(client, vaultID, keyGeneration, actorDeviceID, wrappers) {

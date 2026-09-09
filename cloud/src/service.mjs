@@ -418,6 +418,7 @@ export class CloudService {
     if (hasInvitationID && !invitationID) throw new Error("invalid_team_invitation");
     const result = await this.store.acceptTeamInvitation({
       actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
       actorEmail: session.email,
       invitationID,
       tokenHash: hasToken
@@ -505,7 +506,12 @@ export class CloudService {
   }
 
   async listTeamKeyDevices(session, teamID, vaultID) {
-    const rows = await this.store.listTeamKeyDevices(teamID, vaultID, session.user_id);
+    const rows = await this.store.listTeamKeyDevices(
+      teamID,
+      vaultID,
+      session.user_id,
+      session.device_id,
+    );
     return { devices: rows.map(publicTeamKeyDevice) };
   }
 

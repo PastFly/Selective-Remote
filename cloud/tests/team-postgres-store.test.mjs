@@ -452,6 +452,10 @@ test("invitation acceptance locks one token and advances a revoked membership ep
         username: "member", display_name: "Member",
       }] };
     }
+    if (sql.includes("SELECT id, key_approved_at FROM devices")) {
+      return { rows: [{ id: deviceID, key_approved_at: null }] };
+    }
+    if (sql.includes("UPDATE devices SET key_approved_at = now()")) return { rows: [], rowCount: 1 };
     if (sql.includes("ORDER BY epoch DESC")) return { rows: [{ id: "old", epoch: 2, revoked_at: new Date() }] };
     if (sql.includes("INSERT INTO team_memberships")) return { rows: [acceptedMembership] };
     if (sql.includes("UPDATE team_invitations SET accepted_at")) return { rows: [{ id: "invite-1" }] };
@@ -460,6 +464,7 @@ test("invitation acceptance locks one token and advances a revoked membership ep
 
   const result = await f.store.acceptTeamInvitation({
     actorUserID,
+    actorDeviceID: deviceID,
     actorEmail: "member@example.com",
     invitationID: null,
     tokenHash: "c".repeat(64),
@@ -471,6 +476,13 @@ test("invitation acceptance locks one token and advances a revoked membership ep
   assert.equal(membershipInsert.parameters[3], 3);
   const invitationLock = f.queries.find(({ sql }) => sql.includes("FOR UPDATE OF invitation, team"));
   assert.deepEqual(invitationLock.parameters, ["c".repeat(64), null, "member@example.com", actorUserID]);
+  const deviceLock = f.queries.find(({ sql }) => sql.includes("SELECT id, key_approved_at FROM devices"));
+  assert.deepEqual(deviceLock.parameters, [deviceID, actorUserID]);
+  assert.match(deviceLock.sql, /public_key_algorithm = 'p256-ecdh-v1'/u);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at = now()")));
+  const audit = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_audit_events"));
+  assert.match(audit.parameters.at(-1), /"acceptingDeviceID":"33cc880e-084a-4d9a-b1ea-f99d2ff86032"/u);
+  assert.match(audit.parameters.at(-1), /"deviceAutoApproved":true/u);
   assert.ok(f.queries.some(({ sql }) => sql.includes("DELETE FROM team_invitation_link_secrets")));
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
@@ -495,6 +507,9 @@ test("username invitation acceptance is bound to the authenticated target user I
         username: "member", display_name: "Member",
       }] };
     }
+    if (sql.includes("SELECT id, key_approved_at FROM devices")) {
+      return { rows: [{ id: deviceID, key_approved_at: new Date() }] };
+    }
     if (sql.includes("ORDER BY epoch DESC")) return { rows: [] };
     if (sql.includes("INSERT INTO team_memberships")) return { rows: [acceptedMembership] };
     if (sql.includes("UPDATE team_invitations SET accepted_at")) return { rows: [{ id: invitationID }] };
@@ -503,6 +518,7 @@ test("username invitation acceptance is bound to the authenticated target user I
 
   await f.store.acceptTeamInvitation({
     actorUserID,
+    actorDeviceID: deviceID,
     actorEmail: "private@example.invalid",
     invitationID,
     tokenHash: null,
@@ -512,6 +528,32 @@ test("username invitation acceptance is bound to the authenticated target user I
   const invitationLock = f.queries.find(({ sql }) => sql.includes("FOR UPDATE OF invitation, team"));
   assert.deepEqual(invitationLock.parameters, [null, invitationID, "private@example.invalid", actorUserID]);
   assert.match(invitationLock.sql, /invitation\.target_user_id = \$4/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at = now()")), false);
+});
+
+test("invitation acceptance refuses a session device without a registered Team key", async () => {
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FROM team_invitations AS invitation")) {
+      return { rows: [{
+        id: "invite-1", team_id: teamID, invitation_type: "link", role: "viewer",
+        username: "member", display_name: "Member",
+      }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+
+  await assert.rejects(f.store.acceptTeamInvitation({
+    actorUserID,
+    actorDeviceID: deviceID,
+    actorEmail: "member@example.com",
+    invitationID: null,
+    tokenHash: "c".repeat(64),
+    idempotencyKey: "request:team-accept-no-key-01",
+  }), /device_approval_required/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_memberships")), false);
+  assert.equal(f.queries.at(-2).sql, "ROLLBACK");
 });
 
 test("membership revocation immediately freezes every active shared Vault", async () => {
@@ -555,9 +597,11 @@ test("outbox claim uses multi-replica-safe SKIP LOCKED leasing", async () => {
   assert.deepEqual(f.queries[0].parameters, ["claim-owner"]);
 });
 
-test("Team key-device listing binds both the Team and Vault scope", async () => {
+test("Team key-device listing binds both scope and the actor's current wrapper", async () => {
   const f = fixture((sql) => {
-    if (sql.includes("SELECT membership.role")) return { rows: [{ role: "owner" }] };
+    if (sql.includes("SELECT membership.role")) {
+      return { rows: [{ role: "viewer", key_approved_at: new Date(), actor_has_wrapper: true }] };
+    }
     if (sql.includes("wrapper.device_id IS NOT NULL AS has_wrapper")) {
       return { rows: [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }] };
     }
@@ -565,11 +609,88 @@ test("Team key-device listing binds both the Team and Vault scope", async () => 
   });
 
   assert.deepEqual(
-    await f.store.listTeamKeyDevices(teamID, vaultID, actorUserID),
+    await f.store.listTeamKeyDevices(teamID, vaultID, actorUserID, deviceID),
     [{ membership_id: membershipID, device_id: deviceID, has_wrapper: true }],
   );
-  assert.deepEqual(f.queries[0].parameters, [teamID, vaultID, actorUserID]);
+  assert.deepEqual(f.queries[0].parameters, [teamID, vaultID, actorUserID, deviceID]);
+  assert.match(f.queries[0].sql, /actor_wrapper\.device_id IS NOT NULL AS actor_has_wrapper/u);
   assert.deepEqual(f.queries[1].parameters, [teamID, vaultID]);
+});
+
+test("a non-manager without the current wrapper cannot enumerate Team key devices", async () => {
+  const f = fixture((sql) => sql.includes("SELECT membership.role")
+    ? { rows: [{ role: "editor", key_approved_at: new Date(), actor_has_wrapper: false }] }
+    : { rows: [] });
+
+  await assert.rejects(
+    f.store.listTeamKeyDevices(teamID, vaultID, actorUserID, deviceID),
+    /team_vault_key_unavailable/u,
+  );
+  assert.equal(f.queries.length, 1);
+});
+
+test("an active Viewer with a current wrapper may provision another eligible device", async () => {
+  const recipientDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+  const wrapper = teamWrapper({ deviceID: recipientDeviceID });
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team, vault, device")) {
+      return { rows: [{
+        membership_id: membershipID, role: "viewer", epoch: 1, key_approved_at: new Date(),
+        revision: 2, key_generation: 1, rotation_required: false,
+      }] };
+    }
+    if (sql.includes("SELECT 1 FROM shared_vault_key_wrappers")) {
+      return { rows: [{ proof: true }] };
+    }
+    if (sql.includes("ORDER BY membership.id, device.id") && sql.includes("FOR UPDATE")) {
+      return { rows: [{
+        membership_id: membershipID, membership_epoch: 1, device_id: recipientDeviceID,
+      }] };
+    }
+    if (sql.includes("ON CONFLICT (vault_id, key_generation, device_id) DO NOTHING")) {
+      return { rows: [{ device_id: recipientDeviceID }], rowCount: 1 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.grantSharedVaultWrapper({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    vaultID,
+    wrapper,
+    keyGeneration: 1,
+    idempotencyKey: "request:viewer-wrapper-grant-01",
+  }), { granted: true, keyGeneration: 1, deviceID: recipientDeviceID });
+  assert.ok(f.queries.some(({ sql }) => sql.includes("INSERT INTO shared_vault_key_wrappers")));
+  assert.ok(f.queries.some(({ parameters }) => parameters.includes("team.vault_wrapper_granted")));
+});
+
+test("wrapper provisioning fails closed when the actor does not hold the current Vault key", async () => {
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team, vault, device")) {
+      return { rows: [{
+        membership_id: membershipID, role: "owner", epoch: 1, key_approved_at: new Date(),
+        revision: 2, key_generation: 1, rotation_required: false,
+      }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+
+  await assert.rejects(f.store.grantSharedVaultWrapper({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    vaultID,
+    wrapper: teamWrapper({ deviceID: "aef6452c-1ad8-48bb-b4b5-ea9c207b707b" }),
+    keyGeneration: 1,
+    idempotencyKey: "request:wrapper-without-key-01",
+  }), /team_vault_key_unavailable/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO shared_vault_key_wrappers")), false);
 });
 
 test("initial shared ciphertext and the complete device wrapper set commit atomically", async () => {

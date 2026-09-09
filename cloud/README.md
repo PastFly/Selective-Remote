@@ -16,8 +16,11 @@ ECDH/HKDF/AES-GCM wrappers, scope-bound shared payload envelopes, strict Team
 API calls, Team/member/shared-Vault UI and causal shared-record synchronization.
 The portal also lists account devices, shows canonical SHA-256 public-key
 fingerprints, approves a matching new key only from an approved device, revokes
-other devices, lets Owner/Admin grant missing current-generation wrappers from
-an unlocked Vault and completes required rotations. Owners can rename Teams,
+other devices, and completes required rotations. Invitation acceptance
+atomically approves only that authenticated session's registered P-256 device.
+Any active member device that already holds the current Vault wrapper can then
+provision missing current-generation wrappers for other active approved Team
+devices. Owners can rename Teams,
 atomically transfer ownership after password re-authentication, and archive a
 Team behind exact-name confirmation. Archiving immediately closes Team access,
 retires pending invitations/outbox work and rotation tasks, soft-archives its
@@ -88,7 +91,9 @@ the database stores and replays the committed response atomically.
 - `DELETE /v1/teams/{teamID}/invitations/{invitationID}` cancels a pending
   invitation, retires any undelivered legacy outbox job and invalidates a link.
 - `POST /v1/team-invitations/accept` accepts either an account-bound invitation
-  ID or an opaque link token once and creates the next membership epoch.
+  ID or an opaque link token once, creates the next membership epoch and
+  atomically approves only the accepting authenticated session device after
+  verifying its registered P-256 public key.
 - `PATCH|DELETE /v1/teams/{teamID}/members/{membershipID}` changes a role or
   revokes membership under a transactionally locked role check. Self-mutation,
   Admin escalation and removal of the last Owner fail closed.
@@ -102,12 +107,16 @@ the database stores and replays the committed response atomically.
   approve only the current registered key and only while the account has zero
   approved devices. The user row serializes competing first-device attempts.
 - `GET /v1/teams/{teamID}/vaults/{vaultID}/key-devices` returns the exact
-  active approved device set to Owner/Admin clients preparing wrappers.
+  active approved device set to Owner/Admin clients or to any active member
+  whose current session device already has a wrapper for this Vault generation.
 - `GET|PUT /v1/teams/{teamID}/vaults/{vaultID}` downloads the current opaque
   envelope/current-device wrapper or conditionally writes a ciphertext
   revision. Viewer writes are rejected.
-- `POST /v1/teams/{teamID}/vaults/{vaultID}/wrappers` grants a current-
-  generation wrapper to one newly authorized device under Owner/Admin checks.
+- `POST /v1/teams/{teamID}/vaults/{vaultID}/wrappers` idempotently grants a
+  current-generation wrapper to one active approved Team device. The actor's
+  current session device must itself be approved, active in the exact
+  membership epoch and already hold this Vault generation's wrapper. Vault
+  initialization and rotation remain Owner/Admin-only.
 
 The invitation table stores only an HMAC token hash plus the public target
 account ID for `@username` invitations. A link's recoverable token is held only
