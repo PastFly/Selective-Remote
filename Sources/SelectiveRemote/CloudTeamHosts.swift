@@ -79,7 +79,7 @@ enum SelectiveRemoteTeamHostMaterializer {
                 guard let username = string(data["username"]),
                       let connectionType = string(data["connectionType"]),
                       let encodedProfile = string(data["profile"]),
-                      username.utf8.count <= 256,
+                      username.count <= 256,
                       !username.contains(where: { $0.isNewline }),
                       encodedProfile.utf8.count <= maximumProfileBytes * 2,
                       let profileData = Data(selectiveRemoteBase64URL: encodedProfile),
@@ -208,7 +208,7 @@ enum SelectiveRemoteTeamHostMaterializer {
         runtimeID: UUID
     ) throws -> ConnectionProfile {
         guard input.id.isSelectiveRemoteCloudUUID,
-              input.username.utf8.count <= 256,
+              input.username.count <= 256,
               !input.username.contains(where: { $0.isNewline }),
               input.gatewayHost.utf8.count <= 2_048,
               input.gatewayUsername.utf8.count <= 256,
@@ -324,7 +324,7 @@ enum SelectiveRemoteTeamHostMaterializer {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return !normalized.isEmpty
             && normalized == value
-            && value.utf8.count <= 120
+            && value.count <= 120
             && !value.contains(where: { $0.isNewline })
     }
 
