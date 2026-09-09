@@ -16,6 +16,13 @@
         <h1>Cloud</h1>
       </div>
       <nav class="brand-actions" id="public-actions" aria-label="Аккаунт">
+        <label class="theme-control">Тема
+          <select data-theme-select aria-label="Тема оформления">
+            <option value="graphite">Графит</option>
+            <option value="emerald">Изумруд</option>
+            <option value="light">Светлая</option>
+          </select>
+        </label>
         <button type="button" class="secondary" data-open-auth="login">Войти</button>
       </nav>
       <span class="status" id="service-status">Проверка сервиса…</span>
@@ -153,6 +160,13 @@
       <div class="workspace-main">
         <header class="workspace-header">
           <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
+          <label class="theme-control workspace-theme">Тема
+            <select data-theme-select aria-label="Тема оформления">
+              <option value="graphite">Графит</option>
+              <option value="emerald">Изумруд</option>
+              <option value="light">Светлая</option>
+            </select>
+          </label>
           <div id="cloud-signed-in" hidden>
             <p id="cloud-account-name"></p>
             <button type="button" class="secondary" id="cloud-logout">Выйти</button>
