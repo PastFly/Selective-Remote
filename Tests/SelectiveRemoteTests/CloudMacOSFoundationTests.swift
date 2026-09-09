@@ -27,7 +27,8 @@ struct CloudMacOSFoundationTests {
             case ("GET", "/v1/me"):
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
                 return Self.response(request, status: 200, json: [
-                    "id": userID.uuidString.lowercased(), "email": "user@example.invalid", "displayName": "User"
+                    "id": userID.uuidString.lowercased(), "email": "user@example.invalid", "displayName": "User",
+                    "deviceID": deviceID.uuidString.lowercased()
                 ])
             case ("GET", "/v1/teams"):
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
@@ -70,6 +71,69 @@ struct CloudMacOSFoundationTests {
         #expect(teams[0].membershipEpoch == 3)
         try await client.logout(endpoint: endpoint)
         #expect(try store.token(for: endpoint) == nil)
+    }
+
+    @Test("native Team management creates Teams, invitations and Shared Vaults")
+    func nativeTeamManagement() async throws {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
+        let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let userID = try #require(UUID(uuidString: "66666666-6666-4666-8666-666666666666"))
+        let invitationID = try #require(UUID(uuidString: "77777777-7777-4777-8777-777777777777"))
+        let vaultID = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        try store.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let team: [String: Any] = [
+            "id": teamID.canonicalCloudString, "name": "Platform",
+            "membershipID": membershipID.canonicalCloudString, "role": "owner", "membershipEpoch": 1,
+            "createdAt": "2026-09-09T00:00:00.000Z", "updatedAt": "2026-09-09T00:00:00.000Z"
+        ]
+        let stub = CloudHTTPStub { request in
+            #expect(request.value(forHTTPHeaderField: "Idempotency-Key")?.hasPrefix("macos:") == true
+                || request.httpMethod == "GET")
+            switch (request.httpMethod, request.url?.path) {
+            case ("POST", "/v1/teams"):
+                #expect(Self.stringBodyValue(request, key: "name") == "Platform")
+                return Self.response(request, status: 201, json: ["team": team])
+            case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/members"):
+                return Self.response(request, status: 200, json: ["members": [[
+                    "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
+                    "email": "owner@example.invalid", "displayName": "Owner", "role": "owner",
+                    "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
+                ]]])
+            case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/invitations"):
+                #expect(Self.stringBodyValue(request, key: "email") == "viewer@example.invalid")
+                #expect(Self.stringBodyValue(request, key: "role") == "viewer")
+                return Self.response(request, status: 201, json: ["invitation": [
+                    "id": invitationID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                    "email": "viewer@example.invalid", "role": "viewer", "status": "pending",
+                    "createdAt": "2026-09-09T00:00:00.000Z", "expiresAt": "2026-09-11T00:00:00.000Z"
+                ]])
+            case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/vaults"):
+                #expect(Self.stringBodyValue(request, key: "name") == "Production")
+                return Self.response(request, status: 201, json: ["vault": [
+                    "id": vaultID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                    "name": "Production", "revision": 0, "keyGeneration": 1,
+                    "rotationRequired": false, "createdAt": "2026-09-09T00:00:00.000Z",
+                    "updatedAt": "2026-09-09T00:00:00.000Z"
+                ]])
+            default:
+                Issue.record("Unexpected Team management request")
+                return Self.response(request, status: 500, json: ["error": "unexpected_request"])
+            }
+        }
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: store, dataLoader: { request in
+            try stub.data(for: request)
+        })
+
+        #expect(try await client.createTeam(endpoint: endpoint, name: " Platform ").name == "Platform")
+        #expect(try await client.teamMembers(endpoint: endpoint, teamID: teamID).first?.role == .owner)
+        #expect(try await client.inviteTeamMember(
+            endpoint: endpoint, teamID: teamID, email: " VIEWER@example.invalid ", role: .viewer
+        ).email == "viewer@example.invalid")
+        #expect(try await client.createSharedVault(
+            endpoint: endpoint, teamID: teamID, name: " Production "
+        ).id == vaultID)
     }
 
     @Test("registration sends the device public identity and requires exact verification response")
@@ -1086,6 +1150,14 @@ struct CloudMacOSFoundationTests {
             createdAt: "2026-09-06T00:00:00.000Z",
             updatedAt: "2026-09-06T00:00:00.000Z"
         )
+    }
+
+    private static func stringBodyValue(_ request: URLRequest, key: String) -> String? {
+        guard let body = request.httpBody,
+              let value = try? JSONSerialization.jsonObject(with: body),
+              let object = value as? [String: Any]
+        else { return nil }
+        return object[key] as? String
     }
 
     private static func response(

@@ -85,7 +85,7 @@ struct SelectiveRemoteCloudUser: Codable, Equatable, Sendable {
     var displayName: String
 }
 
-enum SelectiveRemoteCloudTeamRole: String, Codable, Equatable, Sendable {
+enum SelectiveRemoteCloudTeamRole: String, Codable, Equatable, Hashable, Sendable {
     case owner
     case admin
     case editor
@@ -111,6 +111,26 @@ struct SelectiveRemoteCloudSharedVault: Codable, Equatable, Identifiable, Sendab
     var rotationRequired: Bool
     var createdAt: String
     var updatedAt: String
+}
+
+struct SelectiveRemoteCloudTeamMember: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID
+    var userID: UUID
+    var email: String
+    var displayName: String
+    var role: SelectiveRemoteCloudTeamRole
+    var epoch: Int
+    var joinedAt: String
+}
+
+struct SelectiveRemoteCloudTeamInvitation: Codable, Equatable, Identifiable, Sendable {
+    var id: UUID
+    var teamID: UUID
+    var email: String
+    var role: SelectiveRemoteCloudTeamRole
+    var status: String
+    var createdAt: String
+    var expiresAt: String
 }
 
 struct SelectiveRemoteCloudTeamKeyDevice: Codable, Equatable, Sendable {
@@ -425,6 +445,68 @@ actor SelectiveRemoteCloudAPIClient {
         return result.teams
     }
 
+    func createTeam(endpoint: URL, name: String) async throws -> SelectiveRemoteCloudTeam {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedName.isEmpty, normalizedName.count <= 120 else {
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams",
+            method: "POST",
+            body: try encoder.encode(TeamNameRequest(name: normalizedName)),
+            headers: ["Idempotency-Key": Self.idempotencyKey("team-create")]
+        )
+        guard http.statusCode == 201 else { throw serviceError(status: http.statusCode, data: data) }
+        guard Self.validSingleTeamJSON(data),
+              let result = try? decoder.decode(TeamResponse.self, from: data),
+              Self.validTeam(result.team)
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.team
+    }
+
+    func teamMembers(endpoint: URL, teamID: UUID) async throws -> [SelectiveRemoteCloudTeamMember] {
+        guard teamID.isSelectiveRemoteCloudUUID else { throw SelectiveRemoteCloudError.invalidRequest }
+        let data = try await authorizedData(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/members"
+        )
+        guard Self.validTeamMembersJSON(data),
+              let result = try? decoder.decode(TeamMembersResponse.self, from: data),
+              result.members.count <= 10_000,
+              result.members.allSatisfy(Self.validTeamMember),
+              Set(result.members.map(\.id)).count == result.members.count
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.members
+    }
+
+    func inviteTeamMember(
+        endpoint: URL,
+        teamID: UUID,
+        email: String,
+        role: SelectiveRemoteCloudTeamRole
+    ) async throws -> SelectiveRemoteCloudTeamInvitation {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard teamID.isSelectiveRemoteCloudUUID,
+              !normalizedEmail.isEmpty,
+              normalizedEmail.count <= 254,
+              role != .owner
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/invitations",
+            method: "POST",
+            body: try encoder.encode(TeamInvitationRequest(email: normalizedEmail, role: role)),
+            headers: ["Idempotency-Key": Self.idempotencyKey("team-invite")]
+        )
+        guard http.statusCode == 201 else { throw serviceError(status: http.statusCode, data: data) }
+        guard Self.validTeamInvitationJSON(data),
+              let result = try? decoder.decode(TeamInvitationResponse.self, from: data),
+              Self.validTeamInvitation(result.invitation, teamID: teamID)
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.invitation
+    }
+
     func sharedVaults(endpoint: URL, teamID: UUID) async throws -> [SelectiveRemoteCloudSharedVault] {
         guard teamID.isSelectiveRemoteCloudUUID else { throw SelectiveRemoteCloudError.invalidRequest }
         let data = try await authorizedData(
@@ -438,6 +520,31 @@ actor SelectiveRemoteCloudAPIClient {
               Set(result.vaults.map(\.id)).count == result.vaults.count
         else { throw SelectiveRemoteCloudError.invalidResponse }
         return result.vaults
+    }
+
+    func createSharedVault(
+        endpoint: URL,
+        teamID: UUID,
+        name: String
+    ) async throws -> SelectiveRemoteCloudSharedVault {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard teamID.isSelectiveRemoteCloudUUID,
+              !normalizedName.isEmpty,
+              normalizedName.count <= 120
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/vaults",
+            method: "POST",
+            body: try encoder.encode(TeamNameRequest(name: normalizedName)),
+            headers: ["Idempotency-Key": Self.idempotencyKey("vault-create")]
+        )
+        guard http.statusCode == 201 else { throw serviceError(status: http.statusCode, data: data) }
+        guard Self.validSingleSharedVaultJSON(data),
+              let result = try? decoder.decode(SharedVaultResponse.self, from: data),
+              Self.validSharedVault(result.vault, teamID: teamID)
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.vault
     }
 
     func teamKeyDevices(
@@ -615,7 +722,11 @@ actor SelectiveRemoteCloudAPIClient {
 
     private static func validUserJSON(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
-        return validUserObject(object)
+        guard exactKeys(object, expected: ["id", "email", "displayName", "deviceID"]),
+              let deviceID = (object as? [String: Any])?["deviceID"] as? String,
+              UUID(uuidString: deviceID)?.isSelectiveRemoteCloudUUID == true
+        else { return false }
+        return true
     }
 
     private static func validLoginJSON(_ data: Data) -> Bool {
@@ -648,6 +759,82 @@ actor SelectiveRemoteCloudAPIClient {
             "createdAt", "updatedAt"
         ]
         return teams.allSatisfy { exactKeys($0, expected: keys) }
+    }
+
+    private static func validTeam(_ team: SelectiveRemoteCloudTeam) -> Bool {
+        team.id.isSelectiveRemoteCloudUUID
+            && team.membershipID.isSelectiveRemoteCloudUUID
+            && team.membershipEpoch > 0
+            && !team.name.isEmpty
+            && team.name.count <= 120
+            && !team.createdAt.isEmpty
+            && !team.updatedAt.isEmpty
+    }
+
+    private static func validSingleTeamJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["team"]),
+              let team = (object as? [String: Any])?["team"]
+        else { return false }
+        return exactKeys(team, expected: [
+            "id", "name", "membershipID", "role", "membershipEpoch", "createdAt", "updatedAt"
+        ])
+    }
+
+    private static func validTeamMember(_ member: SelectiveRemoteCloudTeamMember) -> Bool {
+        member.id.isSelectiveRemoteCloudUUID
+            && member.userID.isSelectiveRemoteCloudUUID
+            && !member.email.isEmpty && member.email.count <= 254
+            && !member.displayName.isEmpty && member.displayName.count <= 120
+            && member.epoch > 0 && !member.joinedAt.isEmpty
+    }
+
+    private static func validTeamMembersJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["members"]),
+              let members = (object as? [String: Any])?["members"] as? [Any]
+        else { return false }
+        return members.allSatisfy { exactKeys($0, expected: [
+            "id", "userID", "email", "displayName", "role", "epoch", "joinedAt"
+        ]) }
+    }
+
+    private static func validTeamInvitationJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["invitation"]),
+              let invitation = (object as? [String: Any])?["invitation"]
+        else { return false }
+        return exactKeys(invitation, expected: [
+            "id", "teamID", "email", "role", "status", "createdAt", "expiresAt"
+        ])
+    }
+
+    private static func validTeamInvitation(
+        _ invitation: SelectiveRemoteCloudTeamInvitation,
+        teamID: UUID
+    ) -> Bool {
+        invitation.id.isSelectiveRemoteCloudUUID
+            && invitation.teamID == teamID
+            && !invitation.email.isEmpty && invitation.email.count <= 254
+            && invitation.role != .owner
+            && invitation.status == "pending"
+            && !invitation.createdAt.isEmpty
+            && !invitation.expiresAt.isEmpty
+    }
+
+    private static func validSingleSharedVaultJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["vault"]),
+              let vault = (object as? [String: Any])?["vault"]
+        else { return false }
+        return exactKeys(vault, expected: [
+            "id", "teamID", "name", "revision", "keyGeneration", "rotationRequired",
+            "createdAt", "updatedAt"
+        ])
+    }
+
+    private static func idempotencyKey(_ scope: String) -> String {
+        "macos:\(scope):\(UUID().uuidString.lowercased())"
     }
 
     private static func validTeamKeyDevicesJSON(_ data: Data) -> Bool {
@@ -802,6 +989,31 @@ private struct LoginResponse: Decodable {
 
 private struct TeamsResponse: Decodable {
     var teams: [SelectiveRemoteCloudTeam]
+}
+
+private struct TeamResponse: Decodable {
+    var team: SelectiveRemoteCloudTeam
+}
+
+private struct TeamMembersResponse: Decodable {
+    var members: [SelectiveRemoteCloudTeamMember]
+}
+
+private struct TeamInvitationResponse: Decodable {
+    var invitation: SelectiveRemoteCloudTeamInvitation
+}
+
+private struct SharedVaultResponse: Decodable {
+    var vault: SelectiveRemoteCloudSharedVault
+}
+
+private struct TeamNameRequest: Encodable {
+    var name: String
+}
+
+private struct TeamInvitationRequest: Encodable {
+    var email: String
+    var role: SelectiveRemoteCloudTeamRole
 }
 
 private struct SharedVaultsResponse: Decodable {
