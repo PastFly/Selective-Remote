@@ -25,6 +25,8 @@ test("account deletion preserves Team history while removing account-owned secre
   assert.match(deletion.sql, /team_memberships[\s\S]*user_id[\s\S]*ON DELETE SET NULL/u);
   assert.match(deletion.sql, /shared_vault_revisions[\s\S]*updated_by_device_id[\s\S]*ON DELETE SET NULL/u);
   assert.match(deletion.sql, /shared_vault_key_wrappers[\s\S]*created_by_device_id[\s\S]*ON DELETE SET NULL/u);
+  assert.match(deletion.sql, /DROP CONSTRAINT shared_vault_payload_complete/u);
+  assert.match(deletion.sql, /revision > 0[\s\S]*content_hash IS NOT NULL\)/u);
   assert.doesNotMatch(deletion.sql, /DROP TABLE|TRUNCATE/u);
 });
 
