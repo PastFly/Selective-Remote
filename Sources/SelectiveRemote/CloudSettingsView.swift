@@ -31,6 +31,7 @@ struct CloudSettingsView: View {
     @State private var personalVaultMessageIsError = false
     @State private var personalVaultUploading = false
     @State private var showsPersonalVaultUpload = false
+    @State private var showsTeamManagement = false
     @State private var personalVaultRecoveryPhrase = ""
     @State private var personalVaultRecoveryConfirmation = ""
     @State private var includePersonalVaultCredentials = false
@@ -247,7 +248,8 @@ struct CloudSettingsView: View {
                     vaultsByTeam: vaultsByTeam,
                     isRefreshing: accountPhase == .refreshing,
                     errorMessage: inventoryErrorMessage,
-                    onRefresh: refreshInventory
+                    onRefresh: refreshInventory,
+                    onManage: { showsTeamManagement = true }
                 )
             }
 
@@ -307,6 +309,15 @@ struct CloudSettingsView: View {
         }
         .sheet(isPresented: $showsPersonalVaultUpload) {
             personalVaultUploadSheet
+        }
+        .sheet(isPresented: $showsTeamManagement) {
+            if let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) {
+                SelectiveRemoteCloudTeamManagementView(
+                    endpoint: url,
+                    client: client,
+                    onInventoryChanged: refreshInventory
+                )
+            }
         }
     }
 

@@ -289,6 +289,7 @@ struct SelectiveRemoteCloudTeamInventoryView: View {
     let isRefreshing: Bool
     let errorMessage: String?
     let onRefresh: () -> Void
+    let onManage: () -> Void
 
     var body: some View {
         Section(UpdateLocalization.text(ru: "Teams и общие Vaults", en: "Teams & Shared Vaults")) {
@@ -304,6 +305,10 @@ struct SelectiveRemoteCloudTeamInventoryView: View {
                 }
                 Button(UpdateLocalization.text(ru: "Обновить", en: "Refresh"), systemImage: "arrow.clockwise") {
                     onRefresh()
+                }
+                .disabled(isRefreshing)
+                Button(UpdateLocalization.text(ru: "Управлять…", en: "Manage…"), systemImage: "slider.horizontal.3") {
+                    onManage()
                 }
                 .disabled(isRefreshing)
             }

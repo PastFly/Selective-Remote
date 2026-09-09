@@ -118,10 +118,11 @@ test("macOS exposes a complete-choice conflict review without rendering secrets"
   assert.match(settings, /sends nothing to Cloud/);
 });
 
-test("macOS Cloud settings expose real device-bound sign-in and read-only Team inventory", async () => {
-  const [settings, accountViews, client, sessions] = await Promise.all([
+test("macOS Cloud settings expose device-bound sign-in and native Team management", async () => {
+  const [settings, accountViews, teamManagement, client, sessions] = await Promise.all([
     readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudAccountViews.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamManagementView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
   ]);
@@ -139,12 +140,21 @@ test("macOS Cloud settings expose real device-bound sign-in and read-only Team i
   assert.match(settings, /client\.sharedVaults/);
   assert.match(settings, /client\.logout/);
   assert.match(settings, /client\.register/);
+  assert.match(settings, /SelectiveRemoteCloudTeamManagementView/);
   assert.match(settings, /metadata\?\.registrationEnabled == true/);
   assert.match(accountViews, /Teams & Shared Vaults/);
+  assert.match(teamManagement, /NavigationSplitView/);
+  assert.match(teamManagement, /client\.createTeam/);
+  assert.match(teamManagement, /client\.teamMembers/);
+  assert.match(teamManagement, /client\.inviteTeamMember/);
+  assert.match(teamManagement, /client\.createSharedVault/);
+  assert.match(teamManagement, /Team Hosts/);
   assert.match(client, /v1\/auth\/register/);
   assert.match(client, /verificationRequired/);
   assert.match(client, /validLoginJSON/);
   assert.match(client, /validTeamsJSON/);
+  assert.match(client, /validTeamMembersJSON/);
+  assert.match(client, /deviceID/);
   assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.doesNotMatch(sessions, /UserDefaults/);
 });
