@@ -474,14 +474,17 @@ export function initializeTeamWorkspace({
     records.replaceChildren();
     if (!controller) return;
     const current = controller.document();
-    if (current.records.length === 0) {
+    const visibleRecords = current.records.filter((value) => activeView !== "hosts" || value.type === "host");
+    if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
-      empty.textContent = "Shared Vault пока пуст.";
+      empty.textContent = activeView === "hosts"
+        ? "В выбранном Team Vault пока нет хостов."
+        : "Shared Vault пока пуст.";
       records.append(empty);
       return;
     }
-    for (const record of current.records.filter((value) => activeView !== "hosts" || value.type === "host")) {
+    for (const record of visibleRecords) {
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");

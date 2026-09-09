@@ -169,6 +169,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
   assert.match(application, /activeView !== "hosts" \|\| value\.type === "host"/u);
+  assert.match(application, /В выбранном Team Vault пока нет хостов/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
