@@ -4,6 +4,7 @@ import test from "node:test";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
 import {
   createTeamVaultController,
+  provisionTeamVaultWrappers,
   rotateTeamVault,
   synchronizeTeamVault,
 } from "../public/team-vault-sync.js";
@@ -51,7 +52,15 @@ function sharedServer(keyDevices) {
   function clientFor(deviceID) {
     return {
       session() { return { id: "99999999-9999-4999-8999-999999999999" }; },
-      async listTeamKeyDevices() { return { scope, devices: currentKeyDevices }; },
+      async listTeamKeyDevices() {
+        return {
+          scope,
+          devices: currentKeyDevices.map((device) => ({
+            ...device,
+            hasWrapper: wrappers.has(device.deviceID),
+          })),
+        };
+      },
       async getTeamVault() {
         return {
           scope,
@@ -84,12 +93,24 @@ function sharedServer(keyDevices) {
         rotationRequired = false;
         return { conflict: false, revision, keyGeneration, rotationCompleted: rotating };
       },
+      async grantTeamVaultWrapper(_scope, next) {
+        if (next.keyGeneration !== keyGeneration) throw new Error("invalid_key_generation");
+        wrappers.set(next.wrapper.deviceID, next.wrapper);
+        return {
+          granted: true,
+          keyGeneration,
+          deviceID: next.wrapper.deviceID,
+        };
+      },
     };
   }
   return {
     clientFor,
     revision: () => revision,
     inspect: () => ({ revision, keyGeneration, rotationRequired, envelope, wrappers: new Map(wrappers) }),
+    addKeyDevice(nextKeyDevice) {
+      currentKeyDevices = [...currentKeyDevices, nextKeyDevice];
+    },
     requireRotation(nextKeyDevices) {
       currentKeyDevices = nextKeyDevices;
       rotationRequired = true;
@@ -119,6 +140,42 @@ test("a Team Vault initializes for every approved device and persists ciphertext
   const stored = JSON.stringify(repository.inspect());
   assert.doesNotMatch(stored, /Operations|secret|"records":/u);
   assert.equal(repository.inspect().syncedLocalRevision, 1);
+});
+
+test("an unlocked member provisions missing wrappers without manager presence", async () => {
+  const a = await device(deviceA, membershipA);
+  const b = await device(deviceB, membershipB);
+  const server = sharedServer([a.keyDevice]);
+  const controllerA = createTeamVaultController({
+    repository: memoryRepository(),
+    identity: a.identity,
+    scope,
+    cryptoValue: webcrypto,
+  });
+  await synchronizeTeamVault({ client: server.clientFor(deviceA), controller: controllerA, role: "owner" });
+  server.addKeyDevice(b.keyDevice);
+
+  assert.deepEqual(
+    await provisionTeamVaultWrappers({ client: server.clientFor(deviceA), controller: controllerA }),
+    { status: "provisioned", keyGeneration: 1, eligible: 2, missing: 1, granted: 1 },
+  );
+  assert.equal(server.inspect().wrappers.has(deviceB), true);
+  assert.deepEqual(
+    await provisionTeamVaultWrappers({ client: server.clientFor(deviceA), controller: controllerA }),
+    { status: "up_to_date", keyGeneration: 1, eligible: 2, missing: 0, granted: 0 },
+  );
+
+  const controllerB = createTeamVaultController({
+    repository: memoryRepository(),
+    identity: b.identity,
+    scope,
+    cryptoValue: webcrypto,
+  });
+  assert.deepEqual(
+    await synchronizeTeamVault({ client: server.clientFor(deviceB), controller: controllerB, role: "viewer" }),
+    { status: "downloaded", revision: 1 },
+  );
+  assert.deepEqual(controllerB.document(), { schemaVersion: 1, records: [], tombstones: [] });
 });
 
 test("an interrupted first upload retries initialization with wrappers for every current device", async () => {

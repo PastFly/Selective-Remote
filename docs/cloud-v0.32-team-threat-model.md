@@ -180,6 +180,16 @@ provisioning by an online Editor or Viewer without giving either role
 ciphertext-write, membership or rotation authority. A client without the
 current key fails closed.
 
+For an explicitly opened and locally unlocked browser Team Vault, a bounded
+background cycle invokes the same causal synchronize primitive used by the
+manual recovery action. It conditionally uploads dirty ciphertext, merges
+dominant remote revisions, preserves explicit conflicts, stops on required
+rotation, and retries idempotent missing-wrapper publication. It skips work
+while the page is hidden and stops after explicit key lock, Team change or
+logout. The interval grants no new role capability: Viewer writes still fail at
+the client and server, while any role may provision only after current-wrapper
+proof.
+
 ## Removal and rotation
 
 Membership removal is a fail-closed state transition:
