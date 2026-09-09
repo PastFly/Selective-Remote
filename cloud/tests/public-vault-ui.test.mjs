@@ -2,10 +2,33 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  initializeAppearance,
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordSummary,
 } from "../public/app.js";
+
+test("appearance defaults to graphite and synchronizes every visible selector", () => {
+  const listeners = [];
+  const controls = [{ value: "" }, { value: "" }].map((control) => ({
+    ...control,
+    addEventListener(_name, listener) { listeners.push([this, listener]); },
+  }));
+  const documentValue = {
+    documentElement: { dataset: {} },
+    querySelectorAll: () => controls,
+  };
+  const appearance = initializeAppearance({ documentValue });
+  assert.equal(appearance.theme(), "graphite");
+  assert.equal(documentValue.documentElement.dataset.theme, "graphite");
+  assert.deepEqual(controls.map(({ value }) => value), ["graphite", "graphite"]);
+  controls[1].value = "light";
+  listeners[1][1]();
+  assert.equal(appearance.theme(), "light");
+  assert.deepEqual(controls.map(({ value }) => value), ["light", "light"]);
+  appearance.apply("unknown");
+  assert.equal(appearance.theme(), "graphite");
+});
 
 test("Vault form values map to the four versioned record types", () => {
   assert.deepEqual(

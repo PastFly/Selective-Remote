@@ -1724,4 +1724,21 @@ export async function initializePortal({
   });
 }
 
-if (typeof document !== "undefined") await initializePortal();
+export function initializeAppearance({ documentValue = document } = {}) {
+  const allowed = new Set(["graphite", "emerald", "light"]);
+  let selected = "graphite";
+  const controls = [...documentValue.querySelectorAll("[data-theme-select]")];
+  const apply = (theme) => {
+    selected = allowed.has(theme) ? theme : "graphite";
+    documentValue.documentElement.dataset.theme = selected;
+    for (const control of controls) control.value = selected;
+  };
+  for (const control of controls) control.addEventListener("change", () => apply(control.value));
+  apply(selected);
+  return { theme: () => selected, apply };
+}
+
+if (typeof document !== "undefined") {
+  initializeAppearance();
+  await initializePortal();
+}
