@@ -83,18 +83,17 @@ struct CloudMacOSFoundationTests {
         let vaultID = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
         let store = SelectiveRemoteCloudMemoryTokenStore()
         try store.saveToken(String(repeating: "t", count: 43), for: endpoint)
-        let team: [String: Any] = [
-            "id": teamID.canonicalCloudString, "name": "Platform",
-            "membershipID": membershipID.canonicalCloudString, "role": "owner", "membershipEpoch": 1,
-            "createdAt": "2026-09-09T00:00:00.000Z", "updatedAt": "2026-09-09T00:00:00.000Z"
-        ]
         let stub = CloudHTTPStub { request in
             #expect(request.value(forHTTPHeaderField: "Idempotency-Key")?.hasPrefix("macos:") == true
                 || request.httpMethod == "GET")
             switch (request.httpMethod, request.url?.path) {
             case ("POST", "/v1/teams"):
                 #expect(Self.stringBodyValue(request, key: "name") == "Platform")
-                return Self.response(request, status: 201, json: ["team": team])
+                return Self.response(request, status: 201, json: ["team": [
+                    "id": teamID.canonicalCloudString, "name": "Platform",
+                    "membershipID": membershipID.canonicalCloudString, "role": "owner", "membershipEpoch": 1,
+                    "createdAt": "2026-09-09T00:00:00.000Z", "updatedAt": "2026-09-09T00:00:00.000Z"
+                ]])
             case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/members"):
                 return Self.response(request, status: 200, json: ["members": [[
                     "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
