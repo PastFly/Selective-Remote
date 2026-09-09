@@ -142,6 +142,43 @@ struct CloudPersonalVaultSyncTests {
             == .init(conflict: false, revision: 1))
     }
 
+    @Test("automatic revisions reuse the local Vault key without the recovery phrase")
+    func automaticReseal() throws {
+        let firstDocument = try SelectiveRemoteVaultDocument(records: [Self.syntheticRecord()])
+        let first = try SelectiveRemotePersonalVaultCrypto.seal(
+            firstDocument,
+            recoveryPhrase: "correct horse battery staple",
+            baseRevision: 0,
+            vaultKey: Data(repeating: 0x11, count: 32),
+            salt: Data(repeating: 0x22, count: 16),
+            nonce: Data(repeating: 0x33, count: 12)
+        )
+        let next = try SelectiveRemotePersonalVaultCrypto.reseal(
+            firstDocument,
+            vaultKey: Data(repeating: 0x11, count: 32),
+            wrappedKey: first.wrappedKey,
+            baseRevision: 1,
+            nonce: Data(repeating: 0x44, count: 12)
+        )
+
+        #expect(next.baseRevision == 1)
+        #expect(next.wrappedKey == first.wrappedKey)
+        #expect(next.nonce != first.nonce)
+        #expect(next.ciphertext != first.ciphertext)
+        #expect(next.authTag != first.authTag)
+    }
+
+    @Test("automatic export can represent deletion of every local record")
+    func automaticEmptyExport() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+            profiles: [], credentials: [], snippets: [], forwarding: [],
+            deviceID: deviceID, allowEmpty: true
+        )
+        #expect(exported.summary.total == 0)
+        #expect(exported.document.records.isEmpty)
+    }
+
     @Test("an empty Personal Vault accepts only the deployed envelope marker")
     func emptyVaultEnvelopeMarker() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")

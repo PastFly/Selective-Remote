@@ -91,6 +91,11 @@ struct SelectiveRemotePersonalVaultEnvelope: Codable, Equatable, Sendable {
     }
 }
 
+struct SelectiveRemotePersonalVaultSetup: Equatable, Sendable {
+    let envelope: SelectiveRemotePersonalVaultEnvelope
+    let vaultKey: Data
+}
+
 struct SelectiveRemoteCloudPersonalVault: Equatable, Sendable {
     let id: UUID
     let revision: Int
@@ -132,7 +137,8 @@ enum SelectiveRemotePersonalVaultExporter {
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
         deviceID: UUID,
-        now: Date = Date()
+        now: Date = Date(),
+        allowEmpty: Bool = false
     ) throws -> SelectiveRemotePersonalVaultExport {
         let timestamp = timestamp(now)
         let version = try SelectiveRemoteVaultVersion([deviceID: 1])
@@ -209,7 +215,9 @@ enum SelectiveRemotePersonalVaultExporter {
             snippets: snippets.count,
             forwarding: forwarding.count
         )
-        guard summary.total > 0 else { throw SelectiveRemotePersonalVaultError.emptyLocalVault }
+        guard allowEmpty || summary.total > 0 else {
+            throw SelectiveRemotePersonalVaultError.emptyLocalVault
+        }
         return .init(document: document, summary: summary)
     }
 
@@ -278,6 +286,55 @@ enum SelectiveRemotePersonalVaultCrypto {
             return try .init(
                 baseRevision: baseRevision,
                 wrappedKey: .init(salt: rawSalt, value: wrapped),
+                ciphertext: sealed.ciphertext,
+                nonce: rawNonce,
+                authTag: sealed.tag
+            )
+        } catch let error as SelectiveRemotePersonalVaultError {
+            throw error
+        } catch {
+            throw SelectiveRemotePersonalVaultError.cryptoFailure
+        }
+    }
+
+    static func createSetup(
+        _ document: SelectiveRemoteVaultDocument,
+        recoveryPhrase: String,
+        baseRevision: Int
+    ) throws -> SelectiveRemotePersonalVaultSetup {
+        let key = try randomData(count: 32)
+        return try .init(
+            envelope: seal(
+                document,
+                recoveryPhrase: recoveryPhrase,
+                baseRevision: baseRevision,
+                vaultKey: key
+            ),
+            vaultKey: key
+        )
+    }
+
+    static func reseal(
+        _ document: SelectiveRemoteVaultDocument,
+        vaultKey: Data,
+        wrappedKey: SelectiveRemotePersonalVaultWrappedKey,
+        baseRevision: Int,
+        nonce: Data? = nil
+    ) throws -> SelectiveRemotePersonalVaultEnvelope {
+        let rawNonce = try nonce ?? randomData(count: 12)
+        guard vaultKey.count == 32, rawNonce.count == 12, baseRevision > 0 else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        do {
+            let sealed = try AES.GCM.seal(
+                document.encoded(),
+                using: SymmetricKey(data: vaultKey),
+                nonce: AES.GCM.Nonce(data: rawNonce),
+                authenticating: additionalData
+            )
+            return try .init(
+                baseRevision: baseRevision,
+                wrappedKey: wrappedKey,
                 ciphertext: sealed.ciphertext,
                 nonce: rawNonce,
                 authTag: sealed.tag

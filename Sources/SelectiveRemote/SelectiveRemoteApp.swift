@@ -130,6 +130,7 @@ struct SelectiveRemoteApp: App {
     @StateObject private var language = AppLanguageStore()
     @StateObject private var appAppearance = AppAppearanceStore.shared
     @StateObject private var appLock = AppLockStore()
+    private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
 
     private var menuBarSystemImage: String {
         if appLock.isLocked { return "lock.fill" }
@@ -154,6 +155,12 @@ struct SelectiveRemoteApp: App {
                     .frame(minWidth: 1050, minHeight: 700)
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
+                        schedulePersonalVaultAutoSync()
+                    }
+                    .onChange(of: model.profiles) { _, _ in schedulePersonalVaultAutoSync() }
+                    .onChange(of: model.independentPortForwards) { _, _ in schedulePersonalVaultAutoSync() }
+                    .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision) { _ in
+                        schedulePersonalVaultAutoSync()
                     }
             }
         }
@@ -386,5 +393,25 @@ struct SelectiveRemoteApp: App {
         }
         .menuBarExtraStyle(.menu)
         .environment(\.locale, language.locale)
+    }
+
+    private func schedulePersonalVaultAutoSync() {
+        guard let endpointText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
+              let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
+              let deviceText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1"),
+              let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
+        else { return }
+        let profiles = model.profiles
+        let snippets = TerminalCommandHistoryStore.shared.templates()
+        let forwarding = model.independentPortForwards
+        Task {
+            await personalVaultAutoSync.schedule(
+                endpoint: endpoint,
+                deviceID: deviceID,
+                profiles: profiles,
+                snippets: snippets,
+                forwarding: forwarding
+            )
+        }
     }
 }
