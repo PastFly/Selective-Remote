@@ -130,7 +130,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-record-filter="credential"/u);
   assert.match(html, /data-record-filter="snippet"/u);
   assert.match(html, /data-record-filter="forwarding"/u);
-  assert.match(html, /Текущая версия macOS-клиента ещё не выполняет этот импорт автоматически/u);
+  assert.match(html, /защищённой синхронизации Personal Vault с Mac/u);
+  assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
