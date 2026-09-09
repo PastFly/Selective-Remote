@@ -157,6 +157,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
+  assert.match(styles, /:root\[data-theme="light"\] \.access,[\s\S]*\.resource-detail,[\s\S]*\.vault-conflicts\s*\{\s*background:#fff/u);
+  assert.match(styles, /:root\[data-theme="light"\] \.resource-card-clickable:hover/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
