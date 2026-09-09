@@ -119,6 +119,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-open-auth="registration"/u);
   assert.equal((html.match(/data-open-auth="login"/gu) ?? []).length, 1);
   assert.equal((html.match(/data-open-auth="registration"/gu) ?? []).length, 1);
+  assert.match(html, /<nav class="brand-actions"[\s\S]*data-open-auth="login"[\s\S]*data-open-auth="registration"[\s\S]*<\/nav>/u);
+  assert.doesNotMatch(html, /class="hero-actions"/u);
   assert.match(html, /id="cloud-login-form"/u);
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
@@ -159,6 +161,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.workspace-layout/u);
   assert.match(styles, /:root\[data-theme="light"\] \.access,[\s\S]*\.resource-detail,[\s\S]*\.vault-conflicts\s*\{\s*background:#fff/u);
   assert.match(styles, /:root\[data-theme="light"\] \.resource-card-clickable:hover/u);
+  assert.match(styles, /@keyframes reveal-up/u);
+  assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
