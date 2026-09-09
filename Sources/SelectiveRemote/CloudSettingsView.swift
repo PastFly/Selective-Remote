@@ -1,3 +1,4 @@
+import CryptoKit
 import SwiftUI
 
 struct CloudSettingsView: View {
@@ -33,9 +34,11 @@ struct CloudSettingsView: View {
     @State private var personalVaultRecoveryPhrase = ""
     @State private var personalVaultRecoveryConfirmation = ""
     @State private var includePersonalVaultCredentials = false
+    @State private var personalVaultAutoSyncConfigured = false
 
     private let client = SelectiveRemoteCloudAPIClient()
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
+    private let personalVaultKeyStore = SelectiveRemotePersonalVaultKeychainStore()
 
     var body: some View {
         Form {
@@ -190,11 +193,17 @@ struct CloudSettingsView: View {
                         Text(localPersonalVaultSummary)
                             .foregroundStyle(.secondary)
                     }
+                    LabeledContent(UpdateLocalization.text(ru: "Автосинхронизация", en: "Automatic sync")) {
+                        Text(personalVaultAutoSyncConfigured
+                            ? UpdateLocalization.text(ru: "Включена", en: "Enabled")
+                            : UpdateLocalization.text(ru: "Не настроена", en: "Not configured"))
+                            .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
+                    }
 
                     Button(
                         UpdateLocalization.text(
-                            ru: "Зашифровать и отправить локальные данные…",
-                            en: "Encrypt and Upload Local Data…"
+                            ru: "Настроить защищённую синхронизацию…",
+                            en: "Set Up Secure Sync…"
                         ),
                         systemImage: "lock.doc.fill"
                     ) {
@@ -225,8 +234,8 @@ struct CloudSettingsView: View {
                     }
 
                     Text(UpdateLocalization.text(
-                        ru: "Первая отправка доступна только для пустого Cloud Vault. Recovery-фраза и открытые данные не сохраняются на сервере; существующая ревизия никогда не перезаписывается этим действием.",
-                        en: "The first upload is available only for an empty Cloud Vault. The recovery phrase and plaintext are never stored on the server; this action never replaces an existing revision."
+                        ru: "Настройка выполняется один раз для пустого Cloud Vault. Затем Hosts, Snippets и Forwarding синхронизируются автоматически. Recovery-фраза и открытые данные не сохраняются на сервере; конфликты никогда не перезаписываются молча.",
+                        en: "Setup runs once for an empty Cloud Vault. Hosts, Snippets and Forwarding then sync automatically. The recovery phrase and plaintext are never stored on the server, and conflicts are never overwritten silently."
                     ))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -553,6 +562,12 @@ struct CloudSettingsView: View {
         do {
             let personalVault = try await client.personalVault(endpoint: url)
             personalVaultRevision = personalVault.revision
+            if let deviceID = UUID(uuidString: storedDeviceID), deviceID.isSelectiveRemoteCloudUUID {
+                let material = try? personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
+                personalVaultAutoSyncConfigured = material?.vaultID == personalVault.id
+                    && material?.revision == personalVault.revision
+                    && material?.includesCredentials == false
+            }
         } catch {
             if error as? SelectiveRemoteCloudError == .authenticationRequired {
                 resetAccountPresentation(endpoint: url)
@@ -613,6 +628,7 @@ struct CloudSettingsView: View {
         personalVaultRevision = nil
         personalVaultMessage = nil
         personalVaultMessageIsError = false
+        personalVaultAutoSyncConfigured = false
         accountErrorMessage = nil
         inventoryErrorMessage = nil
         personalVaultLoadErrorMessage = nil
@@ -753,22 +769,36 @@ struct CloudSettingsView: View {
                     forwarding: model.independentPortForwards,
                     deviceID: resolvedDeviceID()
                 )
-                let document = exported.document
-                let envelope = try await Task.detached(priority: .userInitiated) {
-                    try SelectiveRemotePersonalVaultCrypto.seal(
-                        document,
+                let setup = try await Task.detached(priority: .userInitiated) {
+                    try SelectiveRemotePersonalVaultCrypto.createSetup(
+                        exported.document,
                         recoveryPhrase: recoveryPhrase,
                         baseRevision: 0
                     )
                 }.value
-                let result = try await client.putPersonalVault(endpoint: url, envelope: envelope)
+                let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope)
                 guard !result.conflict else {
                     throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
                 }
+                let documentHash = Data(SHA256.hash(data: try exported.document.encoded()))
+                let material = try SelectiveRemotePersonalVaultKeyMaterial(
+                    vaultID: remote.id,
+                    vaultKey: setup.vaultKey,
+                    wrappedKey: setup.envelope.wrappedKey,
+                    revision: result.revision,
+                    documentHash: documentHash,
+                    includesCredentials: !credentials.isEmpty
+                )
+                try personalVaultKeyStore.save(material, endpoint: url, deviceID: resolvedDeviceID())
+                personalVaultAutoSyncConfigured = credentials.isEmpty
                 personalVaultRevision = result.revision
                 personalVaultMessage = UpdateLocalization.text(
-                    ru: "Personal Vault отправлен: Hosts \(exported.summary.hosts), Credentials \(exported.summary.credentials), Snippets \(exported.summary.snippets), Forwarding \(exported.summary.forwarding). Ревизия r\(result.revision).",
-                    en: "Personal Vault uploaded: Hosts \(exported.summary.hosts), Credentials \(exported.summary.credentials), Snippets \(exported.summary.snippets), Forwarding \(exported.summary.forwarding). Revision r\(result.revision)."
+                    ru: credentials.isEmpty
+                        ? "Защищённая автосинхронизация включена. Первая ревизия r\(result.revision) отправлена."
+                        : "Ревизия r\(result.revision) отправлена с паролями. Фоновая синхронизация для неё отключена, чтобы не удалить секреты без подтверждения.",
+                    en: credentials.isEmpty
+                        ? "Secure automatic sync is enabled. Initial revision r\(result.revision) was uploaded."
+                        : "Revision r\(result.revision) was uploaded with passwords. Background sync is disabled for it so secrets cannot be removed without confirmation."
                 )
                 personalVaultMessageIsError = false
                 personalVaultUploading = false
