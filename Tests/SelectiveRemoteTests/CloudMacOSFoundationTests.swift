@@ -21,13 +21,13 @@ struct CloudMacOSFoundationTests {
                 #expect(object["password"] as? String == "synthetic-password")
                 return Self.response(request, status: 200, json: [
                     "token": token,
-                    "user": ["id": userID.uuidString.lowercased(), "email": "user@example.invalid", "displayName": "User"],
+                    "user": ["id": userID.uuidString.lowercased(), "email": "user@example.invalid", "username": "user", "displayName": "User"],
                     "deviceID": deviceID.uuidString.lowercased()
                 ])
             case ("GET", "/v1/me"):
                 #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
                 return Self.response(request, status: 200, json: [
-                    "id": userID.uuidString.lowercased(), "email": "user@example.invalid", "displayName": "User",
+                    "id": userID.uuidString.lowercased(), "email": "user@example.invalid", "username": "user", "displayName": "User",
                     "deviceID": deviceID.uuidString.lowercased()
                 ])
             case ("GET", "/v1/teams"):
@@ -60,7 +60,7 @@ struct CloudMacOSFoundationTests {
             password: "synthetic-password",
             device: .thisMac(id: deviceID, name: "Synthetic Mac")
         )
-        #expect(user == SelectiveRemoteCloudUser(id: userID, email: "user@example.invalid", displayName: "User"))
+        #expect(user == SelectiveRemoteCloudUser(id: userID, email: "user@example.invalid", username: "user", displayName: "User"))
         #expect(try store.token(for: endpoint) == token)
         let hasStoredSession = await client.hasStoredSession(endpoint: endpoint)
         #expect(hasStoredSession)
@@ -103,7 +103,7 @@ struct CloudMacOSFoundationTests {
             case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/members"):
                 return Self.response(request, status: 200, json: ["members": [[
                     "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
-                    "email": "owner@example.invalid", "displayName": "Owner", "role": "owner",
+                    "username": "owner", "displayName": "Owner", "role": "owner",
                     "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
                 ]]])
             case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/invitations"):
@@ -151,10 +151,11 @@ struct CloudMacOSFoundationTests {
             #expect(request.url?.path == "/v1/auth/register")
             let body = try #require(request.httpBody)
             let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-            #expect(Set(object.keys) == ["email", "password", "displayName", "device"])
+            #expect(Set(object.keys) == ["email", "password", "username", "displayName", "device"])
             #expect(object["email"] as? String == "user@example.invalid")
             #expect(object["password"] as? String == "synthetic-password")
             #expect(object["displayName"] as? String == "User")
+            #expect(object["username"] as? String == "leonid")
             let device = try #require(object["device"] as? [String: Any])
             #expect(device["id"] as? String == deviceID.canonicalCloudString)
             #expect(device["name"] as? String == "Synthetic Mac")
@@ -169,6 +170,7 @@ struct CloudMacOSFoundationTests {
         try await client.register(
             endpoint: endpoint,
             displayName: " User ",
+            username: " Leonid ",
             email: " user@example.invalid ",
             password: "synthetic-password",
             device: .thisMac(id: deviceID, name: "Synthetic Mac")
@@ -203,6 +205,7 @@ struct CloudMacOSFoundationTests {
                 try await client.register(
                     endpoint: endpoint,
                     displayName: "User",
+                    username: "user",
                     email: "user@example.invalid",
                     password: "synthetic-password",
                     device: .thisMac(id: deviceID, name: "Synthetic Mac")

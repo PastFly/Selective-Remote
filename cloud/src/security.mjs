@@ -24,6 +24,15 @@ export function normalizeEmail(value) {
   return email;
 }
 
+export function normalizeUsername(value) {
+  const username = String(value ?? "").trim().toLowerCase();
+  if (username.length < 3 || username.length > 32
+      || !/^[a-z0-9][a-z0-9._-]*[a-z0-9]$/.test(username)) {
+    throw new Error("invalid_username");
+  }
+  return username;
+}
+
 export function validatePassword(value) {
   const password = String(value ?? "");
   if (password.length < 12 || password.length > 1024) throw new Error("invalid_password");

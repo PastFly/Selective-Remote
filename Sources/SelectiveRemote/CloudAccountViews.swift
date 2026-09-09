@@ -159,9 +159,10 @@ struct SelectiveRemoteCloudRegistrationView: View {
     let errorMessage: String?
     let onBack: () -> Void
     let onCancel: () -> Void
-    let onRegister: (String, String, String) -> Void
+    let onRegister: (String, String, String, String) -> Void
 
     @State private var displayName = ""
+    @State private var username = ""
     @State private var email = ""
     @State private var password = ""
     @State private var confirmation = ""
@@ -172,6 +173,9 @@ struct SelectiveRemoteCloudRegistrationView: View {
                 Section {
                     TextField(UpdateLocalization.text(ru: "Имя", en: "Display Name"), text: $displayName)
                         .textContentType(.name)
+                        .disabled(isRegistering)
+                    TextField(UpdateLocalization.text(ru: "Логин", en: "Username"), text: $username)
+                        .textContentType(.username)
                         .disabled(isRegistering)
                     TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
                         .textContentType(.emailAddress)
@@ -244,7 +248,9 @@ struct SelectiveRemoteCloudRegistrationView: View {
     private var canSubmit: Bool {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let mail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let handle = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return !name.isEmpty && name.count <= 120
+            && handle.range(of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#, options: .regularExpression) != nil
             && !mail.isEmpty && mail.count <= 254
             && (12...1_024).contains(password.count)
             && password == confirmation
@@ -252,7 +258,7 @@ struct SelectiveRemoteCloudRegistrationView: View {
 
     private func submit() {
         guard canSubmit, !isRegistering else { return }
-        onRegister(displayName, email, password)
+        onRegister(displayName, username, email, password)
     }
 }
 

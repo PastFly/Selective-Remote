@@ -75,7 +75,7 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
       if (path === "/v1/auth/login") {
         return jsonResponse(200, {
           token,
-          user: { id: userID, email: "user@example.invalid", displayName: "User" },
+          user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" },
           deviceID: deviceA,
         });
       }
@@ -88,7 +88,7 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
   });
 
   const user = await client.login({ email: " user@example.invalid ", password: "synthetic-password", deviceID: deviceA });
-  assert.deepEqual(user, { id: userID, email: "user@example.invalid", displayName: "User" });
+  assert.deepEqual(user, { id: userID, email: "user@example.invalid", username: "user", displayName: "User" });
   assert.equal(JSON.stringify(client.session()).includes(token), false);
 
   await assert.rejects(
@@ -112,7 +112,7 @@ test("a 401 response clears the in-memory browser session", async () => {
       if (path === "/v1/auth/login") {
         return jsonResponse(200, {
           token: "t".repeat(43),
-          user: { id: userID, email: "user@example.invalid", displayName: "User" },
+          user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" },
           deviceID: deviceA,
         });
       }

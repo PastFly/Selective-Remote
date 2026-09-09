@@ -52,7 +52,7 @@ test("authenticated browser client registers its public key and keeps Team reque
     if (path === "/v1/auth/login") {
       return jsonResponse(200, {
         token,
-        user: { id: userID, email: "user@example.invalid", displayName: "User" },
+        user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" },
         deviceID,
       });
     }
@@ -89,7 +89,7 @@ test("authenticated browser client registers its public key and keeps Team reque
   const client = createAuthenticatedVaultClient({ fetchValue });
 
   await client.login({
-    email: "user@example.invalid",
+    username: "user",
     password: "synthetic-password",
     deviceID,
     publicKey: identity.publicKey,
@@ -119,7 +119,7 @@ test("account device transport normalizes approval metadata and revokes without 
     fetchValue: async (path, options = {}) => {
       calls.push({ path, options });
       if (path === "/v1/auth/login") return jsonResponse(200, {
-        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", displayName: "User" }, deviceID,
+        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" }, deviceID,
       });
       if (path === "/v1/devices") return jsonResponse(200, { devices: [{
         id: otherDeviceID,
@@ -164,7 +164,7 @@ test("Team writes carry idempotency and distinguish conflict from committed rota
       if (path === "/v1/auth/login") {
         return jsonResponse(200, {
           token: "t".repeat(43),
-          user: { id: userID, email: "user@example.invalid", displayName: "User" },
+          user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" },
           deviceID,
         });
       }
@@ -267,7 +267,7 @@ test("browser Team management covers lifecycle, members, invitations and shared 
   const member = {
     id: membershipID,
     userID,
-    email: "user@example.invalid",
+    username: "user",
     displayName: "User",
     role: "owner",
     epoch: 1,
@@ -286,7 +286,7 @@ test("browser Team management covers lifecycle, members, invitations and shared 
     fetchValue: async (path, options = {}) => {
       calls.push({ path, options });
       if (path === "/v1/auth/login") return jsonResponse(200, {
-        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", displayName: "User" }, deviceID,
+        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" }, deviceID,
       });
       if (path === "/v1/teams" && !options.method) return jsonResponse(200, { teams: [team] });
       if (path === "/v1/teams" && options.method === "POST") return jsonResponse(201, { team });

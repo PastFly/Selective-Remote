@@ -14,6 +14,7 @@ import {
   hashTeamInvitationToken,
   isUUID,
   normalizeEmail,
+  normalizeUsername,
   validateDevicePublicKey,
   validatePassword,
   validateTeamVaultEnvelope,
@@ -102,12 +103,16 @@ export class CloudService {
     const email = normalizeEmail(input.email);
     const password = validatePassword(input.password);
     const displayName = String(input.displayName ?? "").trim().slice(0, 120);
+    const username = input.username
+      ? normalizeUsername(input.username)
+      : `user_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
     const device = this.validateDevice(input.device);
     const verificationToken = createEmailVerificationToken();
     const passwordHash = await hashPassword(password);
     try {
       await this.store.createUser({
         email,
+        username,
         displayName,
         passwordHash,
         device,
@@ -502,7 +507,13 @@ export class CloudService {
 }
 
 function publicUser(row) {
-  return { id: row.id, email: row.email, displayName: row.display_name, createdAt: row.created_at };
+  return {
+    id: row.id,
+    email: row.email,
+    username: row.username,
+    displayName: row.display_name,
+    createdAt: row.created_at,
+  };
 }
 
 function publicTeam(row) {
@@ -521,7 +532,7 @@ function publicTeamMember(row) {
   return {
     id: row.id,
     userID: row.user_id,
-    email: row.email,
+    username: row.username,
     displayName: row.display_name,
     role: row.role,
     epoch: Number(row.epoch),
