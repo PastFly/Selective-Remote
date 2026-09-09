@@ -17,7 +17,6 @@
       </div>
       <nav class="brand-actions" id="public-actions" aria-label="Аккаунт">
         <button type="button" class="secondary" data-open-auth="login">Войти</button>
-        <button type="button" data-open-auth="registration">Создать аккаунт</button>
       </nav>
       <span class="status" id="service-status">Проверка сервиса…</span>
     </header>
@@ -54,8 +53,7 @@
           <span>HTTPS</span>
         </div>
         <div class="hero-actions">
-          <button type="button" data-open-auth="login">Войти в Cloud</button>
-          <button type="button" class="secondary" data-open-auth="registration">Создать аккаунт</button>
+          <button type="button" data-open-auth="registration">Создать аккаунт</button>
         </div>
       </div>
 
@@ -174,7 +172,7 @@
           </div>
           <div class="workspace-notice">
             <strong>Ожидается первая синхронизация с Mac</strong>
-            <p>Локальные подключения из установленного приложения появятся здесь после отправки Personal Vault с Mac. Текущая версия macOS-клиента ещё не выполняет этот импорт автоматически.</p>
+            <p>Локальные подключения появятся здесь после защищённой синхронизации Personal Vault с Mac.</p>
           </div>
         </section>
 
@@ -224,7 +222,7 @@
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
         <div class="vault-toolbar">
-          <div><h3>Личный Vault</h3><p>Зашифрованная локальная копия с ручной Cloud-синхронизацией.</p></div>
+          <div><h3>Личный Vault</h3><p>Зашифрованная копия, которая разблокируется только на вашем устройстве.</p></div>
           <div class="vault-actions">
             <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
             <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>

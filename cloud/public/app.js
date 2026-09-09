@@ -335,7 +335,7 @@ export async function initializeLocalVault({
   updateLabels();
   try {
     mode(await controller.status());
-    setText(message, "Данные зашифрованы локально; после входа доступна ручная Cloud-синхронизация.");
+    setText(message, "Данные зашифрованы локально; браузер разблокирует Vault только на этом устройстве.");
   } catch {
     setup.hidden = true;
     unlock.hidden = true;
