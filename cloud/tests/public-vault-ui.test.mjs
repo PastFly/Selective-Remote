@@ -94,6 +94,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
+  assert.equal((html.match(/data-open-auth="login"/gu) ?? []).length, 1);
+  assert.equal((html.match(/data-open-auth="registration"/gu) ?? []).length, 1);
   assert.match(html, /id="cloud-login-form"/u);
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
@@ -131,6 +133,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /Текущая версия macOS-клиента ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
+  assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /resourceTitles/u);
