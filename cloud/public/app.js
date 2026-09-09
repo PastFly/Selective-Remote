@@ -439,6 +439,19 @@ export function initializeTeamWorkspace({
     return ["owner", "admin", "editor"].includes(selectedTeam?.role);
   }
 
+  function updateTeamMessage() {
+    if (!selectedTeam) return;
+    if (activeView === "teams") {
+      setText(message, `Team «${selectedTeam.name}» · участников: ${teamMembers.length}.`);
+    } else if (activeView === "vaults") {
+      setText(message, `Team «${selectedTeam.name}» · хранилищ: ${vaults.length}.`);
+    } else {
+      setText(message, selectedVault
+        ? `Team «${selectedTeam.name}» · Vault «${selectedVault.name}».`
+        : `Team «${selectedTeam.name}» · выберите Vault для просмотра хостов.`);
+    }
+  }
+
   function setWorkspaceControls(disabled) {
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) {
       control.disabled = disabled || !canEdit();
@@ -707,6 +720,7 @@ export function initializeTeamWorkspace({
       renderRecords();
       setWorkspaceControls(false);
     }
+    updateTeamMessage();
   }
 
   async function openSelectedVault() {
@@ -776,6 +790,7 @@ export function initializeTeamWorkspace({
     renderMembers(teamMembers);
     vaults = sharedVaults;
     populateVaults();
+    updateTeamMessage();
   }
 
   async function loadTeams(preferredID = null) {

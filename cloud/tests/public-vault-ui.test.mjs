@@ -168,6 +168,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
+  assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
+  assert.match(application, /Team «\$\{selectedTeam\.name\}» · хранилищ: \$\{vaults\.length\}/u);
+  assert.match(application, /выберите Vault для просмотра хостов/u);
   assert.match(application, /activeView !== "hosts" \|\| value\.type === "host"/u);
   assert.match(application, /В выбранном Team Vault пока нет хостов/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
