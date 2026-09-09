@@ -291,10 +291,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             async let loadedMembers = client.teamMembers(endpoint: endpoint, teamID: team.id)
             async let loadedVaults = client.sharedVaults(endpoint: endpoint, teamID: team.id)
             let (memberResult, vaultResult) = try await (loadedMembers, loadedVaults)
-            let invitationResult = if team.role == .owner || team.role == .admin {
-                try await client.teamInvitations(endpoint: endpoint, teamID: team.id)
+            let invitationResult: [SelectiveRemoteCloudTeamInvitation]
+            if team.role == .owner || team.role == .admin {
+                invitationResult = try await client.teamInvitations(endpoint: endpoint, teamID: team.id)
             } else {
-                []
+                invitationResult = []
             }
             members = memberResult.sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
