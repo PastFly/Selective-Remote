@@ -48,9 +48,10 @@ struct CloudTeamHostsTests {
         let deviceID = try #require(
             UUID(uuidString: "44444444-4444-4444-8444-444444444444")
         )
+        let unicodeTitle = String(repeating: "Я", count: 120)
         var profile = ConnectionProfile(connectionType: .ssh)
         profile.id = profileID
-        profile.friendlyName = "Operations SSH"
+        profile.friendlyName = unicodeTitle
         profile.host = "ops.example.invalid"
         profile.username = "operator"
         profile.sshPort = 2_222
@@ -86,6 +87,7 @@ struct CloudTeamHostsTests {
         let firstRuntimeID = host.id
         #expect(host.recordID == profileID)
         #expect(host.id != profileID)
+        #expect(host.profile.friendlyName == unicodeTitle)
         #expect(host.profile.sshIdentityID == nil)
         #expect(host.profile.sshJumpHostProfileID == nil)
         #expect(host.profile.sshProxyMode == .none)
