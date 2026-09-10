@@ -349,6 +349,31 @@
         <div><p class="eyebrow">ACCOUNT SETTINGS</p><h2>Настройки аккаунта</h2></div>
         <p>Управление аккаунтом Selective Remote Cloud.</p>
       </div>
+      <div class="account-settings-grid">
+        <form class="account-settings-card" id="account-username-form">
+          <h3>Публичный username</h3>
+          <p>Используется для приглашений в команды. Username должен быть уникальным.</p>
+          <label for="account-username">Новый username</label>
+          <input id="account-username" name="username" minlength="3" maxlength="32" autocomplete="username" required>
+          <p id="account-username-availability" aria-live="polite"></p>
+          <label for="account-username-password">Текущий пароль</label>
+          <input id="account-username-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+          <button type="submit">Изменить username</button>
+          <p id="account-username-message" aria-live="polite"></p>
+        </form>
+        <form class="account-settings-card" id="account-password-form">
+          <h3>Изменить пароль</h3>
+          <p>После изменения остальные активные сессии будут завершены.</p>
+          <label for="account-current-password">Текущий пароль</label>
+          <input id="account-current-password" name="currentPassword" type="password" minlength="12" maxlength="1024" autocomplete="current-password" required>
+          <label for="account-new-password">Новый пароль</label>
+          <input id="account-new-password" name="newPassword" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+          <label for="account-new-password-confirmation">Повторите новый пароль</label>
+          <input id="account-new-password-confirmation" name="confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
+          <button type="submit">Изменить пароль</button>
+          <p id="account-password-message" aria-live="polite"></p>
+        </form>
+      </div>
       <section class="account-danger-zone" aria-labelledby="account-delete-title">
         <h3 id="account-delete-title">Удалить аккаунт</h3>
         <p>Будут безвозвратно удалены Personal Vault, устройства и все сессии. Доступ к Team Vaults будет отозван.</p>

@@ -84,6 +84,25 @@ test("authenticated account deletion clears the in-memory session", async () => 
   assert.match(calls.at(-1)[1].headers.Authorization, /^Bearer /u);
 });
 
+test("authenticated account settings check and update username and password", async () => {
+  const calls = [];
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+    calls.push([path, options]);
+    if (path === "/v1/auth/login") return new Response(JSON.stringify({
+      token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", username: "owner", displayName: "Owner" }, deviceID,
+    }), { status: 200, headers: { "Content-Type": "application/json" } });
+    if (path.startsWith("/v1/account/username-availability")) return new Response(JSON.stringify({ username: "new.owner", available: true }), { status: 200 });
+    if (path === "/v1/account/username") return new Response(JSON.stringify({ username: "new.owner" }), { status: 200 });
+    if (path === "/v1/account/password") return new Response(JSON.stringify({ changed: true }), { status: 200 });
+    throw new Error(`unexpected:${path}`);
+  } });
+  await client.login({ email: "owner@example.com", password: "a sufficiently long password", deviceID });
+  assert.deepEqual(await client.usernameAvailability("New.Owner"), { username: "new.owner", available: true });
+  assert.equal((await client.updateUsername({ username: "new.owner", password: "a sufficiently long password" })).username, "new.owner");
+  assert.deepEqual(await client.changePassword({ currentPassword: "a sufficiently long password", newPassword: "a completely new password" }), { changed: true });
+  assert.equal(calls.at(-1)[1].method, "PATCH");
+});
+
 test("portal exposes visible login and registration modes and never promises emailed passwords", async () => {
   const [html, server] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),

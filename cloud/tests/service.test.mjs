@@ -31,6 +31,9 @@ class MemoryStore {
     return this.identity;
   }
   async passwordIdentity(email) { return this.identity?.email === email ? this.identity : null; }
+  async usernameAvailable(username, excludingUserID) { return username !== "taken" || this.identity?.id === excludingUserID && this.identity?.username === username; }
+  async updateUsername(userID, username) { if (username === "taken") throw new Error("username_exists"); this.identity.username = username; return username; }
+  async changePassword(userID, sessionID, passwordHash) { this.identity.password_hash = passwordHash; this.lastPasswordHash = passwordHash; for (const [key, value] of this.sessions) if (value.session_id !== sessionID) this.sessions.delete(key); return { changed: true }; }
   async createSession(input) { this.sessions.set(input.sessionHash, { session_id: "session-2", user_id: input.userID, device_id: input.device.id, email: this.identity.email, display_name: this.identity.display_name }); }
   async session(hash) { return this.sessions.get(hash) ?? null; }
   async consumeEmailVerificationToken(hash) {
@@ -151,6 +154,27 @@ test("account deletion requires password reauthentication and exact account emai
     { deleted: true },
   );
   assert.equal(store.deletedUserID, "user-1");
+});
+
+test("account settings require reauthentication and preserve only the current session after password change", async () => {
+  const store = new MemoryStore();
+  store.identity = {
+    id: "user-1", email: "user@example.com", username: "owner", display_name: "User",
+    password_hash: "stored-password-hash", email_verified_at: new Date(), disabled_at: null,
+  };
+  store.sessions.set("current", { session_id: "session-current" });
+  store.sessions.set("other", { session_id: "session-other" });
+  const verifier = async (password, hash) => password === "correct horse battery" && hash === "stored-password-hash";
+  const service = new CloudService(store, config, null, console, verifier);
+  const session = { session_id: "session-current", user_id: "user-1", email: "user@example.com", username: "owner" };
+
+  assert.deepEqual(await service.usernameAvailability(session, { username: "New.Name" }), { username: "new.name", available: true });
+  await assert.rejects(service.updateUsername(session, { username: "new.name", password: "wrong password" }), /invalid_credentials/u);
+  assert.deepEqual(await service.updateUsername(session, { username: "new.name", password: "correct horse battery" }), { username: "new.name" });
+  assert.deepEqual(await service.changePassword(session, { currentPassword: "correct horse battery", newPassword: "a completely new password" }), { changed: true });
+  assert.ok(store.lastPasswordHash?.startsWith("scrypt$"));
+  assert.equal(store.sessions.has("current"), true);
+  assert.equal(store.sessions.has("other"), false);
 });
 
 test("registration can be disabled until SMTP is configured", async () => {

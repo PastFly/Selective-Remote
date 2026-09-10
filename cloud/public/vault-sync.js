@@ -547,6 +547,36 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return currentDeviceID;
     },
 
+    async usernameAvailability(username) {
+      const normalized = String(username ?? "").trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$/.test(normalized)) throw new Error("invalid_username");
+      const response = await authorizedRequest(`/v1/account/username-availability?username=${encodeURIComponent(normalized)}`);
+      const result = await responseJSON(response, "username_check_failed");
+      if (!response.ok || result.username !== normalized || typeof result.available !== "boolean") throw new Error("username_check_failed");
+      return result;
+    },
+
+    async updateUsername({ username, password }) {
+      const response = await authorizedRequest("/v1/account/username", {
+        method: "PATCH", body: JSON.stringify({ username, password: String(password ?? "") }),
+      });
+      const result = await responseJSON(response, "username_update_failed");
+      if (!response.ok) throw new Error(["invalid_username", "username_exists", "invalid_credentials"].includes(result.error) ? result.error : "username_update_failed");
+      user.username = String(result.username ?? "");
+      return structuredClone(user);
+    },
+
+    async changePassword({ currentPassword, newPassword }) {
+      const response = await authorizedRequest("/v1/account/password", {
+        method: "PATCH",
+        body: JSON.stringify({ currentPassword: String(currentPassword ?? ""), newPassword: normalizedPassword(newPassword) }),
+      });
+      const result = await responseJSON(response, "password_change_failed");
+      if (!response.ok) throw new Error(["invalid_password", "invalid_credentials"].includes(result.error) ? result.error : "password_change_failed");
+      if (result.changed !== true) throw new Error("password_change_failed");
+      return { changed: true };
+    },
+
     async logout() {
       try {
         await authorizedRequest("/v1/auth/logout", { method: "POST" });

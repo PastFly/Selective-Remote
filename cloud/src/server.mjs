@@ -108,6 +108,15 @@ async function route(request, response) {
         deviceID: session.device_id,
       });
     }
+    if (method === "GET" && url.pathname === "/v1/account/username-availability") {
+      return handleOperation(response, async () => service.usernameAvailability(session, { username: url.searchParams.get("username") }));
+    }
+    if (method === "PATCH" && url.pathname === "/v1/account/username") {
+      return handleOperation(response, async () => service.updateUsername(session, await readJSON(request, maxTeamBodyBytes)));
+    }
+    if (method === "PATCH" && url.pathname === "/v1/account/password") {
+      return handleOperation(response, async () => service.changePassword(session, await readJSON(request, maxTeamBodyBytes)));
+    }
     if (method === "DELETE" && url.pathname === "/v1/me") {
       return handleOperation(
         response,
