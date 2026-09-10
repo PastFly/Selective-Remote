@@ -526,6 +526,14 @@ struct CloudSettingsView: View {
                 accountPhase = .signedIn
                 showsAccountSheet = false
                 await loadInventory(endpoint: url)
+                if enrollmentError == nil {
+                    do {
+                        try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID)
+                        await loadInventory(endpoint: url)
+                    } catch {
+                        enrollmentError = error.localizedDescription
+                    }
+                }
                 if let enrollmentError {
                     personalVaultLoadErrorMessage = UpdateLocalization.text(
                         ru: "Вход выполнен, но Personal Vault не подключён автоматически: \(enrollmentError)",
@@ -652,6 +660,35 @@ struct CloudSettingsView: View {
                 accountErrorMessage = error.localizedDescription
             }
         }
+    }
+
+    @MainActor
+    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID) async throws {
+        guard var material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
+              material.requiresInitialDownload == true
+        else { return }
+        let remote = try await client.personalVault(endpoint: url)
+        guard remote.id == material.vaultID, remote.revision == material.revision,
+              let envelope = remote.envelope
+        else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: material.vaultKey)
+        let snapshot = try SelectiveRemotePersonalVaultImporter.decode(document)
+        let history = TerminalCommandHistoryStore.shared
+        let plan = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot,
+            localProfiles: model.profiles,
+            localSnippets: history.templates(),
+            localForwarding: model.independentPortForwards
+        )
+        guard plan.canApply else {
+            throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
+        }
+        try KeychainService.savePasswords(plan.credentials)
+        model.profiles.append(contentsOf: plan.profiles)
+        model.independentPortForwards.append(contentsOf: plan.forwarding)
+        history.importTemplates(plan.snippets)
+        material.requiresInitialDownload = false
+        try personalVaultKeyStore.save(material, endpoint: url, deviceID: deviceID)
     }
 
     @MainActor
