@@ -9,6 +9,7 @@ protocol SelectiveRemoteCloudTokenStore: Sendable {
 
 struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
     static let legacyService = "local.selectiveremote.cloud.session.v1"
+    static let service = legacyService
     private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
     func token(for endpoint: URL) throws -> String? {
