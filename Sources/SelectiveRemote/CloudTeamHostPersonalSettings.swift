@@ -225,6 +225,12 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
                                 onPrimary: setPrimaryDisplay
                             )
                             .frame(height: 220)
+                            Text(UpdateLocalization.text(
+                                ru: "Щёлкните монитор, чтобы включить или исключить его; звезда выбирает основной экран Windows.",
+                                en: "Click a display to include or exclude it; the star selects the primary Windows display."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                             Button(
                                 UpdateLocalization.text(ru: "Обновить мониторы", en: "Refresh Displays"),
                                 systemImage: "arrow.clockwise"
