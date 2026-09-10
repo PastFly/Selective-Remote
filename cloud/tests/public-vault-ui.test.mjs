@@ -16,6 +16,10 @@ test("account password is domain-separated before it unlocks Personal Vault", ()
     "selective-remote:account-password:v1:correct horse battery",
   );
   assert.throws(() => accountVaultPassphrase("too-short"), /invalid_account_password/u);
+  assert.equal(
+    accountVaultPassphrase("mot-de-passe-café"),
+    accountVaultPassphrase("mot-de-passe-cafe\u0301"),
+  );
 });
 
 test("appearance defaults to graphite and synchronizes every visible selector", () => {
