@@ -123,7 +123,8 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
-        credentials: [SelectiveRemotePersonalVaultCredentialInput] = []
+        credentials: [SelectiveRemotePersonalVaultCredentialInput] = [],
+        sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = []
     ) async throws -> Int {
         let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
         let remote = try await client.personalVault(endpoint: endpoint)
@@ -134,6 +135,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
                 credentials: credentials,
                 snippets: snippets,
                 forwarding: forwarding,
+                sshKeys: sshKeys,
                 deviceID: deviceID,
                 allowEmpty: true
             )
@@ -195,7 +197,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
         deviceID: UUID,
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
-        forwarding: [IndependentPortForward]
+        forwarding: [IndependentPortForward],
+        sshKeys: [SSHKeyRecord]
     ) {
         pending?.cancel()
         pending = Task {
@@ -206,7 +209,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
                 deviceID: deviceID,
                 profiles: profiles,
                 snippets: snippets,
-                forwarding: forwarding
+                forwarding: forwarding,
+                sshKeys: sshKeys
             )
         }
     }
@@ -216,7 +220,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
         deviceID: UUID,
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
-        forwarding: [IndependentPortForward]
+        forwarding: [IndependentPortForward],
+        sshKeys: [SSHKeyRecord]
     ) async throws {
         guard var material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
               material.allowsUpload,
@@ -230,6 +235,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
             ),
             snippets: snippets,
             forwarding: forwarding,
+            sshKeys: try await SelectiveRemotePersonalVaultCredentialCollector.shared.collectSSHKeys(sshKeys),
             deviceID: deviceID,
             allowEmpty: true
         )
