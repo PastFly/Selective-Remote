@@ -145,6 +145,8 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--ink); 
 #team-vault-workspace>.team-host-browser { order:2; }
 #team-vault-workspace>.vault-records { order:3; }
 #team-vault-workspace>.vault-conflicts { order:5; }
+#team-vault[data-team-view="hosts"] .team-vault-directory-heading { display:none; }
+#team-vault[data-team-view="hosts"] #team-vault-directory-view { padding-bottom:18px; border-bottom:1px solid var(--line); }
 .vault-records article { display:grid; grid-template-columns:1fr auto; gap:8px 16px; align-items:center; padding:20px; border:1px solid var(--line); border-radius:14px; background:#08110e; }
 .vault-records h4,.vault-records p { margin:0; overflow-wrap:anywhere; }.vault-records p,.vault-records small,.vault-empty { color:var(--muted); }.vault-records small { font-family:ui-monospace,monospace; }
 :root[data-theme="light"] .workspace-layout,:root[data-theme="light"] .workspace-sidebar,:root[data-theme="light"] .workspace-stats button,:root[data-theme="light"] .workspace-devices>.vault-heading,:root[data-theme="light"] .team-onboarding form,:root[data-theme="light"] .team-columns>div,:root[data-theme="light"] .team-devices-panel,:root[data-theme="light"] .team-lifecycle,:root[data-theme="light"] .vault-records article,:root[data-theme="light"] .team-invitations article { background:var(--panel); }

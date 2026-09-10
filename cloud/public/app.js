@@ -1137,15 +1137,15 @@ export function initializeTeamWorkspace({
     membersView.hidden = activeView !== "members";
     vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
-    createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
-    workspace.hidden = activeView === "teams" || !controller;
+    createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    workspace.hidden = activeView !== "hosts" || !controller;
     if (activeView === "hosts") recordType.value = "host";
     updateRecordLabels();
     if (controller) {
       clearConflicts();
       renderRecords();
       setWorkspaceControls(false);
-    } else if (activeView !== "teams" && vaults.length > 0) {
+    } else if (activeView === "hosts" && vaults.length > 0) {
       void openSelectedVault();
     }
     updateTeamMessage();
@@ -1162,7 +1162,7 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
-    workspace.hidden = activeView === "teams";
+    workspace.hidden = activeView !== "hosts";
     rotateButton.hidden = !vault.rotationRequired || !canManage();
     rotateButton.disabled = !vault.rotationRequired || !canManage();
     setRecoveryControls("none");
@@ -1205,7 +1205,7 @@ export function initializeTeamWorkspace({
     if (selectedTeam.role !== "owner" && inviteForm.elements.role.value === "admin") {
       inviteForm.elements.role.value = "viewer";
     }
-    createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
+    createVaultForm.hidden = activeView !== "vaults" || !canManage();
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
@@ -1222,7 +1222,7 @@ export function initializeTeamWorkspace({
     renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
-    if (activeView !== "teams" && vaults.length > 0) await openSelectedVault();
+    if (activeView === "hosts" && vaults.length > 0) await openSelectedVault();
   }
 
   async function loadTeams(preferredID = null) {
@@ -1420,8 +1420,7 @@ export function initializeTeamWorkspace({
       createVaultForm.reset();
       await loadSelectedTeam();
       vaultSelect.value = vault.id;
-      await openSelectedVault();
-      setText(message, "Папка команды создана и открыта.");
+      setText(message, "Папка команды создана. Перейдите в «Хосты команд», чтобы добавить или открыть Host.");
     } catch {
       setText(message, "Shared Vault не создан или не инициализирован. Проверьте роль и одобрение устройства.");
     } finally {
@@ -1436,7 +1435,13 @@ export function initializeTeamWorkspace({
   });
   teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
   devicesRefresh.addEventListener("click", () => loadDevices().catch(() => setText(message, "Не удалось обновить устройства.")));
-  vaultOpen.addEventListener("click", () => openSelectedVault());
+  vaultOpen.addEventListener("click", () => {
+    if (activeView === "vaults") {
+      documentValue.querySelector('[data-workspace-target="team-vault"][data-team-view="hosts"]')?.click();
+      return;
+    }
+    void openSelectedVault();
+  });
   rotateButton.addEventListener("click", async () => {
     if (!controller || !selectedVault || !canManage() || vaultOperation) return;
     if (!confirmValue("Зашифровать полную текущую Team-ревизию новым ключом и выдать wrappers всем актуальным авторизованным устройствам?")) return;
