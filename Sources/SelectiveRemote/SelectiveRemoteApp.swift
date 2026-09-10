@@ -159,6 +159,9 @@ struct SelectiveRemoteApp: App {
                         schedulePersonalVaultAutoSync()
                         updateTeamVaultAutoSync()
                     }
+                    .task {
+                        await runPersonalVaultInboundSyncLoop()
+                    }
                     .onChange(of: model.profiles) { _, _ in schedulePersonalVaultAutoSync() }
                     .onChange(of: model.independentPortForwards) { _, _ in schedulePersonalVaultAutoSync() }
                     .onChange(of: model.sshKeys) { _, _ in schedulePersonalVaultAutoSync() }
@@ -434,6 +437,55 @@ struct SelectiveRemoteApp: App {
                 forwarding: forwarding,
                 sshKeys: sshKeys
             )
+        }
+    }
+
+    @MainActor
+    private func runPersonalVaultInboundSyncLoop() async {
+        while !Task.isCancelled {
+            if UserDefaults.standard.object(
+                forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
+            ) as? Bool ?? true {
+                await downloadPersonalVaultChanges()
+            }
+            do { try await Task.sleep(for: .seconds(15)) }
+            catch { return }
+        }
+    }
+
+    @MainActor
+    private func downloadPersonalVaultChanges() async {
+        guard !appLock.isLocked,
+              let endpointText = UserDefaults.standard.string(
+                  forKey: "SelectiveRemote.cloud.endpoint.v1"
+              ),
+              let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
+              let deviceText = UserDefaults.standard.string(
+                  forKey: "SelectiveRemote.cloud.device-id.v1"
+              ),
+              let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
+        else { return }
+        do {
+            guard let download = try await personalVaultAutoSync.downloadIfNewer(
+                endpoint: endpoint,
+                deviceID: deviceID
+            ) else { return }
+            let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
+            let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
+            try KeychainService.savePasswords(snapshot.credentials)
+            try await personalVaultAutoSync.acceptDownload(
+                download,
+                endpoint: endpoint,
+                deviceID: deviceID
+            )
+            if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
+            if model.independentPortForwards != snapshot.forwarding {
+                model.independentPortForwards = snapshot.forwarding
+            }
+            if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
+            TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
+        } catch {
+            // Keep local data untouched and retry after the polling interval.
         }
     }
 }

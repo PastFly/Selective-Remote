@@ -184,6 +184,12 @@ actor SelectiveRemotePersonalVaultAutoSync {
     private let keyStore: any SelectiveRemotePersonalVaultKeyStore
     private var pending: Task<Void, Never>?
 
+    struct Download: Sendable {
+        let document: SelectiveRemoteVaultDocument
+        let revision: Int
+        let documentHash: Data
+    }
+
     init(
         client: SelectiveRemoteCloudAPIClient = .init(),
         keyStore: any SelectiveRemotePersonalVaultKeyStore = SelectiveRemotePersonalVaultKeychainStore()
@@ -215,6 +221,36 @@ actor SelectiveRemotePersonalVaultAutoSync {
         }
     }
 
+    func downloadIfNewer(endpoint: URL, deviceID: UUID) async throws -> Download? {
+        guard let material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
+              material.allowsUpload,
+              await client.hasStoredSession(endpoint: endpoint)
+        else { return nil }
+        let remote = try await client.personalVault(endpoint: endpoint)
+        guard remote.id == material.vaultID, remote.revision > material.revision,
+              let envelope = remote.envelope
+        else { return nil }
+        let document = try SelectiveRemotePersonalVaultCrypto.open(
+            envelope,
+            vaultKey: material.vaultKey
+        )
+        return Download(
+            document: document,
+            revision: remote.revision,
+            documentHash: Data(SHA256.hash(data: try document.encoded()))
+        )
+    }
+
+    func acceptDownload(_ download: Download, endpoint: URL, deviceID: UUID) throws {
+        guard var material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
+              download.revision > material.revision
+        else { return }
+        material.revision = download.revision
+        material.documentHash = download.documentHash
+        material.requiresInitialDownload = false
+        try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+    }
+
     private func synchronize(
         endpoint: URL,
         deviceID: UUID,
@@ -240,15 +276,18 @@ actor SelectiveRemotePersonalVaultAutoSync {
             allowEmpty: true
         )
         let remote = try await client.personalVault(endpoint: endpoint)
-        guard remote.id == material.vaultID, remote.revision == material.revision else {
+        guard remote.id == material.vaultID else {
             throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
         }
-        let document = try mergedDocument(
-            local: exported.document,
-            remote: remote,
-            vaultKey: material.vaultKey,
-            profileIDs: Set(profiles.map(\.id))
-        )
+        let concurrentChange = remote.revision != material.revision
+        let document = concurrentChange
+            ? try mergeConcurrent(local: exported.document, remote: remote, vaultKey: material.vaultKey)
+            : try mergedDocument(
+                local: exported.document,
+                remote: remote,
+                vaultKey: material.vaultKey,
+                profileIDs: Set(profiles.map(\.id))
+            )
         let documentHash = Data(SHA256.hash(data: try document.encoded()))
         guard documentHash != material.documentHash else { return }
         let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
@@ -261,9 +300,42 @@ actor SelectiveRemotePersonalVaultAutoSync {
         guard !result.conflict, result.revision == remote.revision + 1 else {
             throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
         }
+        // Keep the previous revision after a concurrent merge. The inbound loop
+        // then materializes that exact merged revision on this Mac as well.
+        if concurrentChange { return }
         material.revision = result.revision
         material.documentHash = documentHash
         try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+    }
+
+    private func mergeConcurrent(
+        local: SelectiveRemoteVaultDocument,
+        remote: SelectiveRemoteCloudPersonalVault,
+        vaultKey: Data
+    ) throws -> SelectiveRemoteVaultDocument {
+        guard let envelope = remote.envelope else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
+        var records = Dictionary(uniqueKeysWithValues: current.records.map { ($0.id, $0) })
+        for record in local.records {
+            if let existing = records[record.id], existing.modifiedAt > record.modifiedAt { continue }
+            records[record.id] = record
+        }
+        var tombstones = Dictionary(uniqueKeysWithValues: current.tombstones.map { ($0.id, $0) })
+        for tombstone in local.tombstones {
+            if let existing = tombstones[tombstone.id], existing.deletedAt > tombstone.deletedAt { continue }
+            tombstones[tombstone.id] = tombstone
+        }
+        for (id, tombstone) in tombstones {
+            if let record = records[id], tombstone.deletedAt >= record.modifiedAt {
+                records.removeValue(forKey: id)
+            }
+        }
+        return try .init(
+            records: records.values.sorted { $0.id.uuidString < $1.id.uuidString },
+            tombstones: tombstones.values.sorted { $0.id.uuidString < $1.id.uuidString }
+        )
     }
 
     private func mergedDocument(

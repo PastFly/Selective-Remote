@@ -444,10 +444,12 @@ test("macOS Cloud session and Team device key share one Keychain envelope", asyn
 
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
-  const [sync, crypto, settings] = await Promise.all([
+  const [sync, crypto, settings, app, snippets] = await Promise.all([
     readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+    readFile(new URL("SelectiveRemoteApp.swift", sourceRoot), "utf8"),
+    readFile(new URL("TerminalCommandHistory.swift", sourceRoot), "utf8"),
   ]);
   assert.doesNotMatch(sync, /!material\.includesCredentials/u);
   assert.match(sync, /SelectiveRemotePersonalVaultCrypto\.open/u);
@@ -458,4 +460,15 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(crypto, /static func open\(/u);
   assert.match(settings, /personalVaultAutoSyncConfigured = true/u);
   assert.doesNotMatch(settings, /Background sync is disabled/u);
+  assert.match(sync, /func downloadIfNewer\(/u);
+  assert.match(sync, /remote\.revision > material\.revision/u);
+  assert.match(sync, /func acceptDownload\(/u);
+  assert.match(sync, /func mergeConcurrent\(/u);
+  assert.match(sync, /tombstone\.deletedAt >= record\.modifiedAt/u);
+  assert.match(sync, /if concurrentChange \{ return \}/u);
+  assert.match(app, /runPersonalVaultInboundSyncLoop/u);
+  assert.match(app, /Task\.sleep\(for: \.seconds\(15\)\)/u);
+  assert.match(app, /KeychainService\.savePasswords\(snapshot\.credentials\)/u);
+  assert.match(app, /SelectiveRemotePersonalVaultSSHKeyStore\.install\(snapshot\.sshKeys\)/u);
+  assert.match(snippets, /func replaceSyncedTemplates\(/u);
 });
