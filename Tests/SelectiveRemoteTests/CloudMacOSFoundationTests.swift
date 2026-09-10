@@ -1441,6 +1441,56 @@ struct CloudMacOSFoundationTests {
     }
 }
 
+@Suite("Account-password Personal Vault enrollment")
+struct AccountPasswordPersonalVaultEnrollmentTests {
+    @Test("macOS derives the browser-compatible passphrase and unwraps the Vault key")
+    func accountPasswordRoundTrip() throws {
+        let password = "correct horse battery"
+        let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
+        #expect(passphrase == "selective-remote:account-password:v1:correct horse battery")
+        let document = try SelectiveRemoteVaultDocument(records: [], tombstones: [])
+        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+            document,
+            recoveryPhrase: passphrase,
+            baseRevision: 0
+        )
+
+        let unwrapped = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
+            setup.envelope.wrappedKey,
+            passphrase: passphrase
+        )
+        #expect(unwrapped == setup.vaultKey)
+        #expect(try SelectiveRemotePersonalVaultCrypto.open(setup.envelope, vaultKey: unwrapped) == document)
+        #expect(throws: SelectiveRemotePersonalVaultError.self) {
+            try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
+                setup.envelope.wrappedKey,
+                passphrase: "selective-remote:account-password:v1:different password"
+            )
+        }
+    }
+
+    @Test("canonically equivalent account passwords derive the same passphrase")
+    func unicodeNormalization() throws {
+        #expect(
+            try SelectiveRemotePersonalVaultCrypto.accountPassphrase("mot-de-passe-café")
+                == SelectiveRemotePersonalVaultCrypto.accountPassphrase("mot-de-passe-cafe\u{301}")
+        )
+    }
+
+    @Test("a newly enrolled remote Vault cannot upload before initial download")
+    func remoteEnrollmentUploadGate() throws {
+        let material = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
+            vaultKey: Data(repeating: 1, count: 32),
+            wrappedKey: .init(salt: Data(repeating: 2, count: 16), value: Data(repeating: 3, count: 40)),
+            revision: 2,
+            documentHash: Data(repeating: 4, count: 32),
+            requiresInitialDownload: true
+        )
+        #expect(!material.allowsUpload)
+    }
+}
+
 private final class CloudHTTPStub: @unchecked Sendable {
     let handler: @Sendable (URLRequest) throws -> (Data, URLResponse)
 
