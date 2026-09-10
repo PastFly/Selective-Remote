@@ -360,11 +360,17 @@ export class CloudService {
     const role = validateTeamRole(input?.role, { invitation: true });
     const token = createTeamInvitationToken();
     const expiresAt = this.teamInvitationExpiry();
+    const invitationTeam = invitationType === "email"
+      ? (await this.store.listTeams(session.user_id)).find((team) => team.id === teamID)
+      : null;
+    if (invitationType === "email" && !invitationTeam) throw new Error("team_not_found");
     const outboxEnvelope = invitationType === "email" ? encryptOutboxPayload(
       {
         recipient: email,
         token,
         teamID,
+        teamName: invitationTeam.name,
+        invitedBy: session.username,
         role,
         expiresAt: expiresAt.toISOString(),
       },
