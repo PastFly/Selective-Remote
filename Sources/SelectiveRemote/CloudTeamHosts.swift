@@ -26,6 +26,14 @@ struct SelectiveRemoteTeamHost: Identifiable, Equatable {
     let modifiedAt: String
     let address: String
     let profile: ConnectionProfile
+    let credentials: SelectiveRemoteTeamHostCredentials
+}
+
+struct SelectiveRemoteTeamHostCredentials: Equatable, Sendable {
+    var password: String?
+    var gatewayPassword: String?
+
+    static let empty = Self(password: nil, gatewayPassword: nil)
 }
 
 enum SelectiveRemoteTeamHostMaterializationError: Error, Equatable {
@@ -58,6 +66,7 @@ enum SelectiveRemoteTeamHostMaterializer {
             throw SelectiveRemoteTeamHostMaterializationError.invalidSnapshot
         }
 
+        let credentials = try materializedCredentials(document.records)
         return try document.records.compactMap { record in
             guard record.type == .host else { return nil }
             guard case let .object(data) = record.data,
@@ -124,9 +133,45 @@ enum SelectiveRemoteTeamHostMaterializer {
                         vaultID: snapshot.vaultID,
                         recordID: record.id
                     )
-                )
+                ),
+                credentials: credentials[record.id] ?? .empty
             )
         }
+    }
+
+    private static func materializedCredentials(
+        _ records: [SelectiveRemoteVaultRecord]
+    ) throws -> [UUID: SelectiveRemoteTeamHostCredentials] {
+        var result: [UUID: SelectiveRemoteTeamHostCredentials] = [:]
+        for record in records where record.type == .credential {
+            guard case let .object(data) = record.data,
+                  Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
+                  let source = string(data["sourceID"]),
+                  let sourceID = UUID(uuidString: source),
+                  sourceID.isSelectiveRemoteCloudUUID,
+                  let secret = string(data["secret"]),
+                  !secret.isEmpty,
+                  secret.utf8.count <= 16_384,
+                  let kind = string(data["kind"]),
+                  kind == KeychainCredentialKind.rdp.rawValue
+                    || kind == KeychainCredentialKind.ssh.rawValue
+                    || kind == KeychainCredentialKind.gateway.rawValue
+            else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
+            var value = result[sourceID] ?? .empty
+            if kind == KeychainCredentialKind.gateway.rawValue {
+                guard value.gatewayPassword == nil else {
+                    throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+                }
+                value.gatewayPassword = secret
+            } else {
+                guard value.password == nil else {
+                    throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+                }
+                value.password = secret
+            }
+            result[sourceID] = value
+        }
+        return result
     }
 
     static func scopedID(teamID: UUID, vaultID: UUID, recordID: UUID) -> UUID {
@@ -672,11 +717,11 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .onChange(of: selectedHostID) { _, _ in resetConnectionFields() }
         .sheet(item: $editorRequest) { request in
-            SelectiveRemoteTeamHostEditorView(request: request) { profile in
+            SelectiveRemoteTeamHostEditorView(request: request) { profile, credentials in
                 mutate(
                     request.host.map {
-                        .update(recordID: $0.recordID, profile: profile)
-                    } ?? .create(profile),
+                        .update(recordID: $0.recordID, profile: profile, credentials: credentials)
+                    } ?? .create(profile, credentials),
                     context: request.context,
                     selectedRecordID: profile.id
                 )
@@ -879,12 +924,12 @@ struct SelectiveRemoteTeamHostsView: View {
                             SecureField(
                                 host.profile.connectionType == .rdp
                                     ? UpdateLocalization.text(
-                                        ru: "Пароль RDP (не сохраняется)",
-                                        en: "RDP Password (not saved)"
+                                        ru: "Пароль RDP (общий или временный)",
+                                        en: "RDP Password (shared or temporary)"
                                     )
                                     : UpdateLocalization.text(
-                                        ru: "Пароль SSH, если нужен (не сохраняется)",
-                                        en: "SSH Password, if needed (not saved)"
+                                        ru: "Пароль SSH (общий или временный)",
+                                        en: "SSH Password (shared or temporary)"
                                     ),
                                 text: $password
                             )
@@ -894,8 +939,8 @@ struct SelectiveRemoteTeamHostsView: View {
                            !host.profile.gatewayHost.isEmpty {
                             SecureField(
                                 UpdateLocalization.text(
-                                    ru: "Пароль Gateway (не сохраняется)",
-                                    en: "Gateway Password (not saved)"
+                                    ru: "Пароль Gateway (общий или временный)",
+                                    en: "Gateway Password (shared or temporary)"
                                 ),
                                 text: $gatewayPassword
                             )
@@ -936,8 +981,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                         username,
                                         password.isEmpty ? nil : password
                                     )
-                                    password = ""
-                                    gatewayPassword = ""
+                                    password = host.credentials.password ?? ""
+                                    gatewayPassword = host.credentials.gatewayPassword ?? ""
                                 }
                             }
                             Spacer()
@@ -945,8 +990,8 @@ struct SelectiveRemoteTeamHostsView: View {
 
                         Label(
                             UpdateLocalization.text(
-                                ru: "Общий профиль не добавляется в Personal Vault. Мои настройки хранятся только на этом Mac; введённые пароли не сохраняются.",
-                                en: "The shared profile is not added to Personal Vault. My settings stay on this Mac; entered passwords are not saved."
+                                ru: "Общие пароли приходят из зашифрованного Team Vault. Изменить или удалить их могут Owner, Admin и Editor через карточку Host; временно введённое значение не сохраняется.",
+                                en: "Shared passwords come from the encrypted Team Vault. Owners, Admins, and Editors can change or remove them in the Host editor; a temporary override is not saved."
                             ),
                             systemImage: "lock.shield"
                         )
@@ -1070,8 +1115,8 @@ struct SelectiveRemoteTeamHostsView: View {
         } else {
             onOpenTerminal(host, username, password.isEmpty ? nil : password)
         }
-        password = ""
-        gatewayPassword = ""
+        password = selectedHost?.credentials.password ?? ""
+        gatewayPassword = selectedHost?.credentials.gatewayPassword ?? ""
     }
 
     private func normalizeSelection() {
@@ -1087,8 +1132,8 @@ struct SelectiveRemoteTeamHostsView: View {
         username = selectedHost.map {
             personalSettingsStore.settings(for: $0, endpoint: endpoint).preferredUsername
         } ?? ""
-        password = ""
-        gatewayPassword = ""
+        password = selectedHost?.credentials.password ?? ""
+        gatewayPassword = selectedHost?.credentials.gatewayPassword ?? ""
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
