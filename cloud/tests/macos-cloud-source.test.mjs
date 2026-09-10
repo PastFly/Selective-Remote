@@ -341,6 +341,7 @@ test("macOS Team Host credentials stay inside the encrypted Team Vault lifecycle
   assert.match(mutation, /"sourceID": \.string\(recordID\.canonicalCloudString\)/u);
   assert.match(mutation, /isCredential\(record, for: recordID\)/u);
   assert.match(mutation, /credentialTombstones/u);
+  assert.doesNotMatch(hosts, /KeychainService\.savePassword/u);
   assert.doesNotMatch(mutation, /KeychainService\.savePassword/u);
 });
 
