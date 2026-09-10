@@ -517,6 +517,10 @@ export function initializeTeamWorkspace({
     if (!selectedTeam) return;
     if (activeView === "teams") {
       setText(message, `Team «${selectedTeam.name}» · участников: ${teamMembers.length}.`);
+    } else if (activeView === "members") {
+      setText(message, `Команда «${selectedTeam.name}» · участники и приглашения.`);
+    } else if (activeView === "management") {
+      setText(message, `Команда «${selectedTeam.name}» · управление.`);
     } else if (activeView === "vaults") {
       setText(message, `Команда «${selectedTeam.name}» · папок: ${vaults.length}.`);
     } else {
@@ -1065,13 +1069,16 @@ export function initializeTeamWorkspace({
   }
 
   function setView(view) {
-    activeView = ["teams", "vaults", "hosts"].includes(view) ? view : "teams";
+    activeView = ["teams", "members", "vaults", "hosts", "management"].includes(view) ? view : "teams";
     section.dataset.teamView = activeView;
-    setText(sectionTitle, { teams: "Команды", vaults: "Командные хранилища", hosts: "Командные хосты" }[activeView]);
+    setText(sectionTitle, {
+      teams: "Команды", members: "Участники команд", vaults: "Папки команд",
+      hosts: "Хосты команд", management: "Управление командой",
+    }[activeView]);
     onboarding.hidden = activeView !== "teams";
-    membersView.hidden = activeView !== "teams";
-    vaultDirectoryView.hidden = activeView === "teams";
-    lifecyclePanel.hidden = activeView !== "teams" || selectedTeam?.role !== "owner";
+    membersView.hidden = activeView !== "members";
+    vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
+    lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
     createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
     workspace.hidden = activeView === "teams" || !controller;
     if (activeView === "hosts") recordType.value = "host";
@@ -1141,7 +1148,7 @@ export function initializeTeamWorkspace({
       inviteForm.elements.role.value = "viewer";
     }
     createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
-    lifecyclePanel.hidden = activeView !== "teams" || selectedTeam.role !== "owner";
+    lifecyclePanel.hidden = activeView !== "management" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
     transferOwnershipForm.reset();
@@ -2033,8 +2040,27 @@ export function initializePortalNavigation({
     forwarding: "Forwarding",
     all: "Personal Vault",
   };
-  const teamTitles = { teams: "Команды", vaults: "Team Vaults", hosts: "Team Hosts" };
+  const teamTitles = {
+    teams: "Команды", members: "Участники команд", vaults: "Папки команд",
+    hosts: "Хосты команд", management: "Управление командой",
+  };
+  const workspaceRoutes = {
+    "/app": ["workspace-overview", null, null],
+    "/app/hosts": ["local-vault", "host", null],
+    "/app/snippets": ["local-vault", "snippet", null],
+    "/app/credentials": ["local-vault", "credential", null],
+    "/app/forwarding": ["local-vault", "forwarding", null],
+    "/app/personal-vault": ["local-vault", "all", null],
+    "/app/teams": ["team-vault", null, "teams"],
+    "/app/team-members": ["team-vault", null, "members"],
+    "/app/team-folders": ["team-vault", null, "vaults"],
+    "/app/team-hosts": ["team-vault", null, "hosts"],
+    "/app/team-management": ["team-vault", null, "management"],
+    "/app/devices": ["workspace-devices", null, null],
+    "/app/settings": ["workspace-settings", null, null],
+  };
   let sessionActive = false;
+  let requestedWorkspaceRoute = "/app";
 
   function setPath(path, replace = false) {
     if (locationValue.pathname === path) return;
@@ -2058,6 +2084,18 @@ export function initializePortalNavigation({
       : panelID === "team-vault" ? teamTitles[teamView || "teams"] : titles[panelID]);
     if (recordFilter) vaultUI?.setFilter(recordFilter);
     if (panelID === "team-vault") teamUI?.setView(teamView || "teams");
+  }
+
+  function routeForWorkspace(target, recordFilter = null, teamView = null) {
+    const normalizedFilter = target === "local-vault" ? recordFilter || "all" : null;
+    const normalizedTeamView = target === "team-vault" ? teamView || "teams" : null;
+    return Object.entries(workspaceRoutes).find(([, value]) => value[0] === target
+      && value[1] === normalizedFilter && value[2] === normalizedTeamView)?.[0] ?? "/app";
+  }
+
+  function selectWorkspaceRoute(pathname) {
+    const [target, recordFilter, teamView] = workspaceRoutes[pathname] ?? workspaceRoutes["/app"];
+    selectWorkspacePanel(target, recordFilter, teamView);
   }
 
   function showLanding({ replace = false } = {}) {
@@ -2096,8 +2134,12 @@ export function initializePortalNavigation({
     publicGrid.hidden = true;
     publicAccess.hidden = true;
     workspace.hidden = false;
-    selectWorkspacePanel("workspace-overview");
-    setPath("/app", replace);
+    const route = Object.hasOwn(workspaceRoutes, locationValue.pathname)
+      ? locationValue.pathname
+      : requestedWorkspaceRoute;
+    requestedWorkspaceRoute = route;
+    selectWorkspaceRoute(route);
+    setPath(route, replace);
   }
 
   for (const button of documentValue.querySelectorAll("[data-open-auth]")) {
@@ -2105,11 +2147,15 @@ export function initializePortalNavigation({
   }
   authBack.addEventListener("click", () => showLanding());
   for (const button of workspaceButtons) {
-    button.addEventListener("click", () => selectWorkspacePanel(
-      button.dataset.workspaceTarget,
-      button.dataset.recordFilter || null,
-      button.dataset.teamView || null,
-    ));
+    button.addEventListener("click", () => {
+      const target = button.dataset.workspaceTarget;
+      const recordFilter = button.dataset.recordFilter || null;
+      const teamView = button.dataset.teamView || null;
+      selectWorkspacePanel(target, recordFilter, teamView);
+      requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView);
+      setPath(requestedWorkspaceRoute);
+      workspace.scrollIntoView?.({ block: "start" });
+    });
   }
 
   const view = {
@@ -2134,13 +2180,14 @@ export function initializePortalNavigation({
     showAuthentication(requestedAuthMode, { replace: true });
     return view;
   }
-  if (initialPath === "/login" || initialPath === "/app") {
-    showAuthentication("login", { replace: initialPath === "/app" });
+  if (initialPath === "/login" || Object.hasOwn(workspaceRoutes, initialPath)) {
+    if (Object.hasOwn(workspaceRoutes, initialPath)) requestedWorkspaceRoute = initialPath;
+    showAuthentication("login", { replace: false });
   } else {
     showLanding({ replace: initialPath !== "/" });
   }
   documentValue.defaultView?.addEventListener("popstate", () => {
-    if (sessionActive && locationValue.pathname === "/app") showWorkspace({ replace: true });
+    if (sessionActive && Object.hasOwn(workspaceRoutes, locationValue.pathname)) showWorkspace({ replace: true });
     else if (locationValue.pathname === "/login") showAuthentication("login", { replace: true });
     else showLanding({ replace: true });
   });

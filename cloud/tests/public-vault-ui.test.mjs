@@ -197,6 +197,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="credential">Учётные данные/u);
   assert.match(html, /data-workspace-target="team-vault" data-team-view="teams">Команды/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="members">Участники команд/u);
   assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults">Папки команд/u);
   assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Хосты команд/u);
   assert.match(html, /id="team-record-editor"/u);
@@ -235,8 +236,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /URLSearchParams\(locationValue\.search\)/u);
   assert.match(application, /requestedAuthMode === "login" \|\| requestedAuthMode === "registration"/u);
   assert.match(application, /setPath\("\/login"/u);
-  assert.match(application, /setPath\("\/app"/u);
-  assert.match(server, /\["\/", "\/login", "\/app"\]\.includes\(pathname\)/u);
+  assert.match(application, /"\/app": \["workspace-overview", null, null\]/u);
+  assert.match(application, /"\/app\/team-hosts": \["team-vault", null, "hosts"\]/u);
+  assert.match(application, /routeForWorkspace/u);
+  assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /unlockAndSyncPersonalVault\(password\)/u);
