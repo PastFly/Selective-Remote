@@ -64,6 +64,10 @@ struct SelectiveRemoteTeamHostEditorView: View {
             }
 
             Form {
+                LabeledContent(
+                    UpdateLocalization.text(ru: "Роль", en: "Role"),
+                    value: Self.roleTitle(request.context.role)
+                )
                 Picker(
                     UpdateLocalization.text(ru: "Протокол", en: "Protocol"),
                     selection: $connectionType
@@ -146,5 +150,14 @@ struct SelectiveRemoteTeamHostEditorView: View {
 
     private static func address(_ profile: ConnectionProfile) -> String {
         profile.connectionType == .serial ? profile.serialDevicePath : profile.host
+    }
+
+    private static func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
+        switch role {
+        case .owner: "Owner"
+        case .admin: "Admin"
+        case .editor: "Editor"
+        case .viewer: "Viewer"
+        }
     }
 }
