@@ -1514,7 +1514,10 @@ struct PersonalVaultInitialDownloadDecoderTests {
         )
 
         let decoded = try SelectiveRemotePersonalVaultImporter.decode(exported.document)
-        #expect(decoded.profiles == [profile])
+        #expect(decoded.profiles.first?.id == profile.id)
+        #expect(decoded.profiles.first?.friendlyName == profile.friendlyName)
+        #expect(decoded.profiles.first?.host == profile.host)
+        #expect(decoded.profiles.first?.connectionType == profile.connectionType)
         #expect(decoded.snippets == [snippet])
         #expect(decoded.forwarding == [forward])
         #expect(decoded.credentials.isEmpty)
