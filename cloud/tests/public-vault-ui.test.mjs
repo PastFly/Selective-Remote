@@ -6,6 +6,7 @@ import {
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordSummary,
+  teamVaultRecoveryMode,
 } from "../public/app.js";
 
 test("appearance defaults to graphite and synchronizes every visible selector", () => {
@@ -62,6 +63,17 @@ test("Vault form mapping rejects incomplete and oversized records", () => {
     () => localVaultRecordData("host", { title: "x".repeat(121), target: "host.invalid", secret: "" }),
     /invalid_local_record/,
   );
+});
+
+test("Team Vault routine automation exposes controls only for recoverable blockers", () => {
+  assert.equal(teamVaultRecoveryMode(), "none");
+  assert.equal(teamVaultRecoveryMode({ outcomeStatus: "up_to_date" }), "none");
+  assert.equal(teamVaultRecoveryMode({ outcomeStatus: "remote_changed" }), "none");
+  assert.equal(teamVaultRecoveryMode({ outcomeStatus: "conflict" }), "none");
+  assert.equal(teamVaultRecoveryMode({ wrapperProvisioningFailed: true }), "wrappers");
+  assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_key_unavailable" }), "access");
+  assert.equal(teamVaultRecoveryMode({ errorCode: "network_unavailable" }), "synchronize");
+  assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_rotation_required" }), "none");
 });
 
 test("credential summaries never expose their secret", () => {
@@ -143,9 +155,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /id="team-devices"/u);
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
-  assert.match(html, /недостающие wrappers синхронизируются автоматически/u);
-  assert.match(html, /id="team-vault-grant-wrappers"[^>]*>Повторить выдачу wrappers/u);
-  assert.match(html, /id="team-vault-sync"[^>]*>Синхронизировать сейчас/u);
+  assert.match(html, /изменения и wrappers синхронизируются автоматически/u);
+  assert.match(html, /Recovery-действия появляются только при безопасно устранимом блокере/u);
+  assert.match(html, /id="team-vault-grant-wrappers"[^>]*hidden[^>]*>Повторить безопасную выдачу wrappers/u);
+  assert.match(html, /id="team-vault-sync"[^>]*hidden[^>]*>Повторить безопасную синхронизацию/u);
+  assert.doesNotMatch(html, /Синхронизировать сейчас/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
   assert.match(html, /id="workspace-overview"/u);
@@ -198,6 +212,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
   assert.match(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
+  assert.match(application, /teamVaultRecoveryMode/u);
+  assert.match(application, /setRecoveryControls/u);
+  assert.doesNotMatch(application, /Owner\/Admin может выдать недостающие wrappers/u);
   assert.match(teamSynchronization, /export async function provisionTeamVaultWrappers/u);
   assert.match(application, /rotateTeamVault/u);
   assert.match(application, /teamDevicePublicKeyFingerprint/u);

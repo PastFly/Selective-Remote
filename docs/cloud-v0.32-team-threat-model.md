@@ -188,7 +188,11 @@ rotation, and retries idempotent missing-wrapper publication. It skips work
 while the page is hidden and stops after explicit key lock, Team change or
 logout. The interval grants no new role capability: Viewer writes still fail at
 the client and server, while any role may provision only after current-wrapper
-proof.
+proof. Routine synchronization and wrapper buttons remain hidden while this
+automation is healthy. The browser exposes only a scoped retry after a transient
+sync failure, missing current-device wrapper or failed automatic wrapper
+publication; conflicts and required rotation keep their explicit fail-closed
+recovery surfaces instead of a generic retry.
 
 While the macOS app is unlocked, its app-lifetime 15-second cycle enumerates
 only Teams and Vaults authorized by the current bearer session. For each

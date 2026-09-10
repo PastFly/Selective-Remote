@@ -104,6 +104,19 @@ export function localVaultConflictSideSummary(entity) {
   return `${boundedTitle} · ${String(entity.value?.type ?? "record")} · ${String(entity.value?.modifiedAt ?? "")}`;
 }
 
+export function teamVaultRecoveryMode({
+  outcomeStatus = null,
+  wrapperProvisioningFailed = false,
+  errorCode = null,
+} = {}) {
+  const code = String(errorCode ?? "");
+  if (code === "team_vault_rotation_required" || outcomeStatus === "conflict") return "none";
+  if (code === "team_vault_key_unavailable") return "access";
+  if (code) return "synchronize";
+  if (wrapperProvisioningFailed) return "wrappers";
+  return "none";
+}
+
 function setText(element, value) {
   if (element) element.textContent = value;
 }
@@ -461,6 +474,17 @@ export function initializeTeamWorkspace({
     return ["owner", "admin", "editor"].includes(selectedTeam?.role);
   }
 
+  function setRecoveryControls(mode = "none") {
+    const retriesSynchronization = mode === "synchronize" || mode === "access";
+    syncButton.hidden = !retriesSynchronization;
+    syncButton.disabled = !retriesSynchronization || !controller;
+    syncButton.textContent = mode === "access"
+      ? "Проверить доступ снова"
+      : "Повторить безопасную синхронизацию";
+    grantWrappersButton.hidden = mode !== "wrappers";
+    grantWrappersButton.disabled = mode !== "wrappers" || !controller || selectedVault?.rotationRequired;
+  }
+
   function updateTeamMessage() {
     if (!selectedTeam) return;
     if (activeView === "teams") {
@@ -606,7 +630,7 @@ export function initializeTeamWorkspace({
             idempotencyKey: `web:device:approve:${globalThis.crypto.randomUUID()}`,
           });
           await loadDevices();
-          setText(message, "Ключ устройства одобрен. Owner/Admin может выдать недостающие wrappers из открытого Shared Vault.");
+          setText(message, "Ключ устройства одобрен. Любой активный участник с текущим Team Vault key автоматически выдаст недостающий wrapper.");
         } catch {
           setText(message, "Ключ не одобрен: требуется уже одобренное текущее устройство и совпадающий отпечаток.");
           approve.disabled = false;
@@ -885,6 +909,10 @@ export function initializeTeamWorkspace({
       clearConflicts();
       renderRecords();
     }
+    setRecoveryControls(teamVaultRecoveryMode({
+      outcomeStatus: result.status,
+      wrapperProvisioningFailed,
+    }));
     if (background && result.status === "up_to_date"
       && !wrapperProvisioningFailed && (wrapperProvisioning?.granted ?? 0) === 0) {
       return;
@@ -905,11 +933,6 @@ export function initializeTeamWorkspace({
       status += ` Автоматически выдано недостающих wrappers: ${wrapperProvisioning.granted}.`;
     }
     setText(workspaceStatus, status);
-    if (!selectedVault?.rotationRequired
-      && !["conflict", "remote_changed"].includes(result.status)) {
-      grantWrappersButton.hidden = false;
-      grantWrappersButton.disabled = false;
-    }
   }
 
   async function runBackgroundTeamVaultSync() {
@@ -928,11 +951,15 @@ export function initializeTeamWorkspace({
         vaultSelect.value = selectedVault.id;
         rotateButton.hidden = !canManage();
         rotateButton.disabled = rotateButton.hidden;
-        grantWrappersButton.hidden = true;
+        setRecoveryControls("none");
         stopBackgroundSync();
         setText(workspaceStatus, "Фоновая запись заморожена до безопасной ротации ключа.");
       } else if (code === "team_vault_key_unavailable") {
+        setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
         setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
+      } else {
+        setRecoveryControls(teamVaultRecoveryMode({ errorCode: code || "team_vault_sync_failed" }));
+        setText(workspaceStatus, "Автоматическая синхронизация временно остановилась; локальная зашифрованная копия сохранена.");
       }
     }
   }
@@ -945,8 +972,7 @@ export function initializeTeamWorkspace({
     workspace.hidden = true;
     rotateButton.hidden = true;
     rotateButton.disabled = true;
-    grantWrappersButton.hidden = true;
-    grantWrappersButton.disabled = true;
+    setRecoveryControls("none");
     records.replaceChildren();
     clearConflicts();
   }
@@ -985,27 +1011,23 @@ export function initializeTeamWorkspace({
     workspace.hidden = activeView === "teams";
     rotateButton.hidden = !vault.rotationRequired || !canManage();
     rotateButton.disabled = !vault.rotationRequired || !canManage();
-    grantWrappersButton.hidden = vault.rotationRequired;
-    grantWrappersButton.disabled = true;
+    setRecoveryControls("none");
     workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
     setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
-    syncButton.disabled = true;
     try {
       const outcome = await synchronizeAndProvision();
       applySynchronizationOutcome(outcome);
-      syncButton.disabled = false;
-      grantWrappersButton.disabled = grantWrappersButton.hidden;
     } catch (error) {
       const code = String(error?.message ?? "");
       setWorkspaceControls(true);
-      grantWrappersButton.disabled = true;
       rotateButton.hidden = code !== "team_vault_rotation_required" || !canManage();
       rotateButton.disabled = rotateButton.hidden;
+      setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Запись заморожена: после отзыва участника или устройства требуется полная ротация ключа."
         : code === "team_vault_key_unavailable"
           ? "Для этого устройства пока нет wrapper ключа. Ожидаем автоматическую выдачу от любого активного участника с текущим ключом."
-          : "Shared Vault не открыт; локальные данные не изменены.");
+          : "Shared Vault не открыт; локальные данные не изменены. Доступно безопасное повторение.");
     } finally {
       startBackgroundSync();
     }
@@ -1265,9 +1287,8 @@ export function initializeTeamWorkspace({
     if (!confirmValue("Зашифровать полную текущую Team-ревизию новым ключом и выдать wrappers всем актуальным авторизованным устройствам?")) return;
     stopBackgroundSync();
     rotateButton.disabled = true;
-    syncButton.disabled = true;
     lockButton.disabled = true;
-    grantWrappersButton.disabled = true;
+    setRecoveryControls("none");
     setWorkspaceControls(true);
     try {
       const result = await rotateTeamVault({ client, controller, role: selectedTeam.role });
@@ -1282,8 +1303,7 @@ export function initializeTeamWorkspace({
         populateVaults();
         vaultSelect.value = selectedVault.id;
         rotateButton.hidden = true;
-        grantWrappersButton.hidden = false;
-        grantWrappersButton.disabled = grantWrappersButton.hidden;
+        setRecoveryControls("none");
         clearConflicts();
         renderRecords();
         setWorkspaceControls(false);
@@ -1293,15 +1313,14 @@ export function initializeTeamWorkspace({
       setText(workspaceStatus, "Ротация не подтверждена. Локальный snapshot не заменён; безопасно повторите операцию.");
     } finally {
       lockButton.disabled = false;
-      syncButton.disabled = !controller || !rotateButton.hidden;
       rotateButton.disabled = rotateButton.hidden || !canManage() || Boolean(activeConflicts);
-      grantWrappersButton.disabled = grantWrappersButton.hidden || Boolean(activeConflicts);
+      setRecoveryControls("none");
       startBackgroundSync();
     }
   });
   grantWrappersButton.addEventListener("click", async () => {
     if (!controller || !selectedVault || selectedVault.rotationRequired) return;
-    grantWrappersButton.disabled = true;
+    setRecoveryControls("none");
     try {
       const result = await exclusiveVaultOperation(() => provisionTeamVaultWrappers({
         client,
@@ -1312,9 +1331,8 @@ export function initializeTeamWorkspace({
         ? "Все актуальные авторизованные устройства уже имеют wrapper этой генерации."
         : `Автоматически выдано недостающих wrappers: ${result.granted}. Vault plaintext не покидал браузер.`);
     } catch {
+      setRecoveryControls("wrappers");
       setText(workspaceStatus, "Не все wrappers подтверждены. Автоматический цикл безопасно повторит выдачу.");
-    } finally {
-      grantWrappersButton.disabled = !controller || selectedVault?.rotationRequired;
     }
   });
   recordType.addEventListener("change", updateRecordLabels);
@@ -1345,15 +1363,18 @@ export function initializeTeamWorkspace({
   });
 
   syncButton.addEventListener("click", async () => {
-    syncButton.disabled = true;
+    setRecoveryControls("none");
     try {
       applySynchronizationOutcome(await synchronizeAndProvision());
     } catch (error) {
-      setText(workspaceStatus, String(error?.message ?? "") === "team_vault_rotation_required"
+      const code = String(error?.message ?? "");
+      setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
+      setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Синхронизация заморожена до безопасной ротации ключа."
-        : "Синхронизация не выполнена; локальная зашифрованная копия сохранена.");
+        : code === "team_vault_key_unavailable"
+          ? "Wrapper ещё недоступен. Любой активный участник с текущим ключом выдаст его автоматически."
+          : "Синхронизация не выполнена; локальная зашифрованная копия сохранена.");
     } finally {
-      syncButton.disabled = !controller;
       startBackgroundSync();
     }
   });
@@ -1364,7 +1385,8 @@ export function initializeTeamWorkspace({
     records.replaceChildren();
     clearConflicts();
     setWorkspaceControls(true);
-    setText(workspaceStatus, "Ключ Shared Vault удалён из памяти. Нажмите синхронизацию для повторного локального unlock.");
+    setRecoveryControls("none");
+    setText(workspaceStatus, "Ключ Shared Vault удалён из памяти. Откройте выбранный Vault снова для локального unlock.");
   });
 
   conflictForm.addEventListener("change", () => {
