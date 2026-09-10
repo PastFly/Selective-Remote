@@ -894,7 +894,12 @@ actor SelectiveRemoteCloudAPIClient {
     }
 
     private static func validUserObject(_ value: Any?) -> Bool {
-        exactKeys(value, expected: ["id", "email", "username", "displayName"])
+        guard exactKeys(
+            value,
+            expected: ["id", "email", "username", "displayName", "createdAt"]
+        ), let createdAt = (value as? [String: Any])?["createdAt"] as? String
+        else { return false }
+        return !createdAt.isEmpty && createdAt.count <= 64
     }
 
     private static func validUserJSON(_ data: Data) -> Bool {
