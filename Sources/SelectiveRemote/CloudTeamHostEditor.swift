@@ -21,6 +21,9 @@ struct SelectiveRemoteTeamHostEditorView: View {
     @State private var address: String
     @State private var username: String
     @State private var connectionType: ConnectionType
+    @State private var folder: String
+    @State private var tagsText: String
+    @State private var profileDescription: String
 
     init(
         request: SelectiveRemoteTeamHostEditorRequest,
@@ -33,6 +36,9 @@ struct SelectiveRemoteTeamHostEditorView: View {
         _address = State(initialValue: profile.map(Self.address) ?? "")
         _username = State(initialValue: profile?.username ?? "")
         _connectionType = State(initialValue: profile?.connectionType ?? .ssh)
+        _folder = State(initialValue: profile?.group ?? "")
+        _tagsText = State(initialValue: profile?.tags.joined(separator: ", ") ?? "")
+        _profileDescription = State(initialValue: profile?.profileDescription ?? "")
     }
 
     private var isValid: Bool {
@@ -48,7 +54,28 @@ struct SelectiveRemoteTeamHostEditorView: View {
             && !address.contains(where: { $0.isNewline })
             && username.count <= 256
             && !username.contains(where: { $0.isNewline })
+            && validFolder
+            && tagsText.utf8.count <= 8_192
+            && parsedTags.count <= 64
+            && Set(parsedTags).count == parsedTags.count
+            && parsedTags.allSatisfy { $0.count <= 64 && !$0.contains(where: { $0.isNewline }) }
+            && profileDescription.utf8.count <= 2_048
+            && !profileDescription.contains(where: { $0.isNewline })
             && (connectionType != .serial || address.hasPrefix("/dev/cu."))
+    }
+
+    private var parsedTags: [String] {
+        tagsText.split(separator: ",", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var validFolder: Bool {
+        folder.isEmpty || (
+            folder == folder.trimmingCharacters(in: .whitespacesAndNewlines)
+                && folder.count <= 120
+                && !folder.contains(where: { $0.isNewline })
+        )
     }
 
     var body: some View {
@@ -102,6 +129,23 @@ struct SelectiveRemoteTeamHostEditorView: View {
                         text: $username
                     )
                 }
+                TextField(
+                    UpdateLocalization.text(ru: "Папка", en: "Folder"),
+                    text: $folder
+                )
+                TextField(
+                    UpdateLocalization.text(
+                        ru: "Теги через запятую",
+                        en: "Comma-separated tags"
+                    ),
+                    text: $tagsText
+                )
+                TextField(
+                    UpdateLocalization.text(ru: "Описание", en: "Description"),
+                    text: $profileDescription,
+                    axis: .vertical
+                )
+                .lineLimit(2 ... 5)
             }
             .formStyle(.grouped)
 
@@ -140,6 +184,9 @@ struct SelectiveRemoteTeamHostEditorView: View {
         profile.id = request.host?.recordID ?? UUID()
         profile.friendlyName = title
         profile.username = username
+        profile.group = folder
+        profile.tags = parsedTags
+        profile.profileDescription = profileDescription
         if connectionType == .serial {
             profile.serialDevicePath = address
         } else {
