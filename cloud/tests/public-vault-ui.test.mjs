@@ -248,6 +248,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /https:\/\/boosty\.to\/pastfly/u);
   assert.match(html, /https:\/\/github\.com\/PastFly\/Selective-Remote/u);
   assert.match(html, /id="account-delete-form"/u);
+  assert.match(html, /id="account-username-form"/u);
+  assert.match(html, /id="account-password-form"/u);
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /data-record-filter="host"/u);
   assert.match(html, /data-record-filter="credential"/u);
