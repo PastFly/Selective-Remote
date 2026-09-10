@@ -90,6 +90,17 @@ test("Team Host organization stays inside the encrypted record", () => {
   assert.throws(() => teamHostRecordData({
     title: "API", target: "api.invalid", folder: "x".repeat(121), tags: "", description: "",
   }), /invalid_team_host_organization/u);
+  const advanced = {
+    title: "Mac", address: "rdp.invalid", username: "operator",
+    connectionType: "rdp", profile: "opaque-encrypted-profile",
+  };
+  assert.deepEqual(teamHostRecordData({
+    title: "Mac", target: "rdp.invalid", folder: "Support",
+    tags: "windows", description: "Shared desktop", baseData: advanced,
+  }), { ...advanced, folder: "Support", tags: ["windows"], description: "Shared desktop" });
+  assert.throws(() => teamHostRecordData({
+    title: "Changed", target: "rdp.invalid", folder: "", tags: "", description: "", baseData: advanced,
+  }), /advanced_team_host_requires_native_editor/u);
 });
 
 test("Team Vault routine automation exposes controls only for recoverable blockers", () => {
@@ -202,6 +213,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Хосты команд/u);
   assert.match(html, /id="team-record-editor"/u);
   assert.match(html, /id="host-detail-dialog"/u);
+  assert.match(html, /id="host-detail-copy"/u);
+  assert.match(html, /id="host-detail-edit"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
   assert.match(html, /id="account-delete-form"/u);
   assert.match(html, /autocomplete="current-password"/u);
@@ -230,6 +243,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /teamHostRecordData/u);
   assert.match(application, /В выбранном Team Vault пока нет хостов/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
+  assert.match(application, /beginHostEdit/u);
+  assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
   assert.match(application, /account_owns_teams/u);

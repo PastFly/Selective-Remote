@@ -86,7 +86,7 @@ export function localVaultRecordData(type, { title, target, secret }) {
   throw new Error("invalid_local_record");
 }
 
-export function teamHostRecordData({ title, target, folder, tags, description }) {
+export function teamHostRecordData({ title, target, folder, tags, description, baseData = null }) {
   const data = localVaultRecordData("host", { title, target, secret: "" });
   const normalizedFolder = String(folder ?? "").trim();
   const normalizedDescription = String(description ?? "").trim();
@@ -98,6 +98,12 @@ export function teamHostRecordData({ title, target, folder, tags, description })
   if (normalizedFolder) data.folder = normalizedFolder;
   if (normalizedTags.length) data.tags = normalizedTags;
   if (normalizedDescription) data.description = normalizedDescription;
+  if (baseData?.profile) {
+    if (String(baseData.title ?? "") !== data.title || String(baseData.address ?? "") !== data.address) {
+      throw new Error("advanced_team_host_requires_native_editor");
+    }
+    for (const key of ["username", "connectionType", "profile"]) data[key] = baseData[key];
+  }
   return data;
 }
 
@@ -167,6 +173,10 @@ export async function initializeLocalVault({
   const hostDetailTitle = documentValue.querySelector("#host-detail-title");
   const hostDetailAddress = documentValue.querySelector("#host-detail-address");
   const hostDetailModified = documentValue.querySelector("#host-detail-modified");
+  const hostDetailFolder = documentValue.querySelector("#host-detail-folder");
+  const hostDetailTags = documentValue.querySelector("#host-detail-tags");
+  const hostDetailDescription = documentValue.querySelector("#host-detail-description");
+  const hostDetailEdit = documentValue.querySelector("#host-detail-edit");
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
@@ -267,6 +277,10 @@ export async function initializeLocalVault({
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          setText(hostDetailFolder, "Личный Vault");
+          setText(hostDetailTags, "—");
+          setText(hostDetailDescription, "—");
+          hostDetailEdit.hidden = true;
           hostDetail?.showModal();
         };
         card.addEventListener("click", (event) => {
@@ -454,6 +468,7 @@ export function initializeTeamWorkspace({
   const grantWrappersButton = documentValue.querySelector("#team-vault-grant-wrappers");
   const lockButton = documentValue.querySelector("#team-vault-lock");
   const recordForm = documentValue.querySelector("#team-vault-record-form");
+  const recordEditor = documentValue.querySelector("#team-record-editor");
   const recordEditorSummary = documentValue.querySelector("#team-record-editor-summary");
   const recordType = documentValue.querySelector("#team-record-type");
   const recordTitle = documentValue.querySelector("#team-record-title");
@@ -474,6 +489,11 @@ export function initializeTeamWorkspace({
   const hostDetailTitle = documentValue.querySelector("#host-detail-title");
   const hostDetailAddress = documentValue.querySelector("#host-detail-address");
   const hostDetailModified = documentValue.querySelector("#host-detail-modified");
+  const hostDetailFolder = documentValue.querySelector("#host-detail-folder");
+  const hostDetailTags = documentValue.querySelector("#host-detail-tags");
+  const hostDetailDescription = documentValue.querySelector("#host-detail-description");
+  const hostDetailCopy = documentValue.querySelector("#host-detail-copy");
+  const hostDetailEdit = documentValue.querySelector("#host-detail-edit");
   const conflictPanel = documentValue.querySelector("#team-vault-conflicts");
   const conflictForm = documentValue.querySelector("#team-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#team-vault-conflicts-list");
@@ -491,6 +511,8 @@ export function initializeTeamWorkspace({
   let activeView = "teams";
   let backgroundSyncTimer = null;
   let vaultOperation = null;
+  let editingHostID = null;
+  let detailedHostID = null;
 
   if (initialInvitationToken) acceptInvitationForm.elements.token.value = initialInvitationToken;
 
@@ -561,7 +583,27 @@ export function initializeTeamWorkspace({
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
     hostBrowser.hidden = activeView !== "hosts";
-    setText(recordEditorSummary, activeView === "hosts" ? "Добавить Host" : "Добавить запись");
+    setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? "Добавить Host" : "Добавить запись");
+  }
+
+  function beginHostEdit(record) {
+    editingHostID = record.id;
+    recordType.value = "host";
+    recordTitle.value = String(record.data.title ?? "");
+    recordTarget.value = String(record.data.address ?? "");
+    hostFolder.value = String(record.data.folder ?? "");
+    hostTags.value = Array.isArray(record.data.tags) ? record.data.tags.join(", ") : "";
+    hostDescription.value = String(record.data.description ?? "");
+    const advanced = Boolean(record.data.profile);
+    recordTitle.disabled = advanced;
+    recordTarget.disabled = advanced;
+    updateRecordLabels();
+    recordEditor.open = true;
+    recordEditor.scrollIntoView({ behavior: "smooth", block: "start" });
+    recordTitle.focus();
+    setText(workspaceStatus, advanced
+      ? "Полный профиль создан в приложении: в браузере можно менять папку, теги и описание."
+      : "Измените Host и сохраните зашифрованную запись.");
   }
 
   function hostFolderName(record) {
@@ -622,6 +664,7 @@ export function initializeTeamWorkspace({
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");
       const metadata = documentValue.createElement("small");
+      const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
@@ -631,6 +674,11 @@ export function initializeTeamWorkspace({
       remove.className = "danger";
       remove.textContent = "Удалить";
       remove.disabled = !canEdit();
+      edit.type = "button";
+      edit.className = "secondary record-edit";
+      edit.textContent = "Изменить";
+      edit.disabled = !canEdit();
+      edit.addEventListener("click", (event) => { event.stopPropagation(); beginHostEdit(record); });
       remove.addEventListener("click", async () => {
         remove.disabled = true;
         try {
@@ -648,18 +696,28 @@ export function initializeTeamWorkspace({
         card.tabIndex = 0;
         card.setAttribute("role", "button");
         const openHost = () => {
+          detailedHostID = record.id;
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          setText(hostDetailFolder, hostFolderName(record));
+          setText(hostDetailTags, Array.isArray(record.data.tags) && record.data.tags.length ? record.data.tags.join(", ") : "—");
+          setText(hostDetailDescription, String(record.data.description ?? "—"));
+          hostDetailCopy.hidden = false;
+          hostDetailEdit.hidden = !canEdit();
           hostDetail?.showModal();
         };
-        card.addEventListener("click", (event) => { if (event.target !== remove) openHost(); });
+        card.addEventListener("click", (event) => { if (event.target !== remove && event.target !== edit) openHost(); });
         card.addEventListener("keydown", (event) => {
           if (event.key !== "Enter" && event.key !== " ") return;
           event.preventDefault(); openHost();
         });
       }
-      card.append(heading, summary, metadata, remove);
+      const actions = documentValue.createElement("div");
+      actions.className = "record-actions";
+      if (record.type === "host") actions.append(edit);
+      actions.append(remove);
+      card.append(heading, summary, metadata, actions);
       records.append(card);
     }
   }
@@ -1435,23 +1493,42 @@ export function initializeTeamWorkspace({
   recordType.addEventListener("change", updateRecordLabels);
   hostSearch.addEventListener("input", renderRecords);
   hostFolderFilter.addEventListener("change", renderRecords);
+  hostDetailCopy.addEventListener("click", async () => {
+    try {
+      await documentValue.defaultView.navigator.clipboard.writeText(hostDetailAddress.textContent);
+      setText(workspaceStatus, "Адрес Host скопирован без передачи в Cloud.");
+    } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
+  });
+  hostDetailEdit.addEventListener("click", () => {
+    const record = controller?.document().records.find((value) => value.id === detailedHostID && value.type === "host");
+    hostDetail.close();
+    if (record) beginHostEdit(record);
+  });
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = recordForm.querySelector("button");
     button.disabled = true;
     try {
+      const existingHost = editingHostID
+        ? controller.document().records.find((value) => value.id === editingHostID && value.type === "host")
+        : null;
       await controller.upsert({
+        ...(editingHostID ? { id: editingHostID } : {}),
         type: recordType.value,
         data: recordType.value === "host"
           ? teamHostRecordData({
               title: recordTitle.value, target: recordTarget.value, folder: hostFolder.value,
-              tags: hostTags.value, description: hostDescription.value,
+              tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
           : localVaultRecordData(recordType.value, {
               title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value,
             }),
       });
       recordForm.reset();
+      editingHostID = null;
+      recordTitle.disabled = false;
+      recordTarget.disabled = false;
+      recordEditor.open = false;
       updateRecordLabels();
       clearConflicts();
       rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();

@@ -269,6 +269,13 @@ test("browser and macOS share the bounded Team Host record fixture", async () =>
   assert.equal(decodedProfile.username, mac.data.username);
 });
 
+test("macOS accepts encrypted browser organization without weakening Host structure", async () => {
+  const hosts = await readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8");
+  assert.match(hosts, /organizationKeys: Set<String> = \["folder", "tags", "description"\]/u);
+  assert.match(hosts, /let structuralKeys = keys\.subtracting\(organizationKeys\)/u);
+  assert.match(hosts, /input = try applyingOrganization\(data, to: input\)/u);
+});
+
 test("macOS projects Team Hosts separately and connects without Personal persistence", async () => {
   const [hosts, autoSync, content, appModel, terminal] = await Promise.all([
     readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
