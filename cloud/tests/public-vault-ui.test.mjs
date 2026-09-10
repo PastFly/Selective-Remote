@@ -182,8 +182,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /id="team-devices"/u);
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
-  assert.match(html, /изменения и wrappers синхронизируются автоматически/u);
-  assert.match(html, /Recovery-действия появляются только при безопасно устранимом блокере/u);
+  assert.match(html, /Изменения синхронизируются автоматически/u);
+  assert.match(html, /Дополнительные действия появятся только при устранимой ошибке доступа/u);
   assert.match(html, /id="team-vault-grant-wrappers"[^>]*hidden[^>]*>Повторить безопасную выдачу wrappers/u);
   assert.match(html, /id="team-vault-sync"[^>]*hidden[^>]*>Повторить безопасную синхронизацию/u);
   assert.equal((html.match(/aria-describedby="team-vault-workspace-status"/gu) ?? []).length, 2);
@@ -197,8 +197,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="credential">Учётные данные/u);
   assert.match(html, /data-workspace-target="team-vault" data-team-view="teams">Команды/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults">Team Vaults/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Team Hosts/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults">Папки команд/u);
+  assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Хосты команд/u);
+  assert.match(html, /id="team-record-editor"/u);
   assert.match(html, /id="host-detail-dialog"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
   assert.match(html, /id="account-delete-form"/u);
@@ -219,8 +220,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
-  assert.match(application, /Team «\$\{selectedTeam\.name\}» · хранилищ: \$\{vaults\.length\}/u);
-  assert.match(application, /выберите Vault для просмотра хостов/u);
+  assert.match(application, /Команда «\$\{selectedTeam\.name\}» · папок: \$\{vaults\.length\}/u);
+  assert.match(application, /выберите папку для просмотра хостов/u);
+  assert.match(application, /await openSelectedVault\(\)/u);
   assert.match(application, /value\.type !== "host" \|\| \(folder !== "all"/u);
   assert.match(html, /id="team-host-search"/u);
   assert.match(html, /id="team-host-folder-filter"/u);
