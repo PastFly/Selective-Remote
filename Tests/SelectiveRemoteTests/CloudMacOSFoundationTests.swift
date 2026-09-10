@@ -1699,3 +1699,29 @@ private actor TeamVaultMaterializedSnapshotSink {
         values
     }
 }
+
+
+@Suite("Unified Cloud Keychain envelope")
+struct CloudSecureEnvelopeModelTests {
+    @Test("session and one device key round-trip in a single envelope")
+    func roundTrip() throws {
+        let key = Data(repeating: 0x2a, count: 32)
+        let input = SelectiveRemoteCloudSecureEnvelope(
+            sessionToken: "session-token",
+            teamDevicePrivateKeys: ["device-id": key]
+        )
+        let encoded = try JSONEncoder().encode(input)
+        let decoded = try JSONDecoder().decode(
+            SelectiveRemoteCloudSecureEnvelope.self,
+            from: encoded
+        )
+        #expect(decoded == input)
+        #expect(!decoded.isEmpty)
+        #expect(decoded.teamDevicePrivateKeys["device-id"] == key)
+    }
+
+    @Test("empty envelope is removable")
+    func emptyEnvelope() {
+        #expect(SelectiveRemoteCloudSecureEnvelope().isEmpty)
+    }
+}

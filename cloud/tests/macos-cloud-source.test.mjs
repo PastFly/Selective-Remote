@@ -6,22 +6,24 @@ import { validateVaultDocument } from "../public/vault-model.js";
 const sourceRoot = new URL("../../Sources/SelectiveRemote/", import.meta.url);
 
 test("macOS Cloud foundation keeps sessions in device-only Keychain storage", async () => {
-  const [client, store] = await Promise.all([
+  const [client, store, envelope] = await Promise.all([
     readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
   ]);
   assert.match(store, /local\.selectiveremote\.cloud\.session\.v1/);
-  assert.match(store, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
-  assert.doesNotMatch(store, /UserDefaults/);
+  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.doesNotMatch(store + envelope, /UserDefaults/);
   assert.match(client, /Bearer.*Authorization/);
   assert.match(client, /http\.statusCode == 401[\s\S]*removeToken/);
   assert.match(client, /no-store.*Cache-Control/);
 });
 
 test("macOS Team crypto source pins the browser protocol labels and strict JWK shape", async () => {
-  const [source, identity] = await Promise.all([
+  const [source, identity, envelope] = await Promise.all([
     readFile(new URL("CloudTeamCrypto.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
   ]);
   assert.match(source, /selective-remote\/team-device-key\/v1/);
   assert.match(source, /selective-remote\/team-vault-wrapper\/v1/);
@@ -32,7 +34,7 @@ test("macOS Team crypto source pins the browser protocol labels and strict JWK s
   assert.match(source, /hkdfDerivedSymmetricKey/);
   assert.match(source, /AES\.GCM\.(seal|SealedBox)/);
   assert.match(identity, /local\.selectiveremote\.cloud\.team-device-key\.v1/);
-  assert.match(identity, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.match(identity, /savePrivateKeyIfAbsent/);
   assert.doesNotMatch(identity, /UserDefaults/);
 });
@@ -146,12 +148,13 @@ test("macOS exposes a complete-choice conflict review without rendering secrets"
 });
 
 test("macOS Cloud settings expose device-bound sign-in and native Team management", async () => {
-  const [settings, accountViews, teamManagement, client, sessions] = await Promise.all([
+  const [settings, accountViews, teamManagement, client, sessions, envelope] = await Promise.all([
     readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudAccountViews.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamManagementView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
   ]);
   assert.match(accountViews, /SecureField/);
   assert.doesNotMatch(accountViews, /@AppStorage/);
@@ -189,8 +192,8 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(client, /validTeamsJSON/);
   assert.match(client, /validTeamMembersJSON/);
   assert.match(client, /deviceID/);
-  assert.match(sessions, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
-  assert.doesNotMatch(sessions, /UserDefaults/);
+  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.doesNotMatch(sessions + envelope, /UserDefaults/);
 });
 
 test("connection checks preserve the signed-in account and inventory failures stay isolated", async () => {
@@ -390,4 +393,22 @@ test("macOS Team Host personal settings preserve per-Mac display selection", asy
   assert.match(personal, /profile\.primaryDisplayID = primaryDisplayID/u);
   assert.match(personal, /private func toggleDisplay/u);
   assert.match(personal, /guard selected\.count > 1/u);
+});
+
+
+test("macOS Cloud session and Team device key share one Keychain envelope", async () => {
+  const [envelope, session, teamDevice] = await Promise.all([
+    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(envelope, /local\.selectiveremote\.cloud\.secure-envelope\.v1/u);
+  assert.match(envelope, /var sessionToken: String\?/u);
+  assert.match(envelope, /var teamDevicePrivateKeys: \[String: Data\]/u);
+  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/u);
+  assert.match(session, /SelectiveRemoteCloudSecureEnvelopeStore/u);
+  assert.match(session, /legacyService = "local\.selectiveremote\.cloud\.session\.v1"/u);
+  assert.match(teamDevice, /SelectiveRemoteCloudSecureEnvelopeStore/u);
+  assert.match(teamDevice, /legacyService = "local\.selectiveremote\.cloud\.team-device-key\.v1"/u);
+  assert.doesNotMatch(envelope, /teamID|vaultID|hostID/u);
 });

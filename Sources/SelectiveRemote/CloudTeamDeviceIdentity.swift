@@ -58,22 +58,26 @@ actor SelectiveRemoteTeamDeviceIdentityManager {
 }
 
 struct SelectiveRemoteTeamDeviceKeychainStore: SelectiveRemoteTeamDeviceKeyStore {
-    static let service = "local.selectiveremote.cloud.team-device-key.v1"
+    static let legacyService = "local.selectiveremote.cloud.team-device-key.v1"
+    static let service = legacyService
+    private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
     func privateKeyRepresentation(for endpoint: URL, deviceID: UUID) throws -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account(endpoint: endpoint, deviceID: deviceID),
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
-        guard let data = result as? Data else { throw KeychainError.invalidData }
-        return data
+        let key = deviceID.uuidString.lowercased()
+        if let representation = try envelopeStore.envelope(for: endpoint)?
+            .teamDevicePrivateKeys[key] {
+            return representation
+        }
+        guard let legacy = try legacyPrivateKey(for: endpoint, deviceID: deviceID) else {
+            return nil
+        }
+        let saved = try savePrivateKeyIfAbsent(
+            legacy,
+            for: endpoint,
+            deviceID: deviceID
+        )
+        try? removeLegacyPrivateKey(for: endpoint, deviceID: deviceID)
+        return saved
     }
 
     func savePrivateKeyIfAbsent(
@@ -81,37 +85,61 @@ struct SelectiveRemoteTeamDeviceKeychainStore: SelectiveRemoteTeamDeviceKeyStore
         for endpoint: URL,
         deviceID: UUID
     ) throws -> Data {
-        guard representation.count == 32 else { throw SelectiveRemoteTeamCryptoError.invalidPrivateKey }
-        let item: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account(endpoint: endpoint, deviceID: deviceID),
-            kSecValueData as String: representation,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]
-        let status = SecItemAdd(item as CFDictionary, nil)
-        if status == errSecSuccess { return representation }
-        if status == errSecDuplicateItem,
-           let existing = try privateKeyRepresentation(for: endpoint, deviceID: deviceID) {
-            return existing
+        guard representation.count == 32 else {
+            throw SelectiveRemoteTeamCryptoError.invalidPrivateKey
         }
-        throw KeychainError.unexpectedStatus(status)
+        let key = deviceID.uuidString.lowercased()
+        var result = representation
+        try envelopeStore.update(for: endpoint) { envelope in
+            if let existing = envelope.teamDevicePrivateKeys[key] {
+                result = existing
+            } else {
+                envelope.teamDevicePrivateKeys[key] = representation
+            }
+        }
+        return result
     }
 
     func removePrivateKey(for endpoint: URL, deviceID: UUID) throws {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
-            kSecAttrAccount as String: account(endpoint: endpoint, deviceID: deviceID)
-        ]
-        let status = SecItemDelete(query as CFDictionary)
+        let key = deviceID.uuidString.lowercased()
+        try envelopeStore.update(for: endpoint) {
+            $0.teamDevicePrivateKeys.removeValue(forKey: key)
+        }
+        try? removeLegacyPrivateKey(for: endpoint, deviceID: deviceID)
+    }
+
+    private func legacyPrivateKey(for endpoint: URL, deviceID: UUID) throws -> Data? {
+        var query = legacyQuery(endpoint: endpoint, deviceID: deviceID)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecItemNotFound { return nil }
+        guard status == errSecSuccess else {
+            throw KeychainError.unexpectedStatus(status)
+        }
+        guard let data = result as? Data, data.count == 32 else {
+            throw KeychainError.invalidData
+        }
+        return data
+    }
+
+    private func removeLegacyPrivateKey(for endpoint: URL, deviceID: UUID) throws {
+        let status = SecItemDelete(
+            legacyQuery(endpoint: endpoint, deviceID: deviceID) as CFDictionary
+        )
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
         }
     }
 
-    private func account(endpoint: URL, deviceID: UUID) -> String {
-        "\(endpoint.absoluteString)|\(deviceID.uuidString.lowercased())"
+    private func legacyQuery(endpoint: URL, deviceID: UUID) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Self.legacyService,
+            kSecAttrAccount as String:
+                "\(endpoint.absoluteString)|\(deviceID.uuidString.lowercased())"
+        ]
     }
 }
 
