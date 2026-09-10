@@ -14,7 +14,7 @@ struct SelectiveRemoteTeamHostMutationMessage: Identifiable {
 
 struct SelectiveRemoteTeamHostEditorView: View {
     let request: SelectiveRemoteTeamHostEditorRequest
-    let onSave: (ConnectionProfile) -> Void
+    let onSave: (ConnectionProfile, SelectiveRemoteTeamHostCredentials) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
@@ -25,10 +25,12 @@ struct SelectiveRemoteTeamHostEditorView: View {
     @State private var folder: String
     @State private var tagsText: String
     @State private var profileDescription: String
+    @State private var password: String
+    @State private var gatewayPassword: String
 
     init(
         request: SelectiveRemoteTeamHostEditorRequest,
-        onSave: @escaping (ConnectionProfile) -> Void
+        onSave: @escaping (ConnectionProfile, SelectiveRemoteTeamHostCredentials) -> Void
     ) {
         self.request = request
         self.onSave = onSave
@@ -41,6 +43,8 @@ struct SelectiveRemoteTeamHostEditorView: View {
         _folder = State(initialValue: profile?.group ?? "")
         _tagsText = State(initialValue: profile?.tags.joined(separator: ", ") ?? "")
         _profileDescription = State(initialValue: profile?.profileDescription ?? "")
+        _password = State(initialValue: request.host?.credentials.password ?? "")
+        _gatewayPassword = State(initialValue: request.host?.credentials.gatewayPassword ?? "")
     }
 
     private var isValid: Bool {
@@ -139,6 +143,24 @@ struct SelectiveRemoteTeamHostEditorView: View {
                         format: .number
                     )
                 }
+                if connectionType == .rdp || connectionType == .ssh {
+                    SecureField(
+                        UpdateLocalization.text(
+                            ru: "Общий пароль (Team Vault)",
+                            en: "Shared Password (Team Vault)"
+                        ),
+                        text: $password
+                    )
+                }
+                if connectionType == .rdp {
+                    SecureField(
+                        UpdateLocalization.text(
+                            ru: "Общий пароль Gateway (Team Vault)",
+                            en: "Shared Gateway Password (Team Vault)"
+                        ),
+                        text: $gatewayPassword
+                    )
+                }
                 TextField(
                     UpdateLocalization.text(ru: "Папка", en: "Folder"),
                     text: $folder
@@ -161,8 +183,8 @@ struct SelectiveRemoteTeamHostEditorView: View {
 
             Label(
                 UpdateLocalization.text(
-                    ru: "Пароли и ссылки на Personal Vault не сохраняются в Team Host.",
-                    en: "Passwords and Personal Vault references are not saved in a Team Host."
+                    ru: "Общие пароли шифруются внутри Team Vault. Пустое поле удаляет общий пароль; ссылки на Personal Vault не сохраняются.",
+                    en: "Shared passwords are encrypted inside Team Vault. An empty field removes the shared password; Personal Vault references are never saved."
                 ),
                 systemImage: "lock.shield"
             )
@@ -178,7 +200,13 @@ struct SelectiveRemoteTeamHostEditorView: View {
                     ? UpdateLocalization.text(ru: "Добавить", en: "Add")
                     : UpdateLocalization.text(ru: "Сохранить", en: "Save")
                 ) {
-                    onSave(profile())
+                    onSave(
+                        profile(),
+                        .init(
+                            password: password.isEmpty ? nil : password,
+                            gatewayPassword: gatewayPassword.isEmpty ? nil : gatewayPassword
+                        )
+                    )
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
