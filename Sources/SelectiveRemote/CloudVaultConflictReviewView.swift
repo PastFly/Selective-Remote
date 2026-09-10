@@ -225,6 +225,7 @@ enum SelectiveRemoteVaultConflictPresentation {
         case .credential: "key.fill"
         case .snippet: "text.quote"
         case .forwarding: "arrow.left.arrow.right"
+        case .sshKey: "key.horizontal.fill"
         }
     }
 }
