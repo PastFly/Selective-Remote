@@ -67,6 +67,10 @@ enum SelectiveRemoteTeamHostMaterializer {
         }
 
         let credentials = try materializedCredentials(document.records)
+        let hostIDs = Set(document.records.filter { $0.type == .host }.map(\.id))
+        guard credentials.keys.allSatisfy(hostIDs.contains) else {
+            throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+        }
         return try document.records.compactMap { record in
             guard record.type == .host else { return nil }
             guard case let .object(data) = record.data,
