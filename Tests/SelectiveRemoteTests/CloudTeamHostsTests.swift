@@ -260,6 +260,57 @@ struct CloudTeamHostsTests {
         #expect(mutated.records.count == original.records.count + 1)
     }
 
+    @MainActor
+    @Test("Team Host credentials are encrypted records, materialize for connection, and delete causally")
+    func sharedCredentialLifecycle() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let recordID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        var profile = ConnectionProfile(connectionType: .rdp)
+        profile.id = recordID
+        profile.friendlyName = "Shared Desktop"
+        profile.host = "desktop.example.invalid"
+        profile.username = "operator"
+        profile.gatewayHost = "gateway.example.invalid"
+        profile.gatewayUsername = "gateway-user"
+
+        let created = try SelectiveRemoteTeamHostDocumentMutation.create(
+            profile: profile,
+            credentials: .init(password: "host-secret", gatewayPassword: "gateway-secret"),
+            role: .owner,
+            deviceID: deviceID,
+            modifiedAt: "2026-09-10T04:00:00.000Z"
+        )
+        #expect(created.records.filter { $0.type == .credential }.count == 2)
+
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [Self.snapshot(payload: try created.encoded(), role: .owner)])
+        let host = try #require(store.hosts.first)
+        #expect(host.credentials.password == "host-secret")
+        #expect(host.credentials.gatewayPassword == "gateway-secret")
+
+        let updated = try SelectiveRemoteTeamHostDocumentMutation.update(
+            in: created,
+            recordID: recordID,
+            profile: profile,
+            credentials: .init(password: "rotated", gatewayPassword: nil),
+            role: .admin,
+            deviceID: deviceID,
+            modifiedAt: "2026-09-10T04:01:00.000Z"
+        )
+        #expect(updated.records.filter { $0.type == .credential }.count == 1)
+        #expect(updated.tombstones.count == 1)
+
+        let deleted = try SelectiveRemoteTeamHostDocumentMutation.delete(
+            from: updated,
+            recordID: recordID,
+            role: .editor,
+            deviceID: deviceID,
+            deletedAt: "2026-09-10T04:02:00.000Z"
+        )
+        #expect(deleted.records.isEmpty)
+        #expect(deleted.tombstones.count == 2)
+    }
+
 
     @MainActor
     @Test("store exposes valid Vault contexts and replaces one Vault without touching another")
@@ -323,7 +374,8 @@ struct CloudTeamHostsTests {
             keyGeneration: 3,
             modifiedAt: "2026-09-10T08:00:00.000Z",
             address: shared.host,
-            profile: shared
+            profile: shared,
+            credentials: .empty
         )
 
         let store = SelectiveRemoteTeamHostPersonalSettingsStore(
