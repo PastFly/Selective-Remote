@@ -9,6 +9,9 @@ struct SelectiveRemotePersonalVaultKeyMaterial: Codable, Equatable, Sendable {
     var revision: Int
     var documentHash: Data
     let includesCredentials: Bool
+    let requiresInitialDownload: Bool?
+
+    var allowsUpload: Bool { requiresInitialDownload != true }
 
     init(
         vaultID: UUID,
@@ -16,7 +19,8 @@ struct SelectiveRemotePersonalVaultKeyMaterial: Codable, Equatable, Sendable {
         wrappedKey: SelectiveRemotePersonalVaultWrappedKey,
         revision: Int,
         documentHash: Data,
-        includesCredentials: Bool = false
+        includesCredentials: Bool = false,
+        requiresInitialDownload: Bool = false
     ) throws {
         guard vaultID.isSelectiveRemoteCloudUUID, vaultKey.count == 32,
               revision > 0, documentHash.count == 32
@@ -27,6 +31,7 @@ struct SelectiveRemotePersonalVaultKeyMaterial: Codable, Equatable, Sendable {
         self.revision = revision
         self.documentHash = documentHash
         self.includesCredentials = includesCredentials
+        self.requiresInitialDownload = requiresInitialDownload
     }
 }
 
@@ -99,6 +104,78 @@ struct SelectiveRemotePersonalVaultKeychainStore: SelectiveRemotePersonalVaultKe
     }
 }
 
+struct SelectiveRemotePersonalVaultAccountEnrollment {
+    let client: SelectiveRemoteCloudAPIClient
+    let keyStore: any SelectiveRemotePersonalVaultKeyStore
+
+    init(
+        client: SelectiveRemoteCloudAPIClient = .init(),
+        keyStore: any SelectiveRemotePersonalVaultKeyStore = SelectiveRemotePersonalVaultKeychainStore()
+    ) {
+        self.client = client
+        self.keyStore = keyStore
+    }
+
+    func enrollOrCreate(
+        endpoint: URL,
+        deviceID: UUID,
+        password: String,
+        profiles: [ConnectionProfile],
+        snippets: [TerminalCommandTemplate],
+        forwarding: [IndependentPortForward]
+    ) async throws -> Int {
+        let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
+        let remote = try await client.personalVault(endpoint: endpoint)
+        let material: SelectiveRemotePersonalVaultKeyMaterial
+        if remote.revision == 0 {
+            let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+                profiles: profiles,
+                credentials: [],
+                snippets: snippets,
+                forwarding: forwarding,
+                deviceID: deviceID,
+                allowEmpty: true
+            )
+            let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+                exported.document,
+                recoveryPhrase: passphrase,
+                baseRevision: 0
+            )
+            let result = try await client.putPersonalVault(endpoint: endpoint, envelope: setup.envelope)
+            guard !result.conflict, result.revision == 1 else {
+                throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
+            }
+            material = try .init(
+                vaultID: remote.id,
+                vaultKey: setup.vaultKey,
+                wrappedKey: setup.envelope.wrappedKey,
+                revision: result.revision,
+                documentHash: Data(SHA256.hash(data: try exported.document.encoded()))
+            )
+        } else {
+            guard let envelope = remote.envelope else {
+                throw SelectiveRemotePersonalVaultError.invalidEnvelope
+            }
+            let vaultKey = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
+                envelope.wrappedKey,
+                passphrase: passphrase
+            )
+            let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
+            material = try .init(
+                vaultID: remote.id,
+                vaultKey: vaultKey,
+                wrappedKey: envelope.wrappedKey,
+                revision: remote.revision,
+                documentHash: Data(SHA256.hash(data: try document.encoded())),
+                includesCredentials: document.records.contains { $0.type == .credential },
+                requiresInitialDownload: true
+            )
+        }
+        try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+        return material.revision
+    }
+}
+
 actor SelectiveRemotePersonalVaultAutoSync {
     private let client: SelectiveRemoteCloudAPIClient
     private let keyStore: any SelectiveRemotePersonalVaultKeyStore
@@ -141,6 +218,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         forwarding: [IndependentPortForward]
     ) async throws {
         guard var material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
+              material.allowsUpload,
               await client.hasStoredSession(endpoint: endpoint)
         else { return }
         let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
