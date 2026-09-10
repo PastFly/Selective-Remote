@@ -506,9 +506,32 @@ struct CloudSettingsView: View {
                     device: .thisMac(id: deviceID, publicKey: identity.publicKey)
                 )
                 accountEndpoint = url.absoluteString
+                var enrollmentError: String?
+                let enrollment = SelectiveRemotePersonalVaultAccountEnrollment(
+                    client: client,
+                    keyStore: personalVaultKeyStore
+                )
+                do {
+                    _ = try await enrollment.enrollOrCreate(
+                        endpoint: url,
+                        deviceID: deviceID,
+                        password: password,
+                        profiles: model.profiles,
+                        snippets: TerminalCommandHistoryStore.shared.templates(),
+                        forwarding: model.independentPortForwards
+                    )
+                } catch {
+                    enrollmentError = error.localizedDescription
+                }
                 accountPhase = .signedIn
                 showsAccountSheet = false
                 await loadInventory(endpoint: url)
+                if let enrollmentError {
+                    personalVaultLoadErrorMessage = UpdateLocalization.text(
+                        ru: "Вход выполнен, но Personal Vault не подключён автоматически: \(enrollmentError)",
+                        en: "Sign-in succeeded, but Personal Vault was not enrolled automatically: \(enrollmentError)"
+                    )
+                }
             } catch {
                 accountPhase = .signedOut
                 accountErrorMessage = error.localizedDescription
@@ -579,6 +602,7 @@ struct CloudSettingsView: View {
                 let material = try? personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
                 personalVaultAutoSyncConfigured = material?.vaultID == personalVault.id
                     && material?.revision == personalVault.revision
+                    && material?.allowsUpload == true
             }
         } catch {
             if error as? SelectiveRemoteCloudError == .authenticationRequired {
