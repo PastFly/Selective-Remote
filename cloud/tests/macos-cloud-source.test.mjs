@@ -334,7 +334,7 @@ test("macOS Team Hosts expose shared folders, tags, and local filtering controls
   assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
   assert.match(hosts, /\.searchable\(/u);
   assert.match(hosts, /selectedFolder/u);
-  assert.match(hosts, /Section\(folderTitle\(folder\)\)/u);
+  assert.match(hosts, /Label\(folderTitle\(folder\), systemImage: "folder"\)/u);
   assert.match(editor, /Теги через запятую/u);
   assert.match(editor, /Папка/u);
   assert.match(editor, /profile\.group = folder/u);
