@@ -151,8 +151,8 @@
           <p class="workspace-nav-label">Хранилища</p>
           <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
           <button type="button" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Team Vaults</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Team Hosts</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Папки команд</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Хосты команд</button>
           <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
           <button type="button" data-workspace-target="workspace-settings">Настройки</button>
@@ -400,14 +400,14 @@
             </section>
           </div>
           <div id="team-vault-directory-view">
-            <h3>Shared Vaults</h3>
+            <h3>Папки команды</h3>
             <form id="team-vault-create-form">
-              <label for="team-vault-create-name">Название Vault</label>
+              <label for="team-vault-create-name">Название папки</label>
               <input id="team-vault-create-name" name="name" maxlength="120" required>
-              <button type="submit">Создать Vault</button>
+              <button type="submit">Создать папку</button>
             </form>
             <div class="team-picker compact">
-              <label for="team-vault-select">Vault</label>
+              <label for="team-vault-select">Папка</label>
               <select id="team-vault-select"></select>
               <button type="button" id="team-vault-open" disabled>Открыть</button>
             </div>
@@ -446,9 +446,9 @@
         <div class="vault-workspace" id="team-vault-workspace" hidden>
           <div class="vault-toolbar">
             <div>
-              <h3 id="team-vault-workspace-title">Shared Vault</h3>
+              <h3 id="team-vault-workspace-title">Папка команды</h3>
               <p id="team-vault-workspace-status" aria-live="polite">Vault заблокирован.</p>
-              <small>После открытия изменения и wrappers синхронизируются автоматически. Recovery-действия появляются только при безопасно устранимом блокере.</small>
+              <small>Изменения синхронизируются автоматически. Дополнительные действия появятся только при устранимой ошибке доступа.</small>
             </div>
             <div class="vault-actions">
               <button type="button" class="danger" id="team-vault-rotate" hidden>Завершить ротацию</button>
@@ -457,6 +457,8 @@
               <button type="button" class="secondary" id="team-vault-lock">Заблокировать</button>
             </div>
           </div>
+          <details class="team-record-editor" id="team-record-editor">
+            <summary id="team-record-editor-summary">Добавить запись</summary>
           <form class="record-form" id="team-vault-record-form">
             <label for="team-record-type">Тип записи</label>
             <select id="team-record-type" name="type">
@@ -482,6 +484,7 @@
             </div>
             <button type="submit">Зашифровать локально</button>
           </form>
+          </details>
           <div class="team-host-browser" id="team-host-browser">
             <label for="team-host-search">Найти Host</label>
             <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
