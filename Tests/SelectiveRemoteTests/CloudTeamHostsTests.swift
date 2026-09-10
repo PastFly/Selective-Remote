@@ -337,6 +337,9 @@ struct CloudTeamHostsTests {
         personal.rdpWindowMode = .fixedWindow
         personal.windowWidth = 1
         personal.windowHeight = 99_999
+        personal.selectedDisplayIDs = ["display-a", "display-b"]
+        personal.primaryDisplayID = "display-b"
+        personal.displayLayoutMode = .automatic
         store.save(personal, for: host, endpoint: "https://cloud.example.test")
 
         let applied = store.appliedProfile(for: host, endpoint: "https://cloud.example.test")
@@ -345,9 +348,13 @@ struct CloudTeamHostsTests {
         #expect(applied.audioMode == .local)
         #expect(applied.windowWidth == 640)
         #expect(applied.windowHeight == 16_384)
+        #expect(applied.selectedDisplayIDs == ["display-a", "display-b"])
+        #expect(applied.primaryDisplayID == "display-b")
+        #expect(applied.displayLayoutMode == .automatic)
         #expect(host.profile.username == "shared-user")
         #expect(host.profile.clipboardMode == .disabled)
         #expect(host.profile.audioMode == .muted)
+        #expect(host.profile.selectedDisplayIDs.isEmpty)
 
         let restored = SelectiveRemoteTeamHostPersonalSettingsStore(
             defaults: defaults,
