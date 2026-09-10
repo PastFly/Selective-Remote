@@ -244,6 +244,26 @@ export function createLocalVaultController({
       pendingConflicts = null;
     },
 
+    async rewrap(passphrase) {
+      requireUnlocked();
+      const wrappedKey = await wrapVaultKey(vaultKey, passphrase, cryptoValue);
+      const envelope = await encryptVaultPayload({
+        vaultKey,
+        payload: document,
+        baseRevision: snapshot.revision,
+        wrappedKey,
+        cryptoValue,
+      });
+      const nextSnapshot = validatedSnapshot({
+        revision: snapshot.revision + 1,
+        deviceID: snapshot.deviceID,
+        envelope,
+      });
+      await repository.save(nextSnapshot);
+      snapshot = nextSnapshot;
+      return clone(document);
+    },
+
     document() {
       requireUnlocked();
       return clone(document);
