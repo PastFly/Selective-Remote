@@ -330,16 +330,16 @@ struct CloudTeamHostsTests {
             defaults: defaults,
             storageKey: "settings"
         )
-        var personal = store.settings(for: host)
+        var personal = store.settings(for: host, endpoint: "https://cloud.example.test")
         personal.preferredUsername = "alice"
         personal.clipboardMode = .bidirectional
         personal.audioMode = .local
         personal.rdpWindowMode = .fixedWindow
         personal.windowWidth = 1
         personal.windowHeight = 99_999
-        store.save(personal, for: host)
+        store.save(personal, for: host, endpoint: "https://cloud.example.test")
 
-        let applied = store.appliedProfile(for: host)
+        let applied = store.appliedProfile(for: host, endpoint: "https://cloud.example.test")
         #expect(applied.username == "alice")
         #expect(applied.clipboardMode == .bidirectional)
         #expect(applied.audioMode == .local)
@@ -353,9 +353,9 @@ struct CloudTeamHostsTests {
             defaults: defaults,
             storageKey: "settings"
         )
-        #expect(restored.settings(for: host).preferredUsername == "alice")
-        restored.reset(for: host)
-        #expect(!restored.hasSettings(for: host))
+        #expect(restored.settings(for: host, endpoint: "https://cloud.example.test").preferredUsername == "alice")
+        restored.reset(for: host, endpoint: "https://cloud.example.test")
+        #expect(!restored.hasSettings(for: host, endpoint: "https://cloud.example.test"))
         #expect(restored.settings(for: host).preferredUsername == "shared-user")
     }
 
