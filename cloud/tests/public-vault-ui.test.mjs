@@ -240,6 +240,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /activeView === "hosts" && vaults\.length > 0/u);
   assert.match(application, /data-team-view="hosts"/u);
   assert.match(styles, /#team-vault\[data-team-view="hosts"\] \.team-vault-directory-heading/u);
+  assert.match(styles, /\.vault-records article\s*\{[^}]*grid-template-columns:minmax\(0,1fr\)/u);
+  assert.match(styles, /\.record-actions\s*\{[^}]*grid-column:1;[^}]*flex-wrap:wrap/u);
+  assert.match(styles, /@media \(max-width:560px\)[^}]*[\s\S]*\.record-actions\{display:grid;grid-template-columns:1fr 1fr\}/u);
   assert.match(application, /выберите папку для просмотра хостов/u);
   assert.match(application, /await openSelectedVault\(\)/u);
   assert.match(application, /value\.type !== "host" \|\| \(folder !== "all"/u);
