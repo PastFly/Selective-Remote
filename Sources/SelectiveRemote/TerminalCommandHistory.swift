@@ -399,6 +399,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
         persistTemplates()
     }
 
+    func replaceSyncedTemplates(_ values: [TerminalCommandTemplate]) {
+        let internalTemplates = storedTemplates.filter(isInternalTemplate)
+        let replacement = Array(values.prefix(500 - internalTemplates.count))
+        guard templates() != replacement.sorted(by: { $0.updatedAt > $1.updatedAt }) else { return }
+        storedTemplates = internalTemplates + replacement
+        persistTemplates()
+    }
+
     func templates(in groupID: UUID) -> [TerminalCommandTemplate] {
         templates().filter { $0.groupID == groupID }
     }
