@@ -1487,6 +1487,7 @@ struct AccountPasswordPersonalVaultEnrollmentTests {
             documentHash: Data(repeating: 4, count: 32),
             requiresInitialDownload: true
         )
+        #expect(material.requiresInitialDownload == true)
         #expect(!material.allowsUpload)
     }
 }
