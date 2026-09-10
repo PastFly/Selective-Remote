@@ -1494,6 +1494,7 @@ export async function initializeCloudAccount({
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
   let backgroundSyncing = false;
+  let accountVaultMigrationPassphrase = null;
   vaultUI.setConflictResetListener(() => {
     activeConflicts = null;
     conflictApply.disabled = true;
@@ -1692,6 +1693,7 @@ export async function initializeCloudAccount({
     button.disabled = true;
     try {
       const password = form.elements.password.value;
+      accountVaultMigrationPassphrase = accountVaultPassphrase(password);
       const deviceID = await vault.deviceID();
       let identity = null;
       try {
@@ -1709,6 +1711,7 @@ export async function initializeCloudAccount({
       try {
         await unlockAndSyncPersonalVault(password);
         personalVaultReady = true;
+        accountVaultMigrationPassphrase = null;
       } catch {
         // Vaults created before account-password enrollment retain Recovery fallback.
       }
@@ -1843,11 +1846,16 @@ export async function initializeCloudAccount({
     button.disabled = true;
     try {
       const result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
+      if (accountVaultMigrationPassphrase) {
+        await vault.rewrap(accountVaultMigrationPassphrase);
+        await synchronizeVault({ client, vault });
+        accountVaultMigrationPassphrase = null;
+      }
       recoveryForm.reset();
       await vaultUI.hideRecoveryAndRestoreMode();
       vaultUI.mode("unlocked");
       vaultUI.render();
-      setText(vaultMessage, `Зашифрованная ревизия ${result.revision} восстановлена и расшифрована только в этой вкладке.`);
+      setText(vaultMessage, `Зашифрованная ревизия ${result.revision} восстановлена и переведена на автоматическую разблокировку паролем аккаунта.`);
     } catch (error) {
       recoveryForm.elements.passphrase.value = "";
       if (String(error?.message ?? "") === "authentication_required") {
