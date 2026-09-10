@@ -243,6 +243,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="team-host-username"/u);
   assert.match(html, /id="team-host-password"[^>]*type="password"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
+  assert.match(html, /data-workspace-target="workspace-about">О проекте/u);
+  assert.match(html, /https:\/\/yoomoney\.ru\/to\/4100119600001192/u);
+  assert.match(html, /https:\/\/boosty\.to\/pastfly/u);
+  assert.match(html, /https:\/\/github\.com\/PastFly\/Selective-Remote/u);
   assert.match(html, /id="account-delete-form"/u);
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /data-record-filter="host"/u);
@@ -278,6 +282,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /teamHostRecordData/u);
   assert.match(application, /В выбранном Team Vault пока нет хостов/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
+  assert.match(application, /documentValue\.body\.append\(hostDetail\)/u);
+  assert.match(application, /sidebarFooter\.append\(workspaceTheme\)/u);
+  assert.match(application, /sidebarFooter\.append\(signedInAccount\)/u);
+  assert.match(application, /workspaceHeader\.hidden = true/u);
   assert.match(application, /beginHostEdit/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
   assert.match(application, /navigator\.clipboard\.writeText\(String\(credential\.data\.secret/u);
