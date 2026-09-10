@@ -14,6 +14,7 @@ import {
 
 const verificationPrefix = "#verify-email?";
 const passwordResetPrefix = "#reset-password?";
+const teamInvitationPrefix = "#accept-team-invitation?";
 
 function consumeTokenFragment(prefix, locationValue, historyValue) {
   const hash = String(locationValue.hash ?? "");
@@ -32,6 +33,10 @@ export function consumeVerificationFragment(locationValue, historyValue) {
 
 export function consumePasswordResetFragment(locationValue, historyValue) {
   return consumeTokenFragment(passwordResetPrefix, locationValue, historyValue);
+}
+
+export function consumeTeamInvitationFragment(locationValue, historyValue) {
+  return consumeTokenFragment(teamInvitationPrefix, locationValue, historyValue);
 }
 
 export async function submitEmailVerification(token, fetchValue = fetch) {
@@ -376,6 +381,7 @@ export function initializeTeamWorkspace({
   documentValue = document,
   client,
   confirmValue = (message) => globalThis.confirm(message),
+  initialInvitationToken = null,
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
@@ -385,6 +391,7 @@ export function initializeTeamWorkspace({
   const devicesRefresh = documentValue.querySelector("#team-devices-refresh");
   const createTeamForm = documentValue.querySelector("#team-create-form");
   const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
+  const pendingInvitations = documentValue.querySelector("#team-pending-invitations");
   const onboarding = documentValue.querySelector("#team-onboarding");
   const teamSelect = documentValue.querySelector("#team-select");
   const teamRefresh = documentValue.querySelector("#team-refresh");
@@ -393,6 +400,11 @@ export function initializeTeamWorkspace({
   const members = documentValue.querySelector("#team-members");
   const membersView = documentValue.querySelector("#team-members-view");
   const inviteForm = documentValue.querySelector("#team-invite-form");
+  const inviteLinkCreate = documentValue.querySelector("#team-invite-link-create");
+  const inviteLinkResult = documentValue.querySelector("#team-invite-link-result");
+  const inviteLinkValue = documentValue.querySelector("#team-invite-link-value");
+  const inviteLinkCopy = documentValue.querySelector("#team-invite-link-copy");
+  const activeInvitations = documentValue.querySelector("#team-active-invitations");
   const lifecyclePanel = documentValue.querySelector("#team-lifecycle");
   const renameTeamForm = documentValue.querySelector("#team-rename-form");
   const transferOwnershipForm = documentValue.querySelector("#team-ownership-transfer-form");
@@ -425,11 +437,15 @@ export function initializeTeamWorkspace({
   let teams = [];
   let vaults = [];
   let teamMembers = [];
+  let teamInvitations = [];
+  let accountInvitations = [];
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
   let activeConflicts = null;
   let activeView = "teams";
+
+  if (initialInvitationToken) acceptInvitationForm.elements.token.value = initialInvitationToken;
 
   function canManage() {
     return ["owner", "admin"].includes(selectedTeam?.role);
@@ -679,6 +695,94 @@ export function initializeTeamWorkspace({
     transferOwnershipForm.querySelector("button").disabled = transferOwnershipMember.options.length === 0;
   }
 
+  function invitationTarget(invitation) {
+    if (invitation.type === "username") return `@${invitation.targetUsername}`;
+    if (invitation.type === "link") return "Одноразовая ссылка";
+    return "Прежнее email-приглашение";
+  }
+
+  function renderPendingInvitations() {
+    pendingInvitations.replaceChildren();
+    if (accountInvitations.length === 0) {
+      const empty = documentValue.createElement("p");
+      empty.className = "vault-empty";
+      empty.textContent = "Новых приглашений нет.";
+      pendingInvitations.append(empty);
+      return;
+    }
+    for (const invitation of accountInvitations) {
+      const card = documentValue.createElement("article");
+      const title = documentValue.createElement("strong");
+      const detail = documentValue.createElement("small");
+      const accept = documentValue.createElement("button");
+      title.textContent = invitation.teamName || "Team";
+      detail.textContent = `Роль: ${invitation.role} · до ${invitation.expiresAt}`;
+      accept.type = "button";
+      accept.textContent = "Принять";
+      accept.addEventListener("click", async () => {
+        accept.disabled = true;
+        try {
+          await client.acceptTeamInvitation({ invitationID: invitation.id });
+          await Promise.all([loadPendingInvitations(), loadTeams(invitation.teamID)]);
+          setText(message, `Приглашение в Team «${invitation.teamName || "Team"}» принято.`);
+        } catch {
+          setText(message, "Приглашение уже отозвано, использовано или истекло.");
+          await loadPendingInvitations().catch(() => {});
+        }
+      });
+      card.append(title, detail, accept);
+      pendingInvitations.append(card);
+    }
+  }
+
+  function renderTeamInvitations() {
+    activeInvitations.replaceChildren();
+    if (!canManage() || teamInvitations.length === 0) {
+      const empty = documentValue.createElement("p");
+      empty.className = "vault-empty";
+      empty.textContent = canManage() ? "Активных приглашений нет." : "";
+      activeInvitations.append(empty);
+      return;
+    }
+    for (const invitation of teamInvitations) {
+      const card = documentValue.createElement("article");
+      const title = documentValue.createElement("strong");
+      const detail = documentValue.createElement("small");
+      const cancel = documentValue.createElement("button");
+      title.textContent = invitationTarget(invitation);
+      detail.textContent = `Роль: ${invitation.role} · до ${invitation.expiresAt}`;
+      cancel.type = "button";
+      cancel.className = "danger";
+      cancel.textContent = "Отозвать";
+      cancel.addEventListener("click", async () => {
+        if (!confirmValue(`Отозвать приглашение «${invitationTarget(invitation)}»?`)) return;
+        cancel.disabled = true;
+        try {
+          await client.cancelTeamInvitation({
+            teamID: invitation.teamID,
+            invitationID: invitation.id,
+          });
+          if (invitation.type === "link") {
+            inviteLinkResult.hidden = true;
+            inviteLinkValue.value = "";
+          }
+          await loadSelectedTeam();
+          setText(message, "Приглашение отозвано.");
+        } catch {
+          setText(message, "Приглашение не отозвано. Обновите список и повторите попытку.");
+          cancel.disabled = false;
+        }
+      });
+      card.append(title, detail, cancel);
+      activeInvitations.append(card);
+    }
+  }
+
+  async function loadPendingInvitations() {
+    accountInvitations = await client.listPendingTeamInvitations();
+    renderPendingInvitations();
+  }
+
   function populateVaults() {
     vaultSelect.replaceChildren();
     for (const vault of vaults) {
@@ -771,24 +875,35 @@ export function initializeTeamWorkspace({
     selectedTeam = teams.find((team) => team.id === teamSelect.value) ?? null;
     lockCurrentVault();
     if (!selectedTeam) {
+      teamInvitations = [];
+      renderTeamInvitations();
       selectedPanel.hidden = true;
       return;
     }
     selectedPanel.hidden = false;
     teamRole.textContent = `${selectedTeam.name} · ${selectedTeam.role}`;
     inviteForm.hidden = !canManage();
+    const adminInviteOption = [...inviteForm.elements.role.options]
+      .find((option) => option.value === "admin");
+    if (adminInviteOption) adminInviteOption.disabled = selectedTeam.role !== "owner";
+    if (selectedTeam.role !== "owner" && inviteForm.elements.role.value === "admin") {
+      inviteForm.elements.role.value = "viewer";
+    }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     lifecyclePanel.hidden = activeView !== "teams" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
     transferOwnershipForm.reset();
-    const [loadedMembers, sharedVaults] = await Promise.all([
+    const [loadedMembers, sharedVaults, loadedInvitations] = await Promise.all([
       client.listTeamMembers(selectedTeam.id),
       client.listSharedVaults(selectedTeam.id),
+      canManage() ? client.listTeamInvitations(selectedTeam.id) : Promise.resolve([]),
     ]);
     teamMembers = loadedMembers;
     renderMembers(teamMembers);
     vaults = sharedVaults;
+    teamInvitations = loadedInvitations;
+    renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
   }
@@ -806,7 +921,9 @@ export function initializeTeamWorkspace({
     if (teams.length > 0) await loadSelectedTeam();
     else {
       selectedTeam = null;
+      teamInvitations = [];
       selectedPanel.hidden = true;
+      renderTeamInvitations();
       setText(message, "Команд пока нет. Создайте Team или примите приглашение.");
     }
   }
@@ -834,11 +951,11 @@ export function initializeTeamWorkspace({
     try {
       await client.acceptTeamInvitation({ token: acceptInvitationForm.elements.token.value });
       acceptInvitationForm.reset();
-      await loadTeams();
+      await Promise.all([loadPendingInvitations(), loadTeams()]);
       setText(message, "Приглашение принято.");
     } catch {
       acceptInvitationForm.elements.token.value = "";
-      setText(message, "Приглашение недействительно, истекло или предназначено другому email.");
+      setText(message, "Одноразовая ссылка недействительна, уже использована, отозвана или истекла.");
     } finally {
       button.disabled = false;
     }
@@ -846,20 +963,59 @@ export function initializeTeamWorkspace({
 
   inviteForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (!selectedTeam || !canManage()) return;
     const button = inviteForm.querySelector("button");
     button.disabled = true;
     try {
       await client.inviteTeamMember({
         teamID: selectedTeam.id,
-        email: inviteForm.elements.email.value,
+        username: inviteForm.elements.username.value,
+        type: "username",
         role: inviteForm.elements.role.value,
       });
       inviteForm.reset();
-      setText(message, "Приглашение поставлено в защищённую очередь доставки на 48 часов.");
+      inviteLinkResult.hidden = true;
+      inviteLinkValue.value = "";
+      await loadSelectedTeam();
+      setText(message, "Приглашение по @username создано на 48 часов.");
     } catch {
-      setText(message, "Приглашение не создано. Проверьте SMTP, роль и полномочия.");
+      setText(message, "Приглашение не создано. Проверьте @username, роль и полномочия.");
     } finally {
       button.disabled = false;
+    }
+  });
+
+  inviteLinkCreate.addEventListener("click", async () => {
+    if (!selectedTeam || !canManage()) return;
+    inviteLinkCreate.disabled = true;
+    try {
+      const invitation = await client.inviteTeamMember({
+        teamID: selectedTeam.id,
+        type: "link",
+        role: inviteForm.elements.role.value,
+      });
+      if (!invitation.acceptanceURL) throw new Error("team_invitation_failed");
+      inviteLinkValue.value = invitation.acceptanceURL;
+      inviteLinkResult.hidden = false;
+      await loadSelectedTeam();
+      setText(message, "Одноразовая ссылка создана на 48 часов. Передайте её только нужному участнику.");
+    } catch {
+      inviteLinkResult.hidden = true;
+      inviteLinkValue.value = "";
+      setText(message, "Одноразовая ссылка не создана. Проверьте роль и полномочия.");
+    } finally {
+      inviteLinkCreate.disabled = false;
+    }
+  });
+
+  inviteLinkCopy.addEventListener("click", async () => {
+    if (!inviteLinkValue.value) return;
+    try {
+      await documentValue.defaultView.navigator.clipboard.writeText(inviteLinkValue.value);
+      setText(message, "Одноразовая ссылка скопирована.");
+    } catch {
+      inviteLinkValue.select();
+      setText(message, "Не удалось скопировать автоматически. Скопируйте выделенную ссылку вручную.");
     }
   });
 
@@ -956,7 +1112,11 @@ export function initializeTeamWorkspace({
     }
   });
 
-  teamSelect.addEventListener("change", () => loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team.")));
+  teamSelect.addEventListener("change", () => {
+    inviteLinkResult.hidden = true;
+    inviteLinkValue.value = "";
+    loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team."));
+  });
   teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
   devicesRefresh.addEventListener("click", () => loadDevices().catch(() => setText(message, "Не удалось обновить устройства.")));
   vaultOpen.addEventListener("click", () => openSelectedVault());
@@ -1118,18 +1278,25 @@ export function initializeTeamWorkspace({
     setView,
     async activate(nextIdentity) {
       identity = nextIdentity;
-      await Promise.all([loadDevices(), loadTeams()]);
+      await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams()]);
     },
     deactivate() {
       identity = null;
       teams = [];
       vaults = [];
       teamMembers = [];
+      teamInvitations = [];
+      accountInvitations = [];
       selectedTeam = null;
       lockCurrentVault();
       teamSelect.replaceChildren();
       devices.replaceChildren();
       members.replaceChildren();
+      activeInvitations.replaceChildren();
+      pendingInvitations.replaceChildren();
+      acceptInvitationForm.reset();
+      inviteLinkResult.hidden = true;
+      inviteLinkValue.value = "";
       selectedPanel.hidden = true;
     },
   };
@@ -1140,6 +1307,7 @@ export async function initializeCloudAccount({
   vaultUI,
   fetchValue = fetch,
   metadata = null,
+  initialTeamInvitationToken = null,
   onSessionChange = () => {},
 } = {}) {
   const vault = vaultUI?.controller;
@@ -1171,7 +1339,7 @@ export async function initializeCloudAccount({
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
   const conflictApply = documentValue.querySelector("#local-vault-conflicts-apply");
   const client = createAuthenticatedVaultClient({ fetchValue });
-  const teamWorkspace = initializeTeamWorkspace({ documentValue, client });
+  const teamWorkspace = initializeTeamWorkspace({ documentValue, client, initialInvitationToken: initialTeamInvitationToken });
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
   vaultUI.setConflictResetListener(() => {
@@ -1697,6 +1865,7 @@ export async function initializePortal({
 } = {}) {
   const verification = consumeVerificationFragment(locationValue, historyValue);
   const passwordReset = consumePasswordResetFragment(locationValue, historyValue);
+  const teamInvitation = consumeTeamInvitationFragment(locationValue, historyValue);
   if (verification.present) {
     const panel = documentValue.querySelector("#email-verification");
     const title = documentValue.querySelector("#verification-title");
@@ -1765,6 +1934,7 @@ export async function initializePortal({
     vaultUI,
     fetchValue,
     metadata,
+    initialTeamInvitationToken: teamInvitation.token,
     onSessionChange: (user) => navigation?.sessionChanged(user),
   });
   navigation = initializePortalNavigation({
@@ -1775,6 +1945,13 @@ export async function initializePortal({
     teamUI: account?.teamWorkspace,
     showAuthMode: account?.showAuth,
   });
+  if (teamInvitation.present) {
+    navigation?.showAuthentication("login", { replace: true });
+    const accountMessage = documentValue.querySelector("#cloud-account-message");
+    if (accountMessage) accountMessage.textContent = teamInvitation.token
+      ? "Войдите в аккаунт, затем примите одноразовое Team-приглашение в разделе «Команды»."
+      : "Одноразовая ссылка приглашения недействительна.";
+  }
 }
 
 export function initializeAppearance({ documentValue = document } = {}) {

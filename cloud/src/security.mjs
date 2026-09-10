@@ -101,13 +101,13 @@ export function hashTeamInvitationToken(token, pepper) {
   return createHmac("sha256", pepper).update(token).digest("hex");
 }
 
-export function encryptOutboxPayload(value, secret) {
+function encryptAuthenticatedPayload(value, secret, associatedData, errorCode) {
   const plaintext = Buffer.from(JSON.stringify(value), "utf8");
-  if (plaintext.length === 0 || plaintext.length > 16 * 1024) throw new Error("invalid_outbox_payload");
+  if (plaintext.length === 0 || plaintext.length > 16 * 1024) throw new Error(errorCode);
   const nonce = randomBytes(12);
   const key = createHash("sha256").update(secret).digest();
   const cipher = createCipheriv("aes-256-gcm", key, nonce);
-  cipher.setAAD(Buffer.from("selective-remote/team-outbox/v1", "utf8"));
+  cipher.setAAD(Buffer.from(associatedData, "utf8"));
   const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return {
     ciphertext: ciphertext.toString("base64url"),
@@ -116,7 +116,7 @@ export function encryptOutboxPayload(value, secret) {
   };
 }
 
-export function decryptOutboxPayload(envelope, secret) {
+function decryptAuthenticatedPayload(envelope, secret, associatedData, errorCode) {
   try {
     const key = createHash("sha256").update(secret).digest();
     const decipher = createDecipheriv(
@@ -124,7 +124,7 @@ export function decryptOutboxPayload(envelope, secret) {
       key,
       Buffer.from(envelope.nonce, "base64url"),
     );
-    decipher.setAAD(Buffer.from("selective-remote/team-outbox/v1", "utf8"));
+    decipher.setAAD(Buffer.from(associatedData, "utf8"));
     decipher.setAuthTag(Buffer.from(envelope.auth_tag ?? envelope.authTag, "base64url"));
     const plaintext = Buffer.concat([
       decipher.update(Buffer.from(envelope.payload_ciphertext ?? envelope.ciphertext, "base64url")),
@@ -132,8 +132,44 @@ export function decryptOutboxPayload(envelope, secret) {
     ]);
     return JSON.parse(plaintext.toString("utf8"));
   } catch {
-    throw new Error("invalid_outbox_payload");
+    throw new Error(errorCode);
   }
+}
+
+export function encryptOutboxPayload(value, secret) {
+  return encryptAuthenticatedPayload(
+    value,
+    secret,
+    "selective-remote/team-outbox/v1",
+    "invalid_outbox_payload",
+  );
+}
+
+export function decryptOutboxPayload(envelope, secret) {
+  return decryptAuthenticatedPayload(
+    envelope,
+    secret,
+    "selective-remote/team-outbox/v1",
+    "invalid_outbox_payload",
+  );
+}
+
+export function encryptTeamInvitationLinkSecret(value, secret) {
+  return encryptAuthenticatedPayload(
+    value,
+    secret,
+    "selective-remote/team-invitation-link/v1",
+    "invalid_team_invitation_link_secret",
+  );
+}
+
+export function decryptTeamInvitationLinkSecret(envelope, secret) {
+  return decryptAuthenticatedPayload(
+    envelope,
+    secret,
+    "selective-remote/team-invitation-link/v1",
+    "invalid_team_invitation_link_secret",
+  );
 }
 
 export function hashAbuseKey(scope, value, pepper) {

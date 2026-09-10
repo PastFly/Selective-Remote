@@ -1,8 +1,9 @@
 # Cloud 0.32 Team and shared Vault threat model
 
 Status: design contract with the backend protocol and browser Team client implemented.
-Durable Teams, memberships, four-role checks, membership epochs, hash-only
-invitations, encrypted outbox delivery, audit events, idempotency receipts and
+Durable Teams, memberships, four-role checks, membership epochs, account-bound
+`@username` invitations, HMAC-bound single-use links, encrypted link/outbox
+envelopes, audit events, idempotency receipts and
 shared-Vault metadata, shared ciphertext revisions, approved P-256 devices,
 per-device wrappers and atomic rotation completion are present. The browser has
 Team/member/shared-Vault UI, non-exportable device keys, fingerprint-confirmed
@@ -94,23 +95,30 @@ or history, and all ordinary Team joins exclude archived Teams immediately.
 
 ## Invitation lifecycle
 
-1. Owner/Admin creates an invitation for one normalized email and an allowed
-   role. Only an Owner can invite an Admin.
-2. The server creates at least 256 bits of random token material, stores only a
-   keyed hash, and sends the opaque token through the durable outbox.
+1. Owner/Admin creates an invitation for one normalized public `@username`, or
+   creates a bearer link, with an allowed role. Only an Owner can invite an Admin.
+2. A username invitation resolves and stores the verified target account ID,
+   never its private email. A link uses at least 256 bits of random token
+   material, stores an HMAC hash, and returns the token only in a URL fragment.
+   The token is recoverable for an idempotent create retry solely from a
+   domain-separated AES-256-GCM envelope. Legacy email invitations retain their
+   separate encrypted durable outbox for backwards compatibility.
 3. An invitation expires after 48 hours and has explicit `pending`, `accepted`,
    `cancelled` or `expired` state. It is single-use.
-4. Acceptance requires a verified account whose normalized email matches the
-   invitation. The transaction locks the invite and membership uniqueness
-   rows so two requests cannot accept it twice.
+4. Username acceptance requires the authenticated verified account ID to match
+   the stored target. Bearer-link acceptance requires the matching HMAC token.
+   The transaction locks the invite and membership uniqueness rows so two
+   requests cannot accept it twice.
 5. Cancellation and expiry make the token unusable immediately. Re-inviting
    creates a new token and does not revive an old one.
 6. Acceptance creates membership but does not fabricate a Vault key. Each
    shared Vault remains unavailable until an authorized client publishes a
    wrapper for an authorized device.
 
-Invitation endpoints use uniform public errors and rate limits. Audit events
-contain actor, Team, target, role and timestamps but no token or Vault data.
+Invitation endpoints use uniform public errors and rate limits. Manager and
+pending-account lists expose only public handles and bounded Team metadata.
+Audit events contain actor, Team, target account ID, role and timestamps but no
+email, token or Vault data.
 
 ## Device-bound key distribution
 

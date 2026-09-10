@@ -125,40 +125,51 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     });
     assert.equal(initial.revision, 1);
 
-    const adminTokenHash = "a".repeat(64);
     const adminInvite = await store.createTeamInvitation({
       actorUserID: byEmail["owner@example.com"],
       teamID: created.team.id,
-      email: "admin@example.com",
+      invitationType: "username",
+      email: null,
+      username: "admin",
       role: "admin",
-      tokenHash: adminTokenHash,
+      tokenHash: "a".repeat(64),
       expiresAt: new Date(Date.now() + 48 * 3_600_000),
-      outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      outboxEnvelope: null,
+      linkSecretEnvelope: null,
       idempotencyKey: "integration:invite-admin-01",
     });
+    const pendingAdminInvitations = await store.listPendingTeamInvitations(byEmail["admin@example.com"]);
+    assert.equal(pendingAdminInvitations[0].target_username, "admin");
     const accepted = await store.acceptTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
       actorEmail: "admin@example.com",
-      tokenHash: adminTokenHash,
+      invitationID: adminInvite.invitation.id,
+      tokenHash: null,
       idempotencyKey: "integration:accept-admin-01",
     });
     assert.equal(accepted.membership.role, "admin");
+    assert.equal(accepted.membership.username, "admin");
+    assert.equal(accepted.membership.display_name, "Admin");
     assert.equal(Number(accepted.membership.epoch), 1);
     await assert.rejects(store.acceptTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
       actorEmail: "admin@example.com",
-      tokenHash: adminTokenHash,
+      invitationID: adminInvite.invitation.id,
+      tokenHash: null,
       idempotencyKey: "integration:accept-admin-02",
     }), /invalid_team_invitation/);
 
     await assert.rejects(store.createTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
       teamID: created.team.id,
+      invitationType: "email",
       email: "other@example.com",
+      username: null,
       role: "admin",
       tokenHash: "b".repeat(64),
       expiresAt: new Date(Date.now() + 48 * 3_600_000),
       outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      linkSecretEnvelope: null,
       idempotencyKey: "integration:admin-escalation-01",
     }), /team_access_denied/);
 
@@ -166,22 +177,27 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     await store.createTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
       teamID: created.team.id,
+      invitationType: "email",
       email: "viewer@example.com",
+      username: null,
       role: "viewer",
       tokenHash: viewerTokenHash,
       expiresAt: new Date(Date.now() + 48 * 3_600_000),
       outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      linkSecretEnvelope: null,
       idempotencyKey: "integration:invite-viewer-01",
     });
     await assert.rejects(store.acceptTeamInvitation({
       actorUserID: byEmail["other@example.com"],
       actorEmail: "other@example.com",
+      invitationID: null,
       tokenHash: viewerTokenHash,
       idempotencyKey: "integration:accept-wrong-email-01",
     }), /invalid_team_invitation/);
     const viewer = await store.acceptTeamInvitation({
       actorUserID: byEmail["viewer@example.com"],
       actorEmail: "viewer@example.com",
+      invitationID: null,
       tokenHash: viewerTokenHash,
       idempotencyKey: "integration:accept-viewer-01",
     });
@@ -230,11 +246,14 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const cancelled = await store.createTeamInvitation({
       actorUserID: byEmail["owner@example.com"],
       teamID: created.team.id,
+      invitationType: "email",
       email: "other@example.com",
+      username: null,
       role: "editor",
       tokenHash: "d".repeat(64),
       expiresAt: new Date(Date.now() + 48 * 3_600_000),
       outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      linkSecretEnvelope: null,
       idempotencyKey: "integration:invite-cancel-01",
     });
     await store.cancelTeamInvitation({
@@ -341,11 +360,14 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const pendingLifecycleInvite = await store.createTeamInvitation({
       actorUserID: byEmail["owner@example.com"],
       teamID: created.team.id,
+      invitationType: "email",
       email: "other@example.com",
+      username: null,
       role: "viewer",
       tokenHash: "e".repeat(64),
       expiresAt: new Date(Date.now() + 48 * 3_600_000),
       outboxEnvelope: { ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22) },
+      linkSecretEnvelope: null,
       idempotencyKey: "integration:invite-lifecycle-01",
     });
     const renamed = await store.renameTeam({
@@ -439,7 +461,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       "team.renamed", "team.ownership_transferred", "team.archived",
     ]);
     assert.equal(viewer.membership.role, "viewer");
-    assert.equal(adminInvite.invitation.email, "admin@example.com");
+    assert.equal(adminInvite.invitation.invitation_type, "username");
   } finally {
     await pool.end();
   }

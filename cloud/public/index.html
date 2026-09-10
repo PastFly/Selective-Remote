@@ -350,11 +350,15 @@
           <button type="submit">Создать</button>
         </form>
         <form id="team-invitation-accept-form">
-          <h3>Принять приглашение</h3>
-          <label for="team-invitation-token">Токен приглашения</label>
+          <h3>Принять приглашение по ссылке</h3>
+          <label for="team-invitation-token">Код из одноразовой ссылки</label>
           <input id="team-invitation-token" name="token" type="password" minlength="32" maxlength="512" autocomplete="off" required>
           <button type="submit">Принять</button>
         </form>
+        <section aria-labelledby="team-pending-invitations-title">
+          <h3 id="team-pending-invitations-title">Приглашения для вашего @username</h3>
+          <div class="team-invitations" id="team-pending-invitations"></div>
+        </section>
       </div>
 
       <div class="team-picker">
@@ -374,16 +378,26 @@
             <div class="team-members" id="team-members"></div>
             <form id="team-invite-form">
               <h4>Пригласить на 48 часов</h4>
-              <label for="team-invite-email">Email</label>
-              <input id="team-invite-email" name="email" type="email" maxlength="254" required>
+              <label for="team-invite-username">Публичный @username</label>
+              <input id="team-invite-username" name="username" minlength="3" maxlength="32" autocomplete="off" placeholder="username" required>
               <label for="team-invite-role">Роль</label>
               <select id="team-invite-role" name="role">
                 <option value="viewer">Viewer</option>
                 <option value="editor">Editor</option>
                 <option value="admin">Admin</option>
               </select>
-              <button type="submit">Отправить приглашение</button>
+              <button type="submit">Пригласить по @username</button>
+              <button type="button" class="secondary" id="team-invite-link-create">Создать одноразовую ссылку</button>
+              <div id="team-invite-link-result" hidden>
+                <label for="team-invite-link-value">Одноразовая ссылка</label>
+                <input id="team-invite-link-value" type="text" readonly>
+                <button type="button" class="secondary" id="team-invite-link-copy">Скопировать ссылку</button>
+              </div>
             </form>
+            <section aria-labelledby="team-active-invitations-title">
+              <h4 id="team-active-invitations-title">Активные приглашения</h4>
+              <div class="team-invitations" id="team-active-invitations"></div>
+            </section>
           </div>
           <div id="team-vault-directory-view">
             <h3>Shared Vaults</h3>

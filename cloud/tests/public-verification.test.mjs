@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   consumePasswordResetFragment,
+  consumeTeamInvitationFragment,
   consumeVerificationFragment,
   submitEmailVerification,
   submitPasswordReset,
@@ -74,6 +75,18 @@ test("password reset token is removed from browser history before use", () => {
   assert.deepEqual(result, { present: true, token: "opaque-reset-token" });
   assert.deepEqual(replacements, [[null, "", "/?source=email"]]);
   assert.equal(JSON.stringify(replacements).includes("opaque-reset-token"), false);
+});
+
+test("Team invitation token is removed from the fragment before authentication", () => {
+  const replacements = [];
+  const result = consumeTeamInvitationFragment(
+    { hash: "#accept-team-invitation?token=opaque-team-token", pathname: "/", search: "" },
+    { replaceState(...values) { replacements.push(values); } },
+  );
+
+  assert.deepEqual(result, { present: true, token: "opaque-team-token" });
+  assert.deepEqual(replacements, [[null, "", "/"]]);
+  assert.equal(JSON.stringify(replacements).includes("opaque-team-token"), false);
 });
 
 test("browser submits password reset secrets only in a no-store JSON request", async () => {

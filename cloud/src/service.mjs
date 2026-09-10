@@ -5,7 +5,9 @@ import {
   createPasswordResetToken,
   createSessionToken,
   createTeamInvitationToken,
+  decryptTeamInvitationLinkSecret,
   decryptOutboxPayload,
+  encryptTeamInvitationLinkSecret,
   encryptOutboxPayload,
   hashEmailVerificationToken,
   hashPassword,
@@ -331,37 +333,96 @@ export class CloudService {
     return { members: rows.map(publicTeamMember) };
   }
 
+  async listTeamInvitations(session, teamID) {
+    const rows = await this.store.listTeamInvitations(teamID, session.user_id);
+    return { invitations: rows.map((row) => publicTeamInvitation(row)) };
+  }
+
+  async listPendingTeamInvitations(session) {
+    const rows = await this.store.listPendingTeamInvitations(session.user_id);
+    return { invitations: rows.map((row) => publicTeamInvitation(row)) };
+  }
+
   async createTeamInvitation(session, teamID, input, idempotencyKey) {
-    if (!this.mailer) throw new Error("smtp_not_configured");
-    const email = normalizeEmail(input?.email);
+    const hasUsername = typeof input?.username === "string";
+    const hasEmail = typeof input?.email === "string";
+    const linkRequested = input?.type === "link";
+    if (Number(hasUsername) + Number(hasEmail) + Number(linkRequested) !== 1) {
+      throw new Error("invalid_team_invitation");
+    }
+    const invitationType = linkRequested ? "link" : hasUsername ? "username" : "email";
+    if (input?.type !== undefined && input.type !== invitationType) {
+      throw new Error("invalid_team_invitation");
+    }
+    if (invitationType === "email" && !this.mailer) throw new Error("smtp_not_configured");
+    const email = invitationType === "email" ? normalizeEmail(input.email) : null;
+    const username = invitationType === "username" ? normalizeUsername(input.username) : null;
     const role = validateTeamRole(input?.role, { invitation: true });
     const token = createTeamInvitationToken();
     const expiresAt = this.teamInvitationExpiry();
-    const outboxEnvelope = encryptOutboxPayload({
-      recipient: email,
-      token,
-      teamID,
-      role,
-      expiresAt: expiresAt.toISOString(),
-    }, this.config.teamOutboxEncryptionKey);
+    const outboxEnvelope = invitationType === "email" ? encryptOutboxPayload(
+      {
+        recipient: email,
+        token,
+        teamID,
+        role,
+        expiresAt: expiresAt.toISOString(),
+      },
+      this.config.teamOutboxEncryptionKey,
+    ) : null;
+    const linkSecretEnvelope = invitationType === "link" ? encryptTeamInvitationLinkSecret(
+      {
+        token,
+        teamID,
+        role,
+        expiresAt: expiresAt.toISOString(),
+      },
+      this.config.teamOutboxEncryptionKey,
+    ) : null;
     const result = await this.store.createTeamInvitation({
       actorUserID: session.user_id,
       teamID,
+      invitationType,
       email,
+      username,
       role,
       tokenHash: hashTeamInvitationToken(token, this.config.teamInvitationTokenPepper),
       expiresAt,
       outboxEnvelope,
+      linkSecretEnvelope,
       idempotencyKey: validateIdempotencyKey(idempotencyKey),
     });
-    return { invitation: publicTeamInvitation(result.invitation) };
+    let acceptanceURL = null;
+    if (result.invitation?.invitation_type === "link") {
+      const linkSecret = decryptTeamInvitationLinkSecret(
+        result.linkSecretEnvelope,
+        this.config.teamOutboxEncryptionKey,
+      );
+      if (linkSecret?.teamID !== result.invitation.team_id
+          || linkSecret?.role !== result.invitation.role
+          || linkSecret?.expiresAt !== new Date(result.invitation.expires_at).toISOString()) {
+        throw new Error("invalid_team_invitation_link_secret");
+      }
+      acceptanceURL = teamInvitationURL(this.config.publicOrigin, linkSecret.token);
+    }
+    return { invitation: publicTeamInvitation(result.invitation, acceptanceURL) };
   }
 
   async acceptTeamInvitation(session, input, idempotencyKey) {
+    const hasToken = typeof input?.token === "string";
+    const hasInvitationID = typeof input?.invitationID === "string";
+    if (Number(hasToken) + Number(hasInvitationID) !== 1) throw new Error("invalid_team_invitation");
+    const invitationID = hasInvitationID && isUUID(input.invitationID)
+      ? input.invitationID.toLowerCase()
+      : null;
+    if (hasInvitationID && !invitationID) throw new Error("invalid_team_invitation");
     const result = await this.store.acceptTeamInvitation({
       actorUserID: session.user_id,
       actorEmail: session.email,
-      tokenHash: hashTeamInvitationToken(input?.token, this.config.teamInvitationTokenPepper),
+      invitationID,
+      tokenHash: hasToken
+        ? hashTeamInvitationToken(input.token, this.config.teamInvitationTokenPepper)
+        : null,
       idempotencyKey: validateIdempotencyKey(idempotencyKey),
     });
     return { membership: publicTeamMember(result.membership) };
@@ -540,16 +601,25 @@ function publicTeamMember(row) {
   };
 }
 
-function publicTeamInvitation(row) {
+function publicTeamInvitation(row, acceptanceURL = null) {
   return {
     id: row.id,
     teamID: row.team_id,
-    email: row.email,
+    teamName: row.team_name ?? null,
+    type: row.invitation_type ?? "email",
+    targetUsername: row.target_username ?? null,
     role: row.role,
     status: "pending",
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+    acceptanceURL,
   };
+}
+
+function teamInvitationURL(publicOrigin, token) {
+  const invitationURL = new URL("/", publicOrigin);
+  invitationURL.hash = `accept-team-invitation?${new URLSearchParams({ token })}`;
+  return invitationURL.toString();
 }
 
 function publicSharedVault(row) {

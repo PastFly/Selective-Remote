@@ -239,6 +239,56 @@ function normalizedTeamMember(value) {
   };
 }
 
+function normalizedTeamInvitation(value) {
+  exactKeys(value, [
+    "acceptanceURL", "createdAt", "expiresAt", "id", "role", "status",
+    "targetUsername", "teamID", "teamName", "type",
+  ], "invalid_team_invitation");
+  const type = String(value.type ?? "");
+  const targetUsername = value.targetUsername === null ? null : String(value.targetUsername ?? "");
+  const acceptanceURL = value.acceptanceURL === null ? null : String(value.acceptanceURL ?? "");
+  if (!["email", "username", "link"].includes(type)
+    || !["admin", "editor", "viewer"].includes(value.role)
+    || value.status !== "pending"
+    || (type === "username" && !/^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$/.test(targetUsername ?? ""))
+    || (type !== "username" && targetUsername !== null)
+    || (acceptanceURL !== null && type !== "link")) {
+    throw new Error("invalid_team_invitation");
+  }
+  if (acceptanceURL !== null) {
+    let parsed;
+    try { parsed = new URL(acceptanceURL); } catch { throw new Error("invalid_team_invitation"); }
+    const fragmentPrefix = "#accept-team-invitation?token=";
+    const token = parsed.hash.startsWith(fragmentPrefix)
+      ? parsed.hash.slice(fragmentPrefix.length)
+      : "";
+    if (!/^https?:$/.test(parsed.protocol)
+      || parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search
+      || !/^[A-Za-z0-9_-]{43}$/.test(token)
+      || (globalThis.location?.origin && parsed.origin !== globalThis.location.origin)) {
+      throw new Error("invalid_team_invitation");
+    }
+  }
+  const teamName = value.teamName === null ? null : String(value.teamName ?? "");
+  if ((teamName !== null && (!teamName || teamName.length > 120))
+    || typeof value.createdAt !== "string" || !value.createdAt
+    || typeof value.expiresAt !== "string" || !value.expiresAt) {
+    throw new Error("invalid_team_invitation");
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_team_invitation"),
+    teamID: normalizedUUID(value.teamID, "invalid_team_invitation"),
+    teamName,
+    type,
+    targetUsername,
+    role: value.role,
+    status: value.status,
+    createdAt: value.createdAt,
+    expiresAt: value.expiresAt,
+    acceptanceURL,
+  };
+}
+
 function normalizedSharedVault(value, teamID) {
   exactKeys(value, [
     "createdAt", "id", "keyGeneration", "name", "revision", "rotationRequired", "teamID", "updatedAt",
@@ -619,33 +669,125 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return result.members.map(normalizedTeamMember);
     },
 
-    async inviteTeamMember({ teamID, email, role, idempotencyKey = generatedIdempotencyKey("web:team:invite") }) {
+    async listTeamInvitations(teamID) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/invitations`);
+      const result = await responseJSON(response, "team_invitations_download_failed");
+      if (!response.ok || !Array.isArray(result.invitations) || result.invitations.length > 10_000) {
+        throw new Error("team_invitations_download_failed");
+      }
+      const invitations = result.invitations.map(normalizedTeamInvitation);
+      if (new Set(invitations.map((value) => value.id)).size !== invitations.length
+        || invitations.some((value) => value.teamID !== normalizedTeamID)) {
+        throw new Error("team_invitations_download_failed");
+      }
+      return invitations;
+    },
+
+    async listPendingTeamInvitations() {
+      const response = await authorizedRequest("/v1/team-invitations");
+      const result = await responseJSON(response, "team_invitations_download_failed");
+      if (!response.ok || !Array.isArray(result.invitations) || result.invitations.length > 10_000) {
+        throw new Error("team_invitations_download_failed");
+      }
+      const invitations = result.invitations.map(normalizedTeamInvitation);
+      if (new Set(invitations.map((value) => value.id)).size !== invitations.length
+        || invitations.some((value) => value.type !== "username"
+          || value.targetUsername !== user?.username)) {
+        throw new Error("team_invitations_download_failed");
+      }
+      return invitations;
+    },
+
+    async inviteTeamMember({
+      teamID,
+      username = null,
+      email = null,
+      type = username !== null ? "username" : email !== null ? "email" : "link",
+      role,
+      idempotencyKey = generatedIdempotencyKey("web:team:invite"),
+    }) {
       const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
       const normalizedRole = String(role ?? "");
       if (!["admin", "editor", "viewer"].includes(normalizedRole)) throw new Error("invalid_team_role");
-      const normalizedEmail = String(email ?? "").trim().toLowerCase();
-      if (!normalizedEmail || normalizedEmail.length > 254) throw new Error("invalid_email");
+      const invitationType = String(type ?? "");
+      let body;
+      if (invitationType === "username") {
+        const normalizedUsername = String(username ?? "").trim().toLowerCase().replace(/^@/u, "");
+        if (!/^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$/.test(normalizedUsername)) {
+          throw new Error("invalid_username");
+        }
+        body = { username: normalizedUsername, role: normalizedRole };
+      } else if (invitationType === "link") {
+        body = { type: "link", role: normalizedRole };
+      } else if (invitationType === "email") {
+        const normalizedEmail = String(email ?? "").trim().toLowerCase();
+        if (!normalizedEmail || normalizedEmail.length > 254) throw new Error("invalid_email");
+        body = { email: normalizedEmail, role: normalizedRole };
+      } else {
+        throw new Error("invalid_team_invitation");
+      }
       const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/invitations`, {
         method: "POST",
         headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
-        body: JSON.stringify({ email: normalizedEmail, role: normalizedRole }),
+        body: JSON.stringify(body),
       });
       const result = await responseJSON(response, "team_invitation_failed");
-      if (!response.ok || !result.invitation || "token" in result.invitation) throw new Error("team_invitation_failed");
-      return structuredClone(result.invitation);
+      if (!response.ok || !result.invitation || "token" in result.invitation) {
+        throw new Error("team_invitation_failed");
+      }
+      const invitation = normalizedTeamInvitation(result.invitation);
+      if (invitation.type !== invitationType
+        || (invitationType === "username" && invitation.targetUsername !== body.username)
+        || (invitationType === "link" && !invitation.acceptanceURL)) {
+        throw new Error("team_invitation_failed");
+      }
+      return invitation;
     },
 
-    async acceptTeamInvitation({ token: invitationToken, idempotencyKey = generatedIdempotencyKey("web:team:accept") }) {
-      const value = String(invitationToken ?? "").trim();
-      if (value.length < 32 || value.length > 512) throw new Error("invalid_team_invitation");
+    async acceptTeamInvitation({
+      token: invitationToken = null,
+      invitationID = null,
+      idempotencyKey = generatedIdempotencyKey("web:team:accept"),
+    }) {
+      const hasToken = invitationToken !== null;
+      const hasInvitationID = invitationID !== null;
+      if (hasToken === hasInvitationID) throw new Error("invalid_team_invitation");
+      const body = hasToken
+        ? { token: String(invitationToken ?? "").trim() }
+        : { invitationID: normalizedUUID(invitationID, "invalid_team_invitation") };
+      if (hasToken && (body.token.length < 32 || body.token.length > 512)) {
+        throw new Error("invalid_team_invitation");
+      }
       const response = await authorizedRequest("/v1/team-invitations/accept", {
         method: "POST",
         headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
-        body: JSON.stringify({ token: value }),
+        body: JSON.stringify(body),
       });
       const result = await responseJSON(response, "team_invitation_accept_failed");
       if (!response.ok || !result.membership) throw new Error("team_invitation_accept_failed");
       return normalizedTeamMember(result.membership);
+    },
+
+    async cancelTeamInvitation({
+      teamID,
+      invitationID,
+      idempotencyKey = generatedIdempotencyKey("web:team:invite:cancel"),
+    }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedInvitationID = normalizedUUID(invitationID, "invalid_team_invitation");
+      const response = await authorizedRequest(
+        `/v1/teams/${normalizedTeamID}/invitations/${normalizedInvitationID}`,
+        {
+          method: "DELETE",
+          headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        },
+      );
+      const result = await responseJSON(response, "team_invitation_cancel_failed");
+      if (!response.ok || result.cancelled !== true || Object.keys(result).length !== 1) {
+        throw new Error("team_invitation_cancel_failed");
+      }
+      return { cancelled: true };
     },
 
     async updateTeamMemberRole({ teamID, membershipID, role, idempotencyKey = generatedIdempotencyKey("web:team:role") }) {

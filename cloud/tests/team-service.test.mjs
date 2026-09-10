@@ -12,6 +12,7 @@ const session = {
   email: "owner@example.com",
 };
 const config = {
+  publicOrigin: "https://cloud.example.invalid",
   teamInvitationTTLHours: 48,
   teamInvitationTokenPepper: "t".repeat(32),
   teamOutboxEncryptionKey: "o".repeat(32),
@@ -69,21 +70,33 @@ class TeamStore {
 
   async createTeamInvitation(input) {
     this.calls.push(["createTeamInvitation", input]);
-    this.job = {
-      id: "25b79add-2d18-4fa7-9ef7-9373f850001a",
-      attempts: 1,
-      payload_ciphertext: input.outboxEnvelope.ciphertext,
-      nonce: input.outboxEnvelope.nonce,
-      auth_tag: input.outboxEnvelope.authTag,
-    };
+    this.job = input.outboxEnvelope ? {
+        id: "25b79add-2d18-4fa7-9ef7-9373f850001a",
+        attempts: 1,
+        payload_ciphertext: input.outboxEnvelope.ciphertext,
+        nonce: input.outboxEnvelope.nonce,
+        auth_tag: input.outboxEnvelope.authTag,
+      } : null;
     return { invitation: {
       id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d",
       team_id: input.teamID,
-      email: input.email,
+      invitation_type: input.invitationType,
+      target_username: input.username,
+      team_name: "Operations",
       role: input.role,
       created_at: "now",
       expires_at: input.expiresAt,
-    } };
+    }, linkSecretEnvelope: input.linkSecretEnvelope };
+  }
+
+  async listTeamInvitations(teamID, userID) {
+    this.calls.push(["listTeamInvitations", teamID, userID]);
+    return [];
+  }
+
+  async listPendingTeamInvitations(userID) {
+    this.calls.push(["listPendingTeamInvitations", userID]);
+    return [];
   }
 
   async claimTeamInvitationOutbox() {
@@ -104,7 +117,15 @@ class TeamStore {
 
   async acceptTeamInvitation(input) {
     this.calls.push(["acceptTeamInvitation", input]);
-    return { membership: { id: membershipID, user_id: input.actorUserID, role: "editor", epoch: 2 } };
+    return { membership: {
+      id: membershipID,
+      user_id: input.actorUserID,
+      username: "owner",
+      display_name: "Owner",
+      role: "editor",
+      epoch: 2,
+      joined_at: "now",
+    } };
   }
 
   async cancelTeamInvitation(input) {
@@ -290,7 +311,19 @@ test("ownership transfer and Team archive require password reauthentication", as
   assert.equal(store.calls.filter(([name]) => name === "archiveTeam").length, 1);
 });
 
-test("invitation API persists only a hash and encrypted durable outbox payload", async () => {
+test("invitation listings stay scoped to the authenticated user and Team", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+
+  assert.deepEqual(await service.listTeamInvitations(session, teamID), { invitations: [] });
+  assert.deepEqual(await service.listPendingTeamInvitations(session), { invitations: [] });
+  assert.deepEqual(store.calls, [
+    ["listTeamInvitations", teamID, session.user_id],
+    ["listPendingTeamInvitations", session.user_id],
+  ]);
+});
+
+test("legacy email invitation API persists only a hash and encrypted durable outbox payload", async () => {
   const store = new TeamStore();
   let delivered;
   const service = new CloudService(store, config, {
@@ -308,11 +341,47 @@ test("invitation API persists only a hash and encrypted durable outbox payload",
   assert.equal(JSON.stringify(stored).includes("token\":"), false);
   assert.doesNotMatch(JSON.stringify(stored.outboxEnvelope), /member@example\.com|editor/);
   assert.equal("token" in response.invitation, false);
-  assert.equal(response.invitation.email, "member@example.com");
+  assert.equal(response.invitation.type, "email");
+  assert.equal("email" in response.invitation, false);
+  assert.equal(response.invitation.acceptanceURL, null);
   assert.equal(await service.dispatchTeamInvitationOutbox(), true);
   assert.equal(delivered.recipient, "member@example.com");
   assert.ok(delivered.token.length >= 40);
   assert.equal(store.calls.at(-1)[0], "completeTeamInvitationOutbox");
+});
+
+test("username invitations are account-bound while link invitations return one sealed URL", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+
+  const usernameResponse = await service.createTeamInvitation(
+    session,
+    teamID,
+    { username: " Member.Name ", role: "viewer" },
+    "request:team-username-01",
+  );
+  const usernameStored = store.calls[0][1];
+  assert.equal(usernameStored.invitationType, "username");
+  assert.equal(usernameStored.username, "member.name");
+  assert.equal(usernameStored.email, null);
+  assert.equal(usernameStored.outboxEnvelope, null);
+  assert.equal(usernameResponse.invitation.targetUsername, "member.name");
+  assert.equal(usernameResponse.invitation.acceptanceURL, null);
+
+  const linkResponse = await service.createTeamInvitation(
+    session,
+    teamID,
+    { type: "link", role: "editor" },
+    "request:team-link-01",
+  );
+  const linkStored = store.calls[1][1];
+  assert.equal(linkStored.invitationType, "link");
+  assert.equal(linkStored.email, null);
+  assert.equal(linkStored.username, null);
+  assert.doesNotMatch(JSON.stringify(linkStored.linkSecretEnvelope), /accept-team-invitation|token/iu);
+  assert.match(linkResponse.invitation.acceptanceURL, /^https:\/\/cloud\.example\.invalid\/#accept-team-invitation\?token=/u);
+  assert.equal("token" in linkResponse.invitation, false);
+  assert.equal("email" in linkResponse.invitation, false);
 });
 
 test("failed invitation delivery is sanitized and durably rescheduled", async () => {
@@ -334,10 +403,10 @@ test("failed invitation delivery is sanitized and durably rescheduled", async ()
   assert.doesNotMatch(warnings[0], /provider-secret|member@example\.com/);
 });
 
-test("invitation acceptance binds the verified session email and never accepts a body user ID", async () => {
+test("invitation acceptance binds email links or a username invitation ID to the session", async () => {
   const store = new TeamStore();
   const service = new CloudService(store, config);
-  await service.acceptTeamInvitation(
+  const accepted = await service.acceptTeamInvitation(
     session,
     { token: "opaque-invitation", userID: "attacker", email: "attacker@example.com" },
     "request:team-accept-01",
@@ -346,8 +415,29 @@ test("invitation acceptance binds the verified session email and never accepts a
 
   assert.equal(stored.actorUserID, "user-1");
   assert.equal(stored.actorEmail, "owner@example.com");
+  assert.equal(stored.invitationID, null);
   assert.match(stored.tokenHash, /^[0-9a-f]{64}$/);
   assert.equal("token" in stored, false);
+  assert.equal(accepted.membership.username, "owner");
+  assert.equal(accepted.membership.displayName, "Owner");
+
+  await service.acceptTeamInvitation(
+    session,
+    { invitationID: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d", userID: "attacker" },
+    "request:team-accept-02",
+  );
+  const usernameStored = store.calls[1][1];
+  assert.equal(usernameStored.actorUserID, "user-1");
+  assert.equal(usernameStored.invitationID, "471c3424-b6aa-41a0-959f-aeaa1e3ef79d");
+  assert.equal(usernameStored.tokenHash, null);
+  await assert.rejects(
+    service.acceptTeamInvitation(
+      session,
+      { invitationID: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d", token: "also-present" },
+      "request:team-accept-03",
+    ),
+    /invalid_team_invitation/,
+  );
 });
 
 test("invitation cancellation remains explicitly scoped and idempotent", async () => {
