@@ -224,6 +224,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /backgroundPersonalVaultSync/u);
   assert.match(application, /15_000/u);
   assert.match(application, /vault\.lock\(\)/u);
+  assert.match(application, /vault\.rewrap\(accountVaultMigrationPassphrase\)/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
