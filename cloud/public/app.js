@@ -228,6 +228,7 @@ export async function initializeLocalVault({
   const hostDetailCopyPassword = documentValue.querySelector("#host-detail-copy-password");
   const hostDetailOpenSSH = documentValue.querySelector("#host-detail-open-ssh");
   const hostDetailOpenSFTP = documentValue.querySelector("#host-detail-open-sftp");
+  if (hostDetail && hostDetail.parentElement !== documentValue.body) documentValue.body.append(hostDetail);
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
@@ -2261,6 +2262,7 @@ export function initializePortalNavigation({
     "team-vault": "Команды",
     "workspace-devices": "Устройства",
     "workspace-settings": "Настройки",
+    "workspace-about": "О проекте",
   };
   const resourceTitles = {
     host: "Хосты",
@@ -2288,9 +2290,20 @@ export function initializePortalNavigation({
     "/app/team-management": ["team-vault", null, "management"],
     "/app/devices": ["workspace-devices", null, null],
     "/app/settings": ["workspace-settings", null, null],
+    "/app/about": ["workspace-about", null, null],
   };
   let sessionActive = false;
   let requestedWorkspaceRoute = "/app";
+
+  const sidebarFooter = documentValue.querySelector("#workspace-sidebar-footer");
+  const workspaceHeader = documentValue.querySelector(".workspace-header");
+  const workspaceTheme = documentValue.querySelector(".workspace-theme");
+  const signedInAccount = documentValue.querySelector("#cloud-signed-in");
+  if (sidebarFooter) {
+    if (workspaceTheme) sidebarFooter.append(workspaceTheme);
+    if (signedInAccount) sidebarFooter.append(signedInAccount);
+  }
+  if (workspaceHeader) workspaceHeader.hidden = true;
 
   function setPath(path, replace = false) {
     if (locationValue.pathname === path) return;

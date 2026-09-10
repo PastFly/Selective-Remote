@@ -158,8 +158,9 @@
           <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
           <button type="button" data-workspace-target="workspace-settings">Настройки</button>
+          <button type="button" data-workspace-target="workspace-about">О проекте</button>
         </nav>
-        <div class="workspace-security"><span>●</span> E2EE включено</div>
+        <div class="workspace-security" id="workspace-sidebar-footer"><span>●</span> E2EE включено</div>
       </aside>
 
       <div class="workspace-main">
@@ -324,6 +325,22 @@
           <button type="button" class="secondary" id="team-devices-refresh">Обновить устройства</button>
         </div>
         <div class="team-devices" id="team-devices"></div>
+      </div>
+    </section>
+
+    <section class="workspace-panel workspace-about" id="workspace-about" hidden>
+      <div class="vault-heading">
+        <div><p class="eyebrow">SELECTIVE REMOTE</p><h2>О проекте</h2></div>
+      </div>
+      <div class="about-project-card">
+        <h3>Открытый клиент удалённых подключений для macOS</h3>
+        <p>RDP, SSH, SFTP, туннели и сквозное шифрование личных и командных Vault.</p>
+        <div class="resource-detail-actions">
+          <a class="button-link" href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">Проект на GitHub</a>
+          <a class="button-link secondary" href="https://yoomoney.ru/to/4100119600001192" target="_blank" rel="noreferrer">ЮMoney</a>
+          <a class="button-link secondary" href="https://boosty.to/pastfly/single-payment/donation/821124/target?share=target_link" target="_blank" rel="noreferrer">Boosty</a>
+          <a class="button-link secondary" href="https://messenger.sbrf.ru/sl/0pRZ8zDZzpoim1on3" target="_blank" rel="noreferrer">Сбер</a>
+        </div>
       </div>
     </section>
 
