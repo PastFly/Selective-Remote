@@ -1,13 +1,33 @@
 import Foundation
 
-enum SelectiveRemoteTeamHostMutationError: Error, Equatable {
+enum SelectiveRemoteTeamHostMutationError: LocalizedError, Equatable {
     case readOnlyRole
     case duplicateHost
     case hostNotFound
     case recordIsNotHost
+
+    var errorDescription: String? {
+        switch self {
+        case .readOnlyRole:
+            UpdateLocalization.text(
+                ru: "Роль Viewer может только просматривать Team Hosts.",
+                en: "The Viewer role can only view Team Hosts."
+            )
+        case .duplicateHost:
+            UpdateLocalization.text(ru: "Team Host с таким ID уже существует.", en: "A Team Host with this ID already exists.")
+        case .hostNotFound:
+            UpdateLocalization.text(ru: "Team Host больше не существует.", en: "The Team Host no longer exists.")
+        case .recordIsNotHost:
+            UpdateLocalization.text(ru: "Выбранная запись не является Team Host.", en: "The selected record is not a Team Host.")
+        }
+    }
 }
 
 enum SelectiveRemoteTeamHostDocumentMutation {
+    static func isWritable(role: SelectiveRemoteCloudTeamRole) -> Bool {
+        role == .owner || role == .admin || role == .editor
+    }
+
     static func create(
         profile: ConnectionProfile,
         role: SelectiveRemoteCloudTeamRole,
@@ -137,7 +157,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
     }
 
     private static func requireWritable(_ role: SelectiveRemoteCloudTeamRole) throws {
-        guard role == .owner || role == .admin || role == .editor else {
+        guard isWritable(role: role) else {
             throw SelectiveRemoteTeamHostMutationError.readOnlyRole
         }
     }
