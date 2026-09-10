@@ -166,6 +166,10 @@ struct CloudPersonalVaultSyncTests {
         #expect(next.nonce != first.nonce)
         #expect(next.ciphertext != first.ciphertext)
         #expect(next.authTag != first.authTag)
+        #expect(try SelectiveRemotePersonalVaultCrypto.open(
+            next,
+            vaultKey: Data(repeating: 0x11, count: 32)
+        ) == firstDocument)
     }
 
     @Test("automatic export can represent deletion of every local record")

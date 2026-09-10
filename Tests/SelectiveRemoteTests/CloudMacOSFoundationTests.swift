@@ -21,7 +21,13 @@ struct CloudMacOSFoundationTests {
                 #expect(object["password"] as? String == "synthetic-password")
                 return Self.response(request, status: 200, json: [
                     "token": token,
-                    "user": ["id": userID.uuidString.lowercased(), "email": "user@example.invalid", "username": "user", "displayName": "User"],
+                    "user": [
+                        "id": userID.uuidString.lowercased(),
+                        "email": "user@example.invalid",
+                        "username": "user",
+                        "displayName": "User",
+                        "createdAt": "2026-09-10T00:00:00.000Z"
+                    ],
                     "deviceID": deviceID.uuidString.lowercased()
                 ])
             case ("GET", "/v1/me"):
@@ -1708,7 +1714,8 @@ struct CloudSecureEnvelopeModelTests {
         let key = Data(repeating: 0x2a, count: 32)
         let input = SelectiveRemoteCloudSecureEnvelope(
             sessionToken: "session-token",
-            teamDevicePrivateKeys: ["device-id": key]
+            teamDevicePrivateKeys: ["device-id": key],
+            personalVaultKeyMaterials: ["device-id": Data([4, 5, 6])]
         )
         let encoded = try JSONEncoder().encode(input)
         let decoded = try JSONDecoder().decode(
@@ -1718,10 +1725,25 @@ struct CloudSecureEnvelopeModelTests {
         #expect(decoded == input)
         #expect(!decoded.isEmpty)
         #expect(decoded.teamDevicePrivateKeys["device-id"] == key)
+        #expect(decoded.personalVaultKeyMaterials["device-id"] == Data([4, 5, 6]))
     }
 
     @Test("empty envelope is removable")
     func emptyEnvelope() {
         #expect(SelectiveRemoteCloudSecureEnvelope().isEmpty)
+    }
+
+    @Test("older unified envelopes decode before Personal Vault material is added")
+    func legacyEnvelopeDecoding() throws {
+        let legacy = try JSONSerialization.data(withJSONObject: [
+            "sessionToken": "token",
+            "teamDevicePrivateKeys": [String: String]()
+        ])
+        let decoded = try JSONDecoder().decode(
+            SelectiveRemoteCloudSecureEnvelope.self,
+            from: legacy
+        )
+        #expect(decoded.sessionToken == "token")
+        #expect(decoded.personalVaultKeyMaterials.isEmpty)
     }
 }

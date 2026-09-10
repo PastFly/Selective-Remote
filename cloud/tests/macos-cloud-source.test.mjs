@@ -189,6 +189,7 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(client, /v1\/auth\/register/);
   assert.match(client, /verificationRequired/);
   assert.match(client, /validLoginJSON/);
+  assert.match(client, /"displayName", "createdAt"/u);
   assert.match(client, /validTeamsJSON/);
   assert.match(client, /validTeamMembersJSON/);
   assert.match(client, /deviceID/);
@@ -425,10 +426,29 @@ test("macOS Cloud session and Team device key share one Keychain envelope", asyn
   assert.match(envelope, /local\.selectiveremote\.cloud\.secure-envelope\.v1/u);
   assert.match(envelope, /var sessionToken: String\?/u);
   assert.match(envelope, /var teamDevicePrivateKeys: \[String: Data\]/u);
+  assert.match(envelope, /var personalVaultKeyMaterials: \[String: Data\]/u);
   assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/u);
   assert.match(session, /SelectiveRemoteCloudSecureEnvelopeStore/u);
   assert.match(session, /legacyService = "local\.selectiveremote\.cloud\.session\.v1"/u);
   assert.match(teamDevice, /SelectiveRemoteCloudSecureEnvelopeStore/u);
   assert.match(teamDevice, /legacyService = "local\.selectiveremote\.cloud\.team-device-key\.v1"/u);
   assert.doesNotMatch(envelope, /teamID|vaultID|hostID/u);
+});
+
+
+test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
+  const [sync, crypto, settings] = await Promise.all([
+    readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.doesNotMatch(sync, /!material\.includesCredentials/u);
+  assert.match(sync, /SelectiveRemotePersonalVaultCrypto\.open/u);
+  assert.match(sync, /\$0\.type == \.credential/u);
+  assert.match(sync, /personalVaultKeyMaterials/u);
+  assert.match(sync, /legacyService = "local\.selectiveremote\.cloud\.personal-vault-key\.v1"/u);
+  assert.match(sync, /removeLegacy\(endpoint:/u);
+  assert.match(crypto, /static func open\(/u);
+  assert.match(settings, /personalVaultAutoSyncConfigured = true/u);
+  assert.doesNotMatch(settings, /Background sync is disabled/u);
 });

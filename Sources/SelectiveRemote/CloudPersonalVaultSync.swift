@@ -346,6 +346,36 @@ enum SelectiveRemotePersonalVaultCrypto {
         }
     }
 
+    static func open(
+        _ envelope: SelectiveRemotePersonalVaultEnvelope,
+        vaultKey: Data
+    ) throws -> SelectiveRemoteVaultDocument {
+        guard vaultKey.count == 32,
+              let nonce = Data(selectiveRemoteBase64URL: envelope.nonce, expectedLength: 12),
+              let ciphertext = Data(selectiveRemoteBase64URL: envelope.ciphertext),
+              let authTag = Data(selectiveRemoteBase64URL: envelope.authTag, expectedLength: 16)
+        else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        do {
+            let box = try AES.GCM.SealedBox(
+                nonce: AES.GCM.Nonce(data: nonce),
+                ciphertext: ciphertext,
+                tag: authTag
+            )
+            let plaintext = try AES.GCM.open(
+                box,
+                using: SymmetricKey(data: vaultKey),
+                authenticating: additionalData
+            )
+            return try SelectiveRemoteVaultDocument.decode(plaintext)
+        } catch let error as SelectiveRemotePersonalVaultError {
+            throw error
+        } catch {
+            throw SelectiveRemotePersonalVaultError.cryptoFailure
+        }
+    }
+
     static func wrapRFC3394(_ value: Data, keyEncryptionKey: Data) throws -> Data {
         guard keyEncryptionKey.count == 32, value.count >= 16, value.count.isMultiple(of: 8) else {
             throw SelectiveRemotePersonalVaultError.invalidEnvelope
