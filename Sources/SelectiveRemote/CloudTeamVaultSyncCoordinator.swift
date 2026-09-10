@@ -9,6 +9,7 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
     case remoteRevisionRollback
     case remoteRevisionDivergence
     case invalidWriteAcknowledgement
+    case invalidWrapperGrantAcknowledgement
     case invalidConflictResponse
     case staleConflict
     case invalidKeyDevices
@@ -55,6 +56,11 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
                 ru: "Cloud не подтвердил безопасную запись в Team Vault. Данные не были перезаписаны.",
                 en: "Cloud did not confirm a safe Team Vault write. No data was overwritten."
             )
+        case .invalidWrapperGrantAcknowledgement:
+            UpdateLocalization.text(
+                ru: "Cloud не подтвердил безопасную выдачу ключа Team Vault этому устройству.",
+                en: "Cloud did not confirm the Team Vault key grant to this device."
+            )
         case .staleConflict:
             UpdateLocalization.text(
                 ru: "Team Vault снова изменился во время разрешения конфликта. Обновите его и повторите выбор.",
@@ -70,6 +76,21 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
 }
 
 protocol SelectiveRemoteTeamVaultRemote: Sendable {
+    func teamKeyDevices(
+        endpoint: URL,
+        teamID: UUID,
+        vaultID: UUID
+    ) async throws -> [SelectiveRemoteCloudTeamKeyDevice]
+
+    func grantSharedVaultWrapper(
+        endpoint: URL,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int,
+        wrapper: SelectiveRemoteTeamVaultKeyWrapper,
+        idempotencyKey: String
+    ) async throws -> SelectiveRemoteCloudTeamVaultWrapperGrant
+
     func sharedVault(
         endpoint: URL,
         teamID: UUID,
@@ -130,6 +151,88 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         self.endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
         self.remote = remote
         self.snapshots = snapshots
+    }
+
+    func provisionMissingWrappers(
+        teamID: UUID,
+        vaultID: UUID,
+        identity: SelectiveRemoteTeamDeviceIdentity
+    ) async throws -> Int {
+        let remoteEnvelope = try await remote.sharedVault(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        )
+        guard !remoteEnvelope.rotationRequired else {
+            throw SelectiveRemoteTeamVaultSyncError.rotationRequired
+        }
+        guard remoteEnvelope.revision > 0 else { return 0 }
+
+        let remoteVersion = try decryptedRemoteVersion(
+            remoteEnvelope,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
+        let devices = try await remote.teamKeyDevices(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID
+        )
+        guard !devices.isEmpty,
+              devices.count <= 1_024,
+              Set(devices.map(\.deviceID)).count == devices.count,
+              devices.allSatisfy({
+                  $0.membershipID.isSelectiveRemoteCloudUUID
+                      && $0.membershipEpoch > 0
+                      && $0.deviceID.isSelectiveRemoteCloudUUID
+                      && $0.publicKeyAlgorithm == "p256-ecdh-v1"
+              }),
+              let actor = devices.first(where: { $0.deviceID == identity.deviceID }),
+              actor.hasWrapper,
+              actor.membershipID == remoteVersion.wrapper.membershipID,
+              actor.membershipEpoch == remoteVersion.wrapper.membershipEpoch
+        else { throw SelectiveRemoteTeamVaultSyncError.invalidKeyDevices }
+
+        let vaultKey = try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+            remoteVersion.wrapper,
+            with: identity,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: remoteVersion.keyGeneration
+        )
+        var granted = 0
+        for recipient in devices where !recipient.hasWrapper {
+            try Task.checkCancellation()
+            let wrapper = try SelectiveRemoteTeamVaultCrypto.wrapVaultKey(
+                vaultKey,
+                for: recipient.publicKey,
+                context: SelectiveRemoteTeamWrapperContext(
+                    teamID: teamID,
+                    vaultID: vaultID,
+                    keyGeneration: remoteVersion.keyGeneration,
+                    membershipID: recipient.membershipID,
+                    membershipEpoch: recipient.membershipEpoch,
+                    deviceID: recipient.deviceID
+                )
+            )
+            let acknowledgement = try await remote.grantSharedVaultWrapper(
+                endpoint: endpoint,
+                teamID: teamID,
+                vaultID: vaultID,
+                keyGeneration: remoteVersion.keyGeneration,
+                wrapper: wrapper,
+                idempotencyKey: "macos:team-vault:grant:\(UUID().canonicalCloudString)"
+            )
+            guard acknowledgement.granted,
+                  acknowledgement.keyGeneration == remoteVersion.keyGeneration,
+                  acknowledgement.deviceID == recipient.deviceID
+            else {
+                throw SelectiveRemoteTeamVaultSyncError.invalidWrapperGrantAcknowledgement
+            }
+            granted += 1
+        }
+        return granted
     }
 
     func initialize(

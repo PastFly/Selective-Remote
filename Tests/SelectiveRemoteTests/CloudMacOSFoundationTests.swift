@@ -471,6 +471,11 @@ struct CloudMacOSFoundationTests {
         let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
         let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
         let fixture = try Self.fixture()
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
         let token = String(repeating: "t", count: 43)
         let store = SelectiveRemoteCloudMemoryTokenStore()
         try store.saveToken(token, for: endpoint)
@@ -518,6 +523,19 @@ struct CloudMacOSFoundationTests {
                     "createdAt": "2026-09-06T00:00:00.000Z",
                     "updatedAt": "2026-09-06T00:00:00.000Z"
                 ])
+            case ("POST", "/v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)/wrappers"):
+                #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == "macos:team:vault:grant-1")
+                let body = try #require(request.httpBody)
+                let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+                #expect(Set(object.keys) == ["keyGeneration", "wrapper"])
+                #expect(object["keyGeneration"] as? Int == 7)
+                let encodedWrapper = try #require(object["wrapper"] as? [String: Any])
+                #expect(encodedWrapper["deviceID"] as? String == deviceID.canonicalCloudString)
+                return Self.response(request, status: 201, json: [
+                    "granted": true,
+                    "keyGeneration": 7,
+                    "deviceID": deviceID.canonicalCloudString
+                ])
             case ("PUT", "/v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)"):
                 #expect(request.value(forHTTPHeaderField: "Idempotency-Key") == "macos:team:vault:synthetic-1")
                 #expect(request.httpBody.map { String(decoding: $0, as: UTF8.self) }?.contains("schemaVersion") == false)
@@ -539,6 +557,15 @@ struct CloudMacOSFoundationTests {
             teamID: teamID,
             vaultID: vaultID
         ).map(\.deviceID) == [deviceID])
+        let grant = try await client.grantSharedVaultWrapper(
+            endpoint: endpoint,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: 7,
+            wrapper: wrapper,
+            idempotencyKey: "macos:team:vault:grant-1"
+        )
+        #expect(grant == .init(granted: true, keyGeneration: 7, deviceID: deviceID))
         let remote = try await client.sharedVault(endpoint: endpoint, teamID: teamID, vaultID: vaultID)
         let downloadedEnvelope = try remote.payloadEnvelope
         let envelope = try #require(downloadedEnvelope)
@@ -551,6 +578,176 @@ struct CloudMacOSFoundationTests {
             idempotencyKey: "macos:team:vault:synthetic-1"
         )
         #expect(result == .init(conflict: true, revision: 6, keyGeneration: 7, rotationCompleted: nil))
+    }
+
+    @Test("current macOS key holder provisions another admitted device")
+    func teamVaultWrapperProvisioning() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let membershipID = try fixture.wrapper.membershipID.uuid
+        let recipientID = try #require(UUID(uuidString: "55555555-5555-4555-8555-555555555555"))
+        let recipientMembershipID = try #require(
+            UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        )
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let recipient = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: recipientID,
+            privateKeyRepresentation: Data(repeating: 0x03, count: 32)
+        )
+        let actorWrapper = try Self.fixtureWrapper(fixture, identity: identity)
+        let keyDevices: [SelectiveRemoteCloudTeamKeyDevice] = [
+            .init(
+                membershipID: membershipID,
+                membershipEpoch: fixture.wrapper.membershipEpoch,
+                deviceID: deviceID,
+                publicKeyAlgorithm: "p256-ecdh-v1",
+                publicKey: identity.publicKey,
+                hasWrapper: true
+            ),
+            .init(
+                membershipID: recipientMembershipID,
+                membershipEpoch: 1,
+                deviceID: recipientID,
+                publicKeyAlgorithm: "p256-ecdh-v1",
+                publicKey: recipient.publicKey,
+                hasWrapper: false
+            )
+        ]
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(fixture, wrapper: actorWrapper),
+            writeResult: .init(
+                conflict: false,
+                revision: 6,
+                keyGeneration: fixture.wrapper.keyGeneration,
+                rotationCompleted: false
+            ),
+            keyDevices: keyDevices
+        )
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: SelectiveRemoteTeamVaultMemorySnapshotStore()
+        )
+
+        #expect(try await coordinator.provisionMissingWrappers(
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        ) == 1)
+        let grants = await remote.recordedGrants()
+        let grantedWrapper = try #require(grants.first?.wrapper)
+        #expect(grants.count == 1)
+        #expect(grants.first?.keyGeneration == fixture.wrapper.keyGeneration)
+        #expect(grants.first?.idempotencyKey.hasPrefix("macos:team-vault:grant:") == true)
+        #expect(try SelectiveRemoteTeamVaultCrypto.unwrapVaultKey(
+            grantedWrapper,
+            with: recipient,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: fixture.wrapper.keyGeneration
+        ) == fixture.keyWrap.vaultKey.base64URLData)
+    }
+
+    @Test("macOS background cycle provisions wrappers and refreshes ciphertext")
+    func teamVaultBackgroundSync() async throws {
+        let fixture = try Self.fixture()
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let teamID = try fixture.wrapper.teamID.uuid
+        let vaultID = try fixture.wrapper.vaultID.uuid
+        let deviceID = try fixture.wrapper.deviceID.uuid
+        let membershipID = try fixture.wrapper.membershipID.uuid
+        let recipientID = try #require(UUID(uuidString: "55555555-5555-4555-8555-555555555555"))
+        let recipientMembershipID = try #require(
+            UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+        )
+        let identity = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: deviceID,
+            privateKeyRepresentation: try fixture.keyWrap.recipientPrivateScalar.base64URLData
+        )
+        let recipient = try SelectiveRemoteTeamDeviceIdentity(
+            deviceID: recipientID,
+            privateKeyRepresentation: Data(repeating: 0x03, count: 32)
+        )
+        let team = SelectiveRemoteCloudTeam(
+            id: teamID,
+            name: "Platform",
+            membershipID: membershipID,
+            role: .viewer,
+            membershipEpoch: fixture.wrapper.membershipEpoch,
+            createdAt: "2026-09-09T00:00:00.000Z",
+            updatedAt: "2026-09-09T00:00:00.000Z"
+        )
+        let vault = SelectiveRemoteCloudSharedVault(
+            id: vaultID,
+            teamID: teamID,
+            name: "Operations",
+            revision: fixture.payload.baseRevision + 1,
+            keyGeneration: fixture.wrapper.keyGeneration,
+            rotationRequired: false,
+            createdAt: "2026-09-09T00:00:00.000Z",
+            updatedAt: "2026-09-09T00:00:00.000Z"
+        )
+        let remote = TeamVaultRemoteStub(
+            envelope: Self.remoteEnvelope(
+                fixture,
+                wrapper: try Self.fixtureWrapper(fixture, identity: identity)
+            ),
+            writeResult: .init(
+                conflict: false,
+                revision: 6,
+                keyGeneration: fixture.wrapper.keyGeneration,
+                rotationCompleted: false
+            ),
+            teams: [team],
+            vaults: [vault],
+            keyDevices: [
+                .init(
+                    membershipID: membershipID,
+                    membershipEpoch: fixture.wrapper.membershipEpoch,
+                    deviceID: deviceID,
+                    publicKeyAlgorithm: "p256-ecdh-v1",
+                    publicKey: identity.publicKey,
+                    hasWrapper: true
+                ),
+                .init(
+                    membershipID: recipientMembershipID,
+                    membershipEpoch: 1,
+                    deviceID: recipientID,
+                    publicKeyAlgorithm: "p256-ecdh-v1",
+                    publicKey: recipient.publicKey,
+                    hasWrapper: false
+                )
+            ]
+        )
+        let keyStore = SelectiveRemoteTeamDeviceMemoryKeyStore()
+        _ = try keyStore.savePrivateKeyIfAbsent(
+            try fixture.keyWrap.recipientPrivateScalar.base64URLData,
+            for: endpoint,
+            deviceID: deviceID
+        )
+        let snapshots = SelectiveRemoteTeamVaultMemorySnapshotStore()
+        let autoSync = SelectiveRemoteTeamVaultAutoSync(
+            remote: remote,
+            identityManager: SelectiveRemoteTeamDeviceIdentityManager(store: keyStore),
+            snapshotStore: { snapshots }
+        )
+
+        let report = try await autoSync.synchronizeOnce(
+            endpoint: endpoint,
+            deviceID: deviceID
+        )
+        #expect(report.scannedVaults == 1)
+        #expect(report.synchronizedVaults == 1)
+        #expect(report.wrappersGranted == 1)
+        #expect(report.pendingWrappers == 0)
+        #expect(report.failures == 0)
+        #expect(try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) != nil)
     }
 
     @Test("Team Vault coordinator stages and acknowledges one causal upload")
@@ -1268,9 +1465,15 @@ private actor TeamVaultReadBarrier {
     }
 }
 
-private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
+private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultAutoSyncRemote {
     struct RecordedWrite: Equatable, Sendable {
         let upload: SelectiveRemoteCloudTeamVaultUpload
+        let idempotencyKey: String
+    }
+
+    struct RecordedGrant: Equatable, Sendable {
+        let wrapper: SelectiveRemoteTeamVaultKeyWrapper
+        let keyGeneration: Int
         let idempotencyKey: String
     }
 
@@ -1279,13 +1482,72 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
     private var writeFailure: TeamVaultRemoteStubFailure?
     private var readBarrier: TeamVaultReadBarrier?
     private var writes: [RecordedWrite] = []
+    private var grants: [RecordedGrant] = []
+    private var teamValues: [SelectiveRemoteCloudTeam]
+    private var vaultValues: [SelectiveRemoteCloudSharedVault]
+    private var keyDeviceValues: [SelectiveRemoteCloudTeamKeyDevice]
 
     init(
         envelope: SelectiveRemoteCloudSharedVaultEnvelope,
-        writeResult: SelectiveRemoteCloudTeamVaultWriteResult
+        writeResult: SelectiveRemoteCloudTeamVaultWriteResult,
+        teams: [SelectiveRemoteCloudTeam] = [],
+        vaults: [SelectiveRemoteCloudSharedVault] = [],
+        keyDevices: [SelectiveRemoteCloudTeamKeyDevice] = []
     ) {
         self.envelope = envelope
         self.writeResult = writeResult
+        teamValues = teams
+        vaultValues = vaults
+        keyDeviceValues = keyDevices
+    }
+
+    func hasStoredSession(endpoint _: URL) async -> Bool {
+        true
+    }
+
+    func teams(endpoint _: URL) async throws -> [SelectiveRemoteCloudTeam] {
+        teamValues
+    }
+
+    func sharedVaults(
+        endpoint _: URL,
+        teamID: UUID
+    ) async throws -> [SelectiveRemoteCloudSharedVault] {
+        #expect(vaultValues.allSatisfy { $0.teamID == teamID })
+        return vaultValues
+    }
+
+    func teamKeyDevices(
+        endpoint _: URL,
+        teamID: UUID,
+        vaultID: UUID
+    ) async throws -> [SelectiveRemoteCloudTeamKeyDevice] {
+        #expect(envelope.teamID == teamID)
+        #expect(envelope.id == vaultID)
+        return keyDeviceValues
+    }
+
+    func grantSharedVaultWrapper(
+        endpoint _: URL,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int,
+        wrapper: SelectiveRemoteTeamVaultKeyWrapper,
+        idempotencyKey: String
+    ) async throws -> SelectiveRemoteCloudTeamVaultWrapperGrant {
+        #expect(envelope.teamID == teamID)
+        #expect(envelope.id == vaultID)
+        #expect(envelope.keyGeneration == keyGeneration)
+        guard let index = keyDeviceValues.firstIndex(where: { $0.deviceID == wrapper.deviceID }) else {
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        grants.append(.init(
+            wrapper: wrapper,
+            keyGeneration: keyGeneration,
+            idempotencyKey: idempotencyKey
+        ))
+        keyDeviceValues[index].hasWrapper = true
+        return .init(granted: true, keyGeneration: keyGeneration, deviceID: wrapper.deviceID)
     }
 
     func sharedVault(
@@ -1336,6 +1598,10 @@ private actor TeamVaultRemoteStub: SelectiveRemoteTeamVaultRemote {
 
     func recordedWrites() -> [RecordedWrite] {
         writes
+    }
+
+    func recordedGrants() -> [RecordedGrant] {
+        grants
     }
 }
 

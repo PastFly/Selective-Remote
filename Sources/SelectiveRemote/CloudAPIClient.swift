@@ -220,6 +220,12 @@ struct SelectiveRemoteCloudTeamVaultWriteResult: Equatable, Sendable {
     var rotationCompleted: Bool?
 }
 
+struct SelectiveRemoteCloudTeamVaultWrapperGrant: Equatable, Sendable {
+    var granted: Bool
+    var keyGeneration: Int
+    var deviceID: UUID
+}
+
 struct SelectiveRemoteCloudDeviceRegistration: Codable, Equatable, Sendable {
     var id: UUID
     var name: String
@@ -695,6 +701,53 @@ actor SelectiveRemoteCloudAPIClient {
         return result.devices
     }
 
+    func grantSharedVaultWrapper(
+        endpoint: URL,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int,
+        wrapper: SelectiveRemoteTeamVaultKeyWrapper,
+        idempotencyKey: String
+    ) async throws -> SelectiveRemoteCloudTeamVaultWrapperGrant {
+        let wrapperIsValid = (try? Self.validWrapper(
+            wrapper,
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: keyGeneration
+        )) == true
+        guard teamID.isSelectiveRemoteCloudUUID,
+              vaultID.isSelectiveRemoteCloudUUID,
+              keyGeneration > 0,
+              Self.validIdempotencyKey(idempotencyKey),
+              wrapperIsValid
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)/wrappers",
+            method: "POST",
+            body: try encoder.encode(TeamVaultWrapperGrantRequest(
+                keyGeneration: keyGeneration,
+                wrapper: wrapper
+            )),
+            headers: ["Idempotency-Key": idempotencyKey]
+        )
+        guard http.statusCode == 201 else {
+            throw serviceError(status: http.statusCode, data: data)
+        }
+        guard Self.validTeamVaultWrapperGrantJSON(data),
+              let response = try? decoder.decode(TeamVaultWrapperGrantResponse.self, from: data),
+              response.granted,
+              response.keyGeneration == keyGeneration,
+              response.deviceID == wrapper.deviceID
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return .init(
+            granted: true,
+            keyGeneration: response.keyGeneration,
+            deviceID: response.deviceID
+        )
+    }
+
     func sharedVault(
         endpoint: URL,
         teamID: UUID,
@@ -1047,6 +1100,11 @@ actor SelectiveRemoteCloudAPIClient {
         return devices.allSatisfy { exactKeys($0, expected: keys) }
     }
 
+    private static func validTeamVaultWrapperGrantJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
+        return exactKeys(object, expected: ["granted", "keyGeneration", "deviceID"])
+    }
+
     private static func validSharedVaultEnvelopeJSON(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
         return exactKeys(object, expected: [
@@ -1098,6 +1156,23 @@ actor SelectiveRemoteCloudAPIClient {
             && value.range(of: "^[A-Za-z0-9._:-]+$", options: .regularExpression) != nil
     }
 
+    private static func validWrapper(
+        _ wrapper: SelectiveRemoteTeamVaultKeyWrapper,
+        teamID: UUID,
+        vaultID: UUID,
+        keyGeneration: Int
+    ) throws -> Bool {
+        let context = try SelectiveRemoteTeamWrapperContext(
+            teamID: teamID,
+            vaultID: vaultID,
+            keyGeneration: keyGeneration,
+            membershipID: wrapper.membershipID,
+            membershipEpoch: wrapper.membershipEpoch,
+            deviceID: wrapper.deviceID
+        )
+        return wrapper.contextHash == SelectiveRemoteTeamVaultCrypto.wrapperContextHash(context)
+    }
+
     private static func validUpload(
         _ upload: SelectiveRemoteCloudTeamVaultUpload,
         teamID: UUID,
@@ -1108,16 +1183,13 @@ actor SelectiveRemoteCloudAPIClient {
               wrappers.count <= 1_024,
               Set(wrappers.map(\.deviceID)).count == wrappers.count
         else { return false }
-        return try wrappers.allSatisfy { wrapper in
-            let context = try SelectiveRemoteTeamWrapperContext(
+        return try wrappers.allSatisfy {
+            try validWrapper(
+                $0,
                 teamID: teamID,
                 vaultID: vaultID,
-                keyGeneration: upload.envelope.keyGeneration,
-                membershipID: wrapper.membershipID,
-                membershipEpoch: wrapper.membershipEpoch,
-                deviceID: wrapper.deviceID
+                keyGeneration: upload.envelope.keyGeneration
             )
-            return wrapper.contextHash == SelectiveRemoteTeamVaultCrypto.wrapperContextHash(context)
         }
     }
 
@@ -1238,6 +1310,17 @@ private struct SharedVaultsResponse: Decodable {
 
 private struct TeamKeyDevicesResponse: Decodable {
     var devices: [SelectiveRemoteCloudTeamKeyDevice]
+}
+
+private struct TeamVaultWrapperGrantRequest: Encodable {
+    var keyGeneration: Int
+    var wrapper: SelectiveRemoteTeamVaultKeyWrapper
+}
+
+private struct TeamVaultWrapperGrantResponse: Decodable {
+    var granted: Bool
+    var keyGeneration: Int
+    var deviceID: UUID
 }
 
 private struct TeamVaultWriteResponse: Decodable {
