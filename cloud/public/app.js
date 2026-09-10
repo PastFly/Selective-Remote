@@ -1447,6 +1447,12 @@ export function initializeTeamWorkspace({
   };
 }
 
+export function accountVaultPassphrase(password) {
+  const normalized = String(password ?? "").normalize("NFC");
+  if (new TextEncoder().encode(normalized).length < 12) throw new Error("invalid_account_password");
+  return `selective-remote:account-password:v1:${normalized}`;
+}
+
 export async function initializeCloudAccount({
   documentValue = document,
   vaultUI,
@@ -1487,6 +1493,7 @@ export async function initializeCloudAccount({
   const teamWorkspace = initializeTeamWorkspace({ documentValue, client, initialInvitationToken: initialTeamInvitationToken });
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
+  let backgroundSyncing = false;
   vaultUI.setConflictResetListener(() => {
     activeConflicts = null;
     conflictApply.disabled = true;
@@ -1497,6 +1504,44 @@ export async function initializeCloudAccount({
     message.classList.toggle("error", tone === "error");
     message.classList.toggle("success", tone === "success");
   }
+
+  async function unlockAndSyncPersonalVault(password) {
+    const passphrase = accountVaultPassphrase(password);
+    let status = await vault.status();
+    if (status === "locked") {
+      await vault.unlock(passphrase);
+      status = "unlocked";
+    }
+    let result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
+    if (status === "empty" && result.status === "empty") {
+      await vault.create(passphrase);
+      result = await synchronizeVault({ client, vault });
+    }
+    vaultUI.mode("unlocked");
+    vaultUI.render();
+    return result;
+  }
+
+  async function backgroundPersonalVaultSync() {
+    if (backgroundSyncing || !client.session() || await vault.status() !== "unlocked") return;
+    backgroundSyncing = true;
+    try {
+      const result = await synchronizeVault({ client, vault });
+      if (result.status === "conflict") renderConflicts(result);
+      else if (result.status !== "remote_changed") hideConflicts();
+      vaultUI.render();
+    } catch {
+      // Manual sync keeps the actionable error path; background failures never discard local state.
+    } finally {
+      backgroundSyncing = false;
+    }
+  }
+
+  const personalVaultTimer = globalThis.setInterval(
+    () => { void backgroundPersonalVaultSync(); },
+    15_000
+  );
+  personalVaultTimer?.unref?.();
 
   function setAuthMode(mode) {
     const registrationAvailable = metadata?.registrationEnabled === true;
@@ -1660,6 +1705,13 @@ export async function initializeCloudAccount({
         deviceID,
         publicKey: identity?.publicKey ?? null,
       });
+      let personalVaultReady = false;
+      try {
+        await unlockAndSyncPersonalVault(password);
+        personalVaultReady = true;
+      } catch {
+        // Vaults created before account-password enrollment retain Recovery fallback.
+      }
       if (identity) {
         try {
           await client.bootstrapDeviceKey({
@@ -1683,6 +1735,12 @@ export async function initializeCloudAccount({
           setText(message, "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.");
         }
       }
+      setText(
+        vaultMessage,
+        personalVaultReady
+          ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
+          : "Для ранее созданного Personal Vault один раз введите Recovery-фразу; новые входы используют пароль аккаунта."
+      );
     } catch (error) {
       const code = String(error?.message ?? "");
       const messages = {
@@ -1701,6 +1759,7 @@ export async function initializeCloudAccount({
     try {
       await client.logout();
     } finally {
+      vault.lock();
       showSession(null);
       teamWorkspace?.deactivate();
       hideConflicts();
@@ -1726,6 +1785,7 @@ export async function initializeCloudAccount({
       deleteAccountForm.reset();
       teamWorkspace?.deactivate();
       hideConflicts();
+      vault.lock();
       await vaultUI.hideRecoveryAndRestoreMode();
       showSession(null);
       setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
