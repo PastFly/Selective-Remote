@@ -122,7 +122,8 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         password: String,
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
-        forwarding: [IndependentPortForward]
+        forwarding: [IndependentPortForward],
+        credentials: [SelectiveRemotePersonalVaultCredentialInput] = []
     ) async throws -> Int {
         let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
         let remote = try await client.personalVault(endpoint: endpoint)
@@ -130,7 +131,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         if remote.revision == 0 {
             let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
                 profiles: profiles,
-                credentials: [],
+                credentials: credentials,
                 snippets: snippets,
                 forwarding: forwarding,
                 deviceID: deviceID,
@@ -223,7 +224,10 @@ actor SelectiveRemotePersonalVaultAutoSync {
         else { return }
         let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
             profiles: profiles,
-            credentials: [],
+            credentials: try await SelectiveRemotePersonalVaultCredentialCollector.shared.collect(
+                profiles: profiles,
+                forwarding: forwarding
+            ),
             snippets: snippets,
             forwarding: forwarding,
             deviceID: deviceID,
@@ -266,8 +270,11 @@ actor SelectiveRemotePersonalVaultAutoSync {
             throw SelectiveRemotePersonalVaultError.invalidEnvelope
         }
         let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
+        let localCredentialIDs = Set(local.records.lazy.filter { $0.type == .credential }.map(\.id))
         let credentials = current.records.filter {
-            $0.type == .credential && credentialSourceID($0).map(profileIDs.contains) == true
+            $0.type == .credential
+                && !localCredentialIDs.contains($0.id)
+                && credentialSourceID($0).map(profileIDs.contains) == true
         }
         return try .init(
             records: local.records + credentials,
