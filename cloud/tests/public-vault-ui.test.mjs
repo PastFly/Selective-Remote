@@ -143,6 +143,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /id="team-devices"/u);
   assert.match(html, /id="team-vault-rotate"[^>]*hidden/u);
+  assert.match(html, /недостающие wrappers синхронизируются автоматически/u);
+  assert.match(html, /id="team-vault-grant-wrappers"[^>]*>Повторить выдачу wrappers/u);
+  assert.match(html, /id="team-vault-sync"[^>]*>Синхронизировать сейчас/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
   assert.match(html, /id="workspace-overview"/u);
@@ -191,6 +194,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
+  assert.match(application, /provisionTeamVaultWrappers/u);
+  assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
+  assert.match(application, /documentValue\.visibilityState === "hidden"/u);
+  assert.match(application, /runBackgroundTeamVaultSync/u);
+  assert.match(teamSynchronization, /export async function provisionTeamVaultWrappers/u);
   assert.match(application, /rotateTeamVault/u);
   assert.match(application, /teamDevicePublicKeyFingerprint/u);
   assert.match(application, /client\.approveDeviceKey/u);

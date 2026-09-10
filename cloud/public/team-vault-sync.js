@@ -727,6 +727,38 @@ async function uploadCurrent({ client, controller, scope, baseRevision }) {
   return { status: state.dirty ? "uploaded_with_new_local_changes" : "uploaded", revision: result.revision };
 }
 
+export async function provisionTeamVaultWrappers({ client, controller } = {}) {
+  if (!client?.session()) throw new Error("authentication_required");
+  if (!controller || typeof controller.prepareWrapper !== "function"
+    || typeof controller.syncState !== "function") {
+    throw new Error("invalid_team_vault_controller");
+  }
+  const scope = controller.scope;
+  const state = await controller.syncState();
+  const keyDevices = await client.listTeamKeyDevices(scope);
+  if (!keyDevices || !Array.isArray(keyDevices.devices) || keyDevices.devices.length > 1_024) {
+    throw new Error("invalid_team_key_devices");
+  }
+  const missing = keyDevices.devices.filter((device) => device.hasWrapper === false);
+  let granted = 0;
+  for (const recipient of missing) {
+    const wrapper = await controller.prepareWrapper(recipient);
+    await client.grantTeamVaultWrapper(
+      scope,
+      { keyGeneration: state.keyGeneration, wrapper },
+      `web:team:vault:grant:${globalThis.crypto.randomUUID()}`,
+    );
+    granted += 1;
+  }
+  return {
+    status: missing.length === 0 ? "up_to_date" : "provisioned",
+    keyGeneration: state.keyGeneration,
+    eligible: keyDevices.devices.length,
+    missing: missing.length,
+    granted,
+  };
+}
+
 export async function synchronizeTeamVault({ client, controller, role } = {}) {
   if (!client?.session()) throw new Error("authentication_required");
   if (!controller || typeof controller.status !== "function") throw new Error("invalid_team_vault_controller");

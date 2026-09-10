@@ -21,7 +21,11 @@ a Team- and membership-epoch-scoped admission for only the authenticated
 session's registered P-256 device; it does not grant account-wide device trust.
 Any active member device that already holds the current Vault wrapper can then
 provision missing current-generation wrappers for other active authorized Team
-devices. Owners can rename Teams,
+devices. Once a browser opens and unlocks a Team Vault, a bounded 15-second
+background cycle pulls or conditionally uploads causal revisions and
+idempotently provisions missing wrappers. Explicit conflicts and required
+rotation still stop writes; “sync now” and wrapper delivery remain recovery
+actions. Owners can rename Teams,
 atomically transfer ownership after password re-authentication, and archive a
 Team behind exact-name confirmation. Archiving immediately closes Team access,
 retires pending invitations/outbox work and rotation tasks, soft-archives its
