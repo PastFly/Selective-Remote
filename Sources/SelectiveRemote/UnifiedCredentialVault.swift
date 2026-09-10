@@ -75,6 +75,24 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         suppressedLegacy = suppressed
     }
 
+    func save(_ entries: [(reference: KeychainCredentialReference, secret: String)]) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var secrets = try loadIfNeeded()
+        var updatedIndex = index
+        var suppressed = suppressedLegacy
+        for entry in entries {
+            let key = Self.entryKey(for: entry.reference)
+            secrets[key] = entry.secret
+            updatedIndex.insert(key)
+            suppressed.remove(key)
+        }
+        try persist(secrets)
+        cachedSecrets = secrets
+        index = updatedIndex
+        suppressedLegacy = suppressed
+    }
+
     func delete(reference: KeychainCredentialReference) throws {
         lock.lock()
         defer { lock.unlock() }
