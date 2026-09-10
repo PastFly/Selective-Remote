@@ -376,3 +376,18 @@ test("macOS Team Hosts nest teams and folders and expose SSH tools", async () =>
   assert.match(sftp, /let temporaryPassword: String\?/u);
   assert.match(sftp, /temporaryPassword: request\.temporaryPassword/u);
 });
+
+
+test("macOS Team Host personal settings preserve per-Mac display selection", async () => {
+  const personal = await readFile(
+    new URL("CloudTeamHostPersonalSettings.swift", sourceRoot),
+    "utf8",
+  );
+  assert.match(personal, /var selectedDisplayIDs: Set<String>\?/u);
+  assert.match(personal, /DisplayManager\(\)\.currentDisplays\(\)/u);
+  assert.match(personal, /MonitorMapView\(/u);
+  assert.match(personal, /profile\.selectedDisplayIDs = selectedDisplayIDs/u);
+  assert.match(personal, /profile\.primaryDisplayID = primaryDisplayID/u);
+  assert.match(personal, /private func toggleDisplay/u);
+  assert.match(personal, /guard selected\.count > 1/u);
+});
