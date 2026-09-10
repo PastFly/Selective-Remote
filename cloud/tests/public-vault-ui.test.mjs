@@ -159,6 +159,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /Recovery-действия появляются только при безопасно устранимом блокере/u);
   assert.match(html, /id="team-vault-grant-wrappers"[^>]*hidden[^>]*>Повторить безопасную выдачу wrappers/u);
   assert.match(html, /id="team-vault-sync"[^>]*hidden[^>]*>Повторить безопасную синхронизацию/u);
+  assert.equal((html.match(/aria-describedby="team-vault-workspace-status"/gu) ?? []).length, 2);
   assert.doesNotMatch(html, /Синхронизировать сейчас/u);
   assert.match(html, /id="team-vault-record-form"/u);
   assert.match(html, /id="team-vault-conflicts-form"/u);
