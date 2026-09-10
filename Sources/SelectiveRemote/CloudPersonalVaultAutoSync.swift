@@ -37,10 +37,18 @@ protocol SelectiveRemotePersonalVaultKeyStore: Sendable {
 }
 
 struct SelectiveRemotePersonalVaultKeychainStore: SelectiveRemotePersonalVaultKeyStore {
-    static let service = "local.selectiveremote.cloud.personal-vault-key.v1"
+    static let legacyService = "local.selectiveremote.cloud.personal-vault-key.v1"
+    static let service = legacyService
+    private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
     func material(endpoint: URL, deviceID: UUID) throws -> SelectiveRemotePersonalVaultKeyMaterial? {
-        let query = baseQuery(endpoint: endpoint, deviceID: deviceID).merging([
+        let key = deviceID.uuidString.lowercased()
+        if let data = try envelopeStore.envelope(for: endpoint)?
+            .personalVaultKeyMaterials[key] {
+            do { return try JSONDecoder().decode(SelectiveRemotePersonalVaultKeyMaterial.self, from: data) }
+            catch { throw KeychainError.invalidData }
+        }
+        let query = legacyQuery(endpoint: endpoint, deviceID: deviceID).merging([
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]) { _, new in new }
@@ -50,35 +58,42 @@ struct SelectiveRemotePersonalVaultKeychainStore: SelectiveRemotePersonalVaultKe
         guard status == errSecSuccess, let data = result as? Data else {
             throw status == errSecSuccess ? KeychainError.invalidData : KeychainError.unexpectedStatus(status)
         }
-        do { return try JSONDecoder().decode(SelectiveRemotePersonalVaultKeyMaterial.self, from: data) }
+        do {
+            let material = try JSONDecoder().decode(SelectiveRemotePersonalVaultKeyMaterial.self, from: data)
+            try save(material, endpoint: endpoint, deviceID: deviceID)
+            try? removeLegacy(endpoint: endpoint, deviceID: deviceID)
+            return material
+        } catch let error as KeychainError { throw error }
         catch { throw KeychainError.invalidData }
     }
 
     func save(_ material: SelectiveRemotePersonalVaultKeyMaterial, endpoint: URL, deviceID: UUID) throws {
         let data = try JSONEncoder().encode(material)
-        let query = baseQuery(endpoint: endpoint, deviceID: deviceID)
-        let updateStatus = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
-        if updateStatus == errSecSuccess { return }
-        guard updateStatus == errSecItemNotFound else { throw KeychainError.unexpectedStatus(updateStatus) }
-        let item = query.merging([
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        ]) { _, new in new }
-        let addStatus = SecItemAdd(item as CFDictionary, nil)
-        guard addStatus == errSecSuccess else { throw KeychainError.unexpectedStatus(addStatus) }
+        let key = deviceID.uuidString.lowercased()
+        try envelopeStore.update(for: endpoint) {
+            $0.personalVaultKeyMaterials[key] = data
+        }
     }
 
     func remove(endpoint: URL, deviceID: UUID) throws {
-        let status = SecItemDelete(baseQuery(endpoint: endpoint, deviceID: deviceID) as CFDictionary)
+        let key = deviceID.uuidString.lowercased()
+        try envelopeStore.update(for: endpoint) {
+            $0.personalVaultKeyMaterials.removeValue(forKey: key)
+        }
+        try? removeLegacy(endpoint: endpoint, deviceID: deviceID)
+    }
+
+    private func removeLegacy(endpoint: URL, deviceID: UUID) throws {
+        let status = SecItemDelete(legacyQuery(endpoint: endpoint, deviceID: deviceID) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
         }
     }
 
-    private func baseQuery(endpoint: URL, deviceID: UUID) -> [String: Any] {
+    private func legacyQuery(endpoint: URL, deviceID: UUID) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: Self.legacyService,
             kSecAttrAccount as String: "\(endpoint.absoluteString)|\(deviceID.uuidString.lowercased())"
         ]
     }
@@ -126,7 +141,6 @@ actor SelectiveRemotePersonalVaultAutoSync {
         forwarding: [IndependentPortForward]
     ) async throws {
         guard var material = try keyStore.material(endpoint: endpoint, deviceID: deviceID),
-              !material.includesCredentials,
               await client.hasStoredSession(endpoint: endpoint)
         else { return }
         let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
@@ -137,14 +151,20 @@ actor SelectiveRemotePersonalVaultAutoSync {
             deviceID: deviceID,
             allowEmpty: true
         )
-        let documentHash = Data(SHA256.hash(data: try exported.document.encoded()))
-        guard documentHash != material.documentHash else { return }
         let remote = try await client.personalVault(endpoint: endpoint)
         guard remote.id == material.vaultID, remote.revision == material.revision else {
             throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
         }
+        let document = try mergedDocument(
+            local: exported.document,
+            remote: remote,
+            vaultKey: material.vaultKey,
+            profileIDs: Set(profiles.map(\.id))
+        )
+        let documentHash = Data(SHA256.hash(data: try document.encoded()))
+        guard documentHash != material.documentHash else { return }
         let envelope = try SelectiveRemotePersonalVaultCrypto.reseal(
-            exported.document,
+            document,
             vaultKey: material.vaultKey,
             wrappedKey: material.wrappedKey,
             baseRevision: remote.revision
@@ -156,5 +176,31 @@ actor SelectiveRemotePersonalVaultAutoSync {
         material.revision = result.revision
         material.documentHash = documentHash
         try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+    }
+
+    private func mergedDocument(
+        local: SelectiveRemoteVaultDocument,
+        remote: SelectiveRemoteCloudPersonalVault,
+        vaultKey: Data,
+        profileIDs: Set<UUID>
+    ) throws -> SelectiveRemoteVaultDocument {
+        guard let envelope = remote.envelope else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
+        let credentials = current.records.filter {
+            $0.type == .credential && credentialSourceID($0).map(profileIDs.contains) == true
+        }
+        return try .init(
+            records: local.records + credentials,
+            tombstones: current.tombstones
+        )
+    }
+
+    private func credentialSourceID(_ record: SelectiveRemoteVaultRecord) -> UUID? {
+        guard case let .object(data) = record.data,
+              case let .string(source)? = data["sourceID"]
+        else { return nil }
+        return UUID(uuidString: source)
     }
 }
