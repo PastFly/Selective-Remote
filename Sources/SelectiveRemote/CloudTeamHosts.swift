@@ -444,9 +444,23 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""
+    @State private var editorRequest: SelectiveRemoteTeamHostEditorRequest?
+    @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
+    @State private var isMutating = false
+    @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1") private var endpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
+
+    private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
 
     private var selectedHost: SelectiveRemoteTeamHost? {
         store.hosts.first(where: { $0.id == selectedHostID })
+    }
+
+    private var writableVaults: [SelectiveRemoteTeamHostVaultContext] {
+        store.vaults.filter {
+            SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
+        }
     }
 
     var body: some View {
@@ -502,6 +516,29 @@ struct SelectiveRemoteTeamHostsView: View {
                         Text(lastUpdatedAt, style: .time)
                     }
                     Spacer()
+                    Menu {
+                        ForEach(writableVaults) { vault in
+                            Button("\(vault.teamName) / \(vault.vaultName)") {
+                                editorRequest = .init(context: vault, host: nil)
+                            }
+                        }
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"),
+                            systemImage: "plus"
+                        )
+                    }
+                    .disabled(writableVaults.isEmpty || isMutating)
+                    .help(writableVaults.isEmpty
+                        ? UpdateLocalization.text(
+                            ru: "Нет синхронизированного Team Vault с правом записи",
+                            en: "No synchronized writable Team Vault"
+                        )
+                        : UpdateLocalization.text(
+                            ru: "Добавить Host в Team Vault",
+                            en: "Add a Host to a Team Vault"
+                        )
+                    )
                     if store.invalidVaultCount > 0 {
                         Label(
                             "\(store.invalidVaultCount)",
@@ -535,6 +572,66 @@ struct SelectiveRemoteTeamHostsView: View {
         .onAppear { normalizeSelection() }
         .onChange(of: store.hosts.map(\.id)) { _, _ in normalizeSelection() }
         .onChange(of: selectedHostID) { _, _ in resetConnectionFields() }
+        .sheet(item: $editorRequest) { request in
+            SelectiveRemoteTeamHostEditorView(request: request) { profile in
+                mutate(
+                    request.host.map {
+                        .update(recordID: $0.recordID, profile: profile)
+                    } ?? .create(profile),
+                    context: request.context,
+                    selectedRecordID: profile.id
+                )
+            }
+        }
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Удалить Team Host?", en: "Delete Team Host?"),
+            isPresented: Binding(
+                get: { hostPendingDeletion != nil },
+                set: { if !$0 { hostPendingDeletion = nil } }
+            ),
+            presenting: hostPendingDeletion
+        ) { host in
+            Button(
+                UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                role: .destructive
+            ) {
+                if let context = context(for: host) {
+                    mutate(
+                        .delete(recordID: host.recordID),
+                        context: context,
+                        selectedRecordID: nil
+                    )
+                }
+                hostPendingDeletion = nil
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        } message: { host in
+            Text(host.profile.friendlyName)
+        }
+        .alert(item: $mutationMessage) { value in
+            Alert(
+                title: Text(value.isError
+                    ? UpdateLocalization.text(ru: "Team Host не изменён", en: "Team Host Not Changed")
+                    : UpdateLocalization.text(ru: "Team Host обновлён", en: "Team Host Updated")
+                ),
+                message: Text(value.text),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .overlay {
+            if isMutating {
+                ZStack {
+                    Color.black.opacity(0.12)
+                    ProgressView(UpdateLocalization.text(
+                        ru: "Шифрование и синхронизация…",
+                        en: "Encrypting and synchronizing…"
+                    ))
+                    .padding(18)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .ignoresSafeArea()
+            }
+        }
     }
 
     private func hostDetail(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -554,6 +651,25 @@ struct SelectiveRemoteTeamHostsView: View {
                             .textSelection(.enabled)
                     }
                     Spacer()
+                    if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                        Button(
+                            UpdateLocalization.text(ru: "Изменить", en: "Edit"),
+                            systemImage: "pencil"
+                        ) {
+                            if let context = context(for: host) {
+                                editorRequest = .init(context: context, host: host)
+                            }
+                        }
+                        .disabled(isMutating)
+                        Button(
+                            UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                            systemImage: "trash",
+                            role: .destructive
+                        ) {
+                            hostPendingDeletion = host
+                        }
+                        .disabled(isMutating)
+                    }
                     Text(roleTitle(host.role))
                         .font(.caption.bold())
                         .padding(.horizontal, 9)
@@ -658,6 +774,70 @@ struct SelectiveRemoteTeamHostsView: View {
             .frame(maxWidth: 900, alignment: .leading)
             .padding(24)
         }
+    }
+
+    private func context(
+        for host: SelectiveRemoteTeamHost
+    ) -> SelectiveRemoteTeamHostVaultContext? {
+        store.vaults.first {
+            $0.teamID == host.teamID && $0.vaultID == host.vaultID
+        }
+    }
+
+    private func mutate(
+        _ change: SelectiveRemoteTeamHostMutationChange,
+        context: SelectiveRemoteTeamHostVaultContext,
+        selectedRecordID: UUID?
+    ) {
+        guard !isMutating else { return }
+        isMutating = true
+        Task { @MainActor in
+            defer { isMutating = false }
+            do {
+                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let deviceID = resolvedDeviceID()
+                let identity = try await identityManager.identity(
+                    endpoint: url,
+                    deviceID: deviceID
+                )
+                let service = try SelectiveRemoteTeamHostMutationService()
+                let snapshot = try await service.apply(
+                    change,
+                    to: context,
+                    endpoint: url,
+                    identity: identity
+                )
+                store.replaceVault(with: snapshot)
+                if let selectedRecordID {
+                    selectedHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                        teamID: context.teamID,
+                        vaultID: context.vaultID,
+                        recordID: selectedRecordID
+                    )
+                } else {
+                    selectedHostID = nil
+                }
+                mutationMessage = .init(
+                    text: UpdateLocalization.text(
+                        ru: "Зашифрованная Team Vault ревизия синхронизирована.",
+                        en: "The encrypted Team Vault revision was synchronized."
+                    ),
+                    isError: false
+                )
+            } catch {
+                mutationMessage = .init(text: error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    private func resolvedDeviceID() -> UUID {
+        if let value = UUID(uuidString: storedDeviceID),
+           value.isSelectiveRemoteCloudUUID {
+            return value
+        }
+        let value = UUID()
+        storedDeviceID = value.canonicalCloudString
+        return value
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {

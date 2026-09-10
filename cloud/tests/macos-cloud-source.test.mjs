@@ -300,3 +300,25 @@ test("macOS projects Team Hosts separately and connects without Personal persist
   assert.match(terminal, /var isEphemeral: Bool/);
   assert.match(terminal, /tabs\.filter \{ !\$0\.isEphemeral \}\.map/);
 });
+
+
+test("macOS Team Host controls expose writes only through the encrypted role-aware service", async () => {
+  const [hosts, editor, mutation] = await Promise.all([
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostMutation.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(hosts, /writableVaults[\s\S]*isWritable\(role:/u);
+  assert.match(hosts, /if SelectiveRemoteTeamHostDocumentMutation\.isWritable\(role: host\.role\)/u);
+  assert.match(hosts, /\.create\(profile\)/u);
+  assert.match(hosts, /\.update\(recordID:/u);
+  assert.match(hosts, /\.delete\(recordID:/u);
+  assert.match(hosts, /store\.replaceVault\(with: snapshot\)/u);
+  assert.doesNotMatch(hosts, /model\.profiles|profiles\.append/u);
+  assert.match(editor, /Passwords and Personal Vault references are not saved/u);
+  assert.doesNotMatch(editor, /SecureField|password/u);
+  assert.match(mutation, /case \.readOnlyRole/u);
+  assert.match(mutation, /coordinator\.refresh/u);
+  assert.match(mutation, /coordinator\.stage/u);
+  assert.match(mutation, /coordinator\.push/u);
+});
