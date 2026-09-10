@@ -54,6 +54,9 @@ struct CloudTeamHostsTests {
         profile.friendlyName = unicodeTitle
         profile.host = "ops.example.invalid"
         profile.username = "operator"
+        profile.group = "Production / Linux"
+        profile.tags = ["critical", "eu-west"]
+        profile.profileDescription = "Shared bastion"
         profile.sshPort = 2_222
         profile.sshIdentityID = UUID()
         profile.sshJumpHostProfileID = UUID()
@@ -88,6 +91,9 @@ struct CloudTeamHostsTests {
         #expect(host.recordID == profileID)
         #expect(host.id != profileID)
         #expect(host.profile.friendlyName == unicodeTitle)
+        #expect(host.profile.group == "Production / Linux")
+        #expect(host.profile.tags == ["critical", "eu-west"])
+        #expect(host.profile.profileDescription == "Shared bastion")
         #expect(host.profile.sshIdentityID == nil)
         #expect(host.profile.sshJumpHostProfileID == nil)
         #expect(host.profile.sshProxyMode == .none)

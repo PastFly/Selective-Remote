@@ -213,7 +213,13 @@ enum SelectiveRemoteTeamHostMaterializer {
               input.gatewayHost.utf8.count <= 2_048,
               input.gatewayUsername.utf8.count <= 256,
               !input.gatewayHost.contains(where: { $0.isNewline }),
-              !input.gatewayUsername.contains(where: { $0.isNewline })
+              !input.gatewayUsername.contains(where: { $0.isNewline }),
+              validOptionalName(input.group),
+              input.tags.count <= 64,
+              Set(input.tags).count == input.tags.count,
+              input.tags.allSatisfy(validTag),
+              input.profileDescription.utf8.count <= 2_048,
+              !input.profileDescription.contains(where: { $0.isNewline })
         else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
 
         switch input.connectionType {
@@ -293,9 +299,9 @@ enum SelectiveRemoteTeamHostMaterializer {
         safe.detectedOperatingSystemID = ""
         safe.detectedOperatingSystemLike = ""
         safe.operatingSystemDetectedAt = nil
-        safe.group = ""
-        safe.tags = []
-        safe.profileDescription = ""
+        safe.group = input.group
+        safe.tags = input.tags
+        safe.profileDescription = input.profileDescription
         safe.createdAt = Date(timeIntervalSince1970: 0)
         safe.lastConnectedAt = nil
         return safe
@@ -330,6 +336,18 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func validTitle(_ value: String) -> Bool {
         validName(value)
+    }
+
+    private static func validOptionalName(_ value: String) -> Bool {
+        value.isEmpty || validName(value)
+    }
+
+    private static func validTag(_ value: String) -> Bool {
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !normalized.isEmpty
+            && normalized == value
+            && value.count <= 64
+            && !value.contains(where: { $0.isNewline })
     }
 
     private static func validAddress(_ value: String) -> Bool {
@@ -448,6 +466,8 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
+    @State private var searchText = ""
+    @State private var selectedFolder = ""
     @AppStorage("SelectiveRemote.cloud.endpoint.v1") private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
@@ -460,6 +480,27 @@ struct SelectiveRemoteTeamHostsView: View {
     private var writableVaults: [SelectiveRemoteTeamHostVaultContext] {
         store.vaults.filter {
             SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
+        }
+    }
+
+    private var folderNames: [String] {
+        Array(Set(store.hosts.map { $0.profile.group }))
+            .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
+    }
+
+    private var visibleHosts: [SelectiveRemoteTeamHost] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        return store.hosts.filter { host in
+            (selectedFolder.isEmpty || host.profile.group == selectedFolder)
+                && (query.isEmpty || [
+                    host.profile.friendlyName,
+                    host.address,
+                    host.profile.username,
+                    host.teamName,
+                    host.vaultName,
+                    host.profile.group,
+                    host.profile.tags.joined(separator: " ")
+                ].contains { $0.localizedCaseInsensitiveContains(query) })
         }
     }
 
@@ -479,31 +520,27 @@ struct SelectiveRemoteTeamHostsView: View {
                         ))
                     )
                 } else {
-                    List(store.hosts, selection: $selectedHostID) { host in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(
-                                host.profile.friendlyName,
-                                systemImage: host.profile.connectionType.systemImage
-                            )
-                            .font(.headline)
-                            HStack(spacing: 5) {
-                                Text(host.teamName)
-                                Text("·")
-                                Text(host.vaultName)
-                                Text("·")
-                                Text(host.profile.connectionType.title)
+                    List(selection: $selectedHostID) {
+                        ForEach(folderNames, id: \.self) { folder in
+                            let hosts = visibleHosts.filter { $0.profile.group == folder }
+                            if !hosts.isEmpty {
+                                Section(folderTitle(folder)) {
+                                    ForEach(hosts) { host in
+                                        hostRow(host)
+                                            .tag(host.id)
+                                    }
+                                }
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            Text(host.address)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
                         }
-                        .padding(.vertical, 4)
-                        .tag(host.id)
                     }
                     .listStyle(.sidebar)
+                    .searchable(
+                        text: $searchText,
+                        prompt: UpdateLocalization.text(
+                            ru: "Host, адрес, папка или тег",
+                            en: "Host, address, folder, or tag"
+                        )
+                    )
                 }
 
                 Divider()
@@ -516,6 +553,23 @@ struct SelectiveRemoteTeamHostsView: View {
                         Text(lastUpdatedAt, style: .time)
                     }
                     Spacer()
+                    Menu {
+                        Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
+                            selectedFolder = ""
+                        }
+                        Divider()
+                        ForEach(folderNames.filter { !$0.isEmpty }, id: \.self) { folder in
+                            Button(folder) { selectedFolder = folder }
+                        }
+                    } label: {
+                        Label(
+                            selectedFolder.isEmpty
+                                ? UpdateLocalization.text(ru: "Все папки", en: "All Folders")
+                                : selectedFolder,
+                            systemImage: "line.3.horizontal.decrease.circle"
+                        )
+                    }
+
                     Menu {
                         ForEach(writableVaults) { vault in
                             Button("\(vault.teamName) / \(vault.vaultName)") {
@@ -634,6 +688,42 @@ struct SelectiveRemoteTeamHostsView: View {
         }
     }
 
+    private func hostRow(_ host: SelectiveRemoteTeamHost) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(
+                host.profile.friendlyName,
+                systemImage: host.profile.connectionType.systemImage
+            )
+            .font(.headline)
+            HStack(spacing: 5) {
+                Text(host.teamName)
+                Text("·")
+                Text(host.vaultName)
+                Text("·")
+                Text(host.profile.connectionType.title)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            Text(host.address)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            if !host.profile.tags.isEmpty {
+                Text(host.profile.tags.map { "#\($0)" }.joined(separator: " "))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func folderTitle(_ folder: String) -> String {
+        folder.isEmpty
+            ? UpdateLocalization.text(ru: "Без папки", en: "No Folder")
+            : folder
+    }
+
     private func hostDetail(_ host: SelectiveRemoteTeamHost) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -681,6 +771,22 @@ struct SelectiveRemoteTeamHostsView: View {
                     VStack(alignment: .leading, spacing: 9) {
                         LabeledContent("Team", value: host.teamName)
                         LabeledContent("Vault", value: host.vaultName)
+                        LabeledContent(
+                            UpdateLocalization.text(ru: "Папка", en: "Folder"),
+                            value: folderTitle(host.profile.group)
+                        )
+                        if !host.profile.tags.isEmpty {
+                            LabeledContent(
+                                UpdateLocalization.text(ru: "Теги", en: "Tags"),
+                                value: host.profile.tags.map { "#\($0)" }.joined(separator: " ")
+                            )
+                        }
+                        if !host.profile.profileDescription.isEmpty {
+                            LabeledContent(
+                                UpdateLocalization.text(ru: "Описание", en: "Description"),
+                                value: host.profile.profileDescription
+                            )
+                        }
                         LabeledContent(
                             UpdateLocalization.text(ru: "Ревизия", en: "Revision"),
                             value: "\(host.revision)"

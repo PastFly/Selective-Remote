@@ -322,3 +322,21 @@ test("macOS Team Host controls expose writes only through the encrypted role-awa
   assert.match(mutation, /coordinator\.stage/u);
   assert.match(mutation, /coordinator\.push/u);
 });
+
+
+test("macOS Team Hosts expose shared folders, tags, and local filtering controls", async () => {
+  const [hosts, editor] = await Promise.all([
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(hosts, /safe\.group = input\.group/u);
+  assert.match(hosts, /safe\.tags = input\.tags/u);
+  assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
+  assert.match(hosts, /\.searchable\(/u);
+  assert.match(hosts, /selectedFolder/u);
+  assert.match(hosts, /Section\(folderTitle\(folder\)\)/u);
+  assert.match(editor, /Теги через запятую/u);
+  assert.match(editor, /Папка/u);
+  assert.match(editor, /profile\.group = folder/u);
+  assert.match(editor, /profile\.tags = parsedTags/u);
+});
