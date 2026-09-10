@@ -335,6 +335,7 @@ test("macOS Team Host credentials stay inside the encrypted Team Vault lifecycle
   ]);
   assert.match(hosts, /let credentials: SelectiveRemoteTeamHostCredentials/u);
   assert.match(hosts, /record\.type == \.credential/u);
+  assert.match(hosts, /credentials\.keys\.allSatisfy\(hostIDs\.contains\)/u);
   assert.match(hosts, /host\.credentials\.password/u);
   assert.match(editor, /Shared Password \(Team Vault\)/u);
   assert.match(mutation, /selective-remote\/team-host-credential\/v1/u);
