@@ -12,6 +12,7 @@ enum SFTPWorkspacePaneKind: String, Equatable, Sendable {
 struct SFTPWorkspaceOpenRequest: Identifiable, Equatable {
     let id = UUID()
     let connection: TerminalTabConnection
+    let temporaryPassword: String?
     let path: String?
 }
 
@@ -226,9 +227,14 @@ final class SFTPWorkspaceModel: ObservableObject {
         }
     }
 
-    func requestOpen(connection: TerminalTabConnection, path: String? = nil) {
+    func requestOpen(
+        connection: TerminalTabConnection,
+        temporaryPassword: String? = nil,
+        path: String? = nil
+    ) {
         pendingOpenRequest = SFTPWorkspaceOpenRequest(
             connection: connection,
+            temporaryPassword: temporaryPassword,
             path: path
         )
     }
@@ -370,6 +376,7 @@ struct SFTPWorkspaceView: View {
                 connect(
                     pane: pane,
                     connection: request.connection,
+                    temporaryPassword: request.temporaryPassword,
                     path: request.path
                 )
             }
