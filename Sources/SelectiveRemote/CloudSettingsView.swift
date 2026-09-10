@@ -8,6 +8,8 @@ struct CloudSettingsView: View {
     private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1")
     private var storedDeviceID = ""
+    @AppStorage("SelectiveRemote.cloud.personal-vault-sync-enabled.v1")
+    private var personalVaultSyncEnabled = true
 
     @State private var phase = Phase.idle
     @State private var metadata: SelectiveRemoteCloudMetadata?
@@ -201,19 +203,13 @@ struct CloudSettingsView: View {
                             .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
                     }
 
-                    Button(
+                    Toggle(
                         UpdateLocalization.text(
-                            ru: "Настроить защищённую синхронизацию…",
-                            en: "Set Up Secure Sync…"
+                            ru: "Синхронизировать Personal Vault",
+                            en: "Sync Personal Vault"
                         ),
-                        systemImage: "lock.doc.fill"
-                    ) {
-                        personalVaultMessage = nil
-                        personalVaultMessageIsError = false
-                        showsPersonalVaultUpload = true
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(personalVaultUploading || personalVaultRevision != 0)
+                        isOn: $personalVaultSyncEnabled
+                    )
 
                     if let personalVaultMessage {
                         Label(
@@ -235,8 +231,8 @@ struct CloudSettingsView: View {
                     }
 
                     Text(UpdateLocalization.text(
-                        ru: "Настройка выполняется один раз для пустого Cloud Vault. Затем Hosts, Snippets и Forwarding синхронизируются автоматически. Recovery-фраза и открытые данные не сохраняются на сервере; конфликты никогда не перезаписываются молча.",
-                        en: "Setup runs once for an empty Cloud Vault. Hosts, Snippets and Forwarding then sync automatically. The recovery phrase and plaintext are never stored on the server, and conflicts are never overwritten silently."
+                        ru: "После входа Hosts, Snippets, Forwarding и сохранённые пароли синхронизируются автоматически. Keychain подтверждается один раз за сеанс; в Cloud хранится только E2EE-шифротекст.",
+                        en: "After sign-in, Hosts, Snippets, Forwarding, and saved passwords sync automatically. Keychain access is confirmed once per session; Cloud stores only E2EE ciphertext."
                     ))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -306,9 +302,6 @@ struct CloudSettingsView: View {
         }
         .sheet(isPresented: $showsConflictReview) {
             conflictReviewSheet
-        }
-        .sheet(isPresented: $showsPersonalVaultUpload) {
-            personalVaultUploadSheet
         }
         .sheet(isPresented: $showsTeamManagement) {
             if let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) {
@@ -512,13 +505,20 @@ struct CloudSettingsView: View {
                     keyStore: personalVaultKeyStore
                 )
                 do {
+                    let credentials = personalVaultSyncEnabled
+                        ? try await SelectiveRemotePersonalVaultCredentialCollector.shared.collect(
+                            profiles: model.profiles,
+                            forwarding: model.independentPortForwards
+                        )
+                        : []
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
                         password: password,
                         profiles: model.profiles,
                         snippets: TerminalCommandHistoryStore.shared.templates(),
-                        forwarding: model.independentPortForwards
+                        forwarding: model.independentPortForwards,
+                        credentials: credentials
                     )
                 } catch {
                     enrollmentError = error.localizedDescription
