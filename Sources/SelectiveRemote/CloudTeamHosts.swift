@@ -459,6 +459,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject private var personalSettingsStore =
         SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
+    let onOpenSFTP: (SelectiveRemoteTeamHost, String, String?) -> Void
 
     @State private var selectedHostID: UUID?
     @State private var username = ""
@@ -471,6 +472,8 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
     @State private var searchText = ""
     @State private var selectedFolder = ""
+    @State private var expandedTeamIDs: Set<UUID> = []
+    @State private var expandedFolderKeys: Set<String> = []
     @AppStorage("SelectiveRemote.cloud.endpoint.v1") private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
@@ -488,6 +491,24 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private var folderNames: [String] {
         Array(Set(store.hosts.map { $0.profile.group }))
+            .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
+    }
+
+    private var teamIDs: [UUID] {
+        Array(Set(visibleHosts.map(\.teamID))).sorted { left, right in
+            let leftName = store.hosts.first(where: { $0.teamID == left })?.teamName ?? ""
+            let rightName = store.hosts.first(where: { $0.teamID == right })?.teamName ?? ""
+            return leftName.localizedCaseInsensitiveCompare(rightName) == .orderedAscending
+        }
+    }
+
+    private func teamName(_ teamID: UUID) -> String {
+        store.hosts.first(where: { $0.teamID == teamID })?.teamName
+            ?? UpdateLocalization.text(ru: "Команда", en: "Team")
+    }
+
+    private func folders(in teamID: UUID) -> [String] {
+        Array(Set(visibleHosts.filter { $0.teamID == teamID }.map { $0.profile.group }))
             .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
     }
 
@@ -524,15 +545,30 @@ struct SelectiveRemoteTeamHostsView: View {
                     )
                 } else {
                     List(selection: $selectedHostID) {
-                        ForEach(folderNames, id: \.self) { folder in
-                            let hosts = visibleHosts.filter { $0.profile.group == folder }
-                            if !hosts.isEmpty {
-                                Section(folderTitle(folder)) {
-                                    ForEach(hosts) { host in
-                                        hostRow(host)
-                                            .tag(host.id)
+                        ForEach(teamIDs, id: \.self) { teamID in
+                            DisclosureGroup(
+                                isExpanded: expansionBinding(for: teamID)
+                            ) {
+                                ForEach(folders(in: teamID), id: \.self) { folder in
+                                    DisclosureGroup(
+                                        isExpanded: folderExpansionBinding(
+                                            teamID: teamID,
+                                            folder: folder
+                                        )
+                                    ) {
+                                        ForEach(visibleHosts.filter {
+                                            $0.teamID == teamID && $0.profile.group == folder
+                                        }) { host in
+                                            hostRow(host)
+                                                .tag(host.id)
+                                        }
+                                    } label: {
+                                        Label(folderTitle(folder), systemImage: "folder")
                                     }
                                 }
+                            } label: {
+                                Label(teamName(teamID), systemImage: "person.3.fill")
+                                    .font(.headline)
                             }
                         }
                     }
@@ -626,8 +662,14 @@ struct SelectiveRemoteTeamHostsView: View {
             }
             .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
         }
-        .onAppear { normalizeSelection() }
-        .onChange(of: store.hosts.map(\.id)) { _, _ in normalizeSelection() }
+        .onAppear {
+            normalizeSelection()
+            expandNewHierarchy()
+        }
+        .onChange(of: store.hosts.map(\.id)) { _, _ in
+            normalizeSelection()
+            expandNewHierarchy()
+        }
         .onChange(of: selectedHostID) { _, _ in resetConnectionFields() }
         .sheet(item: $editorRequest) { request in
             SelectiveRemoteTeamHostEditorView(request: request) { profile in
@@ -817,6 +859,13 @@ struct SelectiveRemoteTeamHostsView: View {
 
                 GroupBox(UpdateLocalization.text(ru: "Подключение", en: "Connection")) {
                     VStack(alignment: .leading, spacing: 12) {
+                        if host.profile.connectionType == .ssh
+                            || host.profile.connectionType == .telnet {
+                            LabeledContent(
+                                UpdateLocalization.text(ru: "Порт", en: "Port"),
+                                value: "\(host.profile.sshPort)"
+                            )
+                        }
                         if host.profile.connectionType == .rdp
                             || host.profile.connectionType == .ssh {
                             TextField(
@@ -876,6 +925,20 @@ struct SelectiveRemoteTeamHostsView: View {
                                     host.profile.connectionType == .rdp
                                         && password.isEmpty
                                 )
+                            }
+                            if host.profile.connectionType == .ssh {
+                                Button(
+                                    UpdateLocalization.text(ru: "Открыть SFTP", en: "Open SFTP"),
+                                    systemImage: "folder.badge.gearshape"
+                                ) {
+                                    onOpenSFTP(
+                                        host,
+                                        username,
+                                        password.isEmpty ? nil : password
+                                    )
+                                    password = ""
+                                    gatewayPassword = ""
+                                }
                             }
                             Spacer()
                         }
@@ -960,6 +1023,36 @@ struct SelectiveRemoteTeamHostsView: View {
         let value = UUID()
         storedDeviceID = value.canonicalCloudString
         return value
+    }
+
+    private func expansionBinding(for teamID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedTeamIDs.contains(teamID) },
+            set: { expanded in
+                if expanded { expandedTeamIDs.insert(teamID) }
+                else { expandedTeamIDs.remove(teamID) }
+            }
+        )
+    }
+
+    private func folderExpansionBinding(teamID: UUID, folder: String) -> Binding<Bool> {
+        let key = "\(teamID.uuidString.lowercased())/\(folder)"
+        return Binding(
+            get: { expandedFolderKeys.contains(key) },
+            set: { expanded in
+                if expanded { expandedFolderKeys.insert(key) }
+                else { expandedFolderKeys.remove(key) }
+            }
+        )
+    }
+
+    private func expandNewHierarchy() {
+        for host in store.hosts {
+            expandedTeamIDs.insert(host.teamID)
+            expandedFolderKeys.insert(
+                "\(host.teamID.uuidString.lowercased())/\(host.profile.group)"
+            )
+        }
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {

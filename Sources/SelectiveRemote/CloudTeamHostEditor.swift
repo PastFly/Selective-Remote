@@ -20,6 +20,7 @@ struct SelectiveRemoteTeamHostEditorView: View {
     @State private var title: String
     @State private var address: String
     @State private var username: String
+    @State private var port: Int
     @State private var connectionType: ConnectionType
     @State private var folder: String
     @State private var tagsText: String
@@ -35,6 +36,7 @@ struct SelectiveRemoteTeamHostEditorView: View {
         _title = State(initialValue: profile?.friendlyName ?? "")
         _address = State(initialValue: profile.map(Self.address) ?? "")
         _username = State(initialValue: profile?.username ?? "")
+        _port = State(initialValue: profile?.sshPort ?? 22)
         _connectionType = State(initialValue: profile?.connectionType ?? .ssh)
         _folder = State(initialValue: profile?.group ?? "")
         _tagsText = State(initialValue: profile?.tags.joined(separator: ", ") ?? "")
@@ -54,6 +56,7 @@ struct SelectiveRemoteTeamHostEditorView: View {
             && !address.contains(where: { $0.isNewline })
             && username.count <= 256
             && !username.contains(where: { $0.isNewline })
+            && ((connectionType != .ssh && connectionType != .telnet) || (1 ... 65_535).contains(port))
             && validFolder
             && tagsText.utf8.count <= 8_192
             && parsedTags.count <= 64
@@ -129,6 +132,13 @@ struct SelectiveRemoteTeamHostEditorView: View {
                         text: $username
                     )
                 }
+                if connectionType == .ssh || connectionType == .telnet {
+                    TextField(
+                        UpdateLocalization.text(ru: "Порт", en: "Port"),
+                        value: $port,
+                        format: .number
+                    )
+                }
                 TextField(
                     UpdateLocalization.text(ru: "Папка", en: "Folder"),
                     text: $folder
@@ -187,6 +197,9 @@ struct SelectiveRemoteTeamHostEditorView: View {
         profile.group = folder
         profile.tags = parsedTags
         profile.profileDescription = profileDescription
+        if connectionType == .ssh || connectionType == .telnet {
+            profile.sshPort = port
+        }
         if connectionType == .serial {
             profile.serialDevicePath = address
         } else {

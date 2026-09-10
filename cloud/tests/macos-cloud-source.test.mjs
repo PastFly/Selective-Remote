@@ -334,7 +334,7 @@ test("macOS Team Hosts expose shared folders, tags, and local filtering controls
   assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
   assert.match(hosts, /\.searchable\(/u);
   assert.match(hosts, /selectedFolder/u);
-  assert.match(hosts, /Section\(folderTitle\(folder\)\)/u);
+  assert.match(hosts, /Label\(folderTitle\(folder\), systemImage: "folder"\)/u);
   assert.match(editor, /Теги через запятую/u);
   assert.match(editor, /Папка/u);
   assert.match(editor, /profile\.group = folder/u);
@@ -355,4 +355,24 @@ test("macOS Team Hosts keep per-user connection settings local and secret-free",
   assert.doesNotMatch(personal, /password|secret|Keychain/u);
   assert.match(hosts, /personalSettingsStore\.appliedProfile\(/u);
   assert.match(hosts, /personalSettingsHost/u);
+});
+
+
+test("macOS Team Hosts nest teams and folders and expose SSH tools", async () => {
+  const [hosts, editor, content, sftp] = await Promise.all([
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("SFTPWorkspace.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(hosts, /DisclosureGroup\(/u);
+  assert.match(hosts, /Label\(teamName\(teamID\), systemImage: "person\.3\.fill"\)/u);
+  assert.match(hosts, /Label\(folderTitle\(folder\), systemImage: "folder"\)/u);
+  assert.match(editor, /ru: "Порт", en: "Port"/u);
+  assert.match(editor, /profile\.sshPort = port/u);
+  assert.match(hosts, /onOpenSFTP/u);
+  assert.match(content, /private func openTeamSFTP/u);
+  assert.match(content, /temporaryPassword: temporaryPassword/u);
+  assert.match(sftp, /let temporaryPassword: String\?/u);
+  assert.match(sftp, /temporaryPassword: request\.temporaryPassword/u);
 });
