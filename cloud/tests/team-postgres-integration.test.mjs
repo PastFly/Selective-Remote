@@ -9,7 +9,9 @@ import { teamVaultWrapperContextHash } from "../src/security.mjs";
 const databaseURL = process.env.TEST_DATABASE_URL;
 const migrationsDirectory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const ownerDeviceID = "33cc880e-084a-4d9a-b1ea-f99d2ff86032";
+const adminDeviceID = "e5cb5666-8db7-4fd8-88f7-0a3b0a8df156";
 const viewerDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+const viewerSecondDeviceID = "5a5bcf31-01d0-40d5-95ae-7d041553b5d9";
 const legacyDeviceID = "c9afe150-1081-49dc-ad2e-ea67c59a4a25";
 const legacySecondDeviceID = "dab87dc1-99fd-43f4-aa31-cba26c207cff";
 
@@ -65,9 +67,11 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
         (id, user_id, name, platform, public_key, public_key_algorithm,
          key_registered_at, key_approved_at)
        VALUES ($1, $2, 'Owner browser', 'web', $3, 'p256-ecdh-v1', now(), now()),
-              ($4, $5, 'Viewer browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+              ($4, $5, 'Viewer browser', 'web', $3, 'p256-ecdh-v1', now(), now()),
+              ($6, $7, 'Admin browser', 'web', $3, 'p256-ecdh-v1', now(), NULL)`,
       [ownerDeviceID, byEmail["owner@example.com"], publicKey,
-        viewerDeviceID, byEmail["viewer@example.com"]],
+        viewerDeviceID, byEmail["viewer@example.com"],
+        adminDeviceID, byEmail["admin@example.com"]],
     );
     await pool.query(
       `INSERT INTO devices
@@ -142,6 +146,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     assert.equal(pendingAdminInvitations[0].target_username, "admin");
     const accepted = await store.acceptTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
+      actorDeviceID: adminDeviceID,
       actorEmail: "admin@example.com",
       invitationID: adminInvite.invitation.id,
       tokenHash: null,
@@ -151,8 +156,25 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     assert.equal(accepted.membership.username, "admin");
     assert.equal(accepted.membership.display_name, "Admin");
     assert.equal(Number(accepted.membership.epoch), 1);
+    const admittedAdminDevice = await pool.query(
+      "SELECT key_approved_at, key_approved_by_device_id FROM devices WHERE id = $1",
+      [adminDeviceID],
+    );
+    assert.equal(admittedAdminDevice.rows[0].key_approved_at, null);
+    assert.equal(admittedAdminDevice.rows[0].key_approved_by_device_id, null);
+    const scopedAdmission = await pool.query(
+      `SELECT membership_id, membership_epoch, device_id, invitation_id
+       FROM team_membership_device_admissions
+       WHERE membership_id = $1 AND membership_epoch = $2 AND device_id = $3`,
+      [accepted.membership.id, accepted.membership.epoch, adminDeviceID],
+    );
+    assert.equal(scopedAdmission.rows[0].membership_id, accepted.membership.id);
+    assert.equal(Number(scopedAdmission.rows[0].membership_epoch), 1);
+    assert.equal(scopedAdmission.rows[0].device_id, adminDeviceID);
+    assert.equal(scopedAdmission.rows[0].invitation_id, adminInvite.invitation.id);
     await assert.rejects(store.acceptTeamInvitation({
       actorUserID: byEmail["admin@example.com"],
+      actorDeviceID: adminDeviceID,
       actorEmail: "admin@example.com",
       invitationID: adminInvite.invitation.id,
       tokenHash: null,
@@ -189,6 +211,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     });
     await assert.rejects(store.acceptTeamInvitation({
       actorUserID: byEmail["other@example.com"],
+      actorDeviceID: ownerDeviceID,
       actorEmail: "other@example.com",
       invitationID: null,
       tokenHash: viewerTokenHash,
@@ -196,6 +219,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     }), /invalid_team_invitation/);
     const viewer = await store.acceptTeamInvitation({
       actorUserID: byEmail["viewer@example.com"],
+      actorDeviceID: viewerDeviceID,
       actorEmail: "viewer@example.com",
       invitationID: null,
       tokenHash: viewerTokenHash,
@@ -205,8 +229,9 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       created.team.id,
       shared.vault.id,
       byEmail["owner@example.com"],
+      ownerDeviceID,
     );
-    assert.equal(keyDevices.length, 2);
+    assert.equal(keyDevices.length, 3);
     await store.grantSharedVaultWrapper({
       actorUserID: byEmail["owner@example.com"],
       actorDeviceID: ownerDeviceID,
@@ -326,6 +351,41 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       [shared.vault.id],
     );
     assert.deepEqual(completed.rows[0], { rotation_required: false, key_generation: "2" });
+
+    await pool.query(
+      `INSERT INTO devices
+        (id, user_id, name, platform, public_key, public_key_algorithm,
+         key_registered_at, key_approved_at)
+       VALUES ($1, $2, 'Viewer second browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+      [viewerSecondDeviceID, byEmail["viewer@example.com"], publicKey],
+    );
+    const viewerVisibleDevices = await store.listTeamKeyDevices(
+      created.team.id,
+      shared.vault.id,
+      byEmail["viewer@example.com"],
+      viewerDeviceID,
+    );
+    assert.ok(viewerVisibleDevices.some((device) => device.device_id === viewerSecondDeviceID
+      && device.has_wrapper === false));
+    assert.deepEqual(await store.grantSharedVaultWrapper({
+      actorUserID: byEmail["viewer@example.com"],
+      actorDeviceID: viewerDeviceID,
+      teamID: created.team.id,
+      vaultID: shared.vault.id,
+      wrapper: integrationWrapper(
+        viewer.membership, viewerSecondDeviceID, "Y", created.team.id, shared.vault.id, 2,
+      ),
+      keyGeneration: 2,
+      idempotencyKey: "integration:viewer-wrapper-second-device-01",
+    }), { granted: true, keyGeneration: 2, deviceID: viewerSecondDeviceID });
+    const secondViewerVault = await store.getSharedVault(
+      created.team.id,
+      shared.vault.id,
+      byEmail["viewer@example.com"],
+      viewerSecondDeviceID,
+    );
+    assert.equal(secondViewerVault.wrapper_ciphertext, "Y".repeat(43));
+
     const stale = await store.putSharedVault({
       actorUserID: byEmail["owner@example.com"],
       actorDeviceID: ownerDeviceID,

@@ -17,6 +17,7 @@ test("numbered migrations have stable checksums", async () => {
     { version: 7, name: "007_account_deletion.sql" },
     { version: 8, name: "008_usernames.sql" },
     { version: 9, name: "009_team_invitation_modes.sql" },
+    { version: 10, name: "010_team_membership_device_admissions.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
 });
@@ -40,6 +41,19 @@ test("Team invitation modes bind usernames and seal revocable single-use links",
   assert.match(invitations.sql, /CREATE TABLE team_invitation_link_secrets/u);
   assert.match(invitations.sql, /payload_ciphertext text NOT NULL/u);
   assert.doesNotMatch(invitations.sql, /\btoken\s+text\b|\bplaintext\b|\bvault_key\b/u);
+});
+
+test("Team invitation admission is scoped to one membership epoch and device", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const admission = migrations.find(({ version }) => version === 10);
+
+  assert.match(admission.sql, /CREATE TABLE team_membership_device_admissions/u);
+  assert.match(admission.sql, /PRIMARY KEY \(membership_id, membership_epoch, device_id\)/u);
+  assert.match(admission.sql, /FOREIGN KEY \(membership_id, membership_epoch\)[\s\S]*REFERENCES team_memberships\(id, epoch\) ON DELETE CASCADE/u);
+  assert.match(admission.sql, /device_id uuid NOT NULL REFERENCES devices\(id\) ON DELETE CASCADE/u);
+  assert.match(admission.sql, /invitation_id uuid REFERENCES team_invitations\(id\) ON DELETE SET NULL/u);
+  assert.match(admission.sql, /CREATE INDEX team_membership_device_admissions_device/u);
+  assert.doesNotMatch(admission.sql, /key_approved_at|private_key|vault_key/u);
 });
 
 test("account deletion preserves Team history while removing account-owned secrets", async () => {

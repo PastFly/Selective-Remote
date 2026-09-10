@@ -76,6 +76,7 @@ Cloud 0.32 uses four roles. A custom-role system is out of scope for 0.32.
 | Remove/demote Admin | Yes | No | No | No |
 | Assign/remove Owner | Yes | No | No | No |
 | Transfer ownership/delete Team | Yes | No | No | No |
+| Provision a missing current-generation wrapper while holding that key | Yes | Yes | Yes | Yes |
 | Start/complete key rotation | Yes | Yes | No | No |
 
 An actor cannot change their own role, remove themselves as the last Owner or
@@ -111,9 +112,12 @@ or history, and all ordinary Team joins exclude archived Teams immediately.
    requests cannot accept it twice.
 5. Cancellation and expiry make the token unusable immediately. Re-inviting
    creates a new token and does not revive an old one.
-6. Acceptance creates membership but does not fabricate a Vault key. Each
-   shared Vault remains unavailable until an authorized client publishes a
-   wrapper for an authorized device.
+6. The same acceptance transaction locks the authenticated session device,
+   requires its registered P-256 public key and records an admission bound to
+   the new membership ID and epoch. It leaves account-wide device approval
+   unchanged, cannot authorize the device in another Team or membership epoch,
+   and does not fabricate a Vault key. Each shared Vault remains unavailable
+   until an authorized key-holding client publishes a context-bound wrapper.
 
 Invitation endpoints use uniform public errors and rate limits. Manager and
 pending-account lists expose only public handles and bounded Team metadata.
@@ -151,13 +155,30 @@ the ciphertext, public metadata and wrappers but never the Vault key or ECDH
 shared secret. A wrapper for one Team/Vault/generation/device must fail when
 replayed in any other context.
 
-A newly registered device requires approval from an existing authorized
-device. A legacy account with zero approved devices may bootstrap only its
-current registered key after password re-verification, user/IP rate limiting
-and an account-row lock that permits exactly one winner. Once any device is
-approved, password login and bootstrap cannot approve another device or grant
-old shared-Vault keys. Device revocation invalidates its sessions and excludes
-it from all later wrapper sets.
+Outside Team invitation acceptance, a newly registered device requires
+approval from an existing authorized account device. A legacy account with zero
+approved devices may bootstrap only its current registered key after password
+re-verification, user/IP rate limiting and an account-row lock that permits
+exactly one winner. Invitation acceptance is the narrow admission exception:
+the accepting session device must already have a registered P-256 public key,
+and a row keyed by membership ID, membership epoch and device ID commits
+atomically with the membership. It does not set `devices.key_approved_at`.
+Consequently, possession of an arbitrary Team link cannot turn a stolen session
+into an account-wide trusted device or authorize another Team. Password login
+alone still cannot approve a device or grant old shared-Vault keys. Device
+revocation invalidates its sessions; a scoped device that held any wrapper also
+forces rotation and is excluded from all later wrapper sets.
+
+After a Vault is initialized, wrapper provisioning is capability-gated rather
+than manager-presence-gated. Any active member's authorized current session
+device may list eligible public keys and publish a wrapper only when the server
+also finds its own wrapper for the exact Vault, key generation, membership and
+membership epoch. A device is authorized here only by account-wide approval or
+by an admission matching this exact membership epoch. The target must satisfy
+the same rule and the API recomputes its context hash. This permits background
+provisioning by an online Editor or Viewer without giving either role
+ciphertext-write, membership or rotation authority. A client without the
+current key fails closed.
 
 ## Removal and rotation
 

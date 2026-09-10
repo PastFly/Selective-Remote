@@ -180,8 +180,8 @@ class TeamStore {
     return { approved: true, deviceID: input.actorDeviceID, bootstrapped: true };
   }
 
-  async listTeamKeyDevices(team, vault, actor) {
-    this.calls.push(["listTeamKeyDevices", team, vault, actor]);
+  async listTeamKeyDevices(team, vault, actor, device) {
+    this.calls.push(["listTeamKeyDevices", team, vault, actor, device]);
     return [{
       membership_id: membershipID,
       membership_epoch: 1,
@@ -414,6 +414,7 @@ test("invitation acceptance binds email links or a username invitation ID to the
   const stored = store.calls[0][1];
 
   assert.equal(stored.actorUserID, "user-1");
+  assert.equal(stored.actorDeviceID, deviceID);
   assert.equal(stored.actorEmail, "owner@example.com");
   assert.equal(stored.invitationID, null);
   assert.match(stored.tokenHash, /^[0-9a-f]{64}$/);
@@ -428,6 +429,7 @@ test("invitation acceptance binds email links or a username invitation ID to the
   );
   const usernameStored = store.calls[1][1];
   assert.equal(usernameStored.actorUserID, "user-1");
+  assert.equal(usernameStored.actorDeviceID, deviceID);
   assert.equal(usernameStored.invitationID, "471c3424-b6aa-41a0-959f-aeaa1e3ef79d");
   assert.equal(usernameStored.tokenHash, null);
   await assert.rejects(
@@ -528,6 +530,10 @@ test("Team ciphertext service binds session device, generation and wrapper conte
 
   assert.equal(devices.devices[0].publicKey.crv, "P-256");
   assert.equal(devices.devices[0].hasWrapper, true);
+  assert.deepEqual(
+    store.calls.find(([name]) => name === "listTeamKeyDevices").slice(1),
+    [teamID, vaultID, session.user_id, deviceID],
+  );
   assert.equal(vault.wrapper.membershipEpoch, 1);
   for (const call of store.calls.filter(([name]) => [
     "approveDeviceKey", "putSharedVault", "grantSharedVaultWrapper",
