@@ -144,13 +144,160 @@ struct CloudTeamHostsTests {
         #expect(store.invalidVaultCount == 1)
     }
 
+
+
+    @Test("Team Host write capability matches the complete role matrix")
+    func writeCapabilityRoleMatrix() {
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .owner))
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .admin))
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .editor))
+        #expect(!SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .viewer))
+    }
+
+    @Test("Owner, Admin, and Editor can create, update, and delete a Team Host")
+    func writableRolesMutateHostCausally() throws {
+        let deviceID = try #require(
+            UUID(uuidString: "44444444-4444-4444-8444-444444444444")
+        )
+        let recordID = try #require(
+            UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        )
+        for role in [
+            SelectiveRemoteCloudTeamRole.owner,
+            .admin,
+            .editor
+        ] {
+            var profile = ConnectionProfile(connectionType: .ssh)
+            profile.id = recordID
+            profile.friendlyName = "Build Host"
+            profile.host = "build.example.invalid"
+            profile.username = "builder"
+
+            let created = try SelectiveRemoteTeamHostDocumentMutation.create(
+                profile: profile,
+                role: role,
+                deviceID: deviceID,
+                modifiedAt: "2026-09-10T01:00:00.000Z"
+            )
+            let createdRecord = try #require(created.records.first)
+            #expect(createdRecord.type == .host)
+            #expect(createdRecord.version.counters[deviceID] == 1)
+
+            profile.friendlyName = "Production Host"
+            let updated = try SelectiveRemoteTeamHostDocumentMutation.update(
+                in: created,
+                recordID: recordID,
+                profile: profile,
+                role: role,
+                deviceID: deviceID,
+                modifiedAt: "2026-09-10T01:01:00.000Z"
+            )
+            #expect(updated.records.first?.version.counters[deviceID] == 2)
+
+            let deleted = try SelectiveRemoteTeamHostDocumentMutation.delete(
+                from: updated,
+                recordID: recordID,
+                role: role,
+                deviceID: deviceID,
+                deletedAt: "2026-09-10T01:02:00.000Z"
+            )
+            #expect(deleted.records.isEmpty)
+            #expect(deleted.tombstones.first?.id == recordID)
+            #expect(deleted.tombstones.first?.version.counters[deviceID] == 3)
+        }
+    }
+
+    @Test("Viewer mutations fail before changing the Team Vault document")
+    func viewerIsStrictlyReadOnly() throws {
+        let deviceID = try #require(
+            UUID(uuidString: "44444444-4444-4444-8444-444444444444")
+        )
+        var profile = ConnectionProfile(connectionType: .rdp)
+        profile.id = try #require(
+            UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        )
+        profile.friendlyName = "Denied"
+        profile.host = "denied.example.invalid"
+
+        #expect(throws: SelectiveRemoteTeamHostMutationError.readOnlyRole) {
+            _ = try SelectiveRemoteTeamHostDocumentMutation.create(
+                profile: profile,
+                role: .viewer,
+                deviceID: deviceID,
+                modifiedAt: "2026-09-10T02:00:00.000Z"
+            )
+        }
+    }
+
+    @Test("Host mutations preserve unrelated Team Vault records")
+    func preservesUnrelatedRecords() throws {
+        let deviceID = try #require(
+            UUID(uuidString: "44444444-4444-4444-8444-444444444444")
+        )
+        let original = try SelectiveRemoteVaultDocument.decode(Self.fixtureData())
+        let preserved = try #require(original.records.first)
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.id = try #require(
+            UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+        )
+        profile.friendlyName = "New Host"
+        profile.host = "new.example.invalid"
+
+        let mutated = try SelectiveRemoteTeamHostDocumentMutation.create(
+            in: original,
+            profile: profile,
+            role: .editor,
+            deviceID: deviceID,
+            modifiedAt: "2026-09-10T03:00:00.000Z"
+        )
+        #expect(mutated.records.first(where: { $0.id == preserved.id }) == preserved)
+        #expect(mutated.records.count == original.records.count + 1)
+    }
+
+
+    @MainActor
+    @Test("store exposes valid Vault contexts and replaces one Vault without touching another")
+    func storeReplacesOneVault() throws {
+        let first = Self.snapshot(payload: try Self.fixtureData(), role: .editor)
+        let second = SelectiveRemoteTeamVaultMaterializedSnapshot(
+            teamID: try #require(UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
+            teamName: "Security",
+            role: .viewer,
+            vaultID: try #require(UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")),
+            vaultName: "Audit",
+            revision: 1,
+            keyGeneration: 1,
+            payload: try SelectiveRemoteVaultDocument().encoded()
+        )
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [first, second])
+        #expect(store.vaults.count == 2)
+        #expect(store.vaults.first(where: { $0.vaultID == first.vaultID })?.role == .editor)
+
+        let updated = SelectiveRemoteTeamVaultMaterializedSnapshot(
+            teamID: first.teamID,
+            teamName: first.teamName,
+            role: first.role,
+            vaultID: first.vaultID,
+            vaultName: first.vaultName,
+            revision: first.revision + 1,
+            keyGeneration: first.keyGeneration,
+            payload: try SelectiveRemoteVaultDocument().encoded()
+        )
+        store.replaceVault(with: updated)
+        #expect(store.vaults.count == 2)
+        #expect(store.hosts.isEmpty)
+        #expect(store.synchronizedVaultCount == 2)
+    }
+
     private static func snapshot(
-        payload: Data
+        payload: Data,
+        role: SelectiveRemoteCloudTeamRole = .viewer
     ) -> SelectiveRemoteTeamVaultMaterializedSnapshot {
         .init(
             teamID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
             teamName: "Platform",
-            role: .viewer,
+            role: role,
             vaultID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
             vaultName: "Operations",
             revision: 7,
