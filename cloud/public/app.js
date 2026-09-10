@@ -107,6 +107,49 @@ export function teamHostRecordData({ title, target, folder, tags, description, b
   return data;
 }
 
+export function teamHostConnectionData({ protocol, host, port, username }) {
+  const normalizedProtocol = String(protocol ?? "").toLowerCase();
+  const normalizedHost = String(host ?? "").trim();
+  const normalizedUsername = String(username ?? "").trim();
+  const defaultPort = normalizedProtocol === "ssh" ? 22 : 3389;
+  const normalizedPort = Number(port || defaultPort);
+  if (!["ssh", "rdp"].includes(normalizedProtocol)
+    || !normalizedHost || normalizedHost.length > 2048 || /[\s/@]/u.test(normalizedHost)
+    || !Number.isSafeInteger(normalizedPort) || normalizedPort < 1 || normalizedPort > 65_535
+    || normalizedUsername.length > 256 || normalizedUsername.includes("\n")) {
+    throw new Error("invalid_team_host_connection");
+  }
+  const encodedUser = normalizedUsername ? `${encodeURIComponent(normalizedUsername)}@` : "";
+  const encodedHost = normalizedHost.includes(":") && !normalizedHost.startsWith("[")
+    ? `[${normalizedHost}]` : normalizedHost;
+  return {
+    protocol: normalizedProtocol, host: normalizedHost, port: normalizedPort,
+    username: normalizedUsername,
+    target: `${normalizedProtocol}://${encodedUser}${encodedHost}:${normalizedPort}`,
+  };
+}
+
+export function parseTeamHostConnection(data) {
+  const address = String(data?.address ?? "").trim();
+  const profileProtocol = String(data?.connectionType ?? "").toLowerCase();
+  try {
+    const parsed = new URL(address);
+    if (["ssh:", "rdp:"].includes(parsed.protocol) && parsed.hostname) {
+      return {
+        protocol: parsed.protocol.slice(0, -1), host: parsed.hostname,
+        port: Number(parsed.port || (parsed.protocol === "ssh:" ? 22 : 3389)),
+        username: decodeURIComponent(parsed.username || ""),
+      };
+    }
+  } catch { /* legacy address */ }
+  return {
+    protocol: ["ssh", "rdp"].includes(profileProtocol) ? profileProtocol : "rdp",
+    host: address,
+    port: profileProtocol === "ssh" ? 22 : 3389,
+    username: String(data?.username ?? ""),
+  };
+}
+
 export function localVaultRecordSummary(record) {
   const data = record?.data ?? {};
   let summary = "";
@@ -173,10 +216,17 @@ export async function initializeLocalVault({
   const hostDetailTitle = documentValue.querySelector("#host-detail-title");
   const hostDetailAddress = documentValue.querySelector("#host-detail-address");
   const hostDetailModified = documentValue.querySelector("#host-detail-modified");
+  const hostDetailProtocol = documentValue.querySelector("#host-detail-protocol");
+  const hostDetailPort = documentValue.querySelector("#host-detail-port");
+  const hostDetailUsername = documentValue.querySelector("#host-detail-username");
+  const hostDetailPasswordState = documentValue.querySelector("#host-detail-password-state");
   const hostDetailFolder = documentValue.querySelector("#host-detail-folder");
   const hostDetailTags = documentValue.querySelector("#host-detail-tags");
   const hostDetailDescription = documentValue.querySelector("#host-detail-description");
   const hostDetailEdit = documentValue.querySelector("#host-detail-edit");
+  const hostDetailCopyPassword = documentValue.querySelector("#host-detail-copy-password");
+  const hostDetailOpenSSH = documentValue.querySelector("#host-detail-open-ssh");
+  const hostDetailOpenSFTP = documentValue.querySelector("#host-detail-open-sftp");
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
@@ -277,10 +327,18 @@ export async function initializeLocalVault({
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          const connection = parseTeamHostConnection(record.data);
+          setText(hostDetailProtocol, connection.protocol.toUpperCase());
+          setText(hostDetailPort, String(connection.port));
+          setText(hostDetailUsername, connection.username || "—");
+          setText(hostDetailPasswordState, "Управляется приложением");
           setText(hostDetailFolder, "Личный Vault");
           setText(hostDetailTags, "—");
           setText(hostDetailDescription, "—");
           hostDetailEdit.hidden = true;
+          hostDetailCopyPassword.hidden = true;
+          hostDetailOpenSSH.hidden = true;
+          hostDetailOpenSFTP.hidden = true;
           hostDetail?.showModal();
         };
         card.addEventListener("click", (event) => {
@@ -478,6 +536,11 @@ export function initializeTeamWorkspace({
   const recordSecretLabel = documentValue.querySelector("#team-record-secret-label");
   const records = documentValue.querySelector("#team-vault-records");
   const hostFields = documentValue.querySelector("#team-host-fields");
+  const hostProtocol = documentValue.querySelector("#team-host-protocol");
+  const hostPort = documentValue.querySelector("#team-host-port");
+  const hostUsername = documentValue.querySelector("#team-host-username");
+  const hostPassword = documentValue.querySelector("#team-host-password");
+  const hostRemovePassword = documentValue.querySelector("#team-host-remove-password");
   const hostFolder = documentValue.querySelector("#team-host-folder");
   const hostFolderOptions = documentValue.querySelector("#team-host-folder-options");
   const hostTags = documentValue.querySelector("#team-host-tags");
@@ -488,12 +551,19 @@ export function initializeTeamWorkspace({
   const hostDetail = documentValue.querySelector("#host-detail-dialog");
   const hostDetailTitle = documentValue.querySelector("#host-detail-title");
   const hostDetailAddress = documentValue.querySelector("#host-detail-address");
+  const hostDetailProtocol = documentValue.querySelector("#host-detail-protocol");
+  const hostDetailPort = documentValue.querySelector("#host-detail-port");
+  const hostDetailUsername = documentValue.querySelector("#host-detail-username");
+  const hostDetailPasswordState = documentValue.querySelector("#host-detail-password-state");
   const hostDetailModified = documentValue.querySelector("#host-detail-modified");
   const hostDetailFolder = documentValue.querySelector("#host-detail-folder");
   const hostDetailTags = documentValue.querySelector("#host-detail-tags");
   const hostDetailDescription = documentValue.querySelector("#host-detail-description");
   const hostDetailCopy = documentValue.querySelector("#host-detail-copy");
   const hostDetailEdit = documentValue.querySelector("#host-detail-edit");
+  const hostDetailCopyPassword = documentValue.querySelector("#host-detail-copy-password");
+  const hostDetailOpenSSH = documentValue.querySelector("#host-detail-open-ssh");
+  const hostDetailOpenSFTP = documentValue.querySelector("#host-detail-open-sftp");
   const conflictPanel = documentValue.querySelector("#team-vault-conflicts");
   const conflictForm = documentValue.querySelector("#team-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#team-vault-conflicts-list");
@@ -587,16 +657,25 @@ export function initializeTeamWorkspace({
   }
 
   function beginHostEdit(record) {
+    const connection = parseTeamHostConnection(record.data);
     editingHostID = record.id;
     recordType.value = "host";
     recordTitle.value = String(record.data.title ?? "");
-    recordTarget.value = String(record.data.address ?? "");
+    recordTarget.value = connection.host;
+    hostProtocol.value = connection.protocol;
+    hostPort.value = String(connection.port);
+    hostUsername.value = connection.username;
+    hostPassword.value = "";
+    hostRemovePassword.checked = false;
     hostFolder.value = String(record.data.folder ?? "");
     hostTags.value = Array.isArray(record.data.tags) ? record.data.tags.join(", ") : "";
     hostDescription.value = String(record.data.description ?? "");
     const advanced = Boolean(record.data.profile);
     recordTitle.disabled = advanced;
     recordTarget.disabled = advanced;
+    hostProtocol.disabled = advanced;
+    hostPort.disabled = advanced;
+    hostUsername.disabled = advanced;
     updateRecordLabels();
     recordEditor.open = true;
     recordEditor.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -604,6 +683,17 @@ export function initializeTeamWorkspace({
     setText(workspaceStatus, advanced
       ? "Полный профиль создан в приложении: в браузере можно менять папку, теги и описание."
       : "Измените Host и сохраните зашифрованную запись.");
+  }
+
+  function hostCredentials(hostID) {
+    return controller?.document().records.filter((value) => value.type === "credential"
+      && value.data?.sourceID === hostID && ["ssh", "rdp"].includes(value.data?.kind)) ?? [];
+  }
+
+  function detailConnectionURL(protocol) {
+    const record = controller?.document().records.find((value) => value.id === detailedHostID);
+    if (!record) return null;
+    return teamHostConnectionData({ ...parseTeamHostConnection(record.data), protocol }).target;
   }
 
   function hostFolderName(record) {
@@ -682,6 +772,7 @@ export function initializeTeamWorkspace({
       remove.addEventListener("click", async () => {
         remove.disabled = true;
         try {
+          for (const credential of hostCredentials(record.id)) await controller.delete(credential.id);
           await controller.delete(record.id);
           clearConflicts();
           renderRecords();
@@ -696,15 +787,24 @@ export function initializeTeamWorkspace({
         card.tabIndex = 0;
         card.setAttribute("role", "button");
         const openHost = () => {
+          const connection = parseTeamHostConnection(record.data);
+          const credentials = hostCredentials(record.id);
           detailedHostID = record.id;
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          setText(hostDetailProtocol, connection.protocol.toUpperCase());
+          setText(hostDetailPort, String(connection.port));
+          setText(hostDetailUsername, connection.username || "—");
+          setText(hostDetailPasswordState, credentials.length ? "Сохранён в E2EE Team Vault" : "Не сохранён");
           setText(hostDetailFolder, hostFolderName(record));
           setText(hostDetailTags, Array.isArray(record.data.tags) && record.data.tags.length ? record.data.tags.join(", ") : "—");
           setText(hostDetailDescription, String(record.data.description ?? "—"));
           hostDetailCopy.hidden = false;
           hostDetailEdit.hidden = !canEdit();
+          hostDetailCopyPassword.hidden = credentials.length === 0;
+          hostDetailOpenSSH.hidden = connection.protocol !== "ssh";
+          hostDetailOpenSFTP.hidden = connection.protocol !== "ssh";
           hostDetail?.showModal();
         };
         card.addEventListener("click", (event) => { if (event.target !== remove && event.target !== edit) openHost(); });
@@ -1498,6 +1598,9 @@ export function initializeTeamWorkspace({
   recordType.addEventListener("change", updateRecordLabels);
   hostSearch.addEventListener("input", renderRecords);
   hostFolderFilter.addEventListener("change", renderRecords);
+  hostProtocol.addEventListener("change", () => {
+    hostPort.value = hostProtocol.value === "ssh" ? "22" : "3389";
+  });
   hostDetailCopy.addEventListener("click", async () => {
     try {
       await documentValue.defaultView.navigator.clipboard.writeText(hostDetailAddress.textContent);
@@ -1509,6 +1612,22 @@ export function initializeTeamWorkspace({
     hostDetail.close();
     if (record) beginHostEdit(record);
   });
+  hostDetailCopyPassword.addEventListener("click", async () => {
+    const credential = hostCredentials(detailedHostID)[0];
+    if (!credential) return;
+    try {
+      await documentValue.defaultView.navigator.clipboard.writeText(String(credential.data.secret ?? ""));
+      setText(workspaceStatus, "Пароль Host скопирован локально. Cloud plaintext не получал.");
+    } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
+  });
+  hostDetailOpenSSH.addEventListener("click", () => {
+    const target = detailConnectionURL("ssh");
+    if (target) documentValue.defaultView.location.href = target;
+  });
+  hostDetailOpenSFTP.addEventListener("click", () => {
+    const target = detailConnectionURL("ssh");
+    if (target) documentValue.defaultView.location.href = target.replace(/^ssh:/u, "sftp:");
+  });
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = recordForm.querySelector("button");
@@ -1517,22 +1636,49 @@ export function initializeTeamWorkspace({
       const existingHost = editingHostID
         ? controller.document().records.find((value) => value.id === editingHostID && value.type === "host")
         : null;
-      await controller.upsert({
+      const connection = recordType.value === "host" && !existingHost?.data?.profile
+        ? teamHostConnectionData({
+            protocol: hostProtocol.value, host: recordTarget.value,
+            port: hostPort.value, username: hostUsername.value,
+          })
+        : null;
+      const hostID = await controller.upsert({
         ...(editingHostID ? { id: editingHostID } : {}),
         type: recordType.value,
         data: recordType.value === "host"
           ? teamHostRecordData({
-              title: recordTitle.value, target: recordTarget.value, folder: hostFolder.value,
+              title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
           : localVaultRecordData(recordType.value, {
               title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value,
             }),
       });
+      if (recordType.value === "host") {
+        const credentials = hostCredentials(hostID);
+        if (hostRemovePassword.checked) {
+          for (const credential of credentials) await controller.delete(credential.id);
+        } else if (hostPassword.value) {
+          const connectionValue = connection ?? parseTeamHostConnection(existingHost?.data);
+          const retained = credentials[0];
+          await controller.upsert({
+            ...(retained ? { id: retained.id } : {}), type: "credential",
+            data: {
+              title: `${recordTitle.value.trim()} · ${connectionValue.protocol}`,
+              username: connectionValue.username, secret: hostPassword.value,
+              kind: connectionValue.protocol, sourceID: hostID,
+            },
+          });
+          for (const duplicate of credentials.slice(1)) await controller.delete(duplicate.id);
+        }
+      }
       recordForm.reset();
       editingHostID = null;
       recordTitle.disabled = false;
       recordTarget.disabled = false;
+      hostProtocol.disabled = false;
+      hostPort.disabled = false;
+      hostUsername.disabled = false;
       recordEditor.open = false;
       updateRecordLabels();
       clearConflicts();
