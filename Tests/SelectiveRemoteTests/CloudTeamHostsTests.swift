@@ -145,6 +145,15 @@ struct CloudTeamHostsTests {
     }
 
 
+
+    @Test("Team Host write capability matches the complete role matrix")
+    func writeCapabilityRoleMatrix() {
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .owner))
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .admin))
+        #expect(SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .editor))
+        #expect(!SelectiveRemoteTeamHostDocumentMutation.isWritable(role: .viewer))
+    }
+
     @Test("Owner, Admin, and Editor can create, update, and delete a Team Host")
     func writableRolesMutateHostCausally() throws {
         let deviceID = try #require(
