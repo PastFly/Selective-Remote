@@ -860,7 +860,8 @@ struct ContentView: View {
                 SelectiveRemoteTeamHostsView(
                     store: teamHosts,
                     model: model,
-                    onOpenTerminal: openTeamTerminal
+                    onOpenTerminal: openTeamTerminal,
+                    onOpenSFTP: openTeamSFTP
                 )
             case .snippets:
                 TerminalSnippetsLibraryView(
@@ -2563,6 +2564,27 @@ struct ContentView: View {
             temporaryPassword: temporaryPassword
         )
         setMainArea(.ssh)
+    }
+
+    private func openTeamSFTP(
+        _ host: SelectiveRemoteTeamHost,
+        username: String,
+        temporaryPassword: String?
+    ) {
+        guard host.profile.connectionType == .ssh else { return }
+        let connection = TerminalTabConnection.custom(
+            host: host.profile.host,
+            username: username,
+            port: host.profile.sshPort,
+            authenticationMode: temporaryPassword == nil ? .automatic : .password,
+            identityID: nil,
+            jumpHostProfileID: nil
+        )
+        model.sftpWorkspace.requestOpen(
+            connection: connection,
+            temporaryPassword: temporaryPassword
+        )
+        setMainArea(.sftp)
     }
 
     private func openForwardingTerminal(_ connection: TerminalTabConnection) {
