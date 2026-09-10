@@ -511,6 +511,9 @@ struct CloudSettingsView: View {
                             forwarding: model.independentPortForwards
                         )
                         : []
+                    let sshKeys = personalVaultSyncEnabled
+                        ? try await SelectiveRemotePersonalVaultCredentialCollector.shared.collectSSHKeys(model.sshKeys)
+                        : []
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
@@ -518,7 +521,8 @@ struct CloudSettingsView: View {
                         profiles: model.profiles,
                         snippets: TerminalCommandHistoryStore.shared.templates(),
                         forwarding: model.independentPortForwards,
-                        credentials: credentials
+                        credentials: credentials,
+                        sshKeys: sshKeys
                     )
                 } catch {
                     enrollmentError = error.localizedDescription
@@ -678,12 +682,14 @@ struct CloudSettingsView: View {
             snapshot: snapshot,
             localProfiles: model.profiles,
             localSnippets: history.templates(),
-            localForwarding: model.independentPortForwards
+            localForwarding: model.independentPortForwards,
+            localSSHKeys: model.sshKeys
         )
         guard plan.canApply else {
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
         try KeychainService.savePasswords(plan.credentials)
+        model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
         model.profiles.append(contentsOf: plan.profiles)
         model.independentPortForwards.append(contentsOf: plan.forwarding)
         history.importTemplates(plan.snippets)
