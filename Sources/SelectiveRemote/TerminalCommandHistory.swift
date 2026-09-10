@@ -389,6 +389,16 @@ final class TerminalCommandHistoryStore: ObservableObject {
             .sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    func importTemplates(_ values: [TerminalCommandTemplate]) {
+        let existing = Set(storedTemplates.map(\.id))
+        storedTemplates.append(contentsOf: values.filter { !existing.contains($0.id) })
+        if storedTemplates.count > 500 {
+            storedTemplates.sort { $0.updatedAt > $1.updatedAt }
+            storedTemplates = Array(storedTemplates.prefix(500))
+        }
+        persistTemplates()
+    }
+
     func templates(in groupID: UUID) -> [TerminalCommandTemplate] {
         templates().filter { $0.groupID == groupID }
     }
