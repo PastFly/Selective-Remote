@@ -398,17 +398,16 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   let currentDeviceID = null;
 
   async function authorizedRequest(path, options = {}) {
-    if (!token) throw new Error("authentication_required");
     const response = await fetchValue(path, {
       ...options,
       headers: {
         ...(options.headers ?? {}),
         Accept: "application/json",
-        Authorization: `Bearer ${token}`,
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
       },
       cache: "no-store",
-      credentials: "omit",
+      credentials: "same-origin",
       referrerPolicy: "no-referrer",
     });
     if (response.status === 401) {
@@ -496,7 +495,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
           },
         }),
         cache: "no-store",
-        credentials: "omit",
+        credentials: "same-origin",
         referrerPolicy: "no-referrer",
       });
       const result = await responseJSON(response, "login_failed");
@@ -523,6 +522,23 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return structuredClone(user);
     },
 
+    async restoreSession() {
+      const response = await authorizedRequest("/v1/me");
+      if (!response.ok) throw new Error("authentication_required");
+      const result = await responseJSON(response, "authentication_required");
+      if (!uuidPattern.test(String(result.id ?? "")) || !uuidPattern.test(String(result.deviceID ?? ""))) {
+        throw new Error("authentication_required");
+      }
+      currentDeviceID = String(result.deviceID).toLowerCase();
+      user = {
+        id: String(result.id).toLowerCase(),
+        email: String(result.email ?? ""),
+        username: String(result.username ?? ""),
+        displayName: String(result.displayName ?? ""),
+      };
+      return structuredClone(user);
+    },
+
     session() {
       return user ? structuredClone(user) : null;
     },
@@ -532,7 +548,6 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
 
     async logout() {
-      if (!token) return;
       try {
         await authorizedRequest("/v1/auth/logout", { method: "POST" });
       } finally {
