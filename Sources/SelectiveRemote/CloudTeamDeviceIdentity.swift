@@ -59,6 +59,7 @@ actor SelectiveRemoteTeamDeviceIdentityManager {
 
 struct SelectiveRemoteTeamDeviceKeychainStore: SelectiveRemoteTeamDeviceKeyStore {
     static let legacyService = "local.selectiveremote.cloud.team-device-key.v1"
+    static let service = legacyService
     private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
     func privateKeyRepresentation(for endpoint: URL, deviceID: UUID) throws -> Data? {
