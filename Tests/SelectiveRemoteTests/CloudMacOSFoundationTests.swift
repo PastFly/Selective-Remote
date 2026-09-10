@@ -1492,6 +1492,59 @@ struct AccountPasswordPersonalVaultEnrollmentTests {
     }
 }
 
+@Suite("Personal Vault initial download decoder")
+struct PersonalVaultInitialDownloadDecoderTests {
+    @Test("macOS export round-trips into typed local resources")
+    func exportedResourcesRoundTrip() throws {
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.host = "host.example"
+        profile.friendlyName = "Production"
+        let snippet = TerminalCommandTemplate(
+            id: UUID(), profileID: UUID(uuidString: "5A17407D-9F03-4F7B-80FB-BD06D3FA50B1")!,
+            title: "Uptime", command: "uptime", category: "Ops",
+            targets: [.localTerminal], updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        let forward = IndependentPortForward(
+            connection: .custom(host: "jump.example", username: "root", port: 22),
+            kind: .local
+        )
+        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+            profiles: [profile], credentials: [], snippets: [snippet], forwarding: [forward],
+            deviceID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
+        )
+
+        let decoded = try SelectiveRemotePersonalVaultImporter.decode(exported.document)
+        #expect(decoded.profiles.first?.id == profile.id)
+        #expect(decoded.profiles.first?.friendlyName == profile.friendlyName)
+        #expect(decoded.profiles.first?.host == profile.host)
+        #expect(decoded.profiles.first?.connectionType == profile.connectionType)
+        #expect(decoded.snippets == [snippet])
+        #expect(decoded.forwarding == [forward])
+        #expect(decoded.credentials.isEmpty)
+    }
+
+    @Test("web Host and Snippet receive bounded local defaults")
+    func webRecords() throws {
+        let version = try SelectiveRemoteVaultVersion([
+            UUID(uuidString: "33333333-3333-4333-8333-333333333333")!: 1
+        ])
+        let hostID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        let snippetID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
+        let document = try SelectiveRemoteVaultDocument(records: [
+            try .init(id: hostID, type: .host, version: version, modifiedAt: "2026-09-10T00:00:00.000Z", data: .object([
+                "title": .string("Web Host"), "address": .string("web.example"), "username": .string("admin")
+            ])),
+            try .init(id: snippetID, type: .snippet, version: version, modifiedAt: "2026-09-10T00:00:00.000Z", data: .object([
+                "title": .string("Status"), "body": .string("uptime")
+            ]))
+        ])
+        let decoded = try SelectiveRemotePersonalVaultImporter.decode(document)
+        #expect(decoded.profiles.first?.id == hostID)
+        #expect(decoded.profiles.first?.connectionType == .ssh)
+        #expect(decoded.snippets.first?.id == snippetID)
+    }
+}
+
 private final class CloudHTTPStub: @unchecked Sendable {
     let handler: @Sendable (URLRequest) throws -> (Data, URLResponse)
 
