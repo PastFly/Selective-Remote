@@ -17,6 +17,9 @@ struct SelectiveRemoteTeamHostPersonalSettings: Codable, Equatable {
     var rdpWindowMode: RDPWindowMode
     var windowWidth: Int
     var windowHeight: Int
+    var selectedDisplayIDs: Set<String>?
+    var primaryDisplayID: String?
+    var displayLayoutMode: DisplayLayoutMode?
 
     init(profile: ConnectionProfile) {
         preferredUsername = profile.username
@@ -34,6 +37,9 @@ struct SelectiveRemoteTeamHostPersonalSettings: Codable, Equatable {
         rdpWindowMode = profile.rdpWindowMode
         windowWidth = profile.windowWidth
         windowHeight = profile.windowHeight
+        selectedDisplayIDs = profile.selectedDisplayIDs.isEmpty ? nil : profile.selectedDisplayIDs
+        primaryDisplayID = profile.primaryDisplayID
+        displayLayoutMode = profile.displayLayoutMode
     }
 
     func applying(to sharedProfile: ConnectionProfile) -> ConnectionProfile {
@@ -54,6 +60,14 @@ struct SelectiveRemoteTeamHostPersonalSettings: Codable, Equatable {
         profile.startFullScreen = rdpWindowMode == .fullScreen
         profile.windowWidth = min(max(windowWidth, 640), 16_384)
         profile.windowHeight = min(max(windowHeight, 480), 16_384)
+        if let selectedDisplayIDs, !selectedDisplayIDs.isEmpty {
+            profile.selectedDisplayIDs = selectedDisplayIDs
+            profile.primaryDisplayID = primaryDisplayID.flatMap {
+                selectedDisplayIDs.contains($0) ? $0 : nil
+            } ?? selectedDisplayIDs.sorted().first
+            profile.displayLayoutMode = displayLayoutMode ?? .automatic
+            profile.virtualDisplayOrigins = [:]
+        }
         return profile
     }
 
@@ -150,6 +164,7 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostPersonalSettingsStore
     @Environment(\.dismiss) private var dismiss
     @State private var draft: SelectiveRemoteTeamHostPersonalSettings
+    @State private var displays: [DisplayDescriptor]
 
     init(
         host: SelectiveRemoteTeamHost,
@@ -159,7 +174,18 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
         self.host = host
         self.endpoint = endpoint
         self.store = store
-        _draft = State(initialValue: store.settings(for: host, endpoint: endpoint))
+        let currentDisplays = DisplayManager().currentDisplays()
+        var settings = store.settings(for: host, endpoint: endpoint)
+        if host.profile.connectionType == .rdp,
+           settings.selectedDisplayIDs?.isEmpty != false {
+            let external = currentDisplays.filter { !$0.isBuiltIn }
+            let initial = external.isEmpty ? currentDisplays : external
+            settings.selectedDisplayIDs = Set(initial.map(\.id))
+            settings.primaryDisplayID = initial.first?.id
+            settings.displayLayoutMode = .automatic
+        }
+        _draft = State(initialValue: settings)
+        _displays = State(initialValue: currentDisplays)
     }
 
     var body: some View {
@@ -183,6 +209,31 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
                 }
 
                 if host.profile.connectionType == .rdp {
+                    Section(UpdateLocalization.text(ru: "Мониторы", en: "Displays")) {
+                        if displays.isEmpty {
+                            Text(UpdateLocalization.text(
+                                ru: "macOS не обнаружила доступные мониторы",
+                                en: "macOS did not report any available displays"
+                            ))
+                            .foregroundStyle(.secondary)
+                        } else {
+                            MonitorMapView(
+                                displays: displays,
+                                selectedIDs: draft.selectedDisplayIDs ?? [],
+                                primaryID: draft.primaryDisplayID,
+                                onToggle: toggleDisplay,
+                                onPrimary: setPrimaryDisplay
+                            )
+                            .frame(height: 220)
+                            Button(
+                                UpdateLocalization.text(ru: "Обновить мониторы", en: "Refresh Displays"),
+                                systemImage: "arrow.clockwise"
+                            ) {
+                                refreshDisplays()
+                            }
+                        }
+                    }
+
                     Section("RDP") {
                         Picker(
                             UpdateLocalization.text(ru: "Режим окна", en: "Window Mode"),
@@ -306,6 +357,44 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
             }
         }
         .padding(24)
-        .frame(width: 560, height: host.profile.connectionType == .rdp ? 720 : 300)
+        .frame(width: 620, height: host.profile.connectionType == .rdp ? 840 : 300)
+    }
+
+    private func toggleDisplay(_ display: DisplayDescriptor) {
+        var selected = draft.selectedDisplayIDs ?? []
+        if selected.contains(display.id) {
+            guard selected.count > 1 else { return }
+            selected.remove(display.id)
+            if draft.primaryDisplayID == display.id {
+                draft.primaryDisplayID = displays.first(where: { selected.contains($0.id) })?.id
+            }
+        } else {
+            selected.insert(display.id)
+            if draft.primaryDisplayID == nil { draft.primaryDisplayID = display.id }
+        }
+        draft.selectedDisplayIDs = selected
+        draft.displayLayoutMode = .automatic
+    }
+
+    private func setPrimaryDisplay(_ display: DisplayDescriptor) {
+        var selected = draft.selectedDisplayIDs ?? []
+        selected.insert(display.id)
+        draft.selectedDisplayIDs = selected
+        draft.primaryDisplayID = display.id
+        draft.displayLayoutMode = .automatic
+    }
+
+    private func refreshDisplays() {
+        displays = DisplayManager().currentDisplays()
+        let available = Set(displays.map(\.id))
+        var selected = (draft.selectedDisplayIDs ?? []).intersection(available)
+        if selected.isEmpty {
+            let external = displays.filter { !$0.isBuiltIn }
+            selected = Set((external.isEmpty ? displays : external).map(\.id))
+        }
+        draft.selectedDisplayIDs = selected
+        if let primary = draft.primaryDisplayID, !selected.contains(primary) {
+            draft.primaryDisplayID = displays.first(where: { selected.contains($0.id) })?.id
+        }
     }
 }
