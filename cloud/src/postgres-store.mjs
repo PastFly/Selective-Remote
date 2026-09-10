@@ -134,6 +134,56 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
+
+  async usernameAvailable(username, excludingUserID) {
+    const result = await this.pool.query(
+      "SELECT NOT EXISTS (SELECT 1 FROM users WHERE username = $1 AND id <> $2) AS available",
+      [username, excludingUserID],
+    );
+    return result.rows[0]?.available === true;
+  }
+
+  async updateUsername(userID, username) {
+    try {
+      const result = await this.pool.query(
+        "UPDATE users SET username = $2, updated_at = now() WHERE id = $1 AND disabled_at IS NULL RETURNING username",
+        [userID, username],
+      );
+      if (!result.rows[0]) throw new Error("account_not_found");
+      return result.rows[0].username;
+    } catch (error) {
+      if (error?.code === "23505" && error?.constraint === "users_username_unique") throw new Error("username_exists");
+      throw error;
+    }
+  }
+
+  async changePassword(userID, sessionID, passwordHash) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      const password = await client.query(
+        `UPDATE account_identities SET password_hash = $2, last_used_at = now()
+         WHERE user_id = $1 AND provider = 'password'
+         RETURNING id`,
+        [userID, passwordHash],
+      );
+      if (!password.rows[0]) throw new Error("password_identity_missing");
+      await client.query(
+        `UPDATE sessions SET revoked_at = COALESCE(revoked_at, now())
+         WHERE user_id = $1 AND id <> $2`,
+        [userID, sessionID],
+      );
+      await client.query("UPDATE users SET updated_at = now() WHERE id = $1", [userID]);
+      await client.query("COMMIT");
+      return { changed: true };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async replaceEmailVerificationToken({ userID, tokenHash, expiresAt }) {
     const client = await this.pool.connect();
     try {
