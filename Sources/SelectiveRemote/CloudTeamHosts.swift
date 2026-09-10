@@ -859,6 +859,13 @@ struct SelectiveRemoteTeamHostsView: View {
 
                 GroupBox(UpdateLocalization.text(ru: "Подключение", en: "Connection")) {
                     VStack(alignment: .leading, spacing: 12) {
+                        if host.profile.connectionType == .ssh
+                            || host.profile.connectionType == .telnet {
+                            LabeledContent(
+                                UpdateLocalization.text(ru: "Порт", en: "Port"),
+                                value: "\(host.profile.sshPort)"
+                            )
+                        }
                         if host.profile.connectionType == .rdp
                             || host.profile.connectionType == .ssh {
                             TextField(
