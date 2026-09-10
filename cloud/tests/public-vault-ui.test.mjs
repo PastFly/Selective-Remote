@@ -7,6 +7,7 @@ import {
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordSummary,
+  teamHostRecordData,
   teamVaultRecoveryMode,
 } from "../public/app.js";
 
@@ -76,6 +77,19 @@ test("Vault form mapping rejects incomplete and oversized records", () => {
     () => localVaultRecordData("host", { title: "x".repeat(121), target: "host.invalid", secret: "" }),
     /invalid_local_record/,
   );
+});
+
+test("Team Host organization stays inside the encrypted record", () => {
+  assert.deepEqual(teamHostRecordData({
+    title: " API ", target: "api.invalid", folder: " Production ",
+    tags: "linux, api, linux", description: " Primary endpoint ",
+  }), {
+    title: "API", address: "api.invalid", folder: "Production",
+    tags: ["linux", "api"], description: "Primary endpoint",
+  });
+  assert.throws(() => teamHostRecordData({
+    title: "API", target: "api.invalid", folder: "x".repeat(121), tags: "", description: "",
+  }), /invalid_team_host_organization/u);
 });
 
 test("Team Vault routine automation exposes controls only for recoverable blockers", () => {
@@ -207,7 +221,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · хранилищ: \$\{vaults\.length\}/u);
   assert.match(application, /выберите Vault для просмотра хостов/u);
-  assert.match(application, /activeView !== "hosts" \|\| value\.type === "host"/u);
+  assert.match(application, /value\.type !== "host" \|\| \(folder !== "all"/u);
+  assert.match(html, /id="team-host-search"/u);
+  assert.match(html, /id="team-host-folder-filter"/u);
+  assert.match(application, /teamHostRecordData/u);
   assert.match(application, /В выбранном Team Vault пока нет хостов/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /resourceTitles/u);
