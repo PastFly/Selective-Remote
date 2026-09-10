@@ -28,6 +28,18 @@ function message(config, recipient, subject, text, html) {
   return { from: `Selective Remote <${config.smtp.from}>`, to: recipient, subject, disableFileAccess: true, disableUrlAccess: true, text, html };
 }
 
+function invitationRole(role) {
+  return ({ admin: "Администратор", editor: "Редактор", operator: "Оператор", viewer: "Наблюдатель" })[role] ?? role;
+}
+
+function invitationExpiry(value) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  return new Intl.DateTimeFormat("ru-RU", {
+    dateStyle: "long", timeStyle: "short", timeZone: "UTC",
+  }).format(date) + " UTC";
+}
+
 export function createVerificationMailer(config, createTransport = nodemailer.createTransport) {
   if (!config.smtp) throw new Error("smtp_not_configured");
   const transport = createTransport({
@@ -55,13 +67,20 @@ export function createVerificationMailer(config, createTransport = nodemailer.cr
       const html = emailHTML({ preview: "Безопасная ссылка для смены пароля Selective Remote.", eyebrow: "Безопасность аккаунта", title: "Сброс пароля", body: `Мы получили запрос на смену пароля. Ссылка действует <strong style="color:${COLORS.white}">${escapeHTML(config.passwordResetTTLHours)} ч.</strong> и предназначена только для вас.`, buttonLabel: "Задать новый пароль", url });
       return transport.sendMail(message(config, recipient, "Сброс пароля Selective Remote", text, html));
     },
-    async sendTeamInvitation({ recipient, token, teamID, role, expiresAt }) {
+    async sendTeamInvitation({ recipient, token, teamID, teamName, invitedBy, role, expiresAt }) {
       const target = new URL("/", config.publicOrigin);
       target.hash = `accept-team-invitation?${new URLSearchParams({ token })}`;
       const url = target.toString();
-      const text = ["Вас пригласили в команду Selective Remote.", url, "", `Роль: ${role}. Идентификатор команды: ${teamID}.`, `Приглашение действует до ${expiresAt} и может быть использовано один раз.`, "Если вы не ожидали приглашение, проигнорируйте это письмо."].join("\n");
-      const html = emailHTML({ preview: "Вас пригласили в команду Selective Remote.", eyebrow: "Командная работа", title: "Вас пригласили в команду", body: "Примите приглашение, чтобы получить защищённый доступ к общим хостам и ресурсам команды.", buttonLabel: "Принять приглашение", url, details: [{ label: "Роль", value: role }, { label: "Команда", value: teamID }, { label: "Действует до", value: expiresAt }] });
-      return transport.sendMail(message(config, recipient, "Приглашение в команду Selective Remote", text, html));
+      const displayTeam = teamName || teamID;
+      const displayRole = invitationRole(role);
+      const displayExpiry = invitationExpiry(expiresAt);
+      const inviterLine = invitedBy ? `Пригласил: @${invitedBy}.` : "";
+      const text = [`Вас пригласили в команду «${displayTeam}» в Selective Remote.`, inviterLine, url, "", `Роль: ${displayRole}.`, `Приглашение действует до ${displayExpiry} и может быть использовано один раз.`, "Если вы не ожидали приглашение, проигнорируйте это письмо."].filter(Boolean).join("\n");
+      const details = [{ label: "Команда", value: displayTeam }, { label: "Роль", value: displayRole }];
+      if (invitedBy) details.push({ label: "Пригласил", value: `@${invitedBy}` });
+      details.push({ label: "Действует до", value: displayExpiry });
+      const html = emailHTML({ preview: `Вас пригласили в команду «${displayTeam}».`, eyebrow: "Командная работа", title: "Приглашение в команду", body: "Примите приглашение, чтобы получить защищённый доступ к общим хостам и ресурсам команды.", buttonLabel: "Принять приглашение", url, details });
+      return transport.sendMail(message(config, recipient, `Приглашение в команду «${displayTeam}»`, text, html));
     },
   });
 }
