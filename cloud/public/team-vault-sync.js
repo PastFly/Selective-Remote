@@ -17,7 +17,7 @@ import {
 
 const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
-const recordTypes = new Set(["host", "credential", "snippet", "forwarding"]);
+const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const snapshotKeys = [
   "deviceID", "envelope", "keyGeneration", "localRevision", "scope",
