@@ -313,17 +313,35 @@ test("macOS Team Host controls expose writes only through the encrypted role-awa
   ]);
   assert.match(hosts, /writableVaults[\s\S]*isWritable\(role:/u);
   assert.match(hosts, /if SelectiveRemoteTeamHostDocumentMutation\.isWritable\(role: host\.role\)/u);
-  assert.match(hosts, /\.create\(profile\)/u);
+  assert.match(hosts, /\.create\(profile, credentials\)/u);
   assert.match(hosts, /\.update\(recordID:/u);
   assert.match(hosts, /\.delete\(recordID:/u);
   assert.match(hosts, /store\.replaceVault\(with: snapshot\)/u);
   assert.doesNotMatch(hosts, /model\.profiles|profiles\.append/u);
-  assert.match(editor, /Passwords and Personal Vault references are not saved/u);
-  assert.doesNotMatch(editor, /SecureField|password/u);
+  assert.match(editor, /Shared passwords are encrypted inside Team Vault/u);
+  assert.match(editor, /SecureField/u);
   assert.match(mutation, /case \.readOnlyRole/u);
   assert.match(mutation, /coordinator\.refresh/u);
   assert.match(mutation, /coordinator\.stage/u);
   assert.match(mutation, /coordinator\.push/u);
+});
+
+
+test("macOS Team Host credentials stay inside the encrypted Team Vault lifecycle", async () => {
+  const [hosts, editor, mutation] = await Promise.all([
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostMutation.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(hosts, /let credentials: SelectiveRemoteTeamHostCredentials/u);
+  assert.match(hosts, /record\.type == \.credential/u);
+  assert.match(hosts, /host\.credentials\.password/u);
+  assert.match(editor, /Shared Password \(Team Vault\)/u);
+  assert.match(mutation, /selective-remote\/team-host-credential\/v1/u);
+  assert.match(mutation, /"sourceID": \.string\(recordID\.canonicalCloudString\)/u);
+  assert.match(mutation, /isCredential\(record, for: recordID\)/u);
+  assert.match(mutation, /credentialTombstones/u);
+  assert.doesNotMatch(mutation, /KeychainService\.savePassword/u);
 });
 
 
