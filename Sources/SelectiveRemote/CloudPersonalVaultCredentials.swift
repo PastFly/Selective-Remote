@@ -38,6 +38,31 @@ actor SelectiveRemotePersonalVaultCredentialCollector {
         return result
     }
 
+    func collectSSHKeys(_ records: [SSHKeyRecord]) async throws
+        -> [SelectiveRemotePersonalVaultSSHKeyInput]
+    {
+        if !authorizedForSession {
+            try await KeychainService.authenticateDeviceOwner(reason: UpdateLocalization.text(
+                ru: "Разрешить Selective Remote синхронизировать приватные SSH-ключи через зашифрованный Personal Vault",
+                en: "Allow Selective Remote to sync private SSH keys through the encrypted Personal Vault"
+            ))
+            authorizedForSession = true
+        }
+        let fileManager = FileManager.default
+        return try records.map { record in
+            let privateURL = URL(fileURLWithPath: record.privateKeyPath).standardizedFileURL
+            let privateKey = try boundedFile(at: privateURL, fileManager: fileManager)
+            let publicKey = try record.publicKeyPath.map {
+                try boundedFile(at: URL(fileURLWithPath: $0).standardizedFileURL, fileManager: fileManager)
+            }
+            let certificateURL = URL(fileURLWithPath: record.privateKeyPath + "-cert.pub").standardizedFileURL
+            let certificate = fileManager.isReadableFile(atPath: certificateURL.path)
+                ? try boundedFile(at: certificateURL, fileManager: fileManager)
+                : nil
+            return .init(record: record, privateKey: privateKey, publicKey: publicKey, certificate: certificate)
+        }
+    }
+
     private func append(
         _ values: inout [SelectiveRemotePersonalVaultCredentialInput],
         sourceID: UUID,
@@ -47,5 +72,14 @@ actor SelectiveRemotePersonalVaultCredentialCollector {
     ) throws {
         guard let secret = try KeychainService.readPassword(profileID: sourceID, kind: kind), !secret.isEmpty else { return }
         values.append(.init(sourceID: sourceID, kind: kind, title: title, username: username, secret: secret))
+    }
+
+    private func boundedFile(at url: URL, fileManager: FileManager) throws -> Data {
+        let attributes = try fileManager.attributesOfItem(atPath: url.path)
+        guard (attributes[.type] as? FileAttributeType) == .typeRegular,
+              let size = (attributes[.size] as? NSNumber)?.intValue,
+              (1 ... 1_048_576).contains(size)
+        else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        return try Data(contentsOf: url, options: [.mappedIfSafe])
     }
 }
