@@ -10,6 +10,14 @@ struct CloudSettingsView: View {
     private var storedDeviceID = ""
     @AppStorage("SelectiveRemote.cloud.personal-vault-sync-enabled.v1")
     private var personalVaultSyncEnabled = true
+    @AppStorage(SelectiveRemotePersonalVaultSyncStatus.lastSuccessKey)
+    private var personalVaultLastSuccess = 0.0
+    @AppStorage(SelectiveRemotePersonalVaultSyncStatus.revisionKey)
+    private var personalVaultSyncedRevision = 0
+    @AppStorage(SelectiveRemotePersonalVaultSyncStatus.errorKey)
+    private var personalVaultSyncError = ""
+    @AppStorage(SelectiveRemotePersonalVaultSyncStatus.isSyncingKey)
+    private var personalVaultIsSyncing = false
 
     @State private var phase = Phase.idle
     @State private var metadata: SelectiveRemoteCloudMetadata?
@@ -210,6 +218,51 @@ struct CloudSettingsView: View {
                         ),
                         isOn: $personalVaultSyncEnabled
                     )
+
+                    LabeledContent(UpdateLocalization.text(
+                        ru: "Последняя синхронизация",
+                        en: "Last synchronization"
+                    )) {
+                        Text(personalVaultLastSuccessText)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    if personalVaultSyncedRevision > 0 {
+                        LabeledContent(UpdateLocalization.text(
+                            ru: "Применённая ревизия",
+                            en: "Applied revision"
+                        )) {
+                            Text("r\(personalVaultSyncedRevision)")
+                                .monospacedDigit()
+                        }
+                    }
+
+                    Button(
+                        UpdateLocalization.text(
+                            ru: "Синхронизировать сейчас",
+                            en: "Synchronize Now"
+                        ),
+                        systemImage: "arrow.triangle.2.circlepath"
+                    ) {
+                        NotificationCenter.default.post(
+                            name: .selectiveRemotePersonalVaultSyncNow,
+                            object: nil
+                        )
+                    }
+                    .disabled(!personalVaultSyncEnabled || personalVaultIsSyncing)
+
+                    if personalVaultIsSyncing {
+                        Label(
+                            UpdateLocalization.text(ru: "Синхронизация…", en: "Synchronizing…"),
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                        .foregroundStyle(.secondary)
+                    } else if !personalVaultSyncError.isEmpty {
+                        Label(personalVaultSyncError, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                            .font(.caption)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
 
                     if let personalVaultMessage {
                         Label(
@@ -739,6 +792,17 @@ struct CloudSettingsView: View {
         return UpdateLocalization.text(
             ru: "Hosts: \(hosts) · Snippets: \(snippets) · Forwarding: \(forwarding)",
             en: "Hosts: \(hosts) · Snippets: \(snippets) · Forwarding: \(forwarding)"
+        )
+    }
+
+    @MainActor
+    private var personalVaultLastSuccessText: String {
+        guard personalVaultLastSuccess > 0 else {
+            return UpdateLocalization.text(ru: "Ещё не выполнялась", en: "Not yet synchronized")
+        }
+        return Date(timeIntervalSince1970: personalVaultLastSuccess).formatted(
+            date: .abbreviated,
+            time: .standard
         )
     }
 

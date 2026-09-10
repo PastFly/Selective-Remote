@@ -2,6 +2,24 @@ import CryptoKit
 import Foundation
 import Security
 
+enum SelectiveRemotePersonalVaultSyncStatus {
+    static let lastSuccessKey = "SelectiveRemote.cloud.personal-vault-sync-last-success.v1"
+    static let revisionKey = "SelectiveRemote.cloud.personal-vault-sync-revision.v1"
+    static let errorKey = "SelectiveRemote.cloud.personal-vault-sync-error.v1"
+    static let isSyncingKey = "SelectiveRemote.cloud.personal-vault-sync-active.v1"
+
+    static func recordSuccess(revision: Int) {
+        let defaults = UserDefaults.standard
+        defaults.set(Date().timeIntervalSince1970, forKey: lastSuccessKey)
+        defaults.set(revision, forKey: revisionKey)
+        defaults.removeObject(forKey: errorKey)
+    }
+
+    static func recordError(_ error: Error) {
+        UserDefaults.standard.set(error.localizedDescription, forKey: errorKey)
+    }
+}
+
 struct SelectiveRemotePersonalVaultKeyMaterial: Codable, Equatable, Sendable {
     let vaultID: UUID
     let vaultKey: Data
@@ -227,9 +245,16 @@ actor SelectiveRemotePersonalVaultAutoSync {
               await client.hasStoredSession(endpoint: endpoint)
         else { return nil }
         let remote = try await client.personalVault(endpoint: endpoint)
-        guard remote.id == material.vaultID, remote.revision > material.revision,
-              let envelope = remote.envelope
-        else { return nil }
+        guard remote.id == material.vaultID else {
+            throw SelectiveRemotePersonalVaultError.uploadConflict(remote.revision)
+        }
+        guard remote.revision > material.revision else {
+            SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: remote.revision)
+            return nil
+        }
+        guard let envelope = remote.envelope else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
         let document = try SelectiveRemotePersonalVaultCrypto.open(
             envelope,
             vaultKey: material.vaultKey
@@ -249,6 +274,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         material.documentHash = download.documentHash
         material.requiresInitialDownload = false
         try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+        SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: download.revision)
     }
 
     private func synchronize(
@@ -306,6 +332,7 @@ actor SelectiveRemotePersonalVaultAutoSync {
         material.revision = result.revision
         material.documentHash = documentHash
         try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
+        SelectiveRemotePersonalVaultSyncStatus.recordSuccess(revision: result.revision)
     }
 
     private func mergeConcurrent(

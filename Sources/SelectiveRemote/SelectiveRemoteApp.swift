@@ -5,6 +5,9 @@ extension Notification.Name {
     static let selectiveRemoteNewLocalTerminal = Notification.Name(
         "SelectiveRemote.newLocalTerminal"
     )
+    static let selectiveRemotePersonalVaultSyncNow = Notification.Name(
+        "SelectiveRemote.personalVaultSyncNow"
+    )
 }
 
 @MainActor
@@ -167,6 +170,15 @@ struct SelectiveRemoteApp: App {
                     .onChange(of: model.sshKeys) { _, _ in schedulePersonalVaultAutoSync() }
                     .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision) { _ in
                         schedulePersonalVaultAutoSync()
+                    }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: .selectiveRemotePersonalVaultSyncNow
+                    )) { _ in
+                        schedulePersonalVaultAutoSync()
+                        Task { @MainActor in
+                            try? await Task.sleep(for: .seconds(3))
+                            await downloadPersonalVaultChanges()
+                        }
                     }
             }
             .onChange(of: appLock.isLocked) { _, _ in
@@ -465,6 +477,16 @@ struct SelectiveRemoteApp: App {
               ),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
         else { return }
+        UserDefaults.standard.set(
+            true,
+            forKey: SelectiveRemotePersonalVaultSyncStatus.isSyncingKey
+        )
+        defer {
+            UserDefaults.standard.set(
+                false,
+                forKey: SelectiveRemotePersonalVaultSyncStatus.isSyncingKey
+            )
+        }
         do {
             guard let download = try await personalVaultAutoSync.downloadIfNewer(
                 endpoint: endpoint,
@@ -485,7 +507,7 @@ struct SelectiveRemoteApp: App {
             if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
             TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
         } catch {
-            // Keep local data untouched and retry after the polling interval.
+            SelectiveRemotePersonalVaultSyncStatus.recordError(error)
         }
     }
 }
