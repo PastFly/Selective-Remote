@@ -15,6 +15,10 @@ struct SelectiveRemotePersonalVaultImportSnapshot: Equatable {
 }
 
 enum SelectiveRemotePersonalVaultImporter {
+    private static let globalSnippetLibraryID = UUID(
+        uuidString: "5A17407D-9F03-4F7B-80FB-BD06D3FA50B1"
+    )!
+
     static func decode(_ document: SelectiveRemoteVaultDocument) throws
         -> SelectiveRemotePersonalVaultImportSnapshot
     {
@@ -103,7 +107,7 @@ enum SelectiveRemotePersonalVaultImporter {
         }
         return .init(
             id: record.id,
-            profileID: TerminalCommandHistoryStore.globalSnippetLibraryID,
+            profileID: globalSnippetLibraryID,
             title: string(data["title"]) ?? "Snippet",
             command: body,
             category: string(data["category"]) ?? "",
