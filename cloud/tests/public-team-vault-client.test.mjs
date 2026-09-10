@@ -151,7 +151,7 @@ test("account device transport normalizes approval metadata and revokes without 
   const revoke = calls.at(-1);
   assert.equal(revoke.options.method, "DELETE");
   assert.match(revoke.options.headers.Authorization, /^Bearer /u);
-  assert.equal(revoke.options.credentials, "omit");
+  assert.equal(revoke.options.credentials, "same-origin");
 });
 
 test("Team writes carry idempotency and distinguish conflict from committed rotation", async () => {
@@ -232,7 +232,7 @@ test("Team writes carry idempotency and distinguish conflict from committed rota
 
   for (const call of calls.filter((value) => value.options.method && value.path !== "/v1/auth/login")) {
     assert.match(call.options.headers["Idempotency-Key"], /^request:/u);
-    assert.equal(call.options.credentials, "omit");
+    assert.equal(call.options.credentials, "same-origin");
   }
 });
 

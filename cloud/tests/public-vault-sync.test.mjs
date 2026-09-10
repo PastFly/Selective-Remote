@@ -99,9 +99,27 @@ test("authenticated client keeps its bearer token in memory and uses only the pe
 
   await client.putVault(personalVaultScope, envelope);
   assert.equal(calls[1].options.headers.Authorization, `Bearer ${token}`);
-  assert.equal(calls[1].options.credentials, "omit");
+  assert.equal(calls[1].options.credentials, "same-origin");
   await client.logout();
   assert.equal(client.session(), null);
+});
+
+test("browser session restores from an HttpOnly cookie without a JavaScript token", async () => {
+  const calls = [];
+  const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
+    calls.push({ path, options });
+    return jsonResponse(200, {
+      id: userID, email: "user@example.invalid", username: "user", displayName: "User", deviceID: deviceA,
+    });
+  } });
+
+  assert.deepEqual(await client.restoreSession(), {
+    id: userID, email: "user@example.invalid", username: "user", displayName: "User",
+  });
+  assert.equal(client.deviceID(), deviceA);
+  assert.equal(calls[0].path, "/v1/me");
+  assert.equal(calls[0].options.credentials, "same-origin");
+  assert.equal("Authorization" in calls[0].options.headers, false);
 });
 
 test("a 401 response clears the in-memory browser session", async () => {
