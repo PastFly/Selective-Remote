@@ -349,9 +349,10 @@ test("macOS Team Hosts keep per-user connection settings local and secret-free",
   ]);
   assert.match(personal, /SelectiveRemote\.team-host\.personal-settings\.v1/u);
   assert.match(personal, /UserDefaults/u);
-  assert.match(personal, /func appliedProfile\(for host:/u);
+  assert.match(personal, /func appliedProfile\(/u);
+  assert.match(personal, /endpoint: String/u);
   assert.match(personal, /do not change the shared Host/u);
   assert.doesNotMatch(personal, /password|secret|Keychain/u);
-  assert.match(hosts, /personalSettingsStore\.appliedProfile\(for: host\)/u);
+  assert.match(hosts, /personalSettingsStore\.appliedProfile\(/u);
   assert.match(hosts, /personalSettingsHost/u);
 });
