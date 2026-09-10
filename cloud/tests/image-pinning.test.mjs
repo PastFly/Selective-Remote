@@ -18,6 +18,14 @@ test("Dockerfile pins every build and runtime stage to the reviewed Node image",
   assert.deepEqual(images, [expectedNode, expectedNode]);
 });
 
+test("runtime sources are readable regardless of checkout umask", () => {
+  assert.match(
+    dockerfile,
+    /RUN chmod -R a=rX \.\/migrations \.\/public \.\/scripts \.\/src[\s\\]*&& chmod a=r \.\/package\.json/u,
+  );
+  assert.ok(dockerfile.indexOf("RUN chmod -R a=rX") < dockerfile.indexOf("USER cloud"));
+});
+
 test("Compose pins every external runtime image to its reviewed digest", () => {
   const images = [...compose.matchAll(/^\s+image:\s+(\S+)\s*$/gm)].map((match) => match[1]);
   assert.deepEqual(images, [expectedPostgres, expectedCaddy]);

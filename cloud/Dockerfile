@@ -13,6 +13,8 @@ COPY migrations ./migrations
 COPY public ./public
 COPY scripts ./scripts
 COPY src ./src
+RUN chmod -R a=rX ./migrations ./public ./scripts ./src \
+    && chmod a=r ./package.json
 USER cloud
 EXPOSE 8080
 CMD ["sh", "-c", "node scripts/migrate.mjs && exec node src/server.mjs"]
