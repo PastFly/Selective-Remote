@@ -4,17 +4,39 @@ import Security
 struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     var sessionToken: String?
     var teamDevicePrivateKeys: [String: Data]
+    var personalVaultKeyMaterials: [String: Data]
 
     init(
         sessionToken: String? = nil,
-        teamDevicePrivateKeys: [String: Data] = [:]
+        teamDevicePrivateKeys: [String: Data] = [:],
+        personalVaultKeyMaterials: [String: Data] = [:]
     ) {
         self.sessionToken = sessionToken
         self.teamDevicePrivateKeys = teamDevicePrivateKeys
+        self.personalVaultKeyMaterials = personalVaultKeyMaterials
     }
 
     var isEmpty: Bool {
-        sessionToken == nil && teamDevicePrivateKeys.isEmpty
+        sessionToken == nil
+            && teamDevicePrivateKeys.isEmpty
+            && personalVaultKeyMaterials.isEmpty
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionToken, teamDevicePrivateKeys, personalVaultKeyMaterials
+    }
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        sessionToken = try values.decodeIfPresent(String.self, forKey: .sessionToken)
+        teamDevicePrivateKeys = try values.decodeIfPresent(
+            [String: Data].self,
+            forKey: .teamDevicePrivateKeys
+        ) ?? [:]
+        personalVaultKeyMaterials = try values.decodeIfPresent(
+            [String: Data].self,
+            forKey: .personalVaultKeyMaterials
+        ) ?? [:]
     }
 }
 
