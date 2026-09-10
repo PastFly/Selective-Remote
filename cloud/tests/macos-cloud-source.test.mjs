@@ -471,4 +471,11 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(app, /KeychainService\.savePasswords\(snapshot\.credentials\)/u);
   assert.match(app, /SelectiveRemotePersonalVaultSSHKeyStore\.install\(snapshot\.sshKeys\)/u);
   assert.match(snippets, /func replaceSyncedTemplates\(/u);
+  assert.match(sync, /enum SelectiveRemotePersonalVaultSyncStatus/u);
+  assert.match(sync, /recordSuccess\(revision:/u);
+  assert.match(sync, /recordError\(_ error:/u);
+  assert.match(app, /selectiveRemotePersonalVaultSyncNow/u);
+  assert.match(settings, /Последняя синхронизация/u);
+  assert.match(settings, /Синхронизировать сейчас/u);
+  assert.match(settings, /personalVaultSyncError/u);
 });
