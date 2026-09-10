@@ -356,7 +356,7 @@ struct CloudTeamHostsTests {
         #expect(restored.settings(for: host, endpoint: "https://cloud.example.test").preferredUsername == "alice")
         restored.reset(for: host, endpoint: "https://cloud.example.test")
         #expect(!restored.hasSettings(for: host, endpoint: "https://cloud.example.test"))
-        #expect(restored.settings(for: host).preferredUsername == "shared-user")
+        #expect(restored.settings(for: host, endpoint: "https://cloud.example.test").preferredUsername == "shared-user")
     }
 
     private static func snapshot(
