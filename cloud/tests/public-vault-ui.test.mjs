@@ -7,6 +7,8 @@ import {
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordSummary,
+  parseTeamHostConnection,
+  teamHostConnectionData,
   teamHostRecordData,
   teamVaultRecoveryMode,
 } from "../public/app.js";
@@ -101,6 +103,24 @@ test("Team Host organization stays inside the encrypted record", () => {
   assert.throws(() => teamHostRecordData({
     title: "Changed", target: "rdp.invalid", folder: "", tags: "", description: "", baseData: advanced,
   }), /advanced_team_host_requires_native_editor/u);
+});
+
+test("Team Host connection fields produce password-free interoperable URLs", () => {
+  assert.deepEqual(teamHostConnectionData({
+    protocol: "ssh", host: "bastion.example.invalid", port: "2222", username: "deployer",
+  }), {
+    protocol: "ssh", host: "bastion.example.invalid", port: 2222, username: "deployer",
+    target: "ssh://deployer@bastion.example.invalid:2222",
+  });
+  assert.deepEqual(parseTeamHostConnection({ address: "rdp://operator@desktop.example.invalid:3390" }), {
+    protocol: "rdp", host: "desktop.example.invalid", port: 3390, username: "operator",
+  });
+  assert.deepEqual(parseTeamHostConnection({ address: "legacy.example.invalid" }), {
+    protocol: "rdp", host: "legacy.example.invalid", port: 3389, username: "",
+  });
+  assert.throws(() => teamHostConnectionData({
+    protocol: "ssh", host: "bad host", port: 22, username: "root",
+  }), /invalid_team_host_connection/u);
 });
 
 test("Team Vault routine automation exposes controls only for recoverable blockers", () => {
@@ -215,6 +235,13 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="host-detail-dialog"/u);
   assert.match(html, /id="host-detail-copy"/u);
   assert.match(html, /id="host-detail-edit"/u);
+  assert.match(html, /id="host-detail-copy-password"/u);
+  assert.match(html, /id="host-detail-open-ssh"/u);
+  assert.match(html, /id="host-detail-open-sftp"/u);
+  assert.match(html, /id="team-host-protocol"/u);
+  assert.match(html, /id="team-host-port"/u);
+  assert.match(html, /id="team-host-username"/u);
+  assert.match(html, /id="team-host-password"[^>]*type="password"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
   assert.match(html, /id="account-delete-form"/u);
   assert.match(html, /autocomplete="current-password"/u);
@@ -253,6 +280,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /beginHostEdit/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
+  assert.match(application, /navigator\.clipboard\.writeText\(String\(credential\.data\.secret/u);
+  assert.match(application, /target\.replace\(\/\^ssh:\/u, "sftp:"\)/u);
+  assert.match(application, /sourceID: hostID/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
   assert.match(application, /account_owns_teams/u);
