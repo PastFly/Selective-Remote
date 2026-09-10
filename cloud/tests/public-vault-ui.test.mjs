@@ -332,7 +332,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /recoveryPassphrase/u);
   assert.doesNotMatch(`${application}\n${synchronization}\n${teamSynchronization}`, /localStorage|sessionStorage/u);
   assert.match(synchronization, /unsupported_vault_scope/u);
-  assert.match(synchronization, /credentials: "omit"/u);
+  assert.match(synchronization, /credentials: "same-origin"/u);
   assert.match(teamSynchronization, /team_vault_rotation_required/u);
   assert.match(teamSynchronization, /prepareInitialization/u);
 });
