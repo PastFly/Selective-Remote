@@ -456,6 +456,8 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
+    @ObservedObject private var personalSettingsStore =
+        SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
 
     @State private var selectedHostID: UUID?
@@ -463,6 +465,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var password = ""
     @State private var gatewayPassword = ""
     @State private var editorRequest: SelectiveRemoteTeamHostEditorRequest?
+    @State private var personalSettingsHost: SelectiveRemoteTeamHost?
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
@@ -637,6 +640,13 @@ struct SelectiveRemoteTeamHostsView: View {
                 )
             }
         }
+        .sheet(item: $personalSettingsHost, onDismiss: resetConnectionFields) { host in
+            SelectiveRemoteTeamHostPersonalSettingsView(
+                host: host,
+                endpoint: endpoint,
+                store: personalSettingsStore
+            )
+        }
         .confirmationDialog(
             UpdateLocalization.text(ru: "Удалить Team Host?", en: "Delete Team Host?"),
             isPresented: Binding(
@@ -741,6 +751,12 @@ struct SelectiveRemoteTeamHostsView: View {
                             .textSelection(.enabled)
                     }
                     Spacer()
+                    Button(
+                        UpdateLocalization.text(ru: "Мои настройки", en: "My Settings"),
+                        systemImage: "person.crop.circle.badge.gearshape"
+                    ) {
+                        personalSettingsHost = host
+                    }
                     if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                         Button(
                             UpdateLocalization.text(ru: "Изменить", en: "Edit"),
@@ -866,8 +882,8 @@ struct SelectiveRemoteTeamHostsView: View {
 
                         Label(
                             UpdateLocalization.text(
-                                ru: "Проекция только для чтения: профиль не добавляется в Personal Vault, введённые пароли не сохраняются.",
-                                en: "Read-only projection: the profile is not added to Personal Vault and entered passwords are not saved."
+                                ru: "Общий профиль не добавляется в Personal Vault. Мои настройки хранятся только на этом Mac; введённые пароли не сохраняются.",
+                                en: "The shared profile is not added to Personal Vault. My settings stay on this Mac; entered passwords are not saved."
                             ),
                             systemImage: "lock.shield"
                         )
@@ -947,7 +963,10 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {
-        var profile = host.profile
+        var profile = personalSettingsStore.appliedProfile(
+            for: host,
+            endpoint: endpoint
+        )
         profile.username = username
         if profile.connectionType == .rdp {
             model.connectTeamHost(
@@ -972,7 +991,9 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func resetConnectionFields() {
-        username = selectedHost?.profile.username ?? ""
+        username = selectedHost.map {
+            personalSettingsStore.settings(for: $0, endpoint: endpoint).preferredUsername
+        } ?? ""
         password = ""
         gatewayPassword = ""
     }

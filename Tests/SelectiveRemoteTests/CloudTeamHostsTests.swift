@@ -296,6 +296,69 @@ struct CloudTeamHostsTests {
         #expect(store.synchronizedVaultCount == 2)
     }
 
+    @MainActor
+    @Test("personal settings remain local and apply without mutating the shared Host")
+    func personalSettingsOverlay() throws {
+        let suiteName = "SelectiveRemoteTests.TeamHostPersonalSettings.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var shared = ConnectionProfile(connectionType: .rdp)
+        shared.id = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        shared.friendlyName = "Shared Desktop"
+        shared.host = "desktop.example.invalid"
+        shared.username = "shared-user"
+        shared.clipboardMode = .disabled
+        shared.audioMode = .muted
+
+        let host = SelectiveRemoteTeamHost(
+            id: try #require(UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
+            recordID: shared.id,
+            teamID: try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111")),
+            teamName: "Platform",
+            role: .viewer,
+            vaultID: try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222")),
+            vaultName: "Operations",
+            revision: 7,
+            keyGeneration: 3,
+            modifiedAt: "2026-09-10T08:00:00.000Z",
+            address: shared.host,
+            profile: shared
+        )
+
+        let store = SelectiveRemoteTeamHostPersonalSettingsStore(
+            defaults: defaults,
+            storageKey: "settings"
+        )
+        var personal = store.settings(for: host, endpoint: "https://cloud.example.test")
+        personal.preferredUsername = "alice"
+        personal.clipboardMode = .bidirectional
+        personal.audioMode = .local
+        personal.rdpWindowMode = .fixedWindow
+        personal.windowWidth = 1
+        personal.windowHeight = 99_999
+        store.save(personal, for: host, endpoint: "https://cloud.example.test")
+
+        let applied = store.appliedProfile(for: host, endpoint: "https://cloud.example.test")
+        #expect(applied.username == "alice")
+        #expect(applied.clipboardMode == .bidirectional)
+        #expect(applied.audioMode == .local)
+        #expect(applied.windowWidth == 640)
+        #expect(applied.windowHeight == 16_384)
+        #expect(host.profile.username == "shared-user")
+        #expect(host.profile.clipboardMode == .disabled)
+        #expect(host.profile.audioMode == .muted)
+
+        let restored = SelectiveRemoteTeamHostPersonalSettingsStore(
+            defaults: defaults,
+            storageKey: "settings"
+        )
+        #expect(restored.settings(for: host, endpoint: "https://cloud.example.test").preferredUsername == "alice")
+        restored.reset(for: host, endpoint: "https://cloud.example.test")
+        #expect(!restored.hasSettings(for: host, endpoint: "https://cloud.example.test"))
+        #expect(restored.settings(for: host, endpoint: "https://cloud.example.test").preferredUsername == "shared-user")
+    }
+
     private static func snapshot(
         payload: Data,
         role: SelectiveRemoteCloudTeamRole = .viewer
