@@ -61,6 +61,21 @@ test("lock drops the in-memory key and wrong recovery passphrases fail closed", 
   assert.throws(() => vault.document(), /local_vault_locked/);
 });
 
+test("rewrap migrates an unlocked Vault to a new account passphrase", async () => {
+  const repository = memoryRepository();
+  const vault = controller(repository);
+  await vault.create(passphrase);
+  await vault.upsert({ type: "credential", data: { title: "Admin", secret: "synthetic-secret" } });
+  const previousRevision = repository.snapshot().revision;
+  const accountPassphrase = "selective-remote:account-password:v1:strong account password";
+
+  await vault.rewrap(accountPassphrase);
+  assert.equal(repository.snapshot().revision, previousRevision + 1);
+  vault.lock();
+  await assert.rejects(vault.unlock(passphrase), /invalid_recovery_passphrase/);
+  assert.equal((await vault.unlock(accountPassphrase)).records[0].data.secret, "synthetic-secret");
+});
+
 test("all personal record types round-trip and every mutation advances the encrypted revision", async () => {
   const repository = memoryRepository();
   const vault = controller(repository);
