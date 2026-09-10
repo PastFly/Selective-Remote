@@ -308,7 +308,7 @@ struct CloudTeamHostsTests {
             deletedAt: "2026-09-10T04:02:00.000Z"
         )
         #expect(deleted.records.isEmpty)
-        #expect(deleted.tombstones.count == 2)
+        #expect(deleted.tombstones.count == 3)
     }
 
 
