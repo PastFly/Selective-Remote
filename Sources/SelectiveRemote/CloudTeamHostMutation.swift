@@ -5,6 +5,7 @@ enum SelectiveRemoteTeamHostMutationError: LocalizedError, Equatable {
     case duplicateHost
     case hostNotFound
     case recordIsNotHost
+    case syncConflict
 
     var errorDescription: String? {
         switch self {
@@ -19,6 +20,11 @@ enum SelectiveRemoteTeamHostMutationError: LocalizedError, Equatable {
             UpdateLocalization.text(ru: "Team Host больше не существует.", en: "The Team Host no longer exists.")
         case .recordIsNotHost:
             UpdateLocalization.text(ru: "Выбранная запись не является Team Host.", en: "The selected record is not a Team Host.")
+        case .syncConflict:
+            UpdateLocalization.text(
+                ru: "Team Vault изменился параллельно. Локальная версия сохранена; синхронизируйте Vault и повторите.",
+                en: "The Team Vault changed concurrently. The local version was preserved; synchronize the Vault and try again."
+            )
         }
     }
 }
@@ -160,5 +166,164 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         guard isWritable(role: role) else {
             throw SelectiveRemoteTeamHostMutationError.readOnlyRole
         }
+    }
+}
+
+
+struct SelectiveRemoteTeamHostVaultContext: Identifiable, Equatable {
+    let id: UUID
+    let teamID: UUID
+    let teamName: String
+    let role: SelectiveRemoteCloudTeamRole
+    let vaultID: UUID
+    let vaultName: String
+}
+
+enum SelectiveRemoteTeamHostMutationChange {
+    case create(ConnectionProfile)
+    case update(recordID: UUID, profile: ConnectionProfile)
+    case delete(recordID: UUID)
+}
+
+@MainActor
+final class SelectiveRemoteTeamHostMutationService {
+    private let remote: any SelectiveRemoteTeamVaultRemote
+    private let snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+
+    init(
+        remote: any SelectiveRemoteTeamVaultRemote = SelectiveRemoteCloudAPIClient(),
+        snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+    ) {
+        self.remote = remote
+        self.snapshots = snapshots
+    }
+
+    convenience init() throws {
+        try self.init(snapshots: SelectiveRemoteTeamVaultFileSnapshotStore())
+    }
+
+    func apply(
+        _ change: SelectiveRemoteTeamHostMutationChange,
+        to context: SelectiveRemoteTeamHostVaultContext,
+        endpoint: URL,
+        identity: SelectiveRemoteTeamDeviceIdentity,
+        now: Date = Date()
+    ) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot {
+        guard SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) else {
+            throw SelectiveRemoteTeamHostMutationError.readOnlyRole
+        }
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: snapshots
+        )
+        let refreshed = try await coordinator.refresh(
+            teamID: context.teamID,
+            vaultID: context.vaultID,
+            identity: identity
+        )
+        let timestamp = Self.timestamp(now)
+        let outcome: SelectiveRemoteTeamVaultPushOutcome
+        switch refreshed {
+        case let .synchronized(snapshot), let .localChanges(snapshot):
+            let current = try SelectiveRemoteVaultDocument.decode(snapshot.payload)
+            let document = try Self.mutated(
+                current,
+                change: change,
+                role: context.role,
+                deviceID: identity.deviceID,
+                timestamp: timestamp
+            )
+            _ = try await coordinator.stage(
+                document.encoded(),
+                teamID: context.teamID,
+                vaultID: context.vaultID,
+                identity: identity
+            )
+            outcome = try await coordinator.push(
+                teamID: context.teamID,
+                vaultID: context.vaultID,
+                identity: identity
+            )
+        case .empty:
+            guard context.role == .owner || context.role == .admin,
+                  case let .create(profile) = change
+            else { throw SelectiveRemoteTeamHostMutationError.hostNotFound }
+            let document = try SelectiveRemoteTeamHostDocumentMutation.create(
+                profile: profile,
+                role: context.role,
+                deviceID: identity.deviceID,
+                modifiedAt: timestamp
+            )
+            let devices = try await remote.teamKeyDevices(
+                endpoint: endpoint,
+                teamID: context.teamID,
+                vaultID: context.vaultID
+            )
+            outcome = try await coordinator.initialize(
+                payload: document.encoded(),
+                teamID: context.teamID,
+                vaultID: context.vaultID,
+                identity: identity,
+                keyDevices: devices
+            )
+        case .conflict:
+            throw SelectiveRemoteTeamHostMutationError.syncConflict
+        }
+        guard case let .uploaded(uploaded) = outcome else {
+            throw SelectiveRemoteTeamHostMutationError.syncConflict
+        }
+        return .init(
+            teamID: context.teamID,
+            teamName: context.teamName,
+            role: context.role,
+            vaultID: context.vaultID,
+            vaultName: context.vaultName,
+            revision: uploaded.snapshot.serverRevision,
+            keyGeneration: uploaded.snapshot.keyGeneration,
+            payload: uploaded.payload
+        )
+    }
+
+    private static func mutated(
+        _ document: SelectiveRemoteVaultDocument,
+        change: SelectiveRemoteTeamHostMutationChange,
+        role: SelectiveRemoteCloudTeamRole,
+        deviceID: UUID,
+        timestamp: String
+    ) throws -> SelectiveRemoteVaultDocument {
+        switch change {
+        case let .create(profile):
+            try SelectiveRemoteTeamHostDocumentMutation.create(
+                in: document,
+                profile: profile,
+                role: role,
+                deviceID: deviceID,
+                modifiedAt: timestamp
+            )
+        case let .update(recordID, profile):
+            try SelectiveRemoteTeamHostDocumentMutation.update(
+                in: document,
+                recordID: recordID,
+                profile: profile,
+                role: role,
+                deviceID: deviceID,
+                modifiedAt: timestamp
+            )
+        case let .delete(recordID):
+            try SelectiveRemoteTeamHostDocumentMutation.delete(
+                from: document,
+                recordID: recordID,
+                role: role,
+                deviceID: deviceID,
+                deletedAt: timestamp
+            )
+        }
+    }
+
+    private static func timestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }
