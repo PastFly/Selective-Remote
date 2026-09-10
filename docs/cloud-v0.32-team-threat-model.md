@@ -202,6 +202,35 @@ reported without choosing a winner, rotation freezes the Vault, and App Lock
 cancels the cycle. The file snapshot remains ciphertext and a device wrapper;
 plaintext and raw Vault keys are never persisted there.
 
+
+A successful macOS refresh now projects only validated Host records into a
+separate main-actor Team Host store and UI. It accepts the browser's exact
+`title/address` shape (with explicit `rdp://`, `ssh://`, `telnet://` or
+`serial://` transport hints, and RDP as the scheme-less compatibility
+default) and the exact richer macOS export shape. Rich records must agree with
+their embedded profile on record ID, title, address, username and connection
+type. Unknown keys, malformed profiles or unusable endpoints invalidate the
+whole Vault projection instead of partially rendering attacker-controlled
+state.
+
+A Team Host receives a deterministic Team/Vault/record-scoped runtime UUID, so
+it cannot resolve Personal Keychain credentials or collide with a Personal
+profile ID. Materialization rebuilds a safe connection profile: local SSH key,
+jump/proxy, snippet, forwarding, display and device references are discarded;
+clipboard, audio capture, folder, camera, microphone and printer redirection
+are disabled; ignored-certificate policy is upgraded to trust-on-first-use;
+automatic reconnect and administrative sessions are disabled. The read-only
+Team UI never appends to the Personal profile collection and exposes no Vault
+mutation to a Viewer. RDP uses only credentials entered for that launch and
+does not consult stored Personal credentials. SSH/Telnet/Serial launches use
+ephemeral Terminal Workspace tabs excluded from UserDefaults and workspace
+exports; temporary SSH passwords retain the existing launch-scoped cleanup.
+App Lock, logout or loss of a stored session clears the materialized Host
+projection. A transport outage keeps the last in-memory projection rather than
+claiming revocation; the existing removal/rotation guarantee still concerns
+new server data and cannot erase plaintext or active sessions already held by
+an authorized device.
+
 ## Removal and rotation
 
 Membership removal is a fail-closed state transition:
@@ -283,8 +312,9 @@ or wrappers.
   present.
 
 Team/shared Vault release status remains `planned_required`: the server-side
-protocol, browser Team UI/cryptography/causal sync/device approval/rotation and
-the bounded macOS crypto/transport/offline coordinator plus automatic wrapper
-delivery and background ciphertext synchronization are implemented, but macOS
-Team Hosts UI, explicit conflict-resolution writes and the complete cross-client
-acceptance suite must pass before Cloud 0.32 is complete.
+protocol, browser Team UI/cryptography/causal sync/device approval/rotation,
+the macOS crypto/transport/conflict coordinator, automatic wrapper delivery,
+background ciphertext synchronization, separate Team Host projection and the
+browser-to-macOS record fixture are implemented. Live two-member staging
+acceptance and the remaining recovery/lifecycle gates must pass before Cloud
+0.32 is complete.

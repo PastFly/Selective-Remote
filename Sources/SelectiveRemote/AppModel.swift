@@ -3425,6 +3425,46 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    func connectTeamHost(
+        _ teamProfile: ConnectionProfile,
+        password: String,
+        gatewayPassword: String
+    ) {
+        guard teamProfile.connectionType == .rdp,
+              teamProfile.id.isSelectiveRemoteCloudUUID
+        else {
+            errorMessage = UpdateLocalization.text(
+                ru: "Team Host содержит некорректный RDP-профиль",
+                en: "The Team Host contains an invalid RDP profile"
+            )
+            return
+        }
+        guard !profiles.contains(where: { $0.id == teamProfile.id }) else {
+            errorMessage = UpdateLocalization.text(
+                ru: "Team Host пересекается с идентификатором Personal-профиля",
+                en: "The Team Host collides with a Personal profile identifier"
+            )
+            return
+        }
+
+        var profile = teamProfile
+        profile.selectedDisplayIDs = Set(displays.map(\.id))
+        profile.primaryDisplayID = displays.first(where: \.isSystemMain)?.id ?? displays.first?.id
+        profile.displayLayoutMode = .automatic
+        profile.virtualDisplayOrigins = [:]
+        profile.autoReconnect = false
+        profile.reconnectAfterWake = false
+        connectRDPProfile(
+            profile,
+            typedPassword: password,
+            typedGatewayPassword: gatewayPassword,
+            automatic: false,
+            smartReconnectAttempt: nil,
+            allowsStoredCredentials: false,
+            persistsProfileState: false
+        )
+    }
+
     func sshConnectionSettings(
         connection: TerminalTabConnection,
         tabID: UUID
@@ -5047,10 +5087,31 @@ final class AppModel: NSObject, ObservableObject {
         automatic: Bool,
         smartReconnectAttempt: Int? = nil
     ) {
+        guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
+        connectRDPProfile(
+            profile,
+            typedPassword: typedPassword,
+            typedGatewayPassword: typedGatewayPassword,
+            automatic: automatic,
+            smartReconnectAttempt: smartReconnectAttempt,
+            allowsStoredCredentials: true,
+            persistsProfileState: true
+        )
+    }
+
+    private func connectRDPProfile(
+        _ profile: ConnectionProfile,
+        typedPassword: String,
+        typedGatewayPassword: String,
+        automatic: Bool,
+        smartReconnectAttempt: Int?,
+        allowsStoredCredentials: Bool,
+        persistsProfileState: Bool
+    ) {
+        let profileID = profile.id
         if smartReconnectAttempt == nil {
             cancelRDPSmartReconnect(profileID)
         }
-        guard let profile = profiles.first(where: { $0.id == profileID }) else { return }
         guard profile.connectionType == .rdp else { return }
         guard !isSessionRunning(profileID: profileID) else {
             if !automatic { errorMessage = SelectiveRemoteAppError.profileAlreadyRunning.localizedDescription }
@@ -5063,7 +5124,9 @@ final class AppModel: NSObject, ObservableObject {
             from: profile,
             displays: displays
         ) else {
-            reconnectCandidateProfileIDs.insert(profileID)
+            if persistsProfileState {
+                reconnectCandidateProfileIDs.insert(profileID)
+            }
             if !automatic {
                 if missingCount > 0 {
                     errorMessage = SelectiveRemoteAppError.selectedDisplaysUnavailable(missingCount).localizedDescription
@@ -5102,7 +5165,8 @@ final class AppModel: NSObject, ObservableObject {
 
         // A normal/manual start with the complete automatic display set defines
         // the baseline order for subsequent monitor hot-plug reconnects.
-        if smartReconnectAttempt == nil,
+        if persistsProfileState,
+           smartReconnectAttempt == nil,
            profile.displayLayoutMode == .automatic,
            runtimeProfile.selectedDisplayIDs == profile.selectedDisplayIDs {
             rdpStableAutomaticTopologyOrigins[profileID] =
@@ -5110,21 +5174,31 @@ final class AppModel: NSObject, ObservableObject {
         }
 
         do {
-            let connectionPassword = try resolvedPassword(
-                typed: typedPassword,
-                profileID: profileID,
-                kind: .rdp
-            )
+            let connectionPassword: String
+            if allowsStoredCredentials {
+                connectionPassword = try resolvedPassword(
+                    typed: typedPassword,
+                    profileID: profileID,
+                    kind: .rdp
+                )
+            } else {
+                guard !typedPassword.isEmpty else {
+                    throw SelectiveRemoteAppError.rdpPasswordRequired
+                }
+                connectionPassword = typedPassword
+            }
             let resolvedGatewayPassword: String
             if profile.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 resolvedGatewayPassword = ""
-            } else {
+            } else if allowsStoredCredentials {
                 resolvedGatewayPassword = try resolvedPassword(
                     typed: typedGatewayPassword,
                     profileID: profileID,
                     kind: .gateway,
                     required: false
                 )
+            } else {
+                resolvedGatewayPassword = typedGatewayPassword
             }
 
             let connection = try freeRDP.launch(
@@ -5140,19 +5214,22 @@ final class AppModel: NSObject, ObservableObject {
             )
             rdpActivityIDs[profileID] = connectionActivity.begin(
                 kind: .rdp,
-                profileID: profileID,
+                profileID: persistsProfileState ? profileID : nil,
                 profileName: profile.friendlyName,
                 target: profile.host,
                 route: profile.gatewayHost.isEmpty ? nil : profile.gatewayHost
             )
             managedSessions[profileID] = runtime
             sessions[profileID] = runtime.summary
-            reconnectCandidateProfileIDs.remove(profileID)
-            if selectedProfileID == profileID {
+            if persistsProfileState {
+                reconnectCandidateProfileIDs.remove(profileID)
+            }
+            if persistsProfileState, selectedProfileID == profileID {
                 password = ""
                 gatewayPassword = ""
             }
-            if let index = profiles.firstIndex(where: { $0.id == profileID }) {
+            if persistsProfileState,
+               let index = profiles.firstIndex(where: { $0.id == profileID }) {
                 profiles[index].lastConnectedAt = Date()
             }
             if let smartReconnectAttempt {
@@ -5183,13 +5260,15 @@ final class AppModel: NSObject, ObservableObject {
             }
             connectionActivity.recordFailure(
                 kind: .rdp,
-                profileID: profileID,
+                profileID: persistsProfileState ? profileID : nil,
                 profileName: profile.friendlyName,
                 target: profile.host,
                 route: profile.gatewayHost.isEmpty ? nil : profile.gatewayHost,
                 errorMessage: error.localizedDescription
             )
-            reconnectCandidateProfileIDs.insert(profileID)
+            if persistsProfileState {
+                reconnectCandidateProfileIDs.insert(profileID)
+            }
         }
     }
 
@@ -5604,15 +5683,27 @@ final class AppModel: NSObject, ObservableObject {
         lastSessionLogURLs[profileID] = runtime.connection.logURL
         managedSessions.removeValue(forKey: profileID)
         sessions.removeValue(forKey: profileID)
+        if !profiles.contains(where: { $0.id == profileID }) {
+            reconnectCandidateProfileIDs.remove(profileID)
+            rdpStableAutomaticTopologyOrigins.removeValue(forKey: profileID)
+        }
         if managedSessions.isEmpty {
             sessionTimer?.invalidate()
             sessionTimer = nil
         }
 
         if interruption.shouldAttemptSmartReconnect {
+            guard let profile = profiles.first(where: { $0.id == profileID }) else {
+                cancelRDPSmartReconnect(profileID)
+                statusMessage = UpdateLocalization.text(
+                    ru: "Team Host отключён после изменения конфигурации мониторов",
+                    en: "The Team Host disconnected after the monitor configuration changed"
+                )
+                errorMessage = nil
+                return
+            }
             reconnectCandidateProfileIDs.insert(profileID)
-            if let profile = profiles.first(where: { $0.id == profileID }),
-               profile.autoReconnect,
+            if profile.autoReconnect,
                passwordStoredProfileIDs.contains(profileID.uuidString) {
                 scheduleRDPSmartReconnect(
                     profileID: profileID,

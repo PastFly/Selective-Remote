@@ -35,6 +35,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
     case connections = "Подключения"
+    case teamHosts = "Team Hosts"
     case ssh = "SSH"
     case terminal = "Терминал"
     case sftp = "SFTP"
@@ -54,6 +55,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
             en: "Connection Center"
         )
         case .connections: UpdateLocalization.text(ru: "Подключения", en: "Connections")
+        case .teamHosts: "Team Hosts"
         case .ssh: "SSH"
         case .terminal: UpdateLocalization.text(ru: "Терминал", en: "Terminal")
         case .sftp: UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP")
@@ -73,6 +75,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
         case .connections: "rectangle.stack"
+        case .teamHosts: "person.2.fill"
         case .snippets: "curlybraces"
         case .sessionLogs: "doc.text.magnifyingglass"
         case .activity: "clock.arrow.circlepath"
@@ -104,6 +107,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
+    @StateObject private var teamHosts = SelectiveRemoteTeamHostStore.shared
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -472,6 +476,11 @@ struct ContentView: View {
                                 .frame(width: 22)
                             Text(area.title)
                             Spacer()
+                            if area == .teamHosts, !teamHosts.hosts.isEmpty {
+                                Text("\(teamHosts.hosts.count)")
+                                    .font(.caption.bold())
+                                    .foregroundStyle(Color.accentColor)
+                            }
                             if area == .ssh,
                                model.globalTerminalWorkspace().runningSessionCount > 0 {
                                 Text("\(model.globalTerminalWorkspace().runningSessionCount)")
@@ -847,6 +856,12 @@ struct ContentView: View {
                 connectionCenterDetail
             case .connections:
                 profileDetail
+            case .teamHosts:
+                SelectiveRemoteTeamHostsView(
+                    store: teamHosts,
+                    model: model,
+                    onOpenTerminal: openTeamTerminal
+                )
             case .snippets:
                 TerminalSnippetsLibraryView(
                     store: snippets,
@@ -2489,6 +2504,59 @@ struct ContentView: View {
             return
         }
         model.connectSSHTerminal(
+            connection: connection,
+            tabID: tab.id,
+            session: tab.session,
+            temporaryPassword: temporaryPassword
+        )
+        setMainArea(.ssh)
+    }
+
+    private func openTeamTerminal(
+        _ host: SelectiveRemoteTeamHost,
+        username: String,
+        temporaryPassword: String?
+    ) {
+        let profile = host.profile
+        let connection: TerminalTabConnection
+        switch profile.connectionType {
+        case .rdp:
+            return
+        case .ssh:
+            connection = .custom(
+                host: profile.host,
+                username: username,
+                port: profile.sshPort,
+                authenticationMode: temporaryPassword == nil ? .automatic : .password,
+                identityID: nil,
+                jumpHostProfileID: nil
+            )
+        case .telnet:
+            connection = .telnet(host: profile.host, port: profile.sshPort)
+        case .serial:
+            connection = .serial(
+                devicePath: profile.serialDevicePath,
+                baudRate: profile.serialBaudRate,
+                dataBits: profile.serialDataBits,
+                parity: profile.serialParity,
+                stopBits: profile.serialStopBits,
+                flowControl: profile.serialFlowControl
+            )
+        }
+
+        let workspace = model.globalTerminalWorkspace()
+        guard let tab = workspace.addTab(
+            connection: connection,
+            title: "\(host.teamName) · \(profile.friendlyName)",
+            ephemeral: true
+        ) else {
+            model.errorMessage = UpdateLocalization.text(
+                ru: "Достигнут лимит вкладок Terminal Workspace",
+                en: "The Terminal Workspace tab limit has been reached"
+            )
+            return
+        }
+        model.connectTerminal(
             connection: connection,
             tabID: tab.id,
             session: tab.session,

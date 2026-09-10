@@ -348,6 +348,7 @@ struct TerminalWorkspaceTab: Identifiable {
     var connection: TerminalTabConnection
     var isPinned: Bool
     var colorIndex: Int
+    var isEphemeral: Bool
     let appearance: TerminalAppearanceStore
 
     @MainActor
@@ -359,6 +360,7 @@ struct TerminalWorkspaceTab: Identifiable {
         connection: TerminalTabConnection,
         isPinned: Bool,
         colorIndex: Int,
+        isEphemeral: Bool = false,
         appearanceDefaults: UserDefaults = .standard
     ) {
         self.id = id
@@ -368,6 +370,7 @@ struct TerminalWorkspaceTab: Identifiable {
         self.connection = connection
         self.isPinned = isPinned
         self.colorIndex = colorIndex
+        self.isEphemeral = isEphemeral
         appearance = TerminalAppearanceStore(
             defaults: appearanceDefaults,
             storageNamespace: "pane.\(id.uuidString)",
@@ -572,7 +575,8 @@ final class TerminalWorkspaceModel: ObservableObject {
     func addTab(
         connection: TerminalTabConnection? = nil,
         title: String? = nil,
-        select: Bool = true
+        select: Bool = true,
+        ephemeral: Bool = false
     ) -> TerminalWorkspaceTab? {
         if isEmptyState {
             let resolvedConnection = connection ?? .savedProfile(profileID)
@@ -581,6 +585,7 @@ final class TerminalWorkspaceModel: ObservableObject {
                 title ?? "Терминал 1",
                 fallback: "Терминал 1"
             )
+            tabs[0].isEphemeral = ephemeral
             selectedTabID = tabs[0].id
             persist()
             objectWillChange.send()
@@ -598,6 +603,7 @@ final class TerminalWorkspaceModel: ObservableObject {
             connection: connection ?? .savedProfile(profileID),
             isPinned: false,
             colorIndex: tabs.count % 6,
+            isEphemeral: ephemeral,
             appearanceDefaults: defaults
         )
         tabs.append(tab)
@@ -614,7 +620,8 @@ final class TerminalWorkspaceModel: ObservableObject {
         let baseTitle = source.title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let created = addTab(
             connection: source.connection,
-            title: baseTitle.isEmpty ? "Копия терминала" : "\(baseTitle) · копия"
+            title: baseTitle.isEmpty ? "Копия терминала" : "\(baseTitle) · копия",
+            ephemeral: source.isEphemeral
         ) else { return nil }
         if let index = tabs.firstIndex(where: { $0.id == created.id }) {
             tabs[index].colorIndex = source.colorIndex
@@ -648,6 +655,7 @@ final class TerminalWorkspaceModel: ObservableObject {
             tabs[0].title = "Новый терминал"
             tabs[0].connection = .custom(host: "", username: "")
             tabs[0].isPrimary = true
+            tabs[0].isEphemeral = false
             layout = .single
             secondaryTabID = nil
             persist()
@@ -749,7 +757,7 @@ final class TerminalWorkspaceModel: ObservableObject {
 
     func workspaceSnapshot() -> TerminalWorkspaceSnapshot {
         TerminalWorkspaceSnapshot(
-            tabs: tabs.map { tab in
+            tabs: tabs.filter { !$0.isEphemeral }.map { tab in
                 TerminalWorkspaceSnapshot.Tab(
                     id: tab.id,
                     title: tab.title,
@@ -886,7 +894,7 @@ final class TerminalWorkspaceModel: ObservableObject {
     private func persist() {
         guard !isRestoring else { return }
         let value = StoredTerminalWorkspace(
-            tabs: tabs.map {
+            tabs: tabs.filter { !$0.isEphemeral }.map {
                 StoredTerminalWorkspace.Tab(
                     id: $0.id,
                     title: $0.title,
