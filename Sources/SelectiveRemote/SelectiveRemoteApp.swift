@@ -412,6 +412,9 @@ struct SelectiveRemoteApp: App {
     }
 
     private func schedulePersonalVaultAutoSync() {
+        guard UserDefaults.standard.object(
+            forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
+        ) as? Bool ?? true else { return }
         guard let endpointText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
               let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
               let deviceText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1"),
