@@ -46,6 +46,9 @@ test("verification mail requires TLS and keeps credentials out of the message", 
   assert.equal(message.to, "person@example.com");
   assert.equal(message.from, "Selective Remote <no-reply@example.com>");
   assert.match(message.text, /https:\/\/cloud\.example\.com\/#verify-email\?token=opaque-token/);
+  assert.match(message.html, /Остался один шаг/);
+  assert.match(message.html, /Подтвердить email/);
+  assert.match(message.html, /href="https:\/\/cloud\.example\.com\/#verify-email\?token=opaque-token"/);
   assert.equal(message.disableFileAccess, true);
   assert.equal(message.disableUrlAccess, true);
   assert.doesNotMatch(JSON.stringify(message), /secret-secret-secret/);
@@ -68,6 +71,8 @@ test("password reset mail keeps the opaque token in a fragment", async () => {
   assert.match(message.subject, /Сброс пароля/);
   assert.match(message.text, /https:\/\/cloud\.example\.com\/#reset-password\?token=opaque-reset-token/);
   assert.match(message.text, /1 ч\./);
+  assert.match(message.html, /Задать новый пароль/);
+  assert.match(message.html, /#reset-password\?token=opaque-reset-token/);
   assert.equal(message.disableFileAccess, true);
   assert.equal(message.disableUrlAccess, true);
   assert.doesNotMatch(JSON.stringify(message), /secret-secret-secret/);
@@ -92,6 +97,9 @@ test("Team invitation mail carries one opaque fragment token and bounded metadat
   assert.match(message.subject, /Приглашение в команду/);
   assert.match(message.text, /#accept-team-invitation\?token=opaque-team-token/);
   assert.match(message.text, /Роль: viewer/);
+  assert.match(message.html, /Принять приглашение/);
+  assert.match(message.html, /viewer/);
+  assert.match(message.html, /84f6c860-0d26-4ef5-8652-27cb8b991b70/);
   assert.equal(message.disableFileAccess, true);
   assert.equal(message.disableUrlAccess, true);
 });
