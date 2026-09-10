@@ -32,7 +32,24 @@ struct SelectiveRemotePersonalVaultImportSnapshot: Equatable {
     let credentials: [SelectiveRemotePersonalVaultCredentialInput]
     let snippets: [TerminalCommandTemplate]
     let forwarding: [IndependentPortForward]
+    let sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
     let tombstoneIDs: Set<UUID>
+
+    init(
+        profiles: [ConnectionProfile],
+        credentials: [SelectiveRemotePersonalVaultCredentialInput],
+        snippets: [TerminalCommandTemplate],
+        forwarding: [IndependentPortForward],
+        sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = [],
+        tombstoneIDs: Set<UUID>
+    ) {
+        self.profiles = profiles
+        self.credentials = credentials
+        self.snippets = snippets
+        self.forwarding = forwarding
+        self.sshKeys = sshKeys
+        self.tombstoneIDs = tombstoneIDs
+    }
 }
 
 struct SelectiveRemotePersonalVaultImportPlan: Equatable {
@@ -40,6 +57,7 @@ struct SelectiveRemotePersonalVaultImportPlan: Equatable {
     let credentials: [SelectiveRemotePersonalVaultCredentialInput]
     let snippets: [TerminalCommandTemplate]
     let forwarding: [IndependentPortForward]
+    let sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput]
     let conflictIDs: [UUID]
 
     var canApply: Bool { conflictIDs.isEmpty }
@@ -57,6 +75,7 @@ enum SelectiveRemotePersonalVaultImporter {
         var credentials: [SelectiveRemotePersonalVaultCredentialInput] = []
         var snippets: [TerminalCommandTemplate] = []
         var forwarding: [IndependentPortForward] = []
+        var sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = []
         for record in document.records {
             guard case let .object(data) = record.data else {
                 throw SelectiveRemotePersonalVaultImportError.invalidRecord(record.id)
@@ -70,6 +89,8 @@ enum SelectiveRemotePersonalVaultImporter {
                 snippets.append(try snippet(record: record, data: data))
             case .forwarding:
                 forwarding.append(try forward(record: record, data: data))
+            case .sshKey:
+                sshKeys.append(try sshKey(record: record, data: data))
             }
         }
         return .init(
@@ -77,6 +98,7 @@ enum SelectiveRemotePersonalVaultImporter {
             credentials: credentials,
             snippets: snippets,
             forwarding: forwarding,
+            sshKeys: sshKeys,
             tombstoneIDs: Set(document.tombstones.map(\.id))
         )
     }
@@ -85,12 +107,24 @@ enum SelectiveRemotePersonalVaultImporter {
         snapshot: SelectiveRemotePersonalVaultImportSnapshot,
         localProfiles: [ConnectionProfile],
         localSnippets: [TerminalCommandTemplate],
-        localForwarding: [IndependentPortForward]
+        localForwarding: [IndependentPortForward],
+        localSSHKeys: [SSHKeyRecord] = []
     ) -> SelectiveRemotePersonalVaultImportPlan {
         let profiles = additions(remote: snapshot.profiles, local: localProfiles)
         let snippets = additions(remote: snapshot.snippets, local: localSnippets)
         let forwarding = additions(remote: snapshot.forwarding, local: localForwarding)
+        let localSSHByID = Dictionary(uniqueKeysWithValues: localSSHKeys.map { ($0.id, $0) })
+        var sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = []
+        var sshKeyConflicts: [UUID] = []
+        for key in snapshot.sshKeys {
+            if let local = localSSHByID[key.record.id] {
+                if local.fingerprint != key.record.fingerprint { sshKeyConflicts.append(key.record.id) }
+            } else {
+                sshKeys.append(key)
+            }
+        }
         var conflicts = Set(profiles.conflicts + snippets.conflicts + forwarding.conflicts)
+        conflicts.formUnion(sshKeyConflicts)
         let localIDs = Set(localProfiles.map(\.id) + localSnippets.map(\.id) + localForwarding.map(\.id))
         conflicts.formUnion(snapshot.tombstoneIDs.intersection(localIDs))
         let existingProfileIDs = Set(localProfiles.map(\.id))
@@ -100,6 +134,7 @@ enum SelectiveRemotePersonalVaultImporter {
             credentials: snapshot.credentials.filter { !conflicts.contains($0.sourceID) },
             snippets: snippets.values,
             forwarding: forwarding.values,
+            sshKeys: sshKeys,
             conflictIDs: conflicts.sorted { $0.uuidString < $1.uuidString }
         )
     }
@@ -199,6 +234,36 @@ enum SelectiveRemotePersonalVaultImporter {
             throw SelectiveRemotePersonalVaultImportError.mismatchedRecordID(record.id)
         }
         return value
+    }
+
+    private static func sshKey(
+        record: SelectiveRemoteVaultRecord,
+        data: [String: SelectiveRemoteJSONValue]
+    ) throws -> SelectiveRemotePersonalVaultSSHKeyInput {
+        guard let encodedRecord = string(data["record"]),
+              let privateText = string(data["privateKey"]),
+              let privateKey = Data(selectiveRemoteBase64URL: privateText),
+              !privateKey.isEmpty, privateKey.count <= 1_048_576
+        else { throw SelectiveRemotePersonalVaultImportError.invalidRecord(record.id) }
+        let key: SSHKeyRecord = try decode(encodedRecord, recordID: record.id)
+        guard key.id == record.id else {
+            throw SelectiveRemotePersonalVaultImportError.mismatchedRecordID(record.id)
+        }
+        func optionalData(_ name: String) throws -> Data? {
+            guard let value = data[name] else { return nil }
+            if case .null = value { return nil }
+            guard let text = string(value), let decoded = Data(selectiveRemoteBase64URL: text),
+                  decoded.count <= 1_048_576 else {
+                throw SelectiveRemotePersonalVaultImportError.invalidRecord(record.id)
+            }
+            return decoded
+        }
+        return try .init(
+            record: key,
+            privateKey: privateKey,
+            publicKey: optionalData("publicKey"),
+            certificate: optionalData("certificate")
+        )
     }
 
     private static func string(_ value: SelectiveRemoteJSONValue?) -> String? {

@@ -157,6 +157,7 @@ export function localVaultRecordSummary(record) {
   if (record?.type === "credential") summary = `${String(data.username ?? "")} · секрет скрыт`;
   if (record?.type === "snippet") summary = String(data.body ?? "");
   if (record?.type === "forwarding") summary = String(data.destination ?? "");
+  if (record?.type === "sshKey") summary = "Приватный ключ защищён · содержимое скрыто";
   return summary.length > 240 ? `${summary.slice(0, 237)}…` : summary;
 }
 
@@ -273,7 +274,7 @@ export async function initializeLocalVault({
 
   function render() {
     const current = controller.document();
-    const counts = { host: 0, credential: 0, snippet: 0, forwarding: 0 };
+    const counts = { host: 0, credential: 0, snippet: 0, forwarding: 0, sshKey: 0 };
     for (const record of current.records) {
       if (Object.hasOwn(counts, record.type)) counts[record.type] += 1;
     }
@@ -455,7 +456,7 @@ export async function initializeLocalVault({
     clearConflictUI,
     setConflictMode,
     setFilter(value) {
-      activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(value) ? value : "all";
+      activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding", "sshKey"].includes(value) ? value : "all";
       for (const button of filterButtons) {
         button.classList.toggle("active", button.dataset.recordFilter === activeRecordFilter);
       }
@@ -2266,6 +2267,7 @@ export function initializePortalNavigation({
     snippet: "Сниппеты",
     credential: "Учётные данные",
     forwarding: "Forwarding",
+    sshKey: "SSH-ключи",
     all: "Personal Vault",
   };
   const teamTitles = {

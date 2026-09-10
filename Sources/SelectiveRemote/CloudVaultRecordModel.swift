@@ -26,6 +26,7 @@ enum SelectiveRemoteVaultRecordType: String, Codable, CaseIterable, Sendable {
     case credential
     case snippet
     case forwarding
+    case sshKey
 }
 
 enum SelectiveRemoteJSONValue: Equatable, Sendable {

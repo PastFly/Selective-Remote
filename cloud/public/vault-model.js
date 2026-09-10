@@ -1,6 +1,6 @@
 export const vaultDocumentSchemaVersion = 1;
 
-const recordTypes = new Set(["host", "credential", "snippet", "forwarding"]);
+const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
 const exactUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const forbiddenKeys = new Set(["__proto__", "constructor", "prototype"]);
 const maxDocumentBytes = 24 * 1024 * 1024;

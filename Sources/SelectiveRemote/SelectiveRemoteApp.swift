@@ -161,6 +161,7 @@ struct SelectiveRemoteApp: App {
                     }
                     .onChange(of: model.profiles) { _, _ in schedulePersonalVaultAutoSync() }
                     .onChange(of: model.independentPortForwards) { _, _ in schedulePersonalVaultAutoSync() }
+                    .onChange(of: model.sshKeys) { _, _ in schedulePersonalVaultAutoSync() }
                     .onReceive(TerminalCommandHistoryStore.shared.$snippetRevision) { _ in
                         schedulePersonalVaultAutoSync()
                     }
@@ -423,13 +424,15 @@ struct SelectiveRemoteApp: App {
         let profiles = model.profiles
         let snippets = TerminalCommandHistoryStore.shared.templates()
         let forwarding = model.independentPortForwards
+        let sshKeys = model.sshKeys
         Task {
             await personalVaultAutoSync.schedule(
                 endpoint: endpoint,
                 deviceID: deviceID,
                 profiles: profiles,
                 snippets: snippets,
-                forwarding: forwarding
+                forwarding: forwarding,
+                sshKeys: sshKeys
             )
         }
     }

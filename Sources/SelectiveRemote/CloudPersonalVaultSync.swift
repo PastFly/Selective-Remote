@@ -116,13 +116,29 @@ struct SelectiveRemotePersonalVaultCredentialInput: Equatable, Sendable {
     let secret: String
 }
 
+struct SelectiveRemotePersonalVaultSSHKeyInput: Equatable, Sendable {
+    let record: SSHKeyRecord
+    let privateKey: Data
+    let publicKey: Data?
+    let certificate: Data?
+}
+
 struct SelectiveRemotePersonalVaultExportSummary: Equatable, Sendable {
     let hosts: Int
     let credentials: Int
     let snippets: Int
     let forwarding: Int
+    let sshKeys: Int
 
-    var total: Int { hosts + credentials + snippets + forwarding }
+    var total: Int { hosts + credentials + snippets + forwarding + sshKeys }
+
+    init(hosts: Int, credentials: Int, snippets: Int, forwarding: Int, sshKeys: Int = 0) {
+        self.hosts = hosts
+        self.credentials = credentials
+        self.snippets = snippets
+        self.forwarding = forwarding
+        self.sshKeys = sshKeys
+    }
 }
 
 struct SelectiveRemotePersonalVaultExport: Equatable, Sendable {
@@ -136,6 +152,7 @@ enum SelectiveRemotePersonalVaultExporter {
         credentials: [SelectiveRemotePersonalVaultCredentialInput],
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
+        sshKeys: [SelectiveRemotePersonalVaultSSHKeyInput] = [],
         deviceID: UUID,
         now: Date = Date(),
         allowEmpty: Bool = false
@@ -208,12 +225,28 @@ enum SelectiveRemotePersonalVaultExporter {
                 ])
             )
         }
+        records += try sshKeys.map { key in
+            try SelectiveRemoteVaultRecord(
+                id: key.record.id,
+                type: .sshKey,
+                version: version,
+                modifiedAt: timestamp,
+                data: .object([
+                    "title": .string(boundedTitle(key.record.name, fallback: "SSH Key")),
+                    "record": .string(try encoded(key.record)),
+                    "privateKey": .string(key.privateKey.selectiveRemoteBase64URL),
+                    "publicKey": key.publicKey.map { .string($0.selectiveRemoteBase64URL) } ?? .null,
+                    "certificate": key.certificate.map { .string($0.selectiveRemoteBase64URL) } ?? .null
+                ])
+            )
+        }
         let document = try SelectiveRemoteVaultDocument(records: records)
         let summary = SelectiveRemotePersonalVaultExportSummary(
             hosts: populatedProfiles.count,
             credentials: credentials.count,
             snippets: snippets.count,
-            forwarding: forwarding.count
+            forwarding: forwarding.count,
+            sshKeys: sshKeys.count
         )
         guard allowEmpty || summary.total > 0 else {
             throw SelectiveRemotePersonalVaultError.emptyLocalVault
