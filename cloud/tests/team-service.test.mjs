@@ -10,6 +10,7 @@ const session = {
   user_id: "user-1",
   device_id: deviceID,
   email: "owner@example.com",
+  username: "owner.name",
 };
 const config = {
   publicOrigin: "https://cloud.example.invalid",
@@ -335,7 +336,7 @@ test("legacy email invitation API persists only a hash and encrypted durable out
     { email: " MEMBER@Example.com ", role: "editor" },
     "request:team-invite-01",
   );
-  const stored = store.calls[0][1];
+  const stored = store.calls.find(([name]) => name === "createTeamInvitation")[1];
 
   assert.match(stored.tokenHash, /^[0-9a-f]{64}$/);
   assert.equal(JSON.stringify(stored).includes("token\":"), false);
@@ -346,6 +347,8 @@ test("legacy email invitation API persists only a hash and encrypted durable out
   assert.equal(response.invitation.acceptanceURL, null);
   assert.equal(await service.dispatchTeamInvitationOutbox(), true);
   assert.equal(delivered.recipient, "member@example.com");
+  assert.equal(delivered.teamName, "Operations");
+  assert.equal(delivered.invitedBy, "owner.name");
   assert.ok(delivered.token.length >= 40);
   assert.equal(store.calls.at(-1)[0], "completeTeamInvitationOutbox");
 });
