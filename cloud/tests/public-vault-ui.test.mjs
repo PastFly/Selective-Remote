@@ -2,12 +2,21 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  accountVaultPassphrase,
   initializeAppearance,
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordSummary,
   teamVaultRecoveryMode,
 } from "../public/app.js";
+
+test("account password is domain-separated before it unlocks Personal Vault", () => {
+  assert.equal(
+    accountVaultPassphrase("correct horse battery"),
+    "selective-remote:account-password:v1:correct horse battery",
+  );
+  assert.throws(() => accountVaultPassphrase("too-short"), /invalid_account_password/u);
+});
 
 test("appearance defaults to graphite and synchronizes every visible selector", () => {
   const listeners = [];
@@ -207,6 +216,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(server, /\["\/", "\/login", "\/app"\]\.includes\(pathname\)/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
+  assert.match(application, /unlockAndSyncPersonalVault\(password\)/u);
+  assert.match(application, /backgroundPersonalVaultSync/u);
+  assert.match(application, /15_000/u);
+  assert.match(application, /vault\.lock\(\)/u);
+  assert.match(application, /Personal Vault открыт паролем аккаунта/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
   assert.match(application, /provisionTeamVaultWrappers/u);
