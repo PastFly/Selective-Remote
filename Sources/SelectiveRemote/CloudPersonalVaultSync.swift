@@ -255,6 +255,28 @@ enum SelectiveRemotePersonalVaultCrypto {
     static let recoveryIterations: UInt32 = 600_000
     private static let additionalData = Data("selective-remote:vault-envelope:v1".utf8)
 
+    static func accountPassphrase(_ password: String) throws -> String {
+        let normalized = password.precomposedStringWithCanonicalMapping
+        guard (12...1_024).contains(normalized.utf8.count) else {
+            throw SelectiveRemotePersonalVaultError.invalidRecoveryPhrase
+        }
+        return "selective-remote:account-password:v1:\(normalized)"
+    }
+
+    static func unwrapVaultKey(
+        _ wrappedKey: SelectiveRemotePersonalVaultWrappedKey,
+        passphrase: String
+    ) throws -> Data {
+        guard wrappedKey.algorithm == "PBKDF2-SHA256+A256KW",
+              wrappedKey.iterations == Int(recoveryIterations),
+              let salt = Data(selectiveRemoteBase64URL: wrappedKey.salt, expectedLength: 16),
+              let value = Data(selectiveRemoteBase64URL: wrappedKey.value, expectedLength: 40)
+        else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
+        let normalized = passphrase.precomposedStringWithCanonicalMapping
+        let keyEncryptionKey = try deriveKey(password: Data(normalized.utf8), salt: salt)
+        return try unwrapRFC3394(value, keyEncryptionKey: keyEncryptionKey)
+    }
+
     static func seal(
         _ document: SelectiveRemoteVaultDocument,
         recoveryPhrase: String,
@@ -400,6 +422,33 @@ enum SelectiveRemotePersonalVaultCrypto {
         return blocks.reduce(into: accumulator) { $0.append($1) }
     }
 
+    static func unwrapRFC3394(_ value: Data, keyEncryptionKey: Data) throws -> Data {
+        guard keyEncryptionKey.count == 32, value.count >= 24, value.count.isMultiple(of: 8) else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        let blockCount = value.count / 8 - 1
+        var accumulator = Data(value.prefix(8))
+        var blocks = stride(from: 8, to: value.count, by: 8).map { offset in
+            Data(value[offset..<offset + 8])
+        }
+        for round in stride(from: 5, through: 0, by: -1) {
+            for index in stride(from: blockCount - 1, through: 0, by: -1) {
+                var counter = UInt64(blockCount * round + index + 1).bigEndian
+                var masked = accumulator
+                withUnsafeBytes(of: &counter) { counterBytes in
+                    for offset in 0..<8 { masked[offset] ^= counterBytes[offset] }
+                }
+                let decrypted = try decryptAESBlock(masked + blocks[index], key: keyEncryptionKey)
+                accumulator = Data(decrypted.prefix(8))
+                blocks[index] = Data(decrypted.suffix(8))
+            }
+        }
+        guard accumulator == Data(repeating: 0xa6, count: 8) else {
+            throw SelectiveRemotePersonalVaultError.invalidRecoveryPhrase
+        }
+        return blocks.reduce(into: Data()) { $0.append($1) }
+    }
+
     private static func deriveKey(password: Data, salt: Data) throws -> Data {
         var derived = Data(count: 32)
         let outputLength = derived.count
@@ -446,6 +495,30 @@ enum SelectiveRemotePersonalVaultCrypto {
                         outputBytes.baseAddress,
                         outputCapacity,
                         &moved
+                    )
+                }
+            }
+        }
+        guard status == kCCSuccess, moved == kCCBlockSizeAES128 else {
+            throw SelectiveRemotePersonalVaultError.cryptoFailure
+        }
+        return output
+    }
+
+    private static func decryptAESBlock(_ block: Data, key: Data) throws -> Data {
+        guard block.count == kCCBlockSizeAES128, key.count == kCCKeySizeAES256 else {
+            throw SelectiveRemotePersonalVaultError.invalidEnvelope
+        }
+        var output = Data(count: kCCBlockSizeAES128)
+        var moved = 0
+        let outputCapacity = output.count
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            block.withUnsafeBytes { blockBytes in
+                key.withUnsafeBytes { keyBytes in
+                    CCCrypt(
+                        CCOperation(kCCDecrypt), CCAlgorithm(kCCAlgorithmAES), CCOptions(kCCOptionECBMode),
+                        keyBytes.baseAddress, key.count, nil, blockBytes.baseAddress, block.count,
+                        outputBytes.baseAddress, outputCapacity, &moved
                     )
                 }
             }
