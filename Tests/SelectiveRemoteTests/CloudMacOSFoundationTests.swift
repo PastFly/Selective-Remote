@@ -1543,6 +1543,42 @@ struct PersonalVaultInitialDownloadDecoderTests {
         #expect(decoded.profiles.first?.connectionType == .ssh)
         #expect(decoded.snippets.first?.id == snippetID)
     }
+
+    @Test("empty Mac accepts additions while an ID collision blocks the whole plan")
+    func conflictAwarePlan() throws {
+        var remote = ConnectionProfile(connectionType: .ssh)
+        remote.host = "remote.example"
+        let snapshot = SelectiveRemotePersonalVaultImportSnapshot(
+            profiles: [remote], credentials: [], snippets: [], forwarding: [], tombstoneIDs: []
+        )
+        let clean = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [], localSnippets: [], localForwarding: []
+        )
+        #expect(clean.canApply)
+        #expect(clean.profiles == [remote])
+
+        var local = remote
+        local.host = "local.example"
+        let blocked = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [local], localSnippets: [], localForwarding: []
+        )
+        #expect(!blocked.canApply)
+        #expect(blocked.conflictIDs == [remote.id])
+        #expect(blocked.profiles.isEmpty)
+    }
+
+    @Test("remote tombstones never silently delete local resources")
+    func tombstoneCollision() {
+        let local = ConnectionProfile(connectionType: .rdp)
+        let snapshot = SelectiveRemotePersonalVaultImportSnapshot(
+            profiles: [], credentials: [], snippets: [], forwarding: [], tombstoneIDs: [local.id]
+        )
+        let plan = SelectiveRemotePersonalVaultImporter.plan(
+            snapshot: snapshot, localProfiles: [local], localSnippets: [], localForwarding: []
+        )
+        #expect(!plan.canApply)
+        #expect(plan.conflictIDs == [local.id])
+    }
 }
 
 private final class CloudHTTPStub: @unchecked Sendable {
