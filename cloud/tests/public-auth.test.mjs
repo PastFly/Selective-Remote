@@ -20,6 +20,7 @@ test("browser registration sends JSON without persisting or returning a password
     email: "owner@example.com",
     password: "a sufficiently long password",
     deviceID,
+    invitationToken: "opaque-invitation-token",
   });
   assert.deepEqual(result, { verificationRequired: true });
   assert.equal(request[0], "/v1/auth/register");
@@ -30,6 +31,7 @@ test("browser registration sends JSON without persisting or returning a password
   assert.equal(body.email, "owner@example.com");
   assert.equal(body.username, "leonid");
   assert.equal(body.device.id, deviceID);
+  assert.equal(body.invitationToken, "opaque-invitation-token");
   assert.equal("password" in result, false);
 });
 

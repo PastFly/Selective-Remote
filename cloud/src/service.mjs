@@ -100,9 +100,16 @@ export class CloudService {
   }
 
   async register(input) {
-    if (!this.config.allowRegistration) throw new Error("registration_disabled");
-    if (!this.mailer) throw new Error("smtp_not_configured");
     const email = normalizeEmail(input.email);
+    if (!this.config.allowRegistration) {
+      const invitationToken = String(input?.invitationToken ?? "").trim();
+      if (!invitationToken) throw new Error("registration_disabled");
+      const target = await this.store.teamInvitationRegistrationTarget(
+        hashTeamInvitationToken(invitationToken, this.config.teamInvitationTokenPepper),
+      );
+      if (!target || (target.type === "email" && target.email !== email)) throw new Error("invalid_team_invitation");
+    }
+    if (!this.mailer) throw new Error("smtp_not_configured");
     const password = validatePassword(input.password);
     const displayName = String(input.displayName ?? "").trim().slice(0, 120);
     const username = input.username

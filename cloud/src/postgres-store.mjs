@@ -134,6 +134,23 @@ export class PostgresStore {
     return result.rows[0] ?? null;
   }
 
+  async teamInvitationRegistrationTarget(tokenHash) {
+    const result = await this.pool.query(
+      `SELECT invitation_type AS type, invitation.email
+       FROM team_invitations invitation
+       JOIN teams team ON team.id = invitation.team_id
+       WHERE invitation.token_hash = $1
+         AND invitation.invitation_type IN ('email', 'link')
+         AND invitation.accepted_at IS NULL
+         AND invitation.cancelled_at IS NULL
+         AND invitation.expires_at > now()
+         AND team.archived_at IS NULL
+       LIMIT 1`,
+      [tokenHash],
+    );
+    return result.rows[0] ?? null;
+  }
+
 
   async usernameAvailable(username, excludingUserID) {
     const result = await this.pool.query(

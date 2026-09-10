@@ -506,6 +506,7 @@ export function initializeTeamWorkspace({
   const members = documentValue.querySelector("#team-members");
   const membersView = documentValue.querySelector("#team-members-view");
   const inviteForm = documentValue.querySelector("#team-invite-form");
+  const inviteEmailSubmit = documentValue.querySelector("#team-invite-email-submit");
   const inviteLinkCreate = documentValue.querySelector("#team-invite-link-create");
   const inviteLinkResult = documentValue.querySelector("#team-invite-link-result");
   const inviteLinkValue = documentValue.querySelector("#team-invite-link-value");
@@ -1404,6 +1405,21 @@ export function initializeTeamWorkspace({
     }
   });
 
+  inviteEmailSubmit.addEventListener("click", async () => {
+    if (!selectedTeam || !canManage()) return;
+    const email = String(inviteForm.elements.email.value ?? "").trim();
+    if (!email) { setText(message, "Укажите email участника."); return; }
+    inviteEmailSubmit.disabled = true;
+    try {
+      await client.inviteTeamMember({ teamID: selectedTeam.id, email, type: "email", role: inviteForm.elements.role.value });
+      inviteForm.elements.email.value = "";
+      await loadSelectedTeam();
+      setText(message, `Приглашение отправлено на ${email}. Оно действует 48 часов.`);
+    } catch {
+      setText(message, "Email-приглашение не отправлено. Проверьте адрес, роль и настройки почты.");
+    } finally { inviteEmailSubmit.disabled = false; }
+  });
+
   inviteLinkCreate.addEventListener("click", async () => {
     if (!selectedTeam || !canManage()) return;
     inviteLinkCreate.disabled = true;
@@ -1882,7 +1898,7 @@ export async function initializeCloudAccount({
   personalVaultTimer?.unref?.();
 
   function setAuthMode(mode) {
-    const registrationAvailable = metadata?.registrationEnabled === true;
+    const registrationAvailable = metadata?.registrationEnabled === true || Boolean(initialTeamInvitationToken);
     form.hidden = mode !== "login";
     registrationForm.hidden = mode !== "registration";
     recoveryFormAccount.hidden = mode !== "recovery";
@@ -1894,7 +1910,9 @@ export async function initializeCloudAccount({
     }
     if (mode === "registration") {
       setAccountMessage(registrationAvailable
-        ? "Создайте пароль Selective Remote — на почту придёт только одноразовая ссылка подтверждения."
+        ? initialTeamInvitationToken
+          ? "Создайте аккаунт по приглашению. После подтверждения email войдите и снова откройте ссылку приглашения."
+          : "Создайте пароль Selective Remote — на почту придёт только одноразовая ссылка подтверждения."
         : "Регистрация временно закрыта. Уже подтверждённые аккаунты могут войти.", registrationAvailable ? null : "error");
     } else if (mode === "recovery") {
       setAccountMessage("Мы отправим одноразовую ссылку для смены пароля, если аккаунт существует.");
@@ -1972,7 +1990,7 @@ export async function initializeCloudAccount({
 
   registrationForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    if (metadata?.registrationEnabled !== true) {
+    if (metadata?.registrationEnabled !== true && !initialTeamInvitationToken) {
       setAccountMessage("Регистрация временно закрыта. Обновите страницу после открытия регистрационного окна.", "error");
       return;
     }
@@ -1994,6 +2012,7 @@ export async function initializeCloudAccount({
         password,
         deviceID,
         publicKey: identity?.publicKey ?? null,
+        invitationToken: initialTeamInvitationToken,
       });
       const email = registrationForm.elements.email.value.trim();
       registrationForm.reset();
@@ -2005,6 +2024,7 @@ export async function initializeCloudAccount({
       const code = String(error?.message ?? "");
       const messages = {
         registration_disabled: "Регистрационное окно уже закрыто. Обновите страницу позже.",
+        invalid_team_invitation: "Приглашение недействительно, уже использовано, отозвано или истекло.",
         rate_limited: "Слишком много попыток. Повторите позже.",
         smtp_not_configured: "Почтовый сервис временно не настроен.",
       };

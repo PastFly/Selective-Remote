@@ -420,7 +420,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   }
 
   return {
-    async register({ displayName, username, email, password, deviceID, publicKey = null }) {
+    async register({ displayName, username, email, password, deviceID, publicKey = null, invitationToken = null }) {
       const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
       if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
       const normalizedName = String(displayName ?? "").trim();
@@ -438,6 +438,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
           username: normalizedUsername,
           email: String(email ?? "").trim(),
           password: normalizedPassword(password),
+          ...(invitationToken ? { invitationToken: String(invitationToken).trim() } : {}),
           device: {
             id: normalizedDeviceID,
             name: "Web browser",
@@ -452,7 +453,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       });
       const result = await responseJSON(response, "registration_failed");
       if (!response.ok) {
-        const code = ["registration_disabled", "rate_limited", "smtp_not_configured"].includes(result.error)
+        const code = ["registration_disabled", "invalid_team_invitation", "rate_limited", "smtp_not_configured"].includes(result.error)
           ? result.error : "registration_failed";
         throw new Error(code);
       }

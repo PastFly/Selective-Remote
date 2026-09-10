@@ -544,12 +544,25 @@ actor SelectiveRemoteCloudAPIClient {
         let invitation = try await createTeamInvitation(
             endpoint: endpoint,
             teamID: teamID,
-            request: TeamInvitationRequest(username: normalizedUsername, type: nil, role: role)
+            request: TeamInvitationRequest(username: normalizedUsername, email: nil, type: nil, role: role)
         )
         guard invitation.type == .username,
               invitation.targetUsername == normalizedUsername,
               invitation.acceptanceURL == nil
         else { throw SelectiveRemoteCloudError.invalidResponse }
+        return invitation
+    }
+
+    func inviteTeamMember(endpoint: URL, teamID: UUID, email: String, role: SelectiveRemoteCloudTeamRole) async throws -> SelectiveRemoteCloudTeamInvitation {
+        let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard teamID.isSelectiveRemoteCloudUUID, normalizedEmail.contains("@"), normalizedEmail.count <= 320, role != .owner else {
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        let invitation = try await createTeamInvitation(
+            endpoint: endpoint, teamID: teamID,
+            request: TeamInvitationRequest(username: nil, email: normalizedEmail, type: "email", role: role)
+        )
+        guard invitation.type == .email, invitation.acceptanceURL == nil else { throw SelectiveRemoteCloudError.invalidResponse }
         return invitation
     }
 
@@ -564,7 +577,7 @@ actor SelectiveRemoteCloudAPIClient {
         let invitation = try await createTeamInvitation(
             endpoint: endpoint,
             teamID: teamID,
-            request: TeamInvitationRequest(username: nil, type: "link", role: role)
+            request: TeamInvitationRequest(username: nil, email: nil, type: "link", role: role)
         )
         guard invitation.type == .link, invitation.acceptanceURL != nil else {
             throw SelectiveRemoteCloudError.invalidResponse
@@ -1301,6 +1314,7 @@ private struct TeamNameRequest: Encodable {
 
 private struct TeamInvitationRequest: Encodable {
     var username: String?
+    var email: String?
     var type: String?
     var role: SelectiveRemoteCloudTeamRole
 }

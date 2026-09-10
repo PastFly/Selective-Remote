@@ -26,6 +26,18 @@ function recordingStore(respond = () => ({ rows: [] })) {
   };
 }
 
+test("invitation-gated registration accepts only active email or link tokens", async () => {
+  const target = { type: "email", email: "invited@example.com" };
+  const fixture = recordingStore(() => ({ rows: [target] }));
+  assert.deepEqual(await fixture.store.teamInvitationRegistrationTarget("a".repeat(64)), target);
+  assert.deepEqual(fixture.queries[0].parameters, ["a".repeat(64)]);
+  assert.match(fixture.queries[0].sql, /invitation_type IN \('email', 'link'\)/u);
+  assert.match(fixture.queries[0].sql, /accepted_at IS NULL/u);
+  assert.match(fixture.queries[0].sql, /cancelled_at IS NULL/u);
+  assert.match(fixture.queries[0].sql, /expires_at > now\(\)/u);
+  assert.match(fixture.queries[0].sql, /team\.archived_at IS NULL/u);
+});
+
 test("creating an unverified account stores a verification hash but no session", async () => {
   const user = { id: "user-1", email: "user@example.com", display_name: "User", created_at: new Date() };
   const fixture = recordingStore((sql) => sql.includes("INSERT INTO users") ? { rows: [user] } : { rows: [] });
