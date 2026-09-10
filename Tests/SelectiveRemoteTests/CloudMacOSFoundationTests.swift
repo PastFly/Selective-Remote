@@ -1500,7 +1500,7 @@ struct PersonalVaultInitialDownloadDecoderTests {
         profile.host = "host.example"
         profile.friendlyName = "Production"
         let snippet = TerminalCommandTemplate(
-            id: UUID(), profileID: TerminalCommandHistoryStore.globalSnippetLibraryID,
+            id: UUID(), profileID: UUID(uuidString: "5A17407D-9F03-4F7B-80FB-BD06D3FA50B1")!,
             title: "Uptime", command: "uptime", category: "Ops",
             targets: [.localTerminal], updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
         )
