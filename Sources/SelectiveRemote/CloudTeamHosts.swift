@@ -350,9 +350,12 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     static let shared = SelectiveRemoteTeamHostStore()
 
     @Published private(set) var hosts: [SelectiveRemoteTeamHost] = []
+    @Published private(set) var vaults: [SelectiveRemoteTeamHostVaultContext] = []
     @Published private(set) var lastUpdatedAt: Date?
     @Published private(set) var synchronizedVaultCount = 0
     @Published private(set) var invalidVaultCount = 0
+
+    private var snapshots: [String: SelectiveRemoteTeamVaultMaterializedSnapshot] = [:]
 
     init() {}
 
@@ -360,16 +363,54 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
         with snapshots: [SelectiveRemoteTeamVaultMaterializedSnapshot],
         now: Date = Date()
     ) {
-        var next: [SelectiveRemoteTeamHost] = []
+        self.snapshots = Dictionary(
+            snapshots.map { (scopeKey(teamID: $0.teamID, vaultID: $0.vaultID), $0) },
+            uniquingKeysWith: { _, latest in latest }
+        )
+        rebuild(now: now)
+    }
+
+    func replaceVault(
+        with snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot,
+        now: Date = Date()
+    ) {
+        snapshots[scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID)] = snapshot
+        rebuild(now: now)
+    }
+
+    func clear() {
+        snapshots = [:]
+        hosts = []
+        vaults = []
+        synchronizedVaultCount = 0
+        invalidVaultCount = 0
+        lastUpdatedAt = nil
+    }
+
+    private func rebuild(now: Date) {
+        var nextHosts: [SelectiveRemoteTeamHost] = []
+        var nextVaults: [SelectiveRemoteTeamHostVaultContext] = []
         var invalid = 0
-        for snapshot in snapshots {
+        for snapshot in snapshots.values {
             do {
-                next += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)
+                nextHosts += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)
+                nextVaults.append(.init(
+                    id: SelectiveRemoteTeamHostMaterializer.scopedID(
+                        teamID: snapshot.teamID,
+                        vaultID: snapshot.vaultID,
+                        recordID: snapshot.vaultID
+                    ),
+                    teamID: snapshot.teamID,
+                    teamName: snapshot.teamName,
+                    role: snapshot.role,
+                    vaultID: snapshot.vaultID,
+                    vaultName: snapshot.vaultName
+                ))
             } catch {
                 invalid += 1
             }
         }
-        hosts = next.sorted {
+        hosts = nextHosts.sorted {
             let left = [$0.teamName, $0.vaultName, $0.profile.friendlyName]
                 .map { $0.localizedLowercase }
             let right = [$1.teamName, $1.vaultName, $1.profile.friendlyName]
@@ -378,16 +419,19 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
                 ? $0.recordID.canonicalCloudString < $1.recordID.canonicalCloudString
                 : left.lexicographicallyPrecedes(right)
         }
+        vaults = nextVaults.sorted {
+            [$0.teamName.localizedLowercase, $0.vaultName.localizedLowercase]
+                .lexicographicallyPrecedes(
+                    [$1.teamName.localizedLowercase, $1.vaultName.localizedLowercase]
+                )
+        }
         synchronizedVaultCount = snapshots.count - invalid
         invalidVaultCount = invalid
         lastUpdatedAt = now
     }
 
-    func clear() {
-        hosts = []
-        synchronizedVaultCount = 0
-        invalidVaultCount = 0
-        lastUpdatedAt = nil
+    private func scopeKey(teamID: UUID, vaultID: UUID) -> String {
+        "\(teamID.canonicalCloudString)/\(vaultID.canonicalCloudString)"
     }
 }
 

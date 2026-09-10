@@ -245,8 +245,45 @@ struct CloudTeamHostsTests {
         #expect(mutated.records.count == original.records.count + 1)
     }
 
+
+    @MainActor
+    @Test("store exposes valid Vault contexts and replaces one Vault without touching another")
+    func storeReplacesOneVault() throws {
+        let first = Self.snapshot(payload: try Self.fixtureData(), role: .editor)
+        let second = SelectiveRemoteTeamVaultMaterializedSnapshot(
+            teamID: try #require(UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
+            teamName: "Security",
+            role: role,
+            vaultID: try #require(UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")),
+            vaultName: "Audit",
+            revision: 1,
+            keyGeneration: 1,
+            payload: try SelectiveRemoteVaultDocument().encoded()
+        )
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [first, second])
+        #expect(store.vaults.count == 2)
+        #expect(store.vaults.first(where: { $0.vaultID == first.vaultID })?.role == .editor)
+
+        let updated = SelectiveRemoteTeamVaultMaterializedSnapshot(
+            teamID: first.teamID,
+            teamName: first.teamName,
+            role: first.role,
+            vaultID: first.vaultID,
+            vaultName: first.vaultName,
+            revision: first.revision + 1,
+            keyGeneration: first.keyGeneration,
+            payload: try SelectiveRemoteVaultDocument().encoded()
+        )
+        store.replaceVault(with: updated)
+        #expect(store.vaults.count == 2)
+        #expect(store.hosts.isEmpty)
+        #expect(store.synchronizedVaultCount == 2)
+    }
+
     private static func snapshot(
-        payload: Data
+        payload: Data,
+        role: SelectiveRemoteCloudTeamRole = .viewer
     ) -> SelectiveRemoteTeamVaultMaterializedSnapshot {
         .init(
             teamID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
