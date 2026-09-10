@@ -96,33 +96,41 @@ final class SelectiveRemoteTeamHostPersonalSettingsStore: ObservableObject {
         }
     }
 
-    func settings(for host: SelectiveRemoteTeamHost) -> SelectiveRemoteTeamHostPersonalSettings {
-        values[key(for: host)] ?? .init(profile: host.profile)
+    func settings(
+        for host: SelectiveRemoteTeamHost,
+        endpoint: String
+    ) -> SelectiveRemoteTeamHostPersonalSettings {
+        values[key(for: host, endpoint: endpoint)] ?? .init(profile: host.profile)
     }
 
-    func hasSettings(for host: SelectiveRemoteTeamHost) -> Bool {
-        values[key(for: host)] != nil
+    func hasSettings(for host: SelectiveRemoteTeamHost, endpoint: String) -> Bool {
+        values[key(for: host, endpoint: endpoint)] != nil
     }
 
     func save(
         _ settings: SelectiveRemoteTeamHostPersonalSettings,
-        for host: SelectiveRemoteTeamHost
+        for host: SelectiveRemoteTeamHost,
+        endpoint: String
     ) {
-        values[key(for: host)] = settings.normalized
+        values[key(for: host, endpoint: endpoint)] = settings.normalized
         persist()
     }
 
-    func reset(for host: SelectiveRemoteTeamHost) {
-        values.removeValue(forKey: key(for: host))
+    func reset(for host: SelectiveRemoteTeamHost, endpoint: String) {
+        values.removeValue(forKey: key(for: host, endpoint: endpoint))
         persist()
     }
 
-    func appliedProfile(for host: SelectiveRemoteTeamHost) -> ConnectionProfile {
-        settings(for: host).applying(to: host.profile)
+    func appliedProfile(
+        for host: SelectiveRemoteTeamHost,
+        endpoint: String
+    ) -> ConnectionProfile {
+        settings(for: host, endpoint: endpoint).applying(to: host.profile)
     }
 
-    private func key(for host: SelectiveRemoteTeamHost) -> String {
+    private func key(for host: SelectiveRemoteTeamHost, endpoint: String) -> String {
         [
+            endpoint.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
             host.teamID.uuidString.lowercased(),
             host.vaultID.uuidString.lowercased(),
             host.recordID.uuidString.lowercased()
@@ -138,17 +146,20 @@ final class SelectiveRemoteTeamHostPersonalSettingsStore: ObservableObject {
 @MainActor
 struct SelectiveRemoteTeamHostPersonalSettingsView: View {
     let host: SelectiveRemoteTeamHost
+    let endpoint: String
     @ObservedObject var store: SelectiveRemoteTeamHostPersonalSettingsStore
     @Environment(\.dismiss) private var dismiss
     @State private var draft: SelectiveRemoteTeamHostPersonalSettings
 
     init(
         host: SelectiveRemoteTeamHost,
+        endpoint: String,
         store: SelectiveRemoteTeamHostPersonalSettingsStore
     ) {
         self.host = host
+        self.endpoint = endpoint
         self.store = store
-        _draft = State(initialValue: store.settings(for: host))
+        _draft = State(initialValue: store.settings(for: host, endpoint: endpoint))
     }
 
     var body: some View {
@@ -275,16 +286,16 @@ struct SelectiveRemoteTeamHostPersonalSettingsView: View {
                     UpdateLocalization.text(ru: "Сбросить мои настройки", en: "Reset My Settings"),
                     role: .destructive
                 ) {
-                    store.reset(for: host)
+                    store.reset(for: host, endpoint: endpoint)
                     dismiss()
                 }
-                .disabled(!store.hasSettings(for: host))
+                .disabled(!store.hasSettings(for: host, endpoint: endpoint))
                 Spacer()
                 Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) {
                     dismiss()
                 }
                 Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
-                    store.save(draft, for: host)
+                    store.save(draft, for: host, endpoint: endpoint)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
