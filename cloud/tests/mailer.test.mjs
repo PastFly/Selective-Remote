@@ -89,6 +89,8 @@ test("Team invitation mail carries one opaque fragment token and bounded metadat
     recipient: "member@example.com",
     token: "opaque-team-token",
     teamID: "84f6c860-0d26-4ef5-8652-27cb8b991b70",
+    teamName: "Operations & Security",
+    invitedBy: "owner.name",
     role: "viewer",
     expiresAt: "2030-01-03T00:00:00.000Z",
   });
@@ -96,10 +98,14 @@ test("Team invitation mail carries one opaque fragment token and bounded metadat
   assert.equal(message.to, "member@example.com");
   assert.match(message.subject, /Приглашение в команду/);
   assert.match(message.text, /#accept-team-invitation\?token=opaque-team-token/);
-  assert.match(message.text, /Роль: viewer/);
+  assert.match(message.text, /Роль: Наблюдатель/);
   assert.match(message.html, /Принять приглашение/);
-  assert.match(message.html, /viewer/);
-  assert.match(message.html, /84f6c860-0d26-4ef5-8652-27cb8b991b70/);
+  assert.match(message.subject, /Operations & Security/);
+  assert.match(message.html, /Operations &amp; Security/);
+  assert.match(message.html, /Наблюдатель/);
+  assert.match(message.html, /@owner\.name/);
+  assert.match(message.html, /3 января 2030 г\. в 00:00 UTC/);
+  assert.doesNotMatch(message.html, /84f6c860-0d26-4ef5-8652-27cb8b991b70/);
   assert.equal(message.disableFileAccess, true);
   assert.equal(message.disableUrlAccess, true);
 });
