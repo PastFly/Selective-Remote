@@ -391,3 +391,21 @@ test("macOS Team Host personal settings preserve per-Mac display selection", asy
   assert.match(personal, /private func toggleDisplay/u);
   assert.match(personal, /guard selected\.count > 1/u);
 });
+
+
+test("macOS Cloud session and Team device key share one Keychain envelope", async () => {
+  const [envelope, session, teamDevice] = await Promise.all([
+    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(envelope, /local\.selectiveremote\.cloud\.secure-envelope\.v1/u);
+  assert.match(envelope, /var sessionToken: String\?/u);
+  assert.match(envelope, /var teamDevicePrivateKeys: \[String: Data\]/u);
+  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/u);
+  assert.match(session, /SelectiveRemoteCloudSecureEnvelopeStore/u);
+  assert.match(session, /legacyService = "local\.selectiveremote\.cloud\.session\.v1"/u);
+  assert.match(teamDevice, /SelectiveRemoteCloudSecureEnvelopeStore/u);
+  assert.match(teamDevice, /legacyService = "local\.selectiveremote\.cloud\.team-device-key\.v1"/u);
+  assert.doesNotMatch(envelope, /teamID|vaultID|hostID/u);
+});
