@@ -297,7 +297,7 @@ struct CloudTeamHostsTests {
         .init(
             teamID: UUID(uuidString: "11111111-1111-4111-8111-111111111111")!,
             teamName: "Platform",
-            role: .viewer,
+            role: role,
             vaultID: UUID(uuidString: "22222222-2222-4222-8222-222222222222")!,
             vaultName: "Operations",
             revision: 7,
