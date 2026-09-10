@@ -235,6 +235,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
   assert.match(application, /Команда «\$\{selectedTeam\.name\}» · папок: \$\{vaults\.length\}/u);
+  assert.match(application, /createVaultForm\.hidden = activeView !== "vaults" \|\| !canManage\(\)/u);
+  assert.match(application, /workspace\.hidden = activeView !== "hosts" \|\| !controller/u);
+  assert.match(application, /activeView === "hosts" && vaults\.length > 0/u);
+  assert.match(application, /data-team-view="hosts"/u);
+  assert.match(styles, /#team-vault\[data-team-view="hosts"\] \.team-vault-directory-heading/u);
   assert.match(application, /выберите папку для просмотра хостов/u);
   assert.match(application, /await openSelectedVault\(\)/u);
   assert.match(application, /value\.type !== "host" \|\| \(folder !== "all"/u);
