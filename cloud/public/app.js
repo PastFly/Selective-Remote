@@ -1811,6 +1811,11 @@ export async function initializeCloudAccount({
   const accountName = documentValue.querySelector("#cloud-account-name");
   const message = documentValue.querySelector("#cloud-account-message");
   const logoutButton = documentValue.querySelector("#cloud-logout");
+  const usernameForm = documentValue.querySelector("#account-username-form");
+  const usernameAvailability = documentValue.querySelector("#account-username-availability");
+  const usernameMessage = documentValue.querySelector("#account-username-message");
+  const passwordForm = documentValue.querySelector("#account-password-form");
+  const passwordMessage = documentValue.querySelector("#account-password-message");
   const deleteAccountForm = documentValue.querySelector("#account-delete-form");
   const deleteAccountMessage = documentValue.querySelector("#account-delete-message");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
@@ -1949,7 +1954,14 @@ export async function initializeCloudAccount({
     signedIn.hidden = !user;
     syncButton.disabled = !user;
     setText(accountName, user ? `${user.displayName || user.email} · ${user.email}` : "");
+    if (user && usernameForm) usernameForm.elements.username.value = user.username;
     onSessionChange(user);
+  }
+
+  function setSettingsMessage(element, value, tone = null) {
+    setText(element, value);
+    element.classList.toggle("error", tone === "error");
+    element.classList.toggle("success", tone === "success");
   }
 
   loginTab.addEventListener("click", () => setAuthMode("login"));
@@ -2101,6 +2113,56 @@ export async function initializeCloudAccount({
       await vaultUI.hideRecoveryAndRestoreMode();
       logoutButton.disabled = false;
       setText(message, "Сессия завершена, токен удалён из памяти вкладки.");
+    }
+  });
+
+  usernameForm.addEventListener("input", async () => {
+    const username = usernameForm.elements.username.value.trim().toLowerCase();
+    if (username.length < 3) return setSettingsMessage(usernameAvailability, "Минимум 3 символа.");
+    try {
+      const result = await client.usernameAvailability(username);
+      setSettingsMessage(usernameAvailability, result.available ? `@${result.username} свободен` : `@${result.username} уже занят`, result.available ? "success" : "error");
+    } catch {
+      setSettingsMessage(usernameAvailability, "Допустимы латинские буквы, цифры, точка, дефис и подчёркивание.", "error");
+    }
+  });
+
+  usernameForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = usernameForm.querySelector('button[type="submit"]');
+    button.disabled = true;
+    try {
+      const user = await client.updateUsername({ username: usernameForm.elements.username.value, password: usernameForm.elements.password.value });
+      showSession(user);
+      setSettingsMessage(usernameMessage, `Username изменён на @${user.username}.`, "success");
+    } catch (error) {
+      const messages = { username_exists: "Этот username уже занят.", invalid_username: "Проверьте формат username.", invalid_credentials: "Текущий пароль неверен." };
+      setSettingsMessage(usernameMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить username.", "error");
+    } finally {
+      usernameForm.elements.password.value = "";
+      button.disabled = false;
+    }
+  });
+
+  passwordForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const button = passwordForm.querySelector('button[type="submit"]');
+    if (passwordForm.elements.newPassword.value !== passwordForm.elements.confirmation.value) {
+      return setSettingsMessage(passwordMessage, "Новые пароли не совпадают.", "error");
+    }
+    button.disabled = true;
+    try {
+      await client.changePassword({ currentPassword: passwordForm.elements.currentPassword.value, newPassword: passwordForm.elements.newPassword.value });
+      passwordForm.reset();
+      setSettingsMessage(passwordMessage, "Пароль изменён. Остальные сессии завершены.", "success");
+    } catch (error) {
+      const messages = { invalid_password: "Новый пароль должен содержать не менее 12 символов.", invalid_credentials: "Текущий пароль неверен." };
+      setSettingsMessage(passwordMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить пароль.", "error");
+    } finally {
+      passwordForm.elements.currentPassword.value = "";
+      passwordForm.elements.newPassword.value = "";
+      passwordForm.elements.confirmation.value = "";
+      button.disabled = false;
     }
   });
 
