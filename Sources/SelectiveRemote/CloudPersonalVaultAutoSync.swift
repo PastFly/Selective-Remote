@@ -9,7 +9,7 @@ struct SelectiveRemotePersonalVaultKeyMaterial: Codable, Equatable, Sendable {
     var revision: Int
     var documentHash: Data
     let includesCredentials: Bool
-    let requiresInitialDownload: Bool?
+    var requiresInitialDownload: Bool?
 
     var allowsUpload: Bool { requiresInitialDownload != true }
 

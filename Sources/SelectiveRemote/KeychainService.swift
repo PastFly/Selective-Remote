@@ -341,6 +341,15 @@ enum KeychainService {
         try UnifiedCredentialVault.shared.save(password, reference: reference)
     }
 
+    static func savePasswords(_ credentials: [SelectiveRemotePersonalVaultCredentialInput]) throws {
+        try UnifiedCredentialVault.shared.save(credentials.map {
+            (
+                reference: credentialReference(profileID: $0.sourceID, kind: $0.kind),
+                secret: $0.secret
+            )
+        })
+    }
+
     static var unifiedVaultEntryCount: Int {
         UnifiedCredentialVault.shared.entryCount
     }

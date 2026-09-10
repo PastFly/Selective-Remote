@@ -1,9 +1,30 @@
 import Foundation
 
-enum SelectiveRemotePersonalVaultImportError: Error, Equatable {
+enum SelectiveRemotePersonalVaultImportError: LocalizedError, Equatable {
     case invalidRecord(UUID)
     case mismatchedRecordID(UUID)
     case unsupportedWebForwarding(UUID)
+    case conflicts([UUID])
+
+    var errorDescription: String? {
+        switch self {
+        case let .conflicts(ids):
+            UpdateLocalization.text(
+                ru: "Initial download остановлен: локальные и Cloud-данные конфликтуют (\(ids.count)). Ничего не перезаписано.",
+                en: "Initial download stopped because local and Cloud data conflict (\(ids.count)). Nothing was overwritten."
+            )
+        case .unsupportedWebForwarding:
+            UpdateLocalization.text(
+                ru: "Forwarding с сайта не содержит полной конфигурации и не был применён.",
+                en: "A web Forwarding record has no complete configuration and was not applied."
+            )
+        case .invalidRecord, .mismatchedRecordID:
+            UpdateLocalization.text(
+                ru: "Personal Vault содержит некорректную запись; импорт остановлен.",
+                en: "Personal Vault contains an invalid record; import was stopped."
+            )
+        }
+    }
 }
 
 struct SelectiveRemotePersonalVaultImportSnapshot: Equatable {
@@ -12,6 +33,16 @@ struct SelectiveRemotePersonalVaultImportSnapshot: Equatable {
     let snippets: [TerminalCommandTemplate]
     let forwarding: [IndependentPortForward]
     let tombstoneIDs: Set<UUID>
+}
+
+struct SelectiveRemotePersonalVaultImportPlan: Equatable {
+    let profiles: [ConnectionProfile]
+    let credentials: [SelectiveRemotePersonalVaultCredentialInput]
+    let snippets: [TerminalCommandTemplate]
+    let forwarding: [IndependentPortForward]
+    let conflictIDs: [UUID]
+
+    var canApply: Bool { conflictIDs.isEmpty }
 }
 
 enum SelectiveRemotePersonalVaultImporter {
@@ -48,6 +79,45 @@ enum SelectiveRemotePersonalVaultImporter {
             forwarding: forwarding,
             tombstoneIDs: Set(document.tombstones.map(\.id))
         )
+    }
+
+    static func plan(
+        snapshot: SelectiveRemotePersonalVaultImportSnapshot,
+        localProfiles: [ConnectionProfile],
+        localSnippets: [TerminalCommandTemplate],
+        localForwarding: [IndependentPortForward]
+    ) -> SelectiveRemotePersonalVaultImportPlan {
+        let profiles = additions(remote: snapshot.profiles, local: localProfiles)
+        let snippets = additions(remote: snapshot.snippets, local: localSnippets)
+        let forwarding = additions(remote: snapshot.forwarding, local: localForwarding)
+        var conflicts = Set(profiles.conflicts + snippets.conflicts + forwarding.conflicts)
+        let localIDs = Set(localProfiles.map(\.id) + localSnippets.map(\.id) + localForwarding.map(\.id))
+        conflicts.formUnion(snapshot.tombstoneIDs.intersection(localIDs))
+        let existingProfileIDs = Set(localProfiles.map(\.id))
+        conflicts.formUnion(snapshot.credentials.lazy.map(\.sourceID).filter(existingProfileIDs.contains))
+        return .init(
+            profiles: profiles.values,
+            credentials: snapshot.credentials.filter { !conflicts.contains($0.sourceID) },
+            snippets: snippets.values,
+            forwarding: forwarding.values,
+            conflictIDs: conflicts.sorted { $0.uuidString < $1.uuidString }
+        )
+    }
+
+    private static func additions<T: Identifiable & Equatable>(remote: [T], local: [T])
+        -> (values: [T], conflicts: [UUID]) where T.ID == UUID
+    {
+        let localByID = Dictionary(uniqueKeysWithValues: local.map { ($0.id, $0) })
+        var values: [T] = []
+        var conflicts: [UUID] = []
+        for value in remote {
+            if let existing = localByID[value.id] {
+                if existing != value { conflicts.append(value.id) }
+            } else {
+                values.append(value)
+            }
+        }
+        return (values, conflicts)
     }
 
     private static func profile(
