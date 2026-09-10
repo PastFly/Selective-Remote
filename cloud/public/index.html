@@ -471,8 +471,23 @@
             <input id="team-record-target" name="target" maxlength="2048">
             <label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label>
             <textarea id="team-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
+            <div class="team-host-fields" id="team-host-fields">
+              <label for="team-host-folder">Папка</label>
+              <input id="team-host-folder" name="folder" maxlength="120" list="team-host-folder-options" placeholder="Например, Production">
+              <datalist id="team-host-folder-options"></datalist>
+              <label for="team-host-tags">Теги</label>
+              <input id="team-host-tags" name="tags" maxlength="512" placeholder="linux, billing, eu-west">
+              <label for="team-host-description">Описание</label>
+              <textarea id="team-host-description" name="description" maxlength="2048" rows="2" placeholder="Назначение и примечания для команды"></textarea>
+            </div>
             <button type="submit">Зашифровать локально</button>
           </form>
+          <div class="team-host-browser" id="team-host-browser">
+            <label for="team-host-search">Найти Host</label>
+            <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
+            <label for="team-host-folder-filter">Папка</label>
+            <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
+          </div>
           <div class="vault-records" id="team-vault-records"></div>
           <section class="vault-conflicts" id="team-vault-conflicts" aria-labelledby="team-vault-conflicts-title" hidden>
             <h3 id="team-vault-conflicts-title">Конфликт Team-ревизий</h3>
