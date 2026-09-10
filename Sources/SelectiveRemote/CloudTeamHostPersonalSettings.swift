@@ -135,6 +135,7 @@ final class SelectiveRemoteTeamHostPersonalSettingsStore: ObservableObject {
     }
 }
 
+@MainActor
 struct SelectiveRemoteTeamHostPersonalSettingsView: View {
     let host: SelectiveRemoteTeamHost
     @ObservedObject var store: SelectiveRemoteTeamHostPersonalSettingsStore
