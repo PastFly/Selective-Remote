@@ -74,8 +74,8 @@ struct SelectiveRemoteCloudSignInView: View {
 
                         Label(
                             UpdateLocalization.text(
-                                ru: "Сессия хранится в Keychain только на этом Mac. Пароль существует только в этой форме и не становится ключом Vault.",
-                                en: "The session is stored in Keychain on this Mac only. The password exists only in this form and never becomes a Vault key."
+                                ru: "Сессия и ключ Personal Vault сохраняются в единой защищённой записи Keychain этого Mac. Пароль используется в памяти только во время входа.",
+                                en: "The session and Personal Vault key are stored in this Mac's unified protected Keychain entry. The password is used in memory only while signing in."
                             ),
                             systemImage: "lock.shield"
                         )
