@@ -643,6 +643,7 @@ struct SelectiveRemoteTeamHostsView: View {
         .sheet(item: $personalSettingsHost, onDismiss: resetConnectionFields) { host in
             SelectiveRemoteTeamHostPersonalSettingsView(
                 host: host,
+                endpoint: endpoint,
                 store: personalSettingsStore
             )
         }
@@ -962,7 +963,10 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {
-        var profile = personalSettingsStore.appliedProfile(for: host)
+        var profile = personalSettingsStore.appliedProfile(
+            for: host,
+            endpoint: endpoint
+        )
         profile.username = username
         if profile.connectionType == .rdp {
             model.connectTeamHost(
@@ -988,7 +992,7 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private func resetConnectionFields() {
         username = selectedHost.map {
-            personalSettingsStore.settings(for: $0).preferredUsername
+            personalSettingsStore.settings(for: $0, endpoint: endpoint).preferredUsername
         } ?? ""
         password = ""
         gatewayPassword = ""
