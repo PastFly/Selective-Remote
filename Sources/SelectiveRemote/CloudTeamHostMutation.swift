@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum SelectiveRemoteTeamHostMutationError: LocalizedError, Equatable {
@@ -36,6 +37,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
 
     static func create(
         profile: ConnectionProfile,
+        credentials: SelectiveRemoteTeamHostCredentials = .empty,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -43,6 +45,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         try mutate(
             document: .init(),
             profile: profile,
+            credentials: credentials,
             recordID: profile.id,
             role: role,
             deviceID: deviceID,
@@ -54,6 +57,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
     static func create(
         in document: SelectiveRemoteVaultDocument,
         profile: ConnectionProfile,
+        credentials: SelectiveRemoteTeamHostCredentials = .empty,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -64,6 +68,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         return try mutate(
             document: document,
             profile: profile,
+            credentials: credentials,
             recordID: profile.id,
             role: role,
             deviceID: deviceID,
@@ -76,6 +81,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         in document: SelectiveRemoteVaultDocument,
         recordID: UUID,
         profile: ConnectionProfile,
+        credentials: SelectiveRemoteTeamHostCredentials = .empty,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -83,6 +89,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         try mutate(
             document: document,
             profile: profile,
+            credentials: credentials,
             recordID: recordID,
             role: role,
             deviceID: deviceID,
@@ -108,20 +115,30 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         guard existing.type == .host else {
             throw SelectiveRemoteTeamHostMutationError.recordIsNotHost
         }
-        let tombstone = try SelectiveRemoteVaultTombstone(
-            id: recordID,
-            version: existing.version.incrementing(deviceID),
-            deletedAt: deletedAt
-        )
+        let removed = document.records.filter { record in
+            record.id == recordID || isCredential(record, for: recordID)
+        }
+        let tombstones = try removed.map { record in
+            try SelectiveRemoteVaultTombstone(
+                id: record.id,
+                version: record.version.incrementing(deviceID),
+                deletedAt: deletedAt
+            )
+        }
         return try .init(
-            records: document.records.filter { $0.id != recordID },
-            tombstones: document.tombstones.filter { $0.id != recordID } + [tombstone]
+            records: document.records.filter { record in
+                !removed.contains(where: { $0.id == record.id })
+            },
+            tombstones: document.tombstones.filter { tombstone in
+                !removed.contains(where: { $0.id == tombstone.id })
+            } + tombstones
         )
     }
 
     private static func mutate(
         document: SelectiveRemoteVaultDocument,
         profile: ConnectionProfile,
+        credentials: SelectiveRemoteTeamHostCredentials,
         recordID: UUID,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
@@ -156,10 +173,78 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             modifiedAt: modifiedAt,
             data: exported.data
         )
-        return try .init(
-            records: document.records.filter { $0.id != recordID } + [record],
-            tombstones: document.tombstones.filter { $0.id != recordID }
+        let previous = document.records.filter { isCredential($0, for: recordID) }
+        let credentialRecords = try makeCredentials(
+            credentials,
+            profile: exportedProfile,
+            recordID: recordID,
+            previous: previous,
+            deviceID: deviceID,
+            modifiedAt: modifiedAt
         )
+        let currentIDs = Set(credentialRecords.map(\.id))
+        let credentialTombstones = try previous.filter { !currentIDs.contains($0.id) }.map {
+            try SelectiveRemoteVaultTombstone(
+                id: $0.id,
+                version: $0.version.incrementing(deviceID),
+                deletedAt: modifiedAt
+            )
+        }
+        let replacedIDs = Set([recordID] + previous.map(\.id))
+        return try .init(
+            records: document.records.filter { !replacedIDs.contains($0.id) }
+                + [record] + credentialRecords,
+            tombstones: document.tombstones.filter {
+                $0.id != recordID && !currentIDs.contains($0.id)
+            } + credentialTombstones
+        )
+    }
+
+    private static func makeCredentials(
+        _ value: SelectiveRemoteTeamHostCredentials,
+        profile: ConnectionProfile,
+        recordID: UUID,
+        previous: [SelectiveRemoteVaultRecord],
+        deviceID: UUID,
+        modifiedAt: String
+    ) throws -> [SelectiveRemoteVaultRecord] {
+        let inputs: [(KeychainCredentialKind, String)] = [
+            (profile.connectionType == .ssh ? .ssh : .rdp, value.password ?? ""),
+            (.gateway, value.gatewayPassword ?? "")
+        ]
+        return try inputs.compactMap { kind, secret in
+            guard !secret.isEmpty else { return nil }
+            let id = credentialID(sourceID: recordID, kind: kind)
+            let old = previous.first(where: { $0.id == id })
+            return try SelectiveRemoteVaultRecord(
+                id: id,
+                type: .credential,
+                version: try old?.version.incrementing(deviceID)
+                    ?? SelectiveRemoteVaultVersion([deviceID: 1]),
+                modifiedAt: modifiedAt,
+                data: .object([
+                    "title": .string("\(profile.friendlyName) · \(kind.rawValue)"),
+                    "username": .string(kind == .gateway ? profile.gatewayUsername : profile.username),
+                    "secret": .string(secret),
+                    "kind": .string(kind.rawValue),
+                    "sourceID": .string(recordID.canonicalCloudString)
+                ])
+            )
+        }
+    }
+
+    private static func credentialID(sourceID: UUID, kind: KeychainCredentialKind) -> UUID {
+        let value = "selective-remote/team-host-credential/v1\u{0}\(sourceID.canonicalCloudString)\u{0}\(kind.rawValue)"
+        var bytes = Array(SHA256.hash(data: Data(value.utf8)).prefix(16))
+        bytes[6] = (bytes[6] & 0x0f) | 0x50
+        bytes[8] = (bytes[8] & 0x3f) | 0x80
+        return UUID(uuid: (bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]))
+    }
+
+    private static func isCredential(_ record: SelectiveRemoteVaultRecord, for hostID: UUID) -> Bool {
+        guard record.type == .credential, case let .object(data) = record.data,
+              case let .string(source)? = data["sourceID"] else { return false }
+        return UUID(uuidString: source) == hostID
     }
 
     private static func requireWritable(_ role: SelectiveRemoteCloudTeamRole) throws {
@@ -180,8 +265,8 @@ struct SelectiveRemoteTeamHostVaultContext: Identifiable, Equatable {
 }
 
 enum SelectiveRemoteTeamHostMutationChange {
-    case create(ConnectionProfile)
-    case update(recordID: UUID, profile: ConnectionProfile)
+    case create(ConnectionProfile, SelectiveRemoteTeamHostCredentials)
+    case update(recordID: UUID, profile: ConnectionProfile, credentials: SelectiveRemoteTeamHostCredentials)
     case delete(recordID: UUID)
 }
 
@@ -247,10 +332,11 @@ final class SelectiveRemoteTeamHostMutationService {
             )
         case .empty:
             guard context.role == .owner || context.role == .admin,
-                  case let .create(profile) = change
+                  case let .create(profile, credentials) = change
             else { throw SelectiveRemoteTeamHostMutationError.hostNotFound }
             let document = try SelectiveRemoteTeamHostDocumentMutation.create(
                 profile: profile,
+                credentials: credentials,
                 role: context.role,
                 deviceID: identity.deviceID,
                 modifiedAt: timestamp
@@ -293,19 +379,21 @@ final class SelectiveRemoteTeamHostMutationService {
         timestamp: String
     ) throws -> SelectiveRemoteVaultDocument {
         switch change {
-        case let .create(profile):
+        case let .create(profile, credentials):
             try SelectiveRemoteTeamHostDocumentMutation.create(
                 in: document,
                 profile: profile,
+                credentials: credentials,
                 role: role,
                 deviceID: deviceID,
                 modifiedAt: timestamp
             )
-        case let .update(recordID, profile):
+        case let .update(recordID, profile, credentials):
             try SelectiveRemoteTeamHostDocumentMutation.update(
                 in: document,
                 recordID: recordID,
                 profile: profile,
+                credentials: credentials,
                 role: role,
                 deviceID: deviceID,
                 modifiedAt: timestamp
