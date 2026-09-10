@@ -235,6 +235,32 @@ export class CloudService {
     return this.store.session(hashSessionToken(token, this.config.sessionPepper));
   }
 
+  async usernameAvailability(session, input) {
+    const username = normalizeUsername(input?.username);
+    return { username, available: await this.store.usernameAvailable(username, session.user_id) };
+  }
+
+  async updateUsername(session, input) {
+    const username = normalizeUsername(input?.username);
+    await this.requireAccountPassword(session, input?.password);
+    return { username: await this.store.updateUsername(session.user_id, username) };
+  }
+
+  async changePassword(session, input) {
+    await this.requireAccountPassword(session, input?.currentPassword);
+    const passwordHash = await hashPassword(validatePassword(input?.newPassword));
+    return this.store.changePassword(session.user_id, session.session_id, passwordHash);
+  }
+
+  async requireAccountPassword(session, password) {
+    const identity = await this.store.passwordIdentity(session.email);
+    const matches = await this.passwordVerifier(
+      String(password ?? ""),
+      identity?.password_hash ?? invalidLoginPasswordHash,
+    );
+    if (!identity || identity.id !== session.user_id || identity.disabled_at || !matches) throw new Error("invalid_credentials");
+  }
+
   async deleteAccount(session, input) {
     const confirmedEmail = normalizeEmail(input?.email);
     if (confirmedEmail !== session.email) throw new Error("account_email_mismatch");
