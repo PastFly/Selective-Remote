@@ -46,6 +46,7 @@ enum SelectiveRemoteTeamHostMaterializer {
     private static let macOSKeys: Set<String> = [
         "title", "address", "username", "connectionType", "profile"
     ]
+    private static let organizationKeys: Set<String> = ["folder", "tags", "description"]
     private static let maximumProfileBytes = 384 * 1024
 
     static func materialize(
@@ -80,15 +81,16 @@ enum SelectiveRemoteTeamHostMaterializer {
                   validAddress(address)
             else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
 
-            let input: ConnectionProfile
+            var input: ConnectionProfile
             let keys = Set(data.keys)
-            if keys == browserKeys {
+            let structuralKeys = keys.subtracting(organizationKeys)
+            if structuralKeys == browserKeys {
                 input = try browserProfile(
                     recordID: record.id,
                     title: title,
                     address: address
                 )
-            } else if keys == macOSKeys {
+            } else if structuralKeys == macOSKeys {
                 guard let username = string(data["username"]),
                       let connectionType = string(data["connectionType"]),
                       let encodedProfile = string(data["profile"]),
@@ -112,6 +114,7 @@ enum SelectiveRemoteTeamHostMaterializer {
             } else {
                 throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
             }
+            input = try applyingOrganization(data, to: input)
 
             return SelectiveRemoteTeamHost(
                 id: scopedID(
@@ -372,6 +375,36 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func string(_ value: SelectiveRemoteJSONValue?) -> String? {
         guard case let .string(result) = value else { return nil }
+        return result
+    }
+
+    private static func applyingOrganization(
+        _ data: [String: SelectiveRemoteJSONValue],
+        to input: ConnectionProfile
+    ) throws -> ConnectionProfile {
+        var result = input
+        if let value = data["folder"] {
+            guard let folder = string(value), validOptionalName(folder) else {
+                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+            }
+            result.group = folder
+        }
+        if let value = data["description"] {
+            guard let description = string(value), description.utf8.count <= 2_048,
+                  !description.contains(where: { $0.isNewline })
+            else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
+            result.profileDescription = description
+        }
+        if let value = data["tags"] {
+            guard case let .array(values) = value else {
+                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+            }
+            let tags = values.compactMap(string)
+            guard tags.count == values.count, tags.count <= 24,
+                  Set(tags).count == tags.count, tags.allSatisfy(validTag)
+            else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
+            result.tags = tags
+        }
         return result
     }
 
