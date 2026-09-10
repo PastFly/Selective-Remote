@@ -19,6 +19,7 @@ const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
 const maxTeamBodyBytes = 16 * 1024;
+const browserSessionCookie = "sr_session";
 
 const server = createServer(async (request, response) => {
   const requestID = crypto.randomUUID();
@@ -50,7 +51,10 @@ async function route(request, response) {
     return handleAuthOperation(request, response, "register_ip", "register_email", service.register.bind(service), 201);
   }
   if (method === "POST" && url.pathname === "/v1/auth/login") {
-    return handleAuthOperation(request, response, "login_ip", "login_email", service.login.bind(service));
+    return handleAuthOperation(
+      request, response, "login_ip", "login_email", service.login.bind(service), 200,
+      (result) => setBrowserSessionCookie(response, result.token),
+    );
   }
   if (method === "POST" && url.pathname === "/v1/auth/verify-email") {
     return handleAuthOperation(request, response, "verify_email_ip", null, service.verifyEmail.bind(service));
@@ -80,10 +84,19 @@ async function route(request, response) {
   }
 
   if (url.pathname.startsWith("/v1/")) {
-    const session = await service.authenticate(bearerToken(request));
-    if (!session) return sendError(response, 401, "unauthorized");
+    const bearer = bearerToken(request);
+    const cookie = bearer ? null : cookieToken(request);
+    if (cookie && !["GET", "HEAD"].includes(method) && !hasTrustedOrigin(request)) {
+      return sendError(response, 403, "invalid_origin");
+    }
+    const session = await service.authenticate(bearer ?? cookie);
+    if (!session) {
+      if (cookie) clearBrowserSessionCookie(response);
+      return sendError(response, 401, "unauthorized");
+    }
     if (method === "POST" && url.pathname === "/v1/auth/logout") {
       await store.revokeSession(session.session_id);
+      clearBrowserSessionCookie(response);
       return empty(response, 204);
     }
     if (method === "GET" && url.pathname === "/v1/me") {
@@ -98,7 +111,11 @@ async function route(request, response) {
     if (method === "DELETE" && url.pathname === "/v1/me") {
       return handleOperation(
         response,
-        async () => service.deleteAccount(session, await readJSON(request, maxTeamBodyBytes)),
+        async () => {
+          const result = await service.deleteAccount(session, await readJSON(request, maxTeamBodyBytes));
+          clearBrowserSessionCookie(response);
+          return result;
+        },
       );
     }
     if (method === "GET" && url.pathname === "/v1/devices") {
@@ -383,7 +400,7 @@ async function requireTeamSensitiveRateLimits(request, session) {
   await authRateLimiter.require("team_sensitive_ip", clientIPAddress(request, config.proxySharedSecret));
 }
 
-async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200) {
+async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200, beforeSend = null) {
   return handleOperation(response, async () => {
     await authRateLimiter.require(ipScope, clientIPAddress(request, config.proxySharedSecret));
     const input = await readJSON(request);
@@ -392,7 +409,9 @@ async function handleAuthOperation(request, response, ipScope, emailScope, opera
       try { email = normalizeEmail(input.email); } catch {}
       if (email) await authRateLimiter.require(emailScope, email);
     }
-    return operation(input);
+    const result = await operation(input);
+    beforeSend?.(result);
+    return result;
   }, successStatus);
 }
 
@@ -416,6 +435,35 @@ function handleOperationError(response, error) {
 function bearerToken(request) {
   const value = request.headers.authorization ?? "";
   return value.startsWith("Bearer ") ? value.slice(7) : null;
+}
+
+function cookieToken(request) {
+  const value = request.headers.cookie ?? "";
+  for (const part of value.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0 || part.slice(0, separator).trim() !== browserSessionCookie) continue;
+    const token = part.slice(separator + 1).trim();
+    return token.length >= 32 && token.length <= 256 ? token : null;
+  }
+  return null;
+}
+
+function sessionCookie(value, maximumAge) {
+  const secure = new URL(config.publicOrigin).protocol === "https:" ? "; Secure" : "";
+  return `${browserSessionCookie}=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maximumAge}${secure}`;
+}
+
+function setBrowserSessionCookie(response, token) {
+  response.setHeader("Set-Cookie", sessionCookie(token, config.sessionTTLDays * 86_400));
+}
+
+function clearBrowserSessionCookie(response) {
+  response.setHeader("Set-Cookie", sessionCookie("", 0));
+}
+
+function hasTrustedOrigin(request) {
+  const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+  return origin === config.publicOrigin;
 }
 
 function idempotencyKey(request) {
