@@ -454,6 +454,7 @@ export function initializeTeamWorkspace({
   const grantWrappersButton = documentValue.querySelector("#team-vault-grant-wrappers");
   const lockButton = documentValue.querySelector("#team-vault-lock");
   const recordForm = documentValue.querySelector("#team-vault-record-form");
+  const recordEditorSummary = documentValue.querySelector("#team-record-editor-summary");
   const recordType = documentValue.querySelector("#team-record-type");
   const recordTitle = documentValue.querySelector("#team-record-title");
   const recordTarget = documentValue.querySelector("#team-record-target");
@@ -517,11 +518,11 @@ export function initializeTeamWorkspace({
     if (activeView === "teams") {
       setText(message, `Team «${selectedTeam.name}» · участников: ${teamMembers.length}.`);
     } else if (activeView === "vaults") {
-      setText(message, `Team «${selectedTeam.name}» · хранилищ: ${vaults.length}.`);
+      setText(message, `Команда «${selectedTeam.name}» · папок: ${vaults.length}.`);
     } else {
       setText(message, selectedVault
-        ? `Team «${selectedTeam.name}» · Vault «${selectedVault.name}».`
-        : `Team «${selectedTeam.name}» · выберите Vault для просмотра хостов.`);
+        ? `Команда «${selectedTeam.name}» · папка «${selectedVault.name}».`
+        : `Команда «${selectedTeam.name}» · выберите папку для просмотра хостов.`);
     }
   }
 
@@ -556,6 +557,7 @@ export function initializeTeamWorkspace({
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
     hostBrowser.hidden = activeView !== "hosts";
+    setText(recordEditorSummary, activeView === "hosts" ? "Добавить Host" : "Добавить запись");
   }
 
   function hostFolderName(record) {
@@ -598,7 +600,7 @@ export function initializeTeamWorkspace({
       empty.className = "vault-empty";
       empty.textContent = activeView === "hosts"
         ? "В выбранном Team Vault пока нет хостов."
-        : "Shared Vault пока пуст.";
+        : "Папка команды пока пуста.";
       records.append(empty);
       return;
     }
@@ -1070,7 +1072,7 @@ export function initializeTeamWorkspace({
     membersView.hidden = activeView !== "teams";
     vaultDirectoryView.hidden = activeView === "teams";
     lifecyclePanel.hidden = activeView !== "teams" || selectedTeam?.role !== "owner";
-    createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
     workspace.hidden = activeView === "teams" || !controller;
     if (activeView === "hosts") recordType.value = "host";
     updateRecordLabels();
@@ -1078,6 +1080,8 @@ export function initializeTeamWorkspace({
       clearConflicts();
       renderRecords();
       setWorkspaceControls(false);
+    } else if (activeView !== "teams" && vaults.length > 0) {
+      void openSelectedVault();
     }
     updateTeamMessage();
   }
@@ -1136,7 +1140,7 @@ export function initializeTeamWorkspace({
     if (selectedTeam.role !== "owner" && inviteForm.elements.role.value === "admin") {
       inviteForm.elements.role.value = "viewer";
     }
-    createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    createVaultForm.hidden = !["vaults", "hosts"].includes(activeView) || !canManage();
     lifecyclePanel.hidden = activeView !== "teams" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
@@ -1153,6 +1157,7 @@ export function initializeTeamWorkspace({
     renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
+    if (activeView !== "teams" && vaults.length > 0) await openSelectedVault();
   }
 
   async function loadTeams(preferredID = null) {
@@ -1351,7 +1356,7 @@ export function initializeTeamWorkspace({
       await loadSelectedTeam();
       vaultSelect.value = vault.id;
       await openSelectedVault();
-      setText(message, "Shared Vault создан. Состояние криптографической инициализации показано ниже.");
+      setText(message, "Папка команды создана и открыта.");
     } catch {
       setText(message, "Shared Vault не создан или не инициализирован. Проверьте роль и одобрение устройства.");
     } finally {
