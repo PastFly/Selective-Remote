@@ -579,7 +579,6 @@ struct CloudSettingsView: View {
                 let material = try? personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
                 personalVaultAutoSyncConfigured = material?.vaultID == personalVault.id
                     && material?.revision == personalVault.revision
-                    && material?.includesCredentials == false
             }
         } catch {
             if error as? SelectiveRemoteCloudError == .authenticationRequired {
@@ -803,15 +802,11 @@ struct CloudSettingsView: View {
                     includesCredentials: !credentials.isEmpty
                 )
                 try personalVaultKeyStore.save(material, endpoint: url, deviceID: resolvedDeviceID())
-                personalVaultAutoSyncConfigured = credentials.isEmpty
+                personalVaultAutoSyncConfigured = true
                 personalVaultRevision = result.revision
                 personalVaultMessage = UpdateLocalization.text(
-                    ru: credentials.isEmpty
-                        ? "Защищённая автосинхронизация включена. Первая ревизия r\(result.revision) отправлена."
-                        : "Ревизия r\(result.revision) отправлена с паролями. Фоновая синхронизация для неё отключена, чтобы не удалить секреты без подтверждения.",
-                    en: credentials.isEmpty
-                        ? "Secure automatic sync is enabled. Initial revision r\(result.revision) was uploaded."
-                        : "Revision r\(result.revision) was uploaded with passwords. Background sync is disabled for it so secrets cannot be removed without confirmation."
+                    ru: "Защищённая автосинхронизация включена. Первая ревизия r\(result.revision) отправлена; сохранённые credential-записи будут сохраняться при фоновых обновлениях.",
+                    en: "Secure automatic sync is enabled. Initial revision r\(result.revision) was uploaded; stored credential records will be preserved during background updates."
                 )
                 personalVaultMessageIsError = false
                 personalVaultUploading = false
