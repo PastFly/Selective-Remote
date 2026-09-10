@@ -262,7 +262,7 @@ struct CloudTeamHostsTests {
         let second = SelectiveRemoteTeamVaultMaterializedSnapshot(
             teamID: try #require(UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")),
             teamName: "Security",
-            role: role,
+            role: .viewer,
             vaultID: try #require(UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")),
             vaultName: "Audit",
             revision: 1,
