@@ -23,8 +23,8 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
             )
         case .missingDeviceWrapper:
             UpdateLocalization.text(
-                ru: "Для этого Mac ещё не выдан ключ выбранного Team Vault. Откройте Vault в уже доверенном браузере или на другом устройстве, выдайте недостающие wrappers и повторите операцию.",
-                en: "This Mac does not have a key for the selected Team Vault yet. Open the Vault in an already trusted browser or on another device, grant the missing wrappers, and try again."
+                ru: "Для этого Mac ещё не выдан ключ выбранного Team Vault. Оставьте уже доверенный браузер или другое устройство с текущим ключом онлайн: wrapper будет выдан автоматически, после чего повторите операцию.",
+                en: "This Mac does not have a key for the selected Team Vault yet. Keep an already trusted browser or another device with the current key online: the wrapper will be granted automatically, then try again."
             )
         case .noLocalSnapshot:
             UpdateLocalization.text(

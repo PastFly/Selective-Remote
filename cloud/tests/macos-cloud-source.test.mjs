@@ -110,7 +110,8 @@ test("Host context menu opens a real encrypted Team Vault share flow", async () 
   assert.match(sharing, /coordinator\.push/);
   assert.match(sharing, /without its saved password/);
   assert.match(coordinator, /enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable/);
-  assert.match(coordinator, /case \.missingDeviceWrapper:[\s\S]*?не выдан ключ выбранного Team Vault/);
+  assert.match(coordinator, /case \.missingDeviceWrapper:[\s\S]*?wrapper будет выдан автоматически/);
+  assert.doesNotMatch(coordinator, /выдайте недостающие wrappers/);
   assert.match(sharing, /catch SelectiveRemoteTeamVaultSyncError\.missingDeviceWrapper/);
   assert.match(sharing, /needsDeviceWrapper = true/);
   assert.match(sharing, /Открыть Team Vaults в браузере/);
