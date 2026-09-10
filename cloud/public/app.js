@@ -2229,8 +2229,23 @@ export async function initializeCloudAccount({
     }
   });
 
-  showSession(null);
   setAuthMode("login");
+  try {
+    const restoredUser = await client.restoreSession();
+    showSession(restoredUser);
+    let identity = null;
+    try {
+      identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID: client.deviceID() });
+      await teamWorkspace?.activate(identity);
+    } catch {
+      // A valid account session remains usable when this browser has no approved Team key.
+    }
+    setAccountMessage(identity
+      ? "Сессия восстановлена. Team-раздел готов к работе."
+      : "Сессия восстановлена. Для Team Vault может потребоваться одобрение устройства.", "success");
+  } catch {
+    showSession(null);
+  }
   return { client, showAuth: setAuthMode, teamWorkspace };
 }
 
@@ -2543,6 +2558,7 @@ export async function initializePortal({
     teamUI: account?.teamWorkspace,
     showAuthMode: account?.showAuth,
   });
+  navigation?.sessionChanged(account?.client.session());
   if (teamInvitation.present) {
     navigation?.showAuthentication("login", { replace: true });
     const accountMessage = documentValue.querySelector("#cloud-account-message");
