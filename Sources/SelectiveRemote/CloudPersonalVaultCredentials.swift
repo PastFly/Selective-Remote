@@ -52,8 +52,14 @@ actor SelectiveRemotePersonalVaultCredentialCollector {
         return try records.map { record in
             let privateURL = URL(fileURLWithPath: record.privateKeyPath).standardizedFileURL
             let privateKey = try boundedFile(at: privateURL, fileManager: fileManager)
-            let publicKey = try record.publicKeyPath.map {
-                try boundedFile(at: URL(fileURLWithPath: $0).standardizedFileURL, fileManager: fileManager)
+            let publicKey: Data?
+            if let publicPath = record.publicKeyPath {
+                publicKey = try boundedFile(
+                    at: URL(fileURLWithPath: publicPath).standardizedFileURL,
+                    fileManager: fileManager
+                )
+            } else {
+                publicKey = nil
             }
             let certificateURL = URL(fileURLWithPath: record.privateKeyPath + "-cert.pub").standardizedFileURL
             let certificate = fileManager.isReadableFile(atPath: certificateURL.path)
