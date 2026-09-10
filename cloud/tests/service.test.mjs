@@ -16,6 +16,7 @@ class MemoryStore {
     this.lastPasswordResetExpiry = null;
     this.lastPasswordHash = null;
     this.deletedUserID = null;
+    this.invitationRegistrationTarget = null;
   }
   async createUser(input) {
     this.lastVerificationHash = input.verificationHash;
@@ -31,6 +32,7 @@ class MemoryStore {
     return this.identity;
   }
   async passwordIdentity(email) { return this.identity?.email === email ? this.identity : null; }
+  async teamInvitationRegistrationTarget() { return this.invitationRegistrationTarget; }
   async usernameAvailable(username, excludingUserID) { return username !== "taken" || this.identity?.id === excludingUserID && this.identity?.username === username; }
   async updateUsername(userID, username) { if (username === "taken") throw new Error("username_exists"); this.identity.username = username; return username; }
   async changePassword(userID, sessionID, passwordHash) { this.identity.password_hash = passwordHash; this.lastPasswordHash = passwordHash; for (const [key, value] of this.sessions) if (value.session_id !== sessionID) this.sessions.delete(key); return { changed: true }; }
@@ -81,6 +83,7 @@ const config = {
   sessionPepper: "p".repeat(32),
   emailVerificationPepper: "v".repeat(32),
   passwordResetTokenPepper: "r".repeat(32),
+  teamInvitationTokenPepper: "t".repeat(32),
   sessionTTLDays: 30,
   emailVerificationTTLHours: 24,
   passwordResetTTLHours: 1,
@@ -180,6 +183,17 @@ test("account settings require reauthentication and preserve only the current se
 test("registration can be disabled until SMTP is configured", async () => {
   const service = new CloudService(new MemoryStore(), { ...config, allowRegistration: false });
   await assert.rejects(service.register({ email: "user@example.com", password: "correct horse battery", device }), /registration_disabled/);
+});
+
+test("closed registration accepts only a valid email or link invitation", async () => {
+  const store = new MemoryStore();
+  const mailer = { async sendEmailVerification() {} };
+  const service = new CloudService(store, { ...config, allowRegistration: false }, mailer);
+  store.invitationRegistrationTarget = { type: "email", email: "invited@example.com" };
+  await assert.rejects(service.register({ email: "other@example.com", password: "correct horse battery", device, invitationToken: "invite-token" }), /invalid_team_invitation/u);
+  assert.deepEqual(await service.register({ email: "invited@example.com", password: "correct horse battery", device, invitationToken: "invite-token" }), { verificationRequired: true });
+  store.invitationRegistrationTarget = { type: "link", email: null };
+  assert.deepEqual(await service.register({ email: "link-user@example.com", password: "correct horse battery", device, invitationToken: "link-token" }), { verificationRequired: true });
 });
 
 test("registration fails closed when SMTP delivery is unavailable", async () => {

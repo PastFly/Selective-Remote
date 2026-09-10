@@ -15,6 +15,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var pendingInvitations: [SelectiveRemoteCloudTeamInvitation] = []
     @State private var newTeamName = ""
     @State private var invitationUsername = ""
+    @State private var invitationEmail = ""
     @State private var invitationRole = SelectiveRemoteCloudTeamRole.viewer
     @State private var latestInvitationURL: String?
     @State private var newVaultName = ""
@@ -161,6 +162,10 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(isBusy || normalized(invitationUsername).isEmpty)
+
+                    TextField("Email", text: $invitationEmail)
+                    Button(UpdateLocalization.text(ru: "Пригласить по email", en: "Invite by Email")) { inviteByEmail(team) }
+                        .disabled(isBusy || normalized(invitationEmail).isEmpty)
 
                     Button(
                         UpdateLocalization.text(ru: "Создать одноразовую ссылку", en: "Create Single-Use Link"),
@@ -378,6 +383,22 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             } catch {
                 errorMessage = error.localizedDescription
             }
+            isBusy = false
+        }
+    }
+
+    private func inviteByEmail(_ team: SelectiveRemoteCloudTeam) {
+        let email = normalized(invitationEmail).lowercased()
+        guard !email.isEmpty else { return }
+        Task { @MainActor in
+            isBusy = true
+            errorMessage = nil
+            do {
+                _ = try await client.inviteTeamMember(endpoint: endpoint, teamID: team.id, email: email, role: invitationRole)
+                invitationEmail = ""
+                statusMessage = UpdateLocalization.text(ru: "Приглашение отправлено по email и действует 48 часов.", en: "The email invitation was sent and is active for 48 hours.")
+                await loadSelectedTeam()
+            } catch { errorMessage = error.localizedDescription }
             isBusy = false
         }
     }

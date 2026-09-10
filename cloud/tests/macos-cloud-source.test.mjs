@@ -185,7 +185,8 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(teamManagement, /Team Hosts/);
   assert.match(teamManagement, /@\\\(member\.username\)/);
   assert.doesNotMatch(teamManagement, /Text\(member\.email\)/);
-  assert.doesNotMatch(teamManagement, /invitationEmail|TextField\("Email"/);
+  assert.match(teamManagement, /invitationEmail|TextField\("Email"/);
+  assert.match(client, /email: normalizedEmail, type: "email"/);
   assert.match(client, /v1\/auth\/register/);
   assert.match(client, /verificationRequired/);
   assert.match(client, /validLoginJSON/);
