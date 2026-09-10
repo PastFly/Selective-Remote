@@ -102,6 +102,9 @@
         <form class="auth-form" id="cloud-registration-form" method="post" action="/v1/auth/register" hidden>
           <label for="cloud-registration-name">Ваше имя</label>
           <input id="cloud-registration-name" name="displayName" maxlength="120" autocomplete="name" placeholder="Как к вам обращаться" required>
+          <label for="cloud-registration-username">Логин</label>
+          <input id="cloud-registration-username" name="username" minlength="3" maxlength="32" pattern="[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]" autocomplete="username" placeholder="например, leonid" required>
+          <p class="auth-note">Участники команд увидят имя и @логин. Электронная почта останется скрытой.</p>
           <label for="cloud-registration-email">Электронная почта</label>
           <input id="cloud-registration-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="На неё придёт подтверждение" required>
           <label for="cloud-registration-password">Новый пароль Selective Remote</label>

@@ -112,7 +112,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     HStack {
                         VStack(alignment: .leading) {
                             Text(member.displayName).font(.headline)
-                            Text(member.email).font(.caption).foregroundStyle(.secondary)
+                            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         Text(roleTitle(member.role)).foregroundStyle(.secondary)

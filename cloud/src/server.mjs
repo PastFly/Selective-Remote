@@ -90,6 +90,7 @@ async function route(request, response) {
       return sendJSON(response, 200, {
         id: session.user_id,
         email: session.email,
+        username: session.username,
         displayName: session.display_name,
         deviceID: session.device_id,
       });

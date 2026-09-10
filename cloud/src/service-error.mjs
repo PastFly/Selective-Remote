@@ -35,6 +35,8 @@ const operationStatuses = Object.freeze({
   invalid_shared_vault: 400,
   invalid_idempotency_key: 400,
   invalid_team_invitation: 400,
+  invalid_username: 400,
+  username_exists: 409,
   team_not_found: 404,
   team_access_denied: 403,
   team_member_exists: 409,

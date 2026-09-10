@@ -81,13 +81,13 @@ export class PostgresStore {
     }
   }
 
-  async createUser({ email, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
+  async createUser({ email, username, displayName, passwordHash, device, verificationHash, verificationExpiresAt }) {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       const userResult = await client.query(
-        "INSERT INTO users (email, display_name) VALUES ($1, $2) RETURNING id, email, display_name, created_at",
-        [email, displayName],
+        "INSERT INTO users (email, username, display_name) VALUES ($1, $2, $3) RETURNING id, email, username, display_name, created_at",
+        [email, username, displayName],
       );
       const user = userResult.rows[0];
       await client.query(
@@ -114,6 +114,9 @@ export class PostgresStore {
       return user;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (error?.code === "23505" && error?.constraint === "users_username_unique") {
+        throw new Error("username_exists");
+      }
       if (error?.code === "23505") throw new Error("email_exists");
       throw error;
     } finally {
@@ -123,7 +126,7 @@ export class PostgresStore {
 
   async passwordIdentity(email) {
     const result = await this.pool.query(
-      `SELECT u.id, u.email, u.display_name, u.disabled_at, u.email_verified_at, i.password_hash
+      `SELECT u.id, u.email, u.username, u.display_name, u.disabled_at, u.email_verified_at, i.password_hash
        FROM users u JOIN account_identities i ON i.user_id = u.id
        WHERE i.provider = 'password' AND i.subject = $1`,
       [email],
@@ -383,7 +386,7 @@ export class PostgresStore {
 
   async session(tokenHash) {
     const result = await this.pool.query(
-      `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.display_name
+      `SELECT s.id AS session_id, s.user_id, s.device_id, u.email, u.username, u.display_name
        FROM sessions s JOIN users u ON u.id = s.user_id JOIN devices d ON d.id = s.device_id
        WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()
          AND u.disabled_at IS NULL AND u.email_verified_at IS NOT NULL AND d.revoked_at IS NULL`,
@@ -726,14 +729,14 @@ export class PostgresStore {
   async listTeamMembers(teamID, actorUserID) {
     const result = await this.pool.query(
       `SELECT member.id, member.user_id, member.role, member.epoch,
-         member.joined_at, account.email, account.display_name
+         member.joined_at, account.username, account.display_name
        FROM team_memberships AS actor
        JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
        JOIN team_memberships AS member ON member.team_id = team.id AND member.revoked_at IS NULL
        JOIN users AS account ON account.id = member.user_id AND account.disabled_at IS NULL
        WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
        ORDER BY CASE member.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 WHEN 'editor' THEN 2 ELSE 3 END,
-         lower(account.email), member.id`,
+         lower(account.username), member.id`,
       [teamID, actorUserID],
     );
     if (result.rows.length === 0) throw new Error("team_not_found");

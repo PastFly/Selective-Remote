@@ -446,9 +446,10 @@ struct CloudSettingsView: View {
                             accountSheetMode = .signIn
                         },
                         onCancel: closeAccountSheet,
-                        onRegister: { displayName, email, password in
+                        onRegister: { displayName, username, email, password in
                             register(
                                 displayName: displayName,
+                                username: username,
                                 email: email,
                                 password: password,
                                 endpoint: url
@@ -515,7 +516,7 @@ struct CloudSettingsView: View {
         }
     }
 
-    private func register(displayName: String, email: String, password: String, endpoint url: URL) {
+    private func register(displayName: String, username: String, email: String, password: String, endpoint url: URL) {
         guard metadata?.registrationEnabled == true else {
             registrationErrorMessage = UpdateLocalization.text(
                 ru: "Регистрация новых аккаунтов отключена на этом сервере.",
@@ -532,6 +533,7 @@ struct CloudSettingsView: View {
                 try await client.register(
                     endpoint: url,
                     displayName: displayName,
+                    username: username,
                     email: email,
                     password: password,
                     device: .thisMac(id: deviceID, publicKey: identity.publicKey)

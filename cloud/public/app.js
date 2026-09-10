@@ -621,8 +621,8 @@ export function initializeTeamWorkspace({
       const role = documentValue.createElement("select");
       const save = documentValue.createElement("button");
       const revoke = documentValue.createElement("button");
-      name.textContent = member.displayName || member.email;
-      detail.textContent = `${member.email} · epoch ${member.epoch}`;
+      name.textContent = member.displayName || `@${member.username}`;
+      detail.textContent = `@${member.username} · epoch ${member.epoch}`;
       const editableByActor = selectedTeam.role === "owner"
         || (selectedTeam.role === "admin" && ["editor", "viewer"].includes(member.role));
       const self = member.id === selectedTeam.membershipID;
@@ -654,7 +654,7 @@ export function initializeTeamWorkspace({
       revoke.textContent = "Отозвать доступ";
       revoke.disabled = !editableByActor || self;
       revoke.addEventListener("click", async () => {
-        if (!confirmValue(`Отозвать доступ для ${member.email}? Все Shared Vaults будут заморожены до ротации ключей.`)) return;
+        if (!confirmValue(`Отозвать доступ для @${member.username}? Все Shared Vaults будут заморожены до ротации ключей.`)) return;
         revoke.disabled = true;
         try {
           const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
@@ -673,7 +673,7 @@ export function initializeTeamWorkspace({
     for (const member of values.filter((value) => value.id !== selectedTeam.membershipID)) {
       const option = documentValue.createElement("option");
       option.value = member.id;
-      option.textContent = `${member.displayName || member.email} · ${member.role}`;
+      option.textContent = `${member.displayName || `@${member.username}`} · ${member.role}`;
       transferOwnershipMember.append(option);
     }
     transferOwnershipForm.querySelector("button").disabled = transferOwnershipMember.options.length === 0;
@@ -1286,6 +1286,7 @@ export async function initializeCloudAccount({
       try { identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }); } catch {}
       await client.register({
         displayName: registrationForm.elements.displayName.value,
+        username: registrationForm.elements.username.value,
         email: registrationForm.elements.email.value,
         password,
         deviceID,

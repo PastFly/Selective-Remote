@@ -15,8 +15,18 @@ test("numbered migrations have stable checksums", async () => {
     { version: 5, name: "005_team_foundation.sql" },
     { version: 6, name: "006_team_vault_crypto.sql" },
     { version: 7, name: "007_account_deletion.sql" },
+    { version: 8, name: "008_usernames.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("usernames are unique public handles and existing accounts receive a stable fallback", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const usernames = migrations.find(({ version }) => version === 8);
+  assert.match(usernames.sql, /ADD COLUMN username text/);
+  assert.match(usernames.sql, /users_username_unique/);
+  assert.match(usernames.sql, /users_username_shape/);
+  assert.doesNotMatch(usernames.sql, /email.*DROP|DROP.*email/iu);
 });
 
 test("account deletion preserves Team history while removing account-owned secrets", async () => {

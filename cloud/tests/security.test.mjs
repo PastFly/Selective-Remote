@@ -13,6 +13,7 @@ import {
   hashSessionToken,
   hashTeamInvitationToken,
   normalizeEmail,
+  normalizeUsername,
   teamVaultWrapperContextHash,
   validateDevicePublicKey,
   validateTeamVaultEnvelope,
@@ -23,6 +24,13 @@ import {
 test("email normalization is deterministic", () => {
   assert.equal(normalizeEmail("  User@Example.COM "), "user@example.com");
   assert.throws(() => normalizeEmail("not-an-email"), /invalid_email/);
+});
+
+test("usernames are normalized, bounded and safe for public display", () => {
+  assert.equal(normalizeUsername("  Leonid.Kadaev_1 "), "leonid.kadaev_1");
+  assert.throws(() => normalizeUsername("ab"), /invalid_username/);
+  assert.throws(() => normalizeUsername("mail@example.com"), /invalid_username/);
+  assert.throws(() => normalizeUsername("-starts-with-separator"), /invalid_username/);
 });
 
 test("password hashes are salted and verifiable", async () => {

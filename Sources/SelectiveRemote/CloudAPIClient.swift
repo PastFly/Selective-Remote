@@ -82,6 +82,7 @@ struct SelectiveRemoteCloudMetadata: Codable, Equatable, Sendable {
 struct SelectiveRemoteCloudUser: Codable, Equatable, Sendable {
     var id: UUID
     var email: String
+    var username: String
     var displayName: String
 }
 
@@ -116,7 +117,7 @@ struct SelectiveRemoteCloudSharedVault: Codable, Equatable, Identifiable, Sendab
 struct SelectiveRemoteCloudTeamMember: Codable, Equatable, Identifiable, Sendable {
     var id: UUID
     var userID: UUID
-    var email: String
+    var username: String
     var displayName: String
     var role: SelectiveRemoteCloudTeamRole
     var epoch: Int
@@ -368,14 +369,20 @@ actor SelectiveRemoteCloudAPIClient {
     func register(
         endpoint: URL,
         displayName: String,
+        username: String,
         email: String,
         password: String,
         device: SelectiveRemoteCloudDeviceRegistration
     ) async throws {
         let normalizedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let normalizedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedDeviceName = device.name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedDisplayName.isEmpty, normalizedDisplayName.count <= 120,
+              normalizedUsername.range(
+                  of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#,
+                  options: .regularExpression
+              ) != nil,
               !normalizedEmail.isEmpty, normalizedEmail.count <= 254,
               password.count >= 12, password.count <= 1_024,
               !normalizedDeviceName.isEmpty, normalizedDeviceName.count <= 120,
@@ -386,6 +393,7 @@ actor SelectiveRemoteCloudAPIClient {
         let body = RegistrationRequest(
             email: normalizedEmail,
             password: password,
+            username: normalizedUsername,
             displayName: normalizedDisplayName,
             device: .init(
                 id: device.id,
@@ -712,17 +720,19 @@ actor SelectiveRemoteCloudAPIClient {
         user.id.isSelectiveRemoteCloudUUID
             && !user.email.isEmpty
             && user.email.count <= 254
+            && !user.username.isEmpty
+            && user.username.count <= 32
             && !user.displayName.isEmpty
             && user.displayName.count <= 120
     }
 
     private static func validUserObject(_ value: Any?) -> Bool {
-        exactKeys(value, expected: ["id", "email", "displayName"])
+        exactKeys(value, expected: ["id", "email", "username", "displayName"])
     }
 
     private static func validUserJSON(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data) else { return false }
-        guard exactKeys(object, expected: ["id", "email", "displayName", "deviceID"]),
+        guard exactKeys(object, expected: ["id", "email", "username", "displayName", "deviceID"]),
               let deviceID = (object as? [String: Any])?["deviceID"] as? String,
               UUID(uuidString: deviceID)?.isSelectiveRemoteCloudUUID == true
         else { return false }
@@ -784,7 +794,7 @@ actor SelectiveRemoteCloudAPIClient {
     private static func validTeamMember(_ member: SelectiveRemoteCloudTeamMember) -> Bool {
         member.id.isSelectiveRemoteCloudUUID
             && member.userID.isSelectiveRemoteCloudUUID
-            && !member.email.isEmpty && member.email.count <= 254
+            && !member.username.isEmpty && member.username.count <= 32
             && !member.displayName.isEmpty && member.displayName.count <= 120
             && member.epoch > 0 && !member.joinedAt.isEmpty
     }
@@ -795,7 +805,7 @@ actor SelectiveRemoteCloudAPIClient {
               let members = (object as? [String: Any])?["members"] as? [Any]
         else { return false }
         return members.allSatisfy { exactKeys($0, expected: [
-            "id", "userID", "email", "displayName", "role", "epoch", "joinedAt"
+            "id", "userID", "username", "displayName", "role", "epoch", "joinedAt"
         ]) }
     }
 
@@ -973,6 +983,7 @@ private struct LoginRequest: Encodable {
 private struct RegistrationRequest: Encodable {
     var email: String
     var password: String
+    var username: String
     var displayName: String
     var device: SelectiveRemoteCloudDeviceRegistration
 }

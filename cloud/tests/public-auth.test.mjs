@@ -16,6 +16,7 @@ test("browser registration sends JSON without persisting or returning a password
 
   const result = await client.register({
     displayName: "Leonid",
+    username: "leonid",
     email: "owner@example.com",
     password: "a sufficiently long password",
     deviceID,
@@ -27,6 +28,7 @@ test("browser registration sends JSON without persisting or returning a password
   assert.equal(request[1].cache, "no-store");
   const body = JSON.parse(request[1].body);
   assert.equal(body.email, "owner@example.com");
+  assert.equal(body.username, "leonid");
   assert.equal(body.device.id, deviceID);
   assert.equal("password" in result, false);
 });
@@ -36,7 +38,7 @@ test("browser surfaces bounded registration and login errors", async () => {
     fetchValue: async () => ({ ok: false, status: 403, async json() { return { error: "registration_disabled" }; } }),
   });
   await assert.rejects(
-    registrationClient.register({ displayName: "Owner", email: "owner@example.com", password: "a sufficiently long password", deviceID }),
+    registrationClient.register({ displayName: "Owner", username: "owner", email: "owner@example.com", password: "a sufficiently long password", deviceID }),
     /registration_disabled/,
   );
 
@@ -68,7 +70,7 @@ test("authenticated account deletion clears the in-memory session", async () => 
   const client = createAuthenticatedVaultClient({ fetchValue: async (path, options = {}) => {
     calls.push([path, options]);
     if (path === "/v1/auth/login") return new Response(JSON.stringify({
-      token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", displayName: "Owner" }, deviceID,
+      token: "t".repeat(43), user: { id: deviceID, email: "owner@example.com", username: "owner", displayName: "Owner" }, deviceID,
     }), { status: 200, headers: { "Content-Type": "application/json" } });
     if (path === "/v1/me" && options.method === "DELETE") {
       return new Response(JSON.stringify({ deleted: true }), { status: 200, headers: { "Content-Type": "application/json" } });

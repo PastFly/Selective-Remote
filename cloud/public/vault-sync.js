@@ -223,7 +223,7 @@ function normalizedTeam(value) {
 }
 
 function normalizedTeamMember(value) {
-  exactKeys(value, ["displayName", "email", "epoch", "id", "joinedAt", "role", "userID"], "invalid_team_member");
+  exactKeys(value, ["displayName", "epoch", "id", "joinedAt", "role", "userID", "username"], "invalid_team_member");
   if (!["owner", "admin", "editor", "viewer"].includes(value.role)
     || !Number.isSafeInteger(value.epoch) || value.epoch < 1) {
     throw new Error("invalid_team_member");
@@ -231,7 +231,7 @@ function normalizedTeamMember(value) {
   return {
     id: normalizedUUID(value.id, "invalid_team_member"),
     userID: normalizedUUID(value.userID, "invalid_team_member"),
-    email: String(value.email ?? ""),
+    username: String(value.username ?? ""),
     displayName: String(value.displayName ?? ""),
     role: value.role,
     epoch: value.epoch,
@@ -371,17 +371,22 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   }
 
   return {
-    async register({ displayName, email, password, deviceID, publicKey = null }) {
+    async register({ displayName, username, email, password, deviceID, publicKey = null }) {
       const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
       if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
       const normalizedName = String(displayName ?? "").trim();
       if (!normalizedName || normalizedName.length > 120) throw new Error("invalid_display_name");
+      const normalizedUsername = String(username ?? "").trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$/.test(normalizedUsername)) {
+        throw new Error("invalid_username");
+      }
       const normalizedPublicKey = publicKey === null ? null : normalizeTeamDevicePublicKey(publicKey);
       const response = await fetchValue("/v1/auth/register", {
         method: "POST",
         headers: { Accept: "application/json", "Content-Type": "application/json" },
         body: JSON.stringify({
           displayName: normalizedName,
+          username: normalizedUsername,
           email: String(email ?? "").trim(),
           password: normalizedPassword(password),
           device: {
@@ -462,6 +467,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       user = {
         id: String(result.user.id).toLowerCase(),
         email: String(result.user.email ?? ""),
+        username: String(result.user.username ?? ""),
         displayName: String(result.user.displayName ?? ""),
       };
       return structuredClone(user);
