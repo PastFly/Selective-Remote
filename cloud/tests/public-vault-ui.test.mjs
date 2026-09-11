@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   accountVaultPassphrase,
+  formatVaultSynchronizationSummary,
   formatVaultTimestamp,
   initializeAppearance,
   localVaultConflictSideSummary,
@@ -11,6 +12,7 @@ import {
   localVaultRecordSummary,
   parseTeamHostConnection,
   personalHostEditorValues,
+  personalHostFolderName,
   personalHostRecordData,
   sortLocalVaultRecords,
   teamHostConnectionData,
@@ -123,6 +125,8 @@ test("Personal Host editor updates organization and the embedded native profile 
   assert.equal(decoded.sshPort, 2222);
   assert.equal(decoded.group, "Work/Production");
   assert.equal(decoded.sshProxyMode, "none");
+  assert.equal(personalHostFolderName({ type: "host", data: baseData }), "Old");
+  assert.equal(personalHostFolderName({ type: "host", data: { title: "Ungrouped" } }), "Без папки");
 });
 
 test("Vault timestamps render in the viewer time zone instead of raw UTC", () => {
@@ -131,6 +135,10 @@ test("Vault timestamps render in the viewer time zone instead of raw UTC", () =>
   });
   assert.match(rendered, /15:58:29/u);
   assert.equal(formatVaultTimestamp("invalid", { locales: "ru-RU" }), "—");
+  assert.match(formatVaultSynchronizationSummary(23, "2026-09-11T15:17:30.000Z", {
+    locales: "ru-RU", timeZone: "Europe/Moscow",
+  }), /Последняя синхронизация:.*18:17:30.*r23/u);
+  assert.equal(formatVaultSynchronizationSummary(-1), "Последняя синхронизация: —");
 });
 
 test("Personal Vault catalog sorting is deterministic and does not mutate the document", () => {
@@ -246,8 +254,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=124/u);
-  assert.match(html, /\/app\.js\?v=124/u);
+  assert.match(html, /\/styles\.css\?v=125/u);
+  assert.match(html, /\/app\.js\?v=125/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -397,6 +405,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /setFilterChangeListener/u);
   assert.match(application, /renderOverviewSummary/u);
   assert.match(application, /formatVaultTimestamp\(record\.modifiedAt\)/u);
+  assert.match(application, /Изменено: \$\{formatVaultTimestamp\(record\.modifiedAt\)\}/u);
+  assert.match(application, /formatVaultSynchronizationSummary\(result\.revision\)/u);
+  assert.match(application, /const hostFolderName = personalHostFolderName/u);
   assert.match(application, /localVaultRecordFormValues\(record\)/u);
   assert.match(application, /editingRecordID/u);
   assert.match(application, /closeEditor\(\)/u);
