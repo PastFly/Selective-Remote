@@ -11,6 +11,18 @@ func unifiedVaultEntryKeyIsStable() {
     #expect(UnifiedCredentialVault.entryKey(for: ssh).contains(id.uuidString))
 }
 
+@Test("Cloud state has a deterministic namespace inside the unified Keychain item")
+func unifiedVaultProtectedDataKeyIsStableAndSeparate() {
+    let endpoint = "https://cloud.example.invalid"
+    let key = UnifiedCredentialVault.protectedDataKey(
+        namespace: SelectiveRemoteCloudSecureEnvelopeStore.namespace,
+        key: endpoint
+    )
+    #expect(key.contains("protected-data"))
+    #expect(key.contains(endpoint))
+    #expect(!key.hasPrefix(SelectiveRemoteCloudSecureEnvelopeStore.legacyService))
+}
+
 @Test("SSH profile exposes Automation as a dedicated settings tab")
 func automationTabSourceRegression() throws {
     let root = URL(fileURLWithPath: #filePath)

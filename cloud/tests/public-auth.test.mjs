@@ -116,7 +116,7 @@ test("portal exposes visible login and registration modes and never promises ema
   assert.match(html, /id="cloud-recovery-form"/u);
   assert.match(html, /Пароли по почте не отправляются/u);
   assert.doesNotMatch(html, /отправим[^<]*(?:логин|пароль)/iu);
-  assert.match(server, /\["\.html", "\.js", "\.css"\][^\n]*"no-cache"/u);
+  assert.match(server, /\["\.html", "\.js", "\.css"\][^\n]*"no-store"/u);
   assert.match(server, /HttpOnly; SameSite=Strict/u);
   assert.match(server, /cookie && !\["GET", "HEAD"\]\.includes\(method\) && !hasTrustedOrigin\(request\)/u);
   assert.match(server, /origin === config\.publicOrigin/u);

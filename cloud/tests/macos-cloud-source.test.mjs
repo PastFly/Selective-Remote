@@ -5,14 +5,16 @@ import { validateVaultDocument } from "../public/vault-model.js";
 
 const sourceRoot = new URL("../../Sources/SelectiveRemote/", import.meta.url);
 
-test("macOS Cloud foundation keeps sessions in device-only Keychain storage", async () => {
-  const [client, store, envelope] = await Promise.all([
+test("macOS Cloud foundation keeps sessions in device-only unified Keychain storage", async () => {
+  const [client, store, envelope, unified] = await Promise.all([
     readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("UnifiedCredentialVault.swift", sourceRoot), "utf8"),
   ]);
   assert.match(store, /local\.selectiveremote\.cloud\.session\.v1/);
-  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(unified, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(envelope, /UnifiedCredentialVault\.shared/u);
   assert.doesNotMatch(store + envelope, /UserDefaults/);
   assert.match(client, /Bearer.*Authorization/);
   assert.match(client, /http\.statusCode == 401[\s\S]*removeToken/);
@@ -20,10 +22,10 @@ test("macOS Cloud foundation keeps sessions in device-only Keychain storage", as
 });
 
 test("macOS Team crypto source pins the browser protocol labels and strict JWK shape", async () => {
-  const [source, identity, envelope] = await Promise.all([
+  const [source, identity, unified] = await Promise.all([
     readFile(new URL("CloudTeamCrypto.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
-    readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("UnifiedCredentialVault.swift", sourceRoot), "utf8"),
   ]);
   assert.match(source, /selective-remote\/team-device-key\/v1/);
   assert.match(source, /selective-remote\/team-vault-wrapper\/v1/);
@@ -34,7 +36,7 @@ test("macOS Team crypto source pins the browser protocol labels and strict JWK s
   assert.match(source, /hkdfDerivedSymmetricKey/);
   assert.match(source, /AES\.GCM\.(seal|SealedBox)/);
   assert.match(identity, /local\.selectiveremote\.cloud\.team-device-key\.v1/);
-  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(unified, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
   assert.match(identity, /savePrivateKeyIfAbsent/);
   assert.doesNotMatch(identity, /UserDefaults/);
 });
@@ -194,7 +196,7 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(client, /validTeamsJSON/);
   assert.match(client, /validTeamMembersJSON/);
   assert.match(client, /deviceID/);
-  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/);
+  assert.match(envelope, /UnifiedCredentialVault\.shared/u);
   assert.doesNotMatch(sessions + envelope, /UserDefaults/);
 });
 
@@ -425,9 +427,10 @@ test("macOS Team Host personal settings preserve per-Mac display selection", asy
 });
 
 
-test("macOS Cloud session and Team device key share one Keychain envelope", async () => {
-  const [envelope, session, teamDevice] = await Promise.all([
+test("macOS credentials, Cloud session, and device keys share one Keychain item", async () => {
+  const [envelope, unified, session, teamDevice] = await Promise.all([
     readFile(new URL("CloudSecureEnvelopeStore.swift", sourceRoot), "utf8"),
+    readFile(new URL("UnifiedCredentialVault.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSessionStore.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamDeviceIdentity.swift", sourceRoot), "utf8"),
   ]);
@@ -435,7 +438,11 @@ test("macOS Cloud session and Team device key share one Keychain envelope", asyn
   assert.match(envelope, /var sessionToken: String\?/u);
   assert.match(envelope, /var teamDevicePrivateKeys: \[String: Data\]/u);
   assert.match(envelope, /var personalVaultKeyMaterials: \[String: Data\]/u);
-  assert.match(envelope, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/u);
+  assert.match(envelope, /UnifiedCredentialVault\.shared\.readProtectedData/u);
+  assert.match(envelope, /UnifiedCredentialVault\.shared\.saveProtectedData/u);
+  assert.match(unified, /local\.selectiveremote\.credentials\.unified\.v1/u);
+  assert.match(unified, /kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly/u);
+  assert.match(unified, /exportedSecrets[\s\S]*isProtectedDataKey/u);
   assert.match(session, /SelectiveRemoteCloudSecureEnvelopeStore/u);
   assert.match(session, /legacyService = "local\.selectiveremote\.cloud\.session\.v1"/u);
   assert.match(teamDevice, /SelectiveRemoteCloudSecureEnvelopeStore/u);

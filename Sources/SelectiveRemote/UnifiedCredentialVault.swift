@@ -8,15 +8,16 @@ struct CredentialVaultMigrationReport: Equatable, Sendable {
     var failed = 0
 }
 
-/// Stores all Selective Remote password secrets inside one generic-password
-/// Keychain item. Ad-hoc signed builds get a new designated identity after an
-/// update, so legacy per-profile Keychain ACLs can ask for authorization once
-/// per item. A single vault reduces that to one Keychain authorization and the
-/// decoded vault is cached only in process memory for the lifetime of the app.
+/// Stores Selective Remote password secrets and device-bound Cloud state inside
+/// one generic-password Keychain item. Ad-hoc signed builds get a new designated
+/// identity after an update, so legacy per-profile Keychain ACLs can ask for
+/// authorization once per item. A single vault reduces that to one Keychain
+/// authorization; the decoded vault is cached only in process memory.
 final class UnifiedCredentialVault: @unchecked Sendable {
     static let shared = UnifiedCredentialVault()
     static let service = "local.selectiveremote.credentials.unified.v1"
     static let account = "credential-vault"
+    private static let protectedDataPrefix = "\u{1E}protected-data\u{1F}"
 
     private let lock = NSRecursiveLock()
     private var cachedSecrets: [String: String]?
@@ -30,6 +31,14 @@ final class UnifiedCredentialVault: @unchecked Sendable {
 
     static func entryKey(for reference: KeychainCredentialReference) -> String {
         reference.service + "\u{1F}" + reference.account
+    }
+
+    static func protectedDataKey(namespace: String, key: String) -> String {
+        protectedDataPrefix + namespace + "\u{1F}" + key
+    }
+
+    private static func isProtectedDataKey(_ key: String) -> Bool {
+        key.hasPrefix(protectedDataPrefix)
     }
 
     var entryCount: Int {
@@ -110,6 +119,38 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         suppressedLegacy = suppressed
     }
 
+    /// Stores device-bound binary state in the same Keychain item as connection
+    /// credentials. Namespaces keep Cloud state separate without creating a
+    /// second Keychain ACL (and therefore a second authorization prompt).
+    func readProtectedData(namespace: String, key: String) throws -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let encoded = try loadIfNeeded()[Self.protectedDataKey(namespace: namespace, key: key)] else {
+            return nil
+        }
+        guard let data = Data(base64Encoded: encoded) else { throw KeychainError.invalidData }
+        return data
+    }
+
+    func saveProtectedData(_ data: Data, namespace: String, key: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var secrets = try loadIfNeeded()
+        secrets[Self.protectedDataKey(namespace: namespace, key: key)] = data.base64EncodedString()
+        try persist(secrets)
+        cachedSecrets = secrets
+    }
+
+    func deleteProtectedData(namespace: String, key: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        var secrets = try loadIfNeeded()
+        if secrets.removeValue(forKey: Self.protectedDataKey(namespace: namespace, key: key)) != nil {
+            try persist(secrets)
+            cachedSecrets = secrets
+        }
+    }
+
     func unlock() throws {
         lock.lock()
         defer { lock.unlock() }
@@ -119,14 +160,16 @@ final class UnifiedCredentialVault: @unchecked Sendable {
     func exportedSecrets() throws -> [String: String] {
         lock.lock()
         defer { lock.unlock() }
-        return try loadIfNeeded()
+        return try loadIfNeeded().filter { !Self.isProtectedDataKey($0.key) }
     }
 
     func replaceSecrets(_ secrets: [String: String]) throws {
         lock.lock()
         defer { lock.unlock() }
-        try persist(secrets)
-        cachedSecrets = secrets
+        let protectedData = try loadIfNeeded().filter { Self.isProtectedDataKey($0.key) }
+        let merged = secrets.merging(protectedData) { _, protectedValue in protectedValue }
+        try persist(merged)
+        cachedSecrets = merged
         index = Set(secrets.keys)
         suppressedLegacy = []
     }
@@ -175,7 +218,7 @@ final class UnifiedCredentialVault: @unchecked Sendable {
         if report.imported > 0 {
             try persist(secrets)
             cachedSecrets = secrets
-            index = Set(secrets.keys)
+            index = Set(secrets.keys.filter { !Self.isProtectedDataKey($0) })
         }
         return report
     }
@@ -256,7 +299,7 @@ final class UnifiedCredentialVault: @unchecked Sendable {
             throw KeychainError.invalidData
         }
         cachedSecrets = decoded
-        index = Set(decoded.keys)
+        index = Set(decoded.keys.filter { !Self.isProtectedDataKey($0) })
         return decoded
     }
 
@@ -271,13 +314,22 @@ final class UnifiedCredentialVault: @unchecked Sendable {
             key as CFDictionary,
             [kSecValueData as String: data] as CFDictionary
         )
-        if updateStatus == errSecSuccess { return }
+        if updateStatus == errSecSuccess {
+            // Accessibility hardening is best-effort for an existing legacy
+            // item: failure must never discard a successfully stored session.
+            _ = SecItemUpdate(
+                key as CFDictionary,
+                [kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly]
+                    as CFDictionary
+            )
+            return
+        }
         guard updateStatus == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(updateStatus)
         }
         var item = key
         item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(item as CFDictionary, nil)
         guard addStatus == errSecSuccess else {
             throw KeychainError.unexpectedStatus(addStatus)

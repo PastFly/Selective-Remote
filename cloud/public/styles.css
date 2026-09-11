@@ -64,19 +64,23 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--ink); 
 .auth-success { text-align:center; padding:18px 8px 8px; }.auth-success h3 { margin:12px 0 8px; }.auth-success p { color:var(--muted); line-height:1.5; }
 .auth-success-icon { width:54px; height:54px; display:grid; place-items:center; margin:auto; border-radius:50%; background:#75e0b424; color:var(--accent); font-size:27px; }
 .auth-card button.secondary { background:transparent; border:1px solid var(--line); color:var(--ink); }
-#cloud-signed-in { display:flex; align-items:center; gap:12px; } #cloud-signed-in p { margin:0; color:var(--ink); font-weight:700; }
+#cloud-signed-in p { margin:0; color:var(--ink); font-weight:700; }
 .workspace-layout { min-height:calc(100vh - 98px); display:grid; grid-template-columns:240px minmax(0,1fr); overflow:hidden; border:1px solid var(--line); border-radius:24px; background:#091310e8; box-shadow:0 30px 90px #0005; }
 .workspace-sidebar { display:flex; flex-direction:column; padding:24px 16px; border-right:1px solid var(--line); background:#07100ded; }
 .workspace-logo { display:flex; align-items:center; gap:11px; padding:0 8px 24px; }.workspace-logo span { width:38px; height:38px; display:grid; place-items:center; border:1px solid var(--accent); border-radius:11px; color:var(--accent); font-weight:800; }.workspace-logo strong { font-size:20px; }
 .workspace-sidebar nav { display:grid; gap:6px; }.workspace-sidebar nav button { width:100%; padding:12px 13px; border:0; border-radius:10px; background:transparent; color:var(--muted); font:inherit; font-weight:650; text-align:left; cursor:pointer; }.workspace-sidebar nav button:hover,.workspace-sidebar nav button.active { background:#75e0b419; color:var(--ink); }
 .workspace-nav-label { margin:16px 13px 4px; color:#70847c; font-size:11px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
-.workspace-security { margin-top:auto; display:grid; gap:12px; padding:16px 10px 4px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }.workspace-security span { color:var(--accent2); }
-.workspace-security .theme-control { display:grid; grid-template-columns:auto 1fr; align-items:center; gap:8px; }.workspace-security select { min-width:0; width:100%; }.workspace-security #cloud-signed-in { display:grid; gap:8px; }.workspace-security #cloud-signed-in p { margin:0; overflow-wrap:anywhere; }.workspace-security #cloud-logout { width:100%; }
+.workspace-security { margin-top:auto; display:grid; gap:10px; padding:16px 4px 0; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+.workspace-security-status { display:flex; align-items:center; gap:10px; padding:11px; border:1px solid #75e0b42e; border-radius:13px; background:linear-gradient(145deg,#75e0b412,#75e0b405); }
+.workspace-security-status>span:last-child { display:grid; gap:3px; min-width:0; }.workspace-security-status strong { color:var(--ink); font-size:12px; }.workspace-security-status small { color:var(--muted); font-size:10px; line-height:1.35; }
+.workspace-security-icon { flex:0 0 auto; width:28px; height:28px; display:grid; place-items:center; border-radius:9px; background:var(--accent); color:#082016; font-weight:900; box-shadow:0 6px 18px #75e0b425; }
+.workspace-security .theme-control { display:grid; grid-template-columns:1fr; gap:7px; padding:11px; border:1px solid var(--line); border-radius:13px; background:#ffffff05; }.workspace-security .theme-control>span { color:var(--muted); font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }.workspace-security select { min-width:0; width:100%; padding:8px 28px 8px 10px; }
+.workspace-account { display:grid; grid-template-columns:32px minmax(0,1fr) auto; align-items:center; gap:9px; padding:10px; border:1px solid var(--line); border-radius:13px; background:#ffffff05; }.workspace-account-avatar { width:32px; height:32px; display:grid; place-items:center; border-radius:10px; background:#75e0b418; color:var(--accent); font-size:10px; font-weight:850; letter-spacing:.04em; }.workspace-security #cloud-signed-in p { min-width:0; margin:0; overflow-wrap:anywhere; font-size:11px; line-height:1.35; }.workspace-security #cloud-logout { width:auto; padding:7px 9px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--muted); font:inherit; font-weight:700; cursor:pointer; }.workspace-security #cloud-logout:hover { border-color:var(--line); color:var(--ink); background:#ffffff08; }
 .about-project-card { max-width:760px; padding:28px; border:1px solid var(--line); border-radius:18px; background:var(--panel); }.about-project-card h3 { margin-top:0; }.about-project-card p { color:var(--muted); line-height:1.6; }.button-link { display:inline-flex; align-items:center; justify-content:center; padding:11px 16px; border-radius:10px; background:var(--accent); color:#04110c; font-weight:800; text-decoration:none; }.button-link.secondary { border:1px solid var(--line); background:transparent; color:var(--ink); }
 .workspace-main { min-width:0; padding:28px; }
 .workspace-header[hidden] { display:none; }
 .workspace-header { display:flex; align-items:center; justify-content:space-between; gap:24px; padding-bottom:24px; border-bottom:1px solid var(--line); }.workspace-header h2 { margin:6px 0 0; font-size:28px; }.workspace-header .secondary { border:1px solid var(--line); border-radius:10px; padding:9px 13px; background:transparent; color:var(--ink); font:inherit; cursor:pointer; }
-.workspace-theme { margin-left:auto; }
+.workspace-theme { margin-left:0; }
 .workspace-panel { margin:28px 0 0; padding:0; border:0; border-radius:0; background:transparent; }
 .workspace-welcome { display:flex; align-items:center; justify-content:space-between; gap:24px; padding:26px; border:1px solid var(--line); border-radius:18px; background:linear-gradient(135deg,#11251de8,#0a1512); }.workspace-welcome h2 { margin:7px 0 0; font-size:30px; }
 .workspace-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; margin-top:18px; }.workspace-stats button { display:grid; gap:7px; min-height:150px; padding:22px; border:1px solid var(--line); border-radius:16px; background:#08110e; color:var(--ink); font:inherit; text-align:left; cursor:pointer; }.workspace-stats button:hover { border-color:#75e0b478; background:#0d1b16; }.workspace-stats span { color:var(--accent); font:700 34px ui-monospace,monospace; }.workspace-stats strong { font-size:18px; }.workspace-stats small { color:var(--muted); }
@@ -127,6 +131,7 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--ink); 
 .vault-heading,.vault-toolbar { display:flex; align-items:flex-start; justify-content:space-between; gap:32px; }
 .vault-heading h2,.vault-toolbar h3 { margin:8px 0 0; }.vault-heading>p,.vault-toolbar p,.vault-panel>p { max-width:520px; color:var(--muted); line-height:1.55; margin:0; }
 .vault-panel,.vault-workspace { margin-top:28px; padding-top:28px; border-top:1px solid var(--line); }.vault-panel h3 { margin-top:0; }
+.vault-account-waiting { display:flex; align-items:center; gap:16px; padding:22px; border:1px solid #75e0b438; border-radius:16px; background:linear-gradient(145deg,#75e0b40d,#75e0b403); }.vault-account-waiting-icon { flex:0 0 auto; width:46px; height:46px; display:grid; place-items:center; border-radius:14px; background:#75e0b418; color:var(--accent); font-size:25px; font-weight:800; }.vault-account-waiting h3,.vault-account-waiting p { margin:0; }.vault-account-waiting p { margin-top:6px; color:var(--muted); line-height:1.5; }
 .vault-panel form,.record-form { display:grid; grid-template-columns:minmax(150px,.45fr) minmax(240px,1fr); align-items:center; gap:12px 18px; margin-top:24px; }
 .vault-panel label,.record-form label { color:var(--muted); font-size:13px; }
 .vault-panel input,.record-form input,.record-form select,.record-form textarea { width:100%; border:1px solid var(--line); border-radius:10px; padding:12px 14px; background:#07100d; color:var(--ink); font:inherit; }
@@ -179,6 +184,7 @@ body { margin:0; min-height:100vh; background:var(--body-bg); color:var(--ink); 
 :root[data-theme="light"] .resource-detail,
 :root[data-theme="light"] .vault-conflicts { background:#fff; color:var(--ink); box-shadow:0 20px 60px #234b3918; }
 :root[data-theme="light"] .auth-tabs { background:#eef4f1; }
+:root[data-theme="light"] .workspace-security .theme-control,:root[data-theme="light"] .workspace-account { background:#f7faf8; }
 :root[data-theme="light"] .resource-card-clickable:hover,
 :root[data-theme="light"] .resource-card-clickable:focus-visible { background:#f1f7f4; }
 :root[data-theme="light"] .resource-detail::backdrop { background:#17312840; }

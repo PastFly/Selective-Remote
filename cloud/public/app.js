@@ -193,13 +193,10 @@ export async function initializeLocalVault({
 } = {}) {
   const section = documentValue.querySelector("#local-vault");
   if (!section) return null;
-  const setup = documentValue.querySelector("#local-vault-setup");
-  const unlock = documentValue.querySelector("#local-vault-unlock");
+  const waiting = documentValue.querySelector("#local-vault-waiting");
   const workspace = documentValue.querySelector("#local-vault-workspace");
   const message = documentValue.querySelector("#local-vault-message");
   const records = documentValue.querySelector("#local-vault-records");
-  const setupForm = documentValue.querySelector("#local-vault-setup-form");
-  const unlockForm = documentValue.querySelector("#local-vault-unlock-form");
   const recordForm = documentValue.querySelector("#local-vault-record-form");
   const lockButton = documentValue.querySelector("#local-vault-lock");
   const type = documentValue.querySelector("#local-record-type");
@@ -208,8 +205,6 @@ export async function initializeLocalVault({
   const secret = documentValue.querySelector("#local-record-secret");
   const targetLabel = documentValue.querySelector("#local-record-target-label");
   const secretLabel = documentValue.querySelector("#local-record-secret-label");
-  const recoveryPanel = documentValue.querySelector("#cloud-vault-recovery");
-  const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
@@ -248,15 +243,9 @@ export async function initializeLocalVault({
     for (const button of records.querySelectorAll("button")) button.disabled = active;
   }
 
-  function hideRecovery() {
-    recoveryPanel.hidden = true;
-    recoveryForm.reset();
-  }
-
   function mode(value) {
-    setup.hidden = value !== "empty";
-    unlock.hidden = value !== "locked";
     workspace.hidden = value !== "unlocked";
+    waiting.hidden = value === "unlocked";
   }
 
   function updateLabels() {
@@ -358,48 +347,6 @@ export async function initializeLocalVault({
     }
   }
 
-  setupForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const passphrase = setupForm.elements.passphrase.value;
-    const confirmation = setupForm.elements.confirmation.value;
-    if (passphrase !== confirmation) {
-      setText(message, "Recovery-фразы не совпадают.");
-      return;
-    }
-    const button = setupForm.querySelector("button");
-    button.disabled = true;
-    try {
-      await controller.create(passphrase);
-      setupForm.reset();
-      hideRecovery();
-      clearConflictUI();
-      mode("unlocked");
-      setText(message, "Локальный Vault создан и разблокирован только в памяти этой вкладки.");
-      render();
-    } catch {
-      setText(message, "Не удалось создать Vault. Проверьте recovery-фразу и доступ к локальному хранилищу.");
-      button.disabled = false;
-    }
-  });
-
-  unlockForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = unlockForm.querySelector("button");
-    button.disabled = true;
-    try {
-      await controller.unlock(unlockForm.elements.passphrase.value);
-      unlockForm.reset();
-      button.disabled = false;
-      mode("unlocked");
-      clearConflictUI();
-      setText(message, "Vault расшифрован локально. Ключ существует только в памяти вкладки.");
-      render();
-    } catch {
-      setText(message, "Не удалось разблокировать Vault. Recovery-фраза неверна или данные повреждены.");
-      button.disabled = false;
-    }
-  });
-
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = recordForm.querySelector("button");
@@ -433,20 +380,21 @@ export async function initializeLocalVault({
   }
   lockButton.addEventListener("click", () => {
     controller.lock();
-    hideRecovery();
     clearConflictUI();
-    mode("locked");
+    mode("waiting");
     records.replaceChildren();
-    setText(message, "Vault заблокирован; ключ удалён из состояния страницы.");
+    setText(message, "Vault заблокирован. Войдите в аккаунт снова, чтобы открыть его.");
   });
 
   updateLabels();
   try {
-    mode(await controller.status());
-    setText(message, "Данные зашифрованы локально; браузер разблокирует Vault только на этом устройстве.");
+    const status = await controller.status();
+    mode(status === "unlocked" ? "unlocked" : "waiting");
+    setText(message, status === "unlocked"
+      ? "Данные расшифрованы локально только для этой вкладки."
+      : "Войдите в аккаунт, чтобы открыть Personal Vault на этом устройстве.");
   } catch {
-    setup.hidden = true;
-    unlock.hidden = true;
+    waiting.hidden = true;
     workspace.hidden = true;
     setText(message, "Локальное защищённое хранилище недоступно в этом браузере.");
   }
@@ -466,16 +414,9 @@ export async function initializeLocalVault({
     setConflictResetListener(listener) {
       conflictResetListener = typeof listener === "function" ? listener : () => {};
     },
-    showRecovery() {
-      setup.hidden = true;
-      unlock.hidden = true;
-      workspace.hidden = true;
-      recoveryPanel.hidden = false;
-      recoveryForm.elements.passphrase.focus();
-    },
-    async hideRecoveryAndRestoreMode() {
-      hideRecovery();
-      mode(await controller.status());
+    async restoreModeFromLocalStatus() {
+      const status = await controller.status();
+      mode(status === "unlocked" ? "unlocked" : "waiting");
     },
   };
 }
@@ -1836,8 +1777,6 @@ export async function initializeCloudAccount({
   const deleteAccountMessage = documentValue.querySelector("#account-delete-message");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
   const vaultMessage = documentValue.querySelector("#local-vault-message");
-  const recoveryForm = documentValue.querySelector("#cloud-vault-recovery-form");
-  const recoveryCancel = documentValue.querySelector("#cloud-vault-recovery-cancel");
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
@@ -1847,7 +1786,6 @@ export async function initializeCloudAccount({
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
   let backgroundSyncing = false;
-  let accountVaultMigrationPassphrase = null;
   vaultUI.setConflictResetListener(() => {
     activeConflicts = null;
     conflictApply.disabled = true;
@@ -2057,7 +1995,6 @@ export async function initializeCloudAccount({
     button.disabled = true;
     try {
       const password = form.elements.password.value;
-      accountVaultMigrationPassphrase = accountVaultPassphrase(password);
       const deviceID = await vault.deviceID();
       let identity = null;
       try {
@@ -2075,7 +2012,6 @@ export async function initializeCloudAccount({
       try {
         await unlockAndSyncPersonalVault(password);
         personalVaultReady = true;
-        accountVaultMigrationPassphrase = null;
       } catch {
         // A legacy wrapper is migrated automatically by an updated Mac that has
         // the authoritative local records. Do not expose Recovery in normal UI.
@@ -2132,7 +2068,7 @@ export async function initializeCloudAccount({
       showSession(null);
       teamWorkspace?.deactivate();
       hideConflicts();
-      await vaultUI.hideRecoveryAndRestoreMode();
+      await vaultUI.restoreModeFromLocalStatus();
       logoutButton.disabled = false;
       setText(message, "Сессия завершена, токен удалён из памяти вкладки.");
     }
@@ -2205,7 +2141,7 @@ export async function initializeCloudAccount({
       teamWorkspace?.deactivate();
       hideConflicts();
       vault.lock();
-      await vaultUI.hideRecoveryAndRestoreMode();
+      await vaultUI.restoreModeFromLocalStatus();
       showSession(null);
       setAccountMessage("Аккаунт удалён. Все Cloud-сессии завершены.", "success");
     } catch (error) {
@@ -2255,68 +2191,6 @@ export async function initializeCloudAccount({
     }
   });
 
-  recoveryForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const button = recoveryForm.querySelector('button[type="submit"]');
-    const passphrase = recoveryForm.elements.passphrase.value;
-    const accountPassword = recoveryForm.elements.accountPassword.value;
-    button.disabled = true;
-    try {
-      let migrationPassphrase = accountVaultMigrationPassphrase;
-      if (!migrationPassphrase) {
-        if (!accountPassword) throw new Error("account_password_required");
-        const currentUser = client.session();
-        if (!currentUser) throw new Error("authentication_required");
-        const deviceID = await vault.deviceID();
-        let identity = null;
-        try {
-          identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID });
-        } catch {
-          // Personal Vault recovery remains available when Team device storage is unavailable.
-        }
-        await client.login({
-          email: currentUser.email,
-          password: accountPassword,
-          deviceID,
-          publicKey: identity?.publicKey ?? null,
-        });
-        migrationPassphrase = accountVaultPassphrase(accountPassword);
-      }
-      const result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
-      await vault.rewrap(migrationPassphrase);
-      await synchronizeVault({ client, vault });
-      accountVaultMigrationPassphrase = null;
-      recoveryForm.reset();
-      await vaultUI.hideRecoveryAndRestoreMode();
-      vaultUI.mode("unlocked");
-      vaultUI.render();
-      setText(vaultMessage, `Зашифрованная ревизия ${result.revision} восстановлена и переведена на автоматическую разблокировку паролем аккаунта.`);
-    } catch (error) {
-      const code = String(error?.message ?? "");
-      recoveryForm.elements.passphrase.value = "";
-      if (recoveryForm.elements.accountPassword) recoveryForm.elements.accountPassword.value = "";
-      if (code === "authentication_required") {
-        showSession(null);
-        await vaultUI.hideRecoveryAndRestoreMode();
-        setText(vaultMessage, "Сессия истекла. Войдите снова.");
-      } else if (code === "account_password_required") {
-        setText(vaultMessage, "Введите пароль аккаунта, чтобы подтвердить восстановленную сессию и подключить Vault.");
-      } else if (code === "invalid_credentials") {
-        setText(vaultMessage, "Пароль аккаунта неверен. Recovery-фраза не проверялась.");
-      } else {
-        setText(vaultMessage, "Не удалось восстановить Vault. Recovery-фраза неверна или зашифрованные данные повреждены.");
-      }
-    } finally {
-      if (recoveryForm.elements.accountPassword) recoveryForm.elements.accountPassword.value = "";
-      button.disabled = false;
-    }
-  });
-
-  recoveryCancel.addEventListener("click", async () => {
-    await vaultUI.hideRecoveryAndRestoreMode();
-    setText(vaultMessage, "Восстановление отменено; удалённый Vault не изменён.");
-  });
-
   conflictForm.addEventListener("change", updateConflictApplyState);
   conflictForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -2343,6 +2217,10 @@ export async function initializeCloudAccount({
   try {
     const restoredUser = await client.restoreSession();
     showSession(restoredUser);
+    if (await vault.status() !== "unlocked") {
+      vaultUI.mode("waiting");
+      setText(vaultMessage, "Сессия аккаунта восстановлена. Чтобы открыть зашифрованный Personal Vault, выполните обычный вход ещё раз — отдельная секретная фраза не требуется.");
+    }
     let identity = null;
     try {
       identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID: client.deviceID() });
@@ -2420,14 +2298,7 @@ export function initializePortalNavigation({
   let sessionActive = false;
   let requestedWorkspaceRoute = "/app";
 
-  const sidebarFooter = documentValue.querySelector("#workspace-sidebar-footer");
   const workspaceHeader = documentValue.querySelector(".workspace-header");
-  const workspaceTheme = documentValue.querySelector(".workspace-theme");
-  const signedInAccount = documentValue.querySelector("#cloud-signed-in");
-  if (sidebarFooter) {
-    if (workspaceTheme) sidebarFooter.append(workspaceTheme);
-    if (signedInAccount) sidebarFooter.append(signedInAccount);
-  }
   if (workspaceHeader) workspaceHeader.hidden = true;
 
   function setPath(path, replace = false) {

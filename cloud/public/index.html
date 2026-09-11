@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=114">
 </head>
 <body>
   <main class="shell">
@@ -160,23 +160,30 @@
           <button type="button" data-workspace-target="workspace-settings">Настройки</button>
           <button type="button" data-workspace-target="workspace-about">О проекте</button>
         </nav>
-        <div class="workspace-security" id="workspace-sidebar-footer"><span>●</span> E2EE включено</div>
-      </aside>
-
-      <div class="workspace-main">
-        <header class="workspace-header">
-          <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
-          <label class="theme-control workspace-theme">Тема
+        <div class="workspace-security" id="workspace-sidebar-footer">
+          <div class="workspace-security-status">
+            <span class="workspace-security-icon" aria-hidden="true">✓</span>
+            <span><strong>Сквозное шифрование</strong><small>E2EE активно на этом устройстве</small></span>
+          </div>
+          <label class="theme-control workspace-theme">
+            <span>Оформление</span>
             <select data-theme-select aria-label="Тема оформления">
               <option value="graphite">Графит</option>
               <option value="emerald">Изумруд</option>
               <option value="light">Светлая</option>
             </select>
           </label>
-          <div id="cloud-signed-in" hidden>
+          <div id="cloud-signed-in" class="workspace-account" hidden>
+            <span class="workspace-account-avatar" aria-hidden="true">SR</span>
             <p id="cloud-account-name"></p>
-            <button type="button" class="secondary" id="cloud-logout">Выйти</button>
+            <button type="button" class="secondary" id="cloud-logout" aria-label="Выйти из Cloud">Выйти</button>
           </div>
+        </div>
+      </aside>
+
+      <div class="workspace-main">
+        <header class="workspace-header">
+          <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
         </header>
 
         <section class="workspace-panel workspace-overview" id="workspace-overview">
@@ -205,42 +212,12 @@
         <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
       </div>
 
-      <div class="vault-panel" id="cloud-vault-recovery" hidden>
-        <h3>Подключить существующий Vault</h3>
-        <p>Эта ревизия создана до привязки Vault к паролю аккаунта. Введите recovery-фразу один раз: она используется только локально и никогда не отправляется на сервер.</p>
-        <form id="cloud-vault-recovery-form">
-          <label for="cloud-vault-recovery-passphrase">Recovery-фраза</label>
-          <input id="cloud-vault-recovery-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
-          <label for="cloud-vault-recovery-account-password">Пароль аккаунта</label>
-          <input id="cloud-vault-recovery-account-password" name="accountPassword" type="password" minlength="12" maxlength="1024" autocomplete="current-password">
-          <p class="auth-note">Если сессия была восстановлена после перезапуска браузера, пароль нужен для повторной проверки аккаунта и локального rewrap. Он не сохраняется. Сразу после обычного входа поле можно оставить пустым.</p>
-          <div class="vault-actions">
-            <button type="submit">Расшифровать и импортировать</button>
-            <button type="button" class="secondary" id="cloud-vault-recovery-cancel">Отмена</button>
-          </div>
-        </form>
-      </div>
-
-      <div class="vault-panel" id="local-vault-setup" hidden>
-        <h3>Создать локальный Vault</h3>
-        <p>Recovery-фраза не отправляется на сервер и не сохраняется в браузере. Потерянную фразу пока восстановить невозможно.</p>
-        <form id="local-vault-setup-form">
-          <label for="local-vault-passphrase">Независимая recovery-фраза</label>
-          <input id="local-vault-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="new-password" required>
-          <label for="local-vault-confirmation">Повторите recovery-фразу</label>
-          <input id="local-vault-confirmation" name="confirmation" type="password" minlength="16" maxlength="1024" autocomplete="new-password" required>
-          <button type="submit">Создать и разблокировать</button>
-        </form>
-      </div>
-
-      <div class="vault-panel" id="local-vault-unlock" hidden>
-        <h3>Разблокировать Vault</h3>
-        <p>Расшифровка выполняется локально. Ключ живёт только в памяти открытой вкладки.</p>
-        <form id="local-vault-unlock-form">
-          <label for="local-vault-unlock-passphrase">Recovery-фраза</label>
-          <input id="local-vault-unlock-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
-          <button type="submit">Подключить и разблокировать</button>
-        </form>
+      <div class="vault-panel vault-account-waiting" id="local-vault-waiting" hidden>
+        <span class="vault-account-waiting-icon" aria-hidden="true">⌁</span>
+        <div>
+          <h3>Personal Vault защищён</h3>
+          <p>Vault открывается паролем аккаунта во время обычного входа. Если браузер восстановил только сессию, выйдите и войдите снова — отдельная секретная фраза не нужна.</p>
+        </div>
       </div>
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
@@ -585,6 +562,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=114"></script>
 </body>
 </html>

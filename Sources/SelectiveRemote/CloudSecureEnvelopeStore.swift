@@ -41,7 +41,8 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
 }
 
 struct SelectiveRemoteCloudSecureEnvelopeStore {
-    static let service = "local.selectiveremote.cloud.secure-envelope.v1"
+    static let legacyService = "local.selectiveremote.cloud.secure-envelope.v1"
+    static let namespace = "cloud-secure-envelope.v1"
     private static let lock = NSLock()
 
     func envelope(for endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
@@ -66,6 +67,19 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     }
 
     private func readUnlocked(endpoint: URL) throws -> SelectiveRemoteCloudSecureEnvelope? {
+        if let data = try UnifiedCredentialVault.shared.readProtectedData(
+            namespace: Self.namespace,
+            key: endpoint.absoluteString
+        ) {
+            guard let envelope = try? JSONDecoder().decode(
+                SelectiveRemoteCloudSecureEnvelope.self,
+                from: data
+            ) else { throw KeychainError.invalidData }
+            return envelope
+        }
+
+        // One-time migration from the former Cloud-only Keychain item. The old
+        // item is deleted only after the unified vault has been persisted.
         var query = baseQuery(endpoint: endpoint)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -82,6 +96,12 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
                   from: data
               )
         else { throw KeychainError.invalidData }
+        try UnifiedCredentialVault.shared.saveProtectedData(
+            data,
+            namespace: Self.namespace,
+            key: endpoint.absoluteString
+        )
+        try? deleteLegacyUnlocked(endpoint: endpoint)
         return envelope
     }
 
@@ -90,26 +110,23 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
         endpoint: URL
     ) throws {
         let data = try JSONEncoder().encode(envelope)
-        let query = baseQuery(endpoint: endpoint)
-        let update = SecItemUpdate(
-            query as CFDictionary,
-            [kSecValueData as String: data] as CFDictionary
+        try UnifiedCredentialVault.shared.saveProtectedData(
+            data,
+            namespace: Self.namespace,
+            key: endpoint.absoluteString
         )
-        if update == errSecSuccess { return }
-        guard update == errSecItemNotFound else {
-            throw KeychainError.unexpectedStatus(update)
-        }
-
-        var addition = query
-        addition[kSecValueData as String] = data
-        addition[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-        let add = SecItemAdd(addition as CFDictionary, nil)
-        guard add == errSecSuccess else {
-            throw KeychainError.unexpectedStatus(add)
-        }
+        try? deleteLegacyUnlocked(endpoint: endpoint)
     }
 
     private func deleteUnlocked(endpoint: URL) throws {
+        try UnifiedCredentialVault.shared.deleteProtectedData(
+            namespace: Self.namespace,
+            key: endpoint.absoluteString
+        )
+        try? deleteLegacyUnlocked(endpoint: endpoint)
+    }
+
+    private func deleteLegacyUnlocked(endpoint: URL) throws {
         let status = SecItemDelete(baseQuery(endpoint: endpoint) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else {
             throw KeychainError.unexpectedStatus(status)
@@ -119,7 +136,7 @@ struct SelectiveRemoteCloudSecureEnvelopeStore {
     private func baseQuery(endpoint: URL) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: Self.service,
+            kSecAttrService as String: Self.legacyService,
             kSecAttrAccount as String: endpoint.absoluteString
         ]
     }
