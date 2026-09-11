@@ -211,6 +211,29 @@ struct CloudSettingsView: View {
                             .foregroundStyle(personalVaultAutoSyncConfigured ? Color.green : Color.secondary)
                     }
 
+                    if !personalVaultAutoSyncConfigured {
+                        Button(
+                            UpdateLocalization.text(
+                                ru: "Подключить автосинхронизацию…",
+                                en: "Connect Automatic Sync…"
+                            ),
+                            systemImage: "key.fill"
+                        ) {
+                            accountErrorMessage = nil
+                            accountSheetMode = .signIn
+                            showsAccountSheet = true
+                        }
+                        .buttonStyle(.borderedProminent)
+
+                        Text(UpdateLocalization.text(
+                            ru: "Повторно войдите в аккаунт: пароль используется только в памяти, чтобы безопасно подключить существующий Personal Vault к Keychain этого Mac.",
+                            en: "Sign in again: the password is used only in memory to securely connect the existing Personal Vault to this Mac's Keychain."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+
                     Toggle(
                         UpdateLocalization.text(
                             ru: "Синхронизировать Personal Vault",
@@ -249,7 +272,11 @@ struct CloudSettingsView: View {
                             object: nil
                         )
                     }
-                    .disabled(!personalVaultSyncEnabled || personalVaultIsSyncing)
+                    .disabled(
+                        !personalVaultSyncEnabled
+                            || !personalVaultAutoSyncConfigured
+                            || personalVaultIsSyncing
+                    )
 
                     if personalVaultIsSyncing {
                         Label(
