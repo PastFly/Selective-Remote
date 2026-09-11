@@ -83,7 +83,7 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
     private func refreshInvitation() async {
         guard invitation == nil,
               let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
-              client.hasStoredSession(endpoint: url)
+              await client.hasStoredSession(endpoint: url)
         else { return }
         do {
             invitation = try await client.pendingTeamInvitations(endpoint: url)
