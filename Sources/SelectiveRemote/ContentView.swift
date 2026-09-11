@@ -122,6 +122,16 @@ struct ContentView: View {
     @State private var showsPersonalFolderCreator = false
     @State private var newPersonalFolderName = ""
     @State private var newPersonalFolderParent = ""
+    @State private var showsCloudManagement = false
+    @State private var expandedPersonalFolderIDs = Set(
+        UserDefaults.standard.stringArray(
+            forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
+        ) ?? []
+    )
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1")
+    private var cloudEndpoint = SelectiveRemoteCloudEndpoint.production
+
+    private let cloudClient = SelectiveRemoteCloudAPIClient()
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -311,6 +321,24 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteNewLocalTerminal)) { _ in
             openNewLocalTerminalTab()
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteOpenTeamHosts)) { _ in
+            showsCloudManagement = false
+            setMainArea(.teamHosts)
+        }
+        .sheet(isPresented: $showsCloudManagement) {
+            if let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint) {
+                SelectiveRemoteCloudTeamManagementView(
+                    endpoint: endpoint,
+                    client: cloudClient,
+                    onInventoryChanged: {
+                        NotificationCenter.default.post(
+                            name: .selectiveRemoteTeamVaultSyncNow,
+                            object: nil
+                        )
+                    }
+                )
+            }
+        }
     }
 
     private var sidebar: some View {
@@ -473,6 +501,28 @@ struct ContentView: View {
             .padding(.bottom, 10)
 
             VStack(spacing: 5) {
+                Button {
+                    showsCloudManagement = true
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "cloud")
+                            .frame(width: 22)
+                        Text(UpdateLocalization.text(
+                            ru: "Управление Cloud",
+                            en: "Cloud Management"
+                        ))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(UpdateLocalization.text(
+                    ru: "Аккаунт, команды и Team Vaults",
+                    en: "Account, Teams, and Team Vaults"
+                ))
+
                 ForEach(MainArea.allCases) { area in
                     Button {
                         setMainArea(area)
@@ -685,7 +735,11 @@ struct ContentView: View {
                 get: { model.selectedProfileID },
                 set: { if let id = $0 { openProfile(id) } }
             )) {
-                OutlineGroup(model.profileOutlineItems, children: \.children) { outline in
+                SelectiveRemotePersistentOutlineRows(
+                    items: model.profileOutlineItems,
+                    children: \.children,
+                    expandedIDs: $expandedPersonalFolderIDs
+                ) { outline in
                     switch outline.kind {
                     case let .folder(path, name):
                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
@@ -716,6 +770,16 @@ struct ContentView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .onAppear { restoreOrInitializePersonalFolderExpansion() }
+            .onChange(of: expandedPersonalFolderIDs) { _, value in
+                UserDefaults.standard.set(
+                    value.sorted(),
+                    forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
+                )
+            }
+            .onChange(of: model.profiles.map { "\($0.id.uuidString):\($0.group)" }) { _, _ in
+                sanitizePersonalFolderExpansion()
+            }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -2794,6 +2858,30 @@ struct ContentView: View {
             setTerminalFocusMode(false)
         }
         mainArea = area
+    }
+
+    private func restoreOrInitializePersonalFolderExpansion() {
+        let defaults = UserDefaults.standard
+        let key = "SelectiveRemote.personal-host.expanded-folders.v1"
+        guard defaults.object(forKey: key) == nil else {
+            sanitizePersonalFolderExpansion()
+            return
+        }
+        expandedPersonalFolderIDs = Set(personalFolderIDs(model.profileOutlineItems))
+    }
+
+    private func sanitizePersonalFolderExpansion() {
+        let valid = Set(personalFolderIDs(model.profileOutlineItems))
+        expandedPersonalFolderIDs.formIntersection(valid)
+    }
+
+    private func personalFolderIDs(
+        _ items: [SelectiveRemoteProfileOutlineItem]
+    ) -> [String] {
+        items.flatMap { item in
+            guard let children = item.children else { return [] }
+            return [item.id] + personalFolderIDs(children)
+        }
     }
 
     private func setTerminalFocusMode(_ enabled: Bool) {

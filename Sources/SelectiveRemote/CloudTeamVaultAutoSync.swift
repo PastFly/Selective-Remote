@@ -18,6 +18,7 @@ struct SelectiveRemoteTeamVaultAutoSyncReport: Equatable, Sendable {
     var wrappersGranted = 0
     var rotations = 0
     var failures = 0
+    var lastFailure: String?
 }
 
 typealias SelectiveRemoteTeamVaultSnapshotStoreFactory =
@@ -27,12 +28,18 @@ typealias SelectiveRemoteTeamVaultMaterializedSnapshotConsumer =
     @Sendable ([SelectiveRemoteTeamVaultMaterializedSnapshot]) async -> Void
 
 actor SelectiveRemoteTeamVaultAutoSync {
+    static let shared = SelectiveRemoteTeamVaultAutoSync()
+
     private let remote: any SelectiveRemoteTeamVaultAutoSyncRemote
     private let identityManager: SelectiveRemoteTeamDeviceIdentityManager
     private let snapshotStore: SelectiveRemoteTeamVaultSnapshotStoreFactory
     private let snapshotConsumer: SelectiveRemoteTeamVaultMaterializedSnapshotConsumer
     private let pollInterval: Duration
     private var cycle: Task<Void, Never>?
+    private var activeSynchronization: (
+        token: UUID,
+        task: Task<SelectiveRemoteTeamVaultAutoSyncReport, Error>
+    )?
 
     init(
         remote: any SelectiveRemoteTeamVaultAutoSyncRemote = SelectiveRemoteCloudAPIClient(),
@@ -69,6 +76,28 @@ actor SelectiveRemoteTeamVaultAutoSync {
         endpoint: URL,
         deviceID: UUID
     ) async throws -> SelectiveRemoteTeamVaultAutoSyncReport {
+        if let activeSynchronization {
+            return try await activeSynchronization.task.value
+        }
+        let token = UUID()
+        let task = Task { [self] in
+            try await performSynchronization(endpoint: endpoint, deviceID: deviceID)
+        }
+        activeSynchronization = (token, task)
+        do {
+            let report = try await task.value
+            if activeSynchronization?.token == token { activeSynchronization = nil }
+            return report
+        } catch {
+            if activeSynchronization?.token == token { activeSynchronization = nil }
+            throw error
+        }
+    }
+
+    private func performSynchronization(
+        endpoint: URL,
+        deviceID: UUID
+    ) async throws -> SelectiveRemoteTeamVaultAutoSyncReport {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
         guard deviceID.isSelectiveRemoteCloudUUID else {
             throw SelectiveRemoteCloudError.invalidRequest
@@ -91,6 +120,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
                 throw CancellationError()
             } catch {
                 report.failures += 1
+                report.lastFailure = error.localizedDescription
                 continue
             }
 
@@ -190,12 +220,21 @@ actor SelectiveRemoteTeamVaultAutoSync {
                     report.rotations += 1
                 } catch {
                     report.failures += 1
+                    report.lastFailure = error.localizedDescription
                 }
             }
         }
         try Task.checkCancellation()
         await snapshotConsumer(materialized)
         return report
+    }
+
+    func synchronizeConfiguredAccountNow() async throws -> SelectiveRemoteTeamVaultAutoSyncReport {
+        guard let account = configuredAccount() else {
+            await snapshotConsumer([])
+            throw SelectiveRemoteCloudError.invalidRequest
+        }
+        return try await synchronizeOnce(endpoint: account.endpoint, deviceID: account.deviceID)
     }
 
     private static func materializedSnapshot(

@@ -718,6 +718,34 @@ actor SelectiveRemoteCloudAPIClient {
         return result.vault
     }
 
+    func renameSharedVault(
+        endpoint: URL,
+        teamID: UUID,
+        vaultID: UUID,
+        name: String
+    ) async throws -> SelectiveRemoteCloudSharedVault {
+        let normalizedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard teamID.isSelectiveRemoteCloudUUID,
+              vaultID.isSelectiveRemoteCloudUUID,
+              !normalizedName.isEmpty,
+              normalizedName.count <= 120
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/vaults/\(vaultID.canonicalCloudString)",
+            method: "PATCH",
+            body: try encoder.encode(TeamNameRequest(name: normalizedName)),
+            headers: ["Idempotency-Key": Self.idempotencyKey("vault-rename")]
+        )
+        guard http.statusCode == 200 else { throw serviceError(status: http.statusCode, data: data) }
+        guard Self.validSingleSharedVaultJSON(data),
+              let result = try? decoder.decode(SharedVaultResponse.self, from: data),
+              Self.validSharedVault(result.vault, teamID: teamID),
+              result.vault.id == vaultID
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.vault
+    }
+
     func teamKeyDevices(
         endpoint: URL,
         teamID: UUID,

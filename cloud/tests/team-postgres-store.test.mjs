@@ -155,6 +155,44 @@ test("Team rename locks the Team, requires Owner and records both names", async 
   assert.match(audit.parameters.at(-1), /Platform/);
 });
 
+test("Team Vault rename keeps ciphertext and revision untouched and requires a Vault manager", async () => {
+  const vault = {
+    id: vaultID,
+    team_id: teamID,
+    name: "Production",
+    revision: 6,
+    key_generation: 1,
+    rotation_required: false,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "admin", epoch: 1, team_name: "Operations" }] };
+    }
+    if (sql.includes("UPDATE shared_vaults SET name")) return { rows: [vault], rowCount: 1 };
+    return { rows: [], rowCount: 0 };
+  });
+
+  const result = await f.store.renameSharedVault({
+    actorUserID,
+    teamID,
+    vaultID,
+    name: "Production",
+    idempotencyKey: "request:vault-rename-01",
+  });
+  assert.equal(result.vault.revision, 6);
+  const update = f.queries.find(({ sql }) => sql.includes("UPDATE shared_vaults SET name"));
+  assert.deepEqual(update.parameters, [vaultID, teamID, "Production"]);
+  assert.doesNotMatch(update.sql.split("RETURNING")[0], /ciphertext|key_generation|revision\s*=/u);
+  assert.match(
+    f.queries.find(({ sql }) => sql.includes("INSERT INTO team_audit_events")).parameters.at(-1),
+    /Production/u,
+  );
+});
+
 test("ownership transfer promotes the target and demotes the actor atomically", async () => {
   const targetMembershipID = "87806d7b-d3a9-4701-8262-f247bd5de1e9";
   const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";

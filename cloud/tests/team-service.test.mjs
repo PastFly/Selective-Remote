@@ -166,6 +166,18 @@ class TeamStore {
     } };
   }
 
+  async renameSharedVault(input) {
+    this.calls.push(["renameSharedVault", input]);
+    return { vault: {
+      id: input.vaultID,
+      team_id: input.teamID,
+      name: input.name,
+      revision: 6,
+      key_generation: 1,
+      rotation_required: false,
+    } };
+  }
+
   async approveDeviceKey(input) {
     this.calls.push(["approveDeviceKey", input]);
     return { approved: true, deviceID: input.deviceID };
@@ -479,10 +491,25 @@ test("member and shared-Vault operations preserve explicit Team scope", async ()
     { name: " Production " },
     "request:vault-create-01",
   );
+  const renamed = await service.renameSharedVault(
+    session,
+    teamID,
+    created.vault.id,
+    { name: " Production Vault " },
+    "request:vault-rename-01",
+  );
 
   assert.equal(created.vault.teamID, teamID);
   assert.equal(created.vault.revision, 0);
   assert.equal(created.vault.keyGeneration, 1);
+  assert.equal(renamed.vault.name, "Production Vault");
+  assert.deepEqual(store.calls.find(([name]) => name === "renameSharedVault")[1], {
+    actorUserID: "user-1",
+    teamID,
+    vaultID: created.vault.id,
+    name: "Production Vault",
+    idempotencyKey: "request:vault-rename-01",
+  });
   for (const [, value] of store.calls) {
     if (value && typeof value === "object" && "actorUserID" in value) assert.equal(value.actorUserID, "user-1");
   }
