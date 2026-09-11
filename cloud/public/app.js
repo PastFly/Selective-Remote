@@ -69,22 +69,48 @@ export async function submitPasswordReset(token, password, fetchValue = fetch) {
   if (result?.reset !== true) throw new Error("password_reset_failed");
 }
 
-export function localVaultRecordData(type, { title, target, secret }) {
+export function localVaultRecordData(type, { title, target, secret }, baseData = null) {
   const normalizedTitle = String(title ?? "").trim();
   const normalizedTarget = String(target ?? "").trim();
   const normalizedSecret = String(secret ?? "");
   if (!normalizedTitle || normalizedTitle.length > 120 || normalizedTarget.length > 2048 || normalizedSecret.length > 32_768) {
     throw new Error("invalid_local_record");
   }
-  if (type === "host" && normalizedTarget) return { title: normalizedTitle, address: normalizedTarget };
+  const preserved = baseData && typeof baseData === "object" ? { ...baseData } : {};
+  if (type === "host" && normalizedTarget) return { ...preserved, title: normalizedTitle, address: normalizedTarget };
   if (type === "credential" && normalizedTarget && normalizedSecret) {
-    return { title: normalizedTitle, username: normalizedTarget, secret: normalizedSecret };
+    return { ...preserved, title: normalizedTitle, username: normalizedTarget, secret: normalizedSecret };
   }
-  if (type === "snippet" && normalizedSecret) return { title: normalizedTitle, body: normalizedSecret };
+  if (type === "snippet" && normalizedSecret) return { ...preserved, title: normalizedTitle, body: normalizedSecret };
   if (type === "forwarding" && normalizedTarget) {
-    return { title: normalizedTitle, destination: normalizedTarget, configuration: normalizedSecret };
+    return { ...preserved, title: normalizedTitle, destination: normalizedTarget, configuration: normalizedSecret };
   }
   throw new Error("invalid_local_record");
+}
+
+export function localVaultRecordFormValues(record) {
+  const data = record?.data ?? {};
+  if (record?.type === "host") return { title: data.title ?? "", target: data.address ?? "", secret: "" };
+  if (record?.type === "credential") return { title: data.title ?? "", target: data.username ?? "", secret: data.secret ?? "" };
+  if (record?.type === "snippet") return { title: data.title ?? "", target: "", secret: data.body ?? "" };
+  if (record?.type === "forwarding") return { title: data.title ?? "", target: data.destination ?? "", secret: data.configuration ?? "" };
+  throw new Error("invalid_local_record");
+}
+
+export function formatVaultTimestamp(value, { locales, timeZone } = {}) {
+  const date = new Date(String(value ?? ""));
+  if (Number.isNaN(date.getTime())) return "—";
+  return new Intl.DateTimeFormat(locales, {
+    dateStyle: "medium", timeStyle: "medium", ...(timeZone ? { timeZone } : {}),
+  }).format(date);
+}
+
+export function sortLocalVaultRecords(records, mode = "modified-desc") {
+  const values = [...records];
+  const title = (record) => String(record?.data?.title ?? "");
+  if (mode === "title-asc") return values.sort((a, b) => title(a).localeCompare(title(b)));
+  if (mode === "type-asc") return values.sort((a, b) => String(a.type).localeCompare(String(b.type)) || title(a).localeCompare(title(b)));
+  return values.sort((a, b) => String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? "")));
 }
 
 export function teamHostRecordData({ title, target, folder, tags, description, baseData = null }) {
@@ -200,6 +226,11 @@ export async function initializeLocalVault({
   const message = documentValue.querySelector("#local-vault-message");
   const records = documentValue.querySelector("#local-vault-records");
   const recordForm = documentValue.querySelector("#local-vault-record-form");
+  const search = documentValue.querySelector("#personal-vault-search");
+  const sort = documentValue.querySelector("#personal-vault-sort");
+  const folderFilter = documentValue.querySelector("#personal-vault-folder-filter");
+  const saveButton = documentValue.querySelector("#local-record-save");
+  const cancelButton = documentValue.querySelector("#local-record-cancel");
   const lockButton = documentValue.querySelector("#local-vault-lock");
   const type = documentValue.querySelector("#local-record-type");
   const title = documentValue.querySelector("#local-record-title");
@@ -231,6 +262,32 @@ export async function initializeLocalVault({
   let conflictResetListener = () => {};
   let filterChangeListener = () => {};
   let activeRecordFilter = "all";
+  let editingRecordID = null;
+
+  function resetEditor() {
+    editingRecordID = null;
+    recordForm.reset();
+    type.disabled = false;
+    saveButton.textContent = "Зашифровать и сохранить";
+    cancelButton.hidden = true;
+    updateLabels();
+  }
+
+  function beginEdit(record) {
+    const values = localVaultRecordFormValues(record);
+    editingRecordID = record.id;
+    type.value = record.type;
+    type.disabled = true;
+    title.value = values.title;
+    target.value = values.target;
+    secret.value = values.secret;
+    saveButton.textContent = "Сохранить изменения";
+    cancelButton.hidden = false;
+    updateLabels();
+    recordForm.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    title.focus?.();
+    setText(message, `Редактирование: ${String(record.data?.title ?? "Без названия")}.`);
+  }
 
   function clearConflictUI() {
     conflictPanel.hidden = true;
@@ -280,9 +337,35 @@ export async function initializeLocalVault({
     for (const [recordType, count] of Object.entries(counts)) {
       setText(documentValue.querySelector(`#workspace-${recordType}-count`), String(count));
     }
-    const visibleRecords = activeRecordFilter === "all"
+    const hostFolderName = (record) => String(record?.data?.folder ?? "").trim() || "Без папки";
+    const selectedFolder = String(folderFilter?.value ?? "all");
+    const folders = [...new Set(current.records.filter((record) => record.type === "host").map(hostFolderName))]
+      .sort((a, b) => a.localeCompare(b));
+    if (folderFilter) {
+      folderFilter.replaceChildren();
+      for (const value of ["all", ...folders]) {
+        const option = documentValue.createElement("option");
+        option.value = value;
+        option.textContent = value === "all" ? "Все папки" : value;
+        folderFilter.append(option);
+      }
+      folderFilter.value = selectedFolder === "all" || folders.includes(selectedFolder) ? selectedFolder : "all";
+    }
+    const filteredRecords = (activeRecordFilter === "all"
       ? current.records
-      : current.records.filter((record) => record.type === activeRecordFilter);
+      : current.records.filter((record) => record.type === activeRecordFilter))
+      .filter((record) => record.type !== "host" || folderFilter?.value === "all" || hostFolderName(record) === folderFilter?.value);
+    const query = String(search?.value ?? "").trim().toLocaleLowerCase();
+    const visibleRecords = sortLocalVaultRecords(filteredRecords.filter((record) => {
+      if (!query) return true;
+      const data = record.data ?? {};
+      const searchable = [data.title, data.address, data.username, data.destination, data.folder,
+        ...(Array.isArray(data.tags) ? data.tags : [])];
+      return searchable.some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
+    }), sort?.value);
+    if (activeRecordFilter === "host") {
+      visibleRecords.sort((a, b) => hostFolderName(a).localeCompare(hostFolderName(b)));
+    }
     records.replaceChildren();
     if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
@@ -293,15 +376,33 @@ export async function initializeLocalVault({
       records.append(empty);
       return;
     }
+    let renderedFolder = null;
     for (const record of visibleRecords) {
+      if (activeRecordFilter === "host" && hostFolderName(record) !== renderedFolder) {
+        const folderHeading = documentValue.createElement("h3");
+        folderHeading.className = "personal-vault-folder-heading";
+        folderHeading.textContent = hostFolderName(record);
+        records.append(folderHeading);
+        renderedFolder = hostFolderName(record);
+      }
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");
       const metadata = documentValue.createElement("small");
+      const actions = documentValue.createElement("div");
+      const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
-      metadata.textContent = `${record.type} · ${record.modifiedAt}`;
+      metadata.textContent = `${record.type} · ${formatVaultTimestamp(record.modifiedAt)}`;
+      actions.className = "record-actions";
+      edit.type = "button";
+      edit.className = "secondary record-edit";
+      edit.textContent = "Изменить";
+      edit.addEventListener("click", (event) => {
+        event.stopPropagation();
+        beginEdit(record);
+      });
       remove.type = "button";
       remove.className = "danger";
       remove.textContent = "Удалить";
@@ -310,6 +411,7 @@ export async function initializeLocalVault({
         remove.disabled = true;
         try {
           await controller.delete(record.id);
+          if (editingRecordID === record.id) resetEditor();
           clearConflictUI();
           setText(message, "Запись удалена. Tombstone сохранён в зашифрованном Vault.");
           render();
@@ -326,23 +428,24 @@ export async function initializeLocalVault({
         const openHost = () => {
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
-          setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          setText(hostDetailModified, formatVaultTimestamp(record.modifiedAt));
           const connection = parseTeamHostConnection(record.data);
           setText(hostDetailProtocol, connection.protocol.toUpperCase());
           setText(hostDetailPort, String(connection.port));
           setText(hostDetailUsername, connection.username || "—");
           setText(hostDetailPasswordState, "Управляется приложением");
-          setText(hostDetailFolder, "Личный Vault");
-          setText(hostDetailTags, "—");
-          setText(hostDetailDescription, "—");
-          hostDetailEdit.hidden = true;
+          setText(hostDetailFolder, String(record.data?.folder ?? "Личный Vault"));
+          setText(hostDetailTags, Array.isArray(record.data?.tags) && record.data.tags.length ? record.data.tags.join(", ") : "—");
+          setText(hostDetailDescription, String(record.data?.description ?? "—"));
+          hostDetailEdit.hidden = false;
+          hostDetailEdit.onclick = () => { hostDetail.close?.(); beginEdit(record); };
           hostDetailCopyPassword.hidden = true;
           hostDetailOpenSSH.hidden = true;
           hostDetailOpenSFTP.hidden = true;
           hostDetail?.showModal();
         };
         card.addEventListener("click", (event) => {
-          if (event.target === remove) return;
+          if (event.target === remove || event.target === edit) return;
           openHost();
         });
         card.addEventListener("keydown", (event) => {
@@ -351,33 +454,48 @@ export async function initializeLocalVault({
           openHost();
         });
       }
-      card.append(heading, summary, metadata, remove);
+      actions.append(edit, remove);
+      card.append(heading, summary, metadata, actions);
       records.append(card);
     }
   }
 
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = recordForm.querySelector("button");
-    button.disabled = true;
+    saveButton.disabled = true;
     try {
+      const existing = editingRecordID
+        ? controller.document().records.find((record) => record.id === editingRecordID)
+        : null;
       await controller.upsert({
+        ...(editingRecordID ? { id: editingRecordID } : {}),
         type: type.value,
-        data: localVaultRecordData(type.value, { title: title.value, target: target.value, secret: secret.value }),
+        data: localVaultRecordData(
+          type.value,
+          { title: title.value, target: target.value, secret: secret.value },
+          existing?.data,
+        ),
       });
-      recordForm.reset();
+      const wasEditing = Boolean(editingRecordID);
+      resetEditor();
       clearConflictUI();
-      updateLabels();
-      setText(message, "Запись локально зашифрована и сохранена.");
+      setText(message, wasEditing ? "Изменения зашифрованы и сохранены." : "Запись локально зашифрована и сохранена.");
       render();
     } catch {
       setText(message, "Не удалось сохранить запись. Заполните обязательные поля.");
     } finally {
-      button.disabled = false;
+      saveButton.disabled = false;
     }
   });
 
   type.addEventListener("change", updateLabels);
+  cancelButton.addEventListener("click", () => {
+    resetEditor();
+    setText(message, "Изменение отменено.");
+  });
+  search?.addEventListener("input", render);
+  sort?.addEventListener("change", render);
+  folderFilter?.addEventListener("change", render);
   for (const button of filterButtons) {
     button.addEventListener("click", () => {
       activeRecordFilter = button.dataset.recordFilter || "all";
@@ -390,6 +508,7 @@ export async function initializeLocalVault({
   }
   lockButton.addEventListener("click", () => {
     controller.lock();
+    resetEditor();
     clearConflictUI();
     mode("waiting");
     records.replaceChildren();
@@ -731,7 +850,7 @@ export function initializeTeamWorkspace({
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
       const tags = Array.isArray(record.data.tags) ? record.data.tags.map((value) => `#${value}`).join(" ") : "";
-      metadata.textContent = `${tags ? `${tags} · ` : ""}${record.modifiedAt}`;
+      metadata.textContent = `${tags ? `${tags} · ` : ""}${formatVaultTimestamp(record.modifiedAt)}`;
       remove.type = "button";
       remove.className = "danger";
       remove.textContent = "Удалить";
@@ -764,7 +883,7 @@ export function initializeTeamWorkspace({
           detailedHostID = record.id;
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
-          setText(hostDetailModified, String(record.modifiedAt ?? "—"));
+          setText(hostDetailModified, formatVaultTimestamp(record.modifiedAt));
           setText(hostDetailProtocol, connection.protocol.toUpperCase());
           setText(hostDetailPort, String(connection.port));
           setText(hostDetailUsername, connection.username || "—");

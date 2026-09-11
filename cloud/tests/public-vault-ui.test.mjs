@@ -3,11 +3,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   accountVaultPassphrase,
+  formatVaultTimestamp,
   initializeAppearance,
   localVaultConflictSideSummary,
   localVaultRecordData,
+  localVaultRecordFormValues,
   localVaultRecordSummary,
   parseTeamHostConnection,
+  sortLocalVaultRecords,
   teamHostConnectionData,
   teamHostRecordData,
   teamVaultRecoveryMode,
@@ -79,6 +82,36 @@ test("Vault form mapping rejects incomplete and oversized records", () => {
     () => localVaultRecordData("host", { title: "x".repeat(121), target: "host.invalid", secret: "" }),
     /invalid_local_record/,
   );
+});
+
+test("Personal Vault editor preserves native fields and maps decrypted form values", () => {
+  const base = { title: "Old", address: "old.invalid", folder: "Work", profile: "opaque" };
+  assert.deepEqual(
+    localVaultRecordData("host", { title: "New", target: "new.invalid", secret: "" }, base),
+    { title: "New", address: "new.invalid", folder: "Work", profile: "opaque" },
+  );
+  assert.deepEqual(localVaultRecordFormValues({
+    type: "forwarding",
+    data: { title: "DB", destination: "db.invalid:5432", configuration: "local 15432" },
+  }), { title: "DB", target: "db.invalid:5432", secret: "local 15432" });
+});
+
+test("Vault timestamps render in the viewer time zone instead of raw UTC", () => {
+  const rendered = formatVaultTimestamp("2026-09-11T12:58:29.596Z", {
+    locales: "ru-RU", timeZone: "Europe/Moscow",
+  });
+  assert.match(rendered, /15:58:29/u);
+  assert.equal(formatVaultTimestamp("invalid", { locales: "ru-RU" }), "—");
+});
+
+test("Personal Vault catalog sorting is deterministic and does not mutate the document", () => {
+  const records = [
+    { id: "b", type: "host", modifiedAt: "2026-09-10T00:00:00Z", data: { title: "Beta" } },
+    { id: "a", type: "credential", modifiedAt: "2026-09-11T00:00:00Z", data: { title: "Alpha" } },
+  ];
+  assert.deepEqual(sortLocalVaultRecords(records).map(({ id }) => id), ["a", "b"]);
+  assert.deepEqual(sortLocalVaultRecords(records, "title-asc").map(({ id }) => id), ["a", "b"]);
+  assert.deepEqual(records.map(({ id }) => id), ["b", "a"]);
 });
 
 test("Team Host organization stays inside the encrypted record", () => {
@@ -184,6 +217,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
+  assert.match(html, /\/styles\.css\?v=121/u);
+  assert.match(html, /\/app\.js\?v=121/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -262,6 +297,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-record-filter="credential"/u);
   assert.match(html, /data-record-filter="snippet"/u);
   assert.match(html, /data-record-filter="forwarding"/u);
+  assert.match(html, /id="personal-vault-search"/u);
+  assert.match(html, /id="personal-vault-sort"/u);
+  assert.match(html, /id="personal-vault-folder-filter"/u);
+  assert.match(html, /id="local-record-cancel"[^>]*hidden/u);
   assert.match(html, /Откройте Vault, чтобы увидеть личные подключения/u);
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
@@ -315,6 +354,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /routeForWorkspace/u);
   assert.match(application, /setFilterChangeListener/u);
   assert.match(application, /renderOverviewSummary/u);
+  assert.match(application, /formatVaultTimestamp\(record\.modifiedAt\)/u);
+  assert.match(application, /localVaultRecordFormValues\(record\)/u);
+  assert.match(application, /editingRecordID/u);
+  assert.match(styles, /\.personal-vault-browser/u);
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
