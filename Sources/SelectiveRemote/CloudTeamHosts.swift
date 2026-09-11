@@ -1150,7 +1150,7 @@ struct SelectiveRemoteTeamHostsView: View {
         let scopedHosts = store.hosts.filter {
             $0.teamID == host.teamID && $0.vaultID == host.vaultID
         }
-        var grouped = Dictionary(grouping: scopedHosts) { candidate in
+        let grouped = Dictionary(grouping: scopedHosts) { candidate in
             candidate.id == host.id
                 ? folder
                 : SelectiveRemoteHostFolderPath.normalize(candidate.profile.group)
@@ -1236,7 +1236,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func teamFolderIDs(_ items: [SelectiveRemoteTeamHostOutlineItem]) -> [String] {
-        items.flatMap { item in
+        items.flatMap { item -> [String] in
             guard let children = item.children else { return [] }
             return [item.id] + teamFolderIDs(children)
         }

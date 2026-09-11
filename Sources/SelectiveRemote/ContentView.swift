@@ -2878,7 +2878,7 @@ struct ContentView: View {
     private func personalFolderIDs(
         _ items: [SelectiveRemoteProfileOutlineItem]
     ) -> [String] {
-        items.flatMap { item in
+        items.flatMap { item -> [String] in
             guard let children = item.children else { return [] }
             return [item.id] + personalFolderIDs(children)
         }
