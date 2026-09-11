@@ -34,8 +34,7 @@ private enum ProfileTab: String, CaseIterable, Identifiable {
 
 private enum MainArea: String, CaseIterable, Identifiable {
     case connectionCenter = "Connection Center"
-    case connections = "Подключения"
-    case teamHosts = "Team Hosts"
+    case hosts = "Hosts"
     case ssh = "SSH"
     case terminal = "Терминал"
     case sftp = "SFTP"
@@ -54,8 +53,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
             ru: "Центр подключений",
             en: "Connection Center"
         )
-        case .connections: UpdateLocalization.text(ru: "Подключения", en: "Connections")
-        case .teamHosts: "Team Hosts"
+        case .hosts: UpdateLocalization.text(ru: "Хосты", en: "Hosts")
         case .ssh: "SSH"
         case .terminal: UpdateLocalization.text(ru: "Терминал", en: "Terminal")
         case .sftp: UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP")
@@ -74,8 +72,7 @@ private enum MainArea: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .connectionCenter: "point.3.connected.trianglepath.dotted"
-        case .connections: "rectangle.stack"
-        case .teamHosts: "person.2.fill"
+        case .hosts: "server.rack"
         case .snippets: "curlybraces"
         case .sessionLogs: "doc.text.magnifyingglass"
         case .activity: "clock.arrow.circlepath"
@@ -85,6 +82,20 @@ private enum MainArea: String, CaseIterable, Identifiable {
         case .diagnostics: "stethoscope"
         case .keychain: "key.viewfinder"
         case .forwarding: "arrow.left.arrow.right"
+        }
+    }
+}
+
+private enum HostScope: String, CaseIterable, Identifiable {
+    case personal
+    case team
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .personal: UpdateLocalization.text(ru: "Личные", en: "Personal")
+        case .team: UpdateLocalization.text(ru: "Командные", en: "Team")
         }
     }
 }
@@ -111,6 +122,7 @@ struct ContentView: View {
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
+    @State private var hostScope = HostScope.personal
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
@@ -132,6 +144,13 @@ struct ContentView: View {
     private var cloudEndpoint = SelectiveRemoteCloudEndpoint.production
 
     private let cloudClient = SelectiveRemoteCloudAPIClient()
+
+    private let primaryMainAreas: [MainArea] = [
+        .connectionCenter, .hosts, .ssh, .sftp, .forwarding, .snippets,
+    ]
+    private let secondaryMainAreas: [MainArea] = [
+        .terminal, .sessionLogs, .activity, .diagnostics, .keychain,
+    ]
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -241,13 +260,13 @@ struct ContentView: View {
                     model.selectProfile(profileID)
                     switch action {
                     case .terminal:
-                        setMainArea(.connections)
+                        openPersonalHosts()
                         selectedTab = .terminal
                     case .sftp:
-                        setMainArea(.connections)
+                        openPersonalHosts()
                         selectedTab = .sftp
                     case .connect:
-                        setMainArea(.connections)
+                        openPersonalHosts()
                         model.connect()
                     }
                 },
@@ -314,7 +333,8 @@ struct ContentView: View {
         }
         .onChange(of: model.requestedSSHConsoleProfileID) { _, profileID in
             guard profileID == profile.id else { return }
-            mainArea = .connections
+            hostScope = .personal
+            mainArea = .hosts
             selectedTab = .terminal
             model.consumeSSHConsoleNavigationRequest()
         }
@@ -323,7 +343,8 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteOpenTeamHosts)) { _ in
             showsCloudManagement = false
-            setMainArea(.teamHosts)
+            hostScope = .team
+            setMainArea(.hosts)
         }
         .sheet(isPresented: $showsCloudManagement) {
             if let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint) {
@@ -477,28 +498,30 @@ struct ContentView: View {
             .padding(.top, 18)
             .padding(.bottom, 16)
 
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField("Поиск", text: $model.searchText)
-                    .textFieldStyle(.plain)
-                if !model.searchText.isEmpty {
-                    Button { model.searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
+            if mainArea == .hosts, hostScope == .personal {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField("Поиск", text: $model.searchText)
+                        .textFieldStyle(.plain)
+                    if !model.searchText.isEmpty {
+                        Button { model.searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 11)
+                .frame(height: 38)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08))
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 38)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
-            }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
 
             VStack(spacing: 5) {
                 Button {
@@ -523,7 +546,7 @@ struct ContentView: View {
                     en: "Account, Teams, and Team Vaults"
                 ))
 
-                ForEach(MainArea.allCases) { area in
+                ForEach(primaryMainAreas) { area in
                     Button {
                         setMainArea(area)
                     } label: {
@@ -532,7 +555,7 @@ struct ContentView: View {
                                 .frame(width: 22)
                             Text(area.title)
                             Spacer()
-                            if area == .teamHosts, !teamHosts.hosts.isEmpty {
+                            if area == .hosts, !teamHosts.hosts.isEmpty {
                                 Text("\(teamHosts.hosts.count)")
                                     .font(.caption.bold())
                                     .foregroundStyle(Color.accentColor)
@@ -570,15 +593,74 @@ struct ContentView: View {
                         in: RoundedRectangle(cornerRadius: 9, style: .continuous)
                     )
                 }
+
+                Menu {
+                    ForEach(secondaryMainAreas) { area in
+                        Button {
+                            setMainArea(area)
+                        } label: {
+                            Label(area.title, systemImage: area.systemImage)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "ellipsis.circle")
+                            .frame(width: 22)
+                        Text(UpdateLocalization.text(ru: "Инструменты", en: "Tools"))
+                        Spacer()
+                    }
+                    .padding(.horizontal, 11)
+                    .frame(height: 34)
+                    .contentShape(Rectangle())
+                }
+                .menuStyle(.borderlessButton)
+                .background(
+                    secondaryMainAreas.contains(mainArea)
+                        ? Color.accentColor.opacity(0.18)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            profileTagFilterBar
-            profileCollection
+            if mainArea == .hosts {
+                Picker("", selection: $hostScope) {
+                    ForEach(HostScope.allCases) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
 
-            Divider()
-            HStack(spacing: 9) {
+                if hostScope == .personal {
+                    profileTagFilterBar
+                    profileCollection
+                } else {
+                    VStack(spacing: 10) {
+                        Image(systemName: "person.2.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.accentColor)
+                        Text(UpdateLocalization.text(
+                            ru: "Командные хосты открыты справа",
+                            en: "Team Hosts are open on the right"
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                }
+            } else {
+                Spacer(minLength: 0)
+            }
+
+            if mainArea == .hosts, hostScope == .personal {
+                Divider()
+                HStack(spacing: 9) {
                 Menu {
                     Button("Новое RDP", systemImage: "desktopcomputer") {
                         model.addProfile(connectionType: .rdp)
@@ -663,9 +745,10 @@ struct ContentView: View {
                     Image(systemName: "arrow.up.arrow.down")
                 }
                 .help("Сортировка подключений")
+                }
+                .buttonStyle(.borderless)
+                .padding(12)
             }
-            .buttonStyle(.borderless)
-            .padding(12)
         }
         .background(.ultraThinMaterial)
         .overlay(alignment: .trailing) {
@@ -840,7 +923,7 @@ struct ContentView: View {
 
     private func openProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
-        setMainArea(.connections)
+        openPersonalHosts()
     }
 
     private func movePersonalProfile(
@@ -939,7 +1022,7 @@ struct ContentView: View {
                 systemImage: item.connectionType == .rdp ? "play.fill" : "terminal"
             ) {
                 model.selectProfile(item.id)
-                setMainArea(.connections)
+                openPersonalHosts()
                 if item.connectionType != .rdp {
                     selectedTab = .terminal
                 }
@@ -950,7 +1033,7 @@ struct ContentView: View {
         if item.connectionType != .rdp {
             Button("Открыть терминал", systemImage: "terminal") {
                 model.selectProfile(item.id)
-                setMainArea(.connections)
+                openPersonalHosts()
                 selectedTab = .terminal
             }
         }
@@ -958,19 +1041,19 @@ struct ContentView: View {
         if item.connectionType == .ssh {
             Button("Открыть SFTP", systemImage: "folder.badge.gearshape") {
                 model.selectProfile(item.id)
-                setMainArea(.connections)
+                openPersonalHosts()
                 selectedTab = .sftp
             }
             Button("Открыть туннели", systemImage: "arrow.left.arrow.right") {
                 model.selectProfile(item.id)
-                setMainArea(.connections)
+                openPersonalHosts()
                 selectedTab = .forwarding
             }
         }
 
         Button("Изменить", systemImage: "pencil") {
             model.selectProfile(item.id)
-            setMainArea(.connections)
+            openPersonalHosts()
             selectedTab = .general
         }
 
@@ -1048,15 +1131,17 @@ struct ContentView: View {
             switch mainArea {
             case .connectionCenter:
                 connectionCenterDetail
-            case .connections:
-                profileDetail
-            case .teamHosts:
-                SelectiveRemoteTeamHostsView(
-                    store: teamHosts,
-                    model: model,
-                    onOpenTerminal: openTeamTerminal,
-                    onOpenSFTP: openTeamSFTP
-                )
+            case .hosts:
+                if hostScope == .personal {
+                    profileDetail
+                } else {
+                    SelectiveRemoteTeamHostsView(
+                        store: teamHosts,
+                        model: model,
+                        onOpenTerminal: openTeamTerminal,
+                        onOpenSFTP: openTeamSFTP
+                    )
+                }
             case .snippets:
                 TerminalSnippetsLibraryView(
                     store: snippets,
@@ -2505,7 +2590,7 @@ struct ContentView: View {
     private var credentialVaultDetail: some View {
         CredentialVaultView(presentation: .embedded) { profileID in
             model.selectProfile(profileID)
-            setMainArea(.connections)
+            openPersonalHosts()
             selectedTab = .general
         }
         .environmentObject(model)
@@ -2797,7 +2882,7 @@ struct ContentView: View {
     private func openForwardingProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
         selectedTab = .forwarding
-        setMainArea(.connections)
+        openPersonalHosts()
     }
 
     private func openNewLocalTerminalTab() {
@@ -2835,7 +2920,7 @@ struct ContentView: View {
             case let .profile(profileID):
                 model.selectProfile(profileID)
                 selectedTab = .terminal
-                setMainArea(.connections)
+                openPersonalHosts()
             case .global:
                 setMainArea(.ssh)
             }
@@ -2847,7 +2932,7 @@ struct ContentView: View {
         case let .profileTunnel(profileID, _):
             model.selectProfile(profileID)
             selectedTab = .forwarding
-            setMainArea(.connections)
+            openPersonalHosts()
         case .independentTunnel:
             setMainArea(.forwarding)
         }
@@ -2858,6 +2943,11 @@ struct ContentView: View {
             setTerminalFocusMode(false)
         }
         mainArea = area
+    }
+
+    private func openPersonalHosts() {
+        hostScope = .personal
+        setMainArea(.hosts)
     }
 
     private func restoreOrInitializePersonalFolderExpansion() {

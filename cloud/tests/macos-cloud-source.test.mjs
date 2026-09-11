@@ -319,7 +319,11 @@ test("macOS projects Team Hosts separately and connects without Personal persist
   assert.match(autoSync, /await snapshotConsumer\(materialized\)/);
   assert.match(autoSync, /func stop\(\) async[\s\S]*snapshotConsumer\(\[\]\)/);
 
-  assert.match(content, /case teamHosts = "Team Hosts"/);
+  assert.match(content, /case hosts = "Hosts"/);
+  assert.match(content, /case personal[\s\S]*case team/u);
+  assert.match(content, /Picker\("", selection: \$hostScope\)/u);
+  assert.match(content, /ForEach\(primaryMainAreas\)/u);
+  assert.match(content, /ru: "Инструменты"/u);
   assert.match(content, /SelectiveRemoteTeamHostsView/);
   assert.match(content, /ephemeral: true/);
   assert.match(appModel, /func connectTeamHost\(/);

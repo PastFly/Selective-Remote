@@ -35,5 +35,5 @@ func keychainMigrationQueryRegression() throws {
 func profileContextMenuEditRegression() throws {
     let text = try source("Sources/SelectiveRemote/ContentView.swift")
     #expect(text.contains("Button(\"Изменить\", systemImage: \"pencil\")"))
-    #expect(text.contains("setMainArea(.connections)\n            selectedTab = .general"))
+    #expect(text.contains("openPersonalHosts()\n            selectedTab = .general"))
 }
