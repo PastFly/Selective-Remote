@@ -61,6 +61,25 @@ test("creating an unverified account stores a verification hash but no session",
   assert.equal(fixture.released(), true);
 });
 
+test("password identity includes the account creation time required by the login contract", async () => {
+  const createdAt = new Date("2026-09-11T00:00:00.000Z");
+  const identity = {
+    id: "user-1",
+    email: "user@example.com",
+    username: "user",
+    display_name: "User",
+    created_at: createdAt,
+    disabled_at: null,
+    email_verified_at: createdAt,
+    password_hash: "password-hash",
+  };
+  const fixture = recordingStore(() => ({ rows: [identity] }));
+
+  assert.deepEqual(await fixture.store.passwordIdentity("user@example.com"), identity);
+  assert.deepEqual(fixture.queries[0].parameters, ["user@example.com"]);
+  assert.match(fixture.queries[0].sql, /u\.created_at/u);
+});
+
 test("session lookup rejects accounts without a verified email", async () => {
   const fixture = recordingStore();
   assert.equal(await fixture.store.session("session-hash"), null);
