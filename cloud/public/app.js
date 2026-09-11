@@ -195,6 +195,7 @@ export async function initializeLocalVault({
   if (!section) return null;
   const waiting = documentValue.querySelector("#local-vault-waiting");
   const workspace = documentValue.querySelector("#local-vault-workspace");
+  const overviewNotice = documentValue.querySelector("#workspace-vault-notice");
   const message = documentValue.querySelector("#local-vault-message");
   const records = documentValue.querySelector("#local-vault-records");
   const recordForm = documentValue.querySelector("#local-vault-record-form");
@@ -246,6 +247,12 @@ export async function initializeLocalVault({
   function mode(value) {
     workspace.hidden = value !== "unlocked";
     waiting.hidden = value === "unlocked";
+    if (overviewNotice) overviewNotice.hidden = value === "unlocked";
+    if (value !== "unlocked") {
+      for (const recordType of ["host", "credential", "snippet", "forwarding", "sshKey"]) {
+        setText(documentValue.querySelector(`#workspace-${recordType}-count`), "—");
+      }
+    }
   }
 
   function updateLabels() {
@@ -1801,7 +1808,16 @@ export async function initializeCloudAccount({
     const passphrase = accountVaultPassphrase(password);
     let status = await vault.status();
     if (status === "locked") {
-      await vault.unlock(passphrase);
+      try {
+        await vault.unlock(passphrase);
+      } catch (unlockError) {
+        const remote = await client.getVault();
+        if (remote.revision === 0) throw unlockError;
+        await vault.replaceLockedWithRemote(remote, passphrase);
+        vaultUI.mode("unlocked");
+        vaultUI.render();
+        return { status: "downloaded", revision: remote.revision };
+      }
       status = "unlocked";
     }
     let result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
@@ -1909,7 +1925,7 @@ export async function initializeCloudAccount({
     registrationSuccess.hidden = true;
     signedIn.hidden = !user;
     syncButton.disabled = !user;
-    setText(accountName, user ? `${user.displayName || user.email} · ${user.email}` : "");
+    setText(accountName, user ? `@${user.username}` : "");
     if (user && usernameForm) usernameForm.elements.username.value = user.username;
     onSessionChange(user);
   }
@@ -2013,8 +2029,6 @@ export async function initializeCloudAccount({
         await unlockAndSyncPersonalVault(password);
         personalVaultReady = true;
       } catch {
-        // A legacy wrapper is migrated automatically by an updated Mac that has
-        // the authoritative local records. Do not expose Recovery in normal UI.
         vaultUI.mode("waiting");
       }
       if (identity) {
@@ -2044,7 +2058,7 @@ export async function initializeCloudAccount({
         vaultMessage,
         personalVaultReady
           ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
-          : "Legacy Personal Vault будет автоматически переведён после входа в обновлённом приложении на Mac с локальными данными. Recovery-фраза не требуется."
+          : "Personal Vault пока недоступен. Повторите вход или синхронизацию."
       );
     } catch (error) {
       const code = String(error?.message ?? "");
@@ -2182,7 +2196,7 @@ export async function initializeCloudAccount({
       } else if (code === "recovery_passphrase_required") {
         hideConflicts();
         vaultUI.mode("waiting");
-        setText(vaultMessage, "Legacy Personal Vault ожидает автоматической миграции после входа в обновлённом приложении на Mac с локальными данными.");
+        setText(vaultMessage, "Personal Vault пока недоступен. Войдите в аккаунт ещё раз.");
       } else {
         setText(vaultMessage, "Синхронизация не выполнена; локальные данные не потеряны.");
       }
@@ -2219,7 +2233,7 @@ export async function initializeCloudAccount({
     showSession(restoredUser);
     if (await vault.status() !== "unlocked") {
       vaultUI.mode("waiting");
-      setText(vaultMessage, "Сессия аккаунта восстановлена. Чтобы открыть зашифрованный Personal Vault, выполните обычный вход ещё раз — отдельная секретная фраза не требуется.");
+      setText(vaultMessage, "Personal Vault заблокирован. Войдите в аккаунт, чтобы увидеть данные.");
     }
     let identity = null;
     try {

@@ -195,7 +195,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
   assert.match(html, /id="local-vault-waiting"[^>]*hidden/u);
-  assert.match(html, /отдельная секретная фраза не нужна/u);
+  assert.match(html, /Personal Vault заблокирован/u);
   assert.doesNotMatch(html, /cloud-vault-recovery|local-vault-(?:setup|unlock)-form/u);
   assert.doesNotMatch(html, /Recovery-фраза|recovery-фраза/iu);
   assert.match(html, /id="local-vault-conflicts-form"/u);
@@ -259,7 +259,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-record-filter="credential"/u);
   assert.match(html, /data-record-filter="snippet"/u);
   assert.match(html, /data-record-filter="forwarding"/u);
-  assert.match(html, /защищённой синхронизации Personal Vault с Mac/u);
+  assert.match(html, /Откройте Vault, чтобы увидеть личные подключения/u);
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
@@ -317,9 +317,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /vault\.lock\(\)/u);
   assert.doesNotMatch(application, /accountVaultMigrationPassphrase|account_password_required/u);
   assert.doesNotMatch(application, /cloud-vault-recovery-form|vaultUI\.showRecovery/u);
-  assert.match(application, /отдельная секретная фраза не требуется/u);
+  assert.match(application, /replaceLockedWithRemote/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
-  assert.match(application, /Legacy Personal Vault будет автоматически переведён/u);
+  assert.doesNotMatch(application, /Legacy Personal Vault|Recovery-фраза|секретная фраза/iu);
   assert.match(application, /vaultUI\.mode\("waiting"\)/u);
   assert.doesNotMatch(application, /vaultUI\.showRecovery\(\)/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
