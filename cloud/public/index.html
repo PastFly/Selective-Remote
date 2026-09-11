@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=115">
+  <link rel="stylesheet" href="/styles.css?v=116">
 </head>
 <body>
   <main class="shell">
@@ -201,6 +201,22 @@
             <strong>Personal Vault заблокирован</strong>
             <p>Откройте Vault, чтобы увидеть личные подключения.</p>
           </div>
+          <section class="workspace-team-overview" aria-labelledby="workspace-team-overview-title">
+            <div class="workspace-team-overview-heading">
+              <div><p class="eyebrow">TEAM WORKSPACE</p><h3 id="workspace-team-overview-title">Командное пространство</h3></div>
+              <p id="workspace-team-overview-status">Загружаем команды…</p>
+            </div>
+            <div class="workspace-team-overview-content">
+              <div class="workspace-team-metrics">
+                <span><strong id="workspace-team-count">—</strong><small>Доступные команды</small></span>
+                <span><strong id="workspace-team-invitation-count">—</strong><small>Новые приглашения</small></span>
+              </div>
+              <div class="workspace-team-actions">
+                <button type="button" data-workspace-target="team-vault" data-team-view="teams">Открыть команды</button>
+                <button type="button" class="secondary" data-workspace-target="team-vault" data-team-view="hosts">Командные хосты</button>
+              </div>
+            </div>
+          </section>
         </section>
 
     <section class="local-vault workspace-panel" id="local-vault" aria-labelledby="local-vault-title" hidden>
@@ -577,6 +593,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=115"></script>
+  <script type="module" src="/app.js?v=116"></script>
 </body>
 </html>

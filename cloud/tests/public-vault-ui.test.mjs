@@ -248,6 +248,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="team-host-password"[^>]*type="password"/u);
   assert.match(html, /data-workspace-target="workspace-settings"/u);
   assert.match(html, /data-workspace-target="workspace-about">О проекте/u);
+  assert.match(html, /id="workspace-team-overview-title"/u);
+  assert.match(html, /id="workspace-team-count"/u);
+  assert.match(html, /id="workspace-team-invitation-count"/u);
   assert.match(html, /https:\/\/yoomoney\.ru\/to\/4100119600001192/u);
   assert.match(html, /https:\/\/boosty\.to\/pastfly/u);
   assert.match(html, /https:\/\/github\.com\/PastFly\/Selective-Remote/u);
@@ -308,6 +311,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /"\/app": \["workspace-overview", null, null\]/u);
   assert.match(application, /"\/app\/team-hosts": \["team-vault", null, "hosts"\]/u);
   assert.match(application, /routeForWorkspace/u);
+  assert.match(application, /setFilterChangeListener/u);
+  assert.match(application, /renderOverviewSummary/u);
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
