@@ -61,6 +61,27 @@ test("lock drops the in-memory key and wrong recovery passphrases fail closed", 
   assert.throws(() => vault.document(), /local_vault_locked/);
 });
 
+test("an unlocked tab can hand its in-memory key to another tab without persisting it", async () => {
+  const repository = memoryRepository();
+  const firstTab = controller(repository);
+  await firstTab.create(passphrase);
+  await firstTab.upsert({ type: "host", data: { title: "Shared tab", address: "tab.invalid" } });
+
+  const secondTab = controller(repository);
+  assert.equal(await secondTab.status(), "locked");
+  const keyClone = structuredClone(firstTab.sessionKey());
+  assert.equal((await secondTab.unlockWithSessionKey(keyClone)).records[0].data.title, "Shared tab");
+
+  secondTab.lock();
+  const wrongKey = await webcrypto.subtle.generateKey(
+    { name: "AES-GCM", length: 256 },
+    true,
+    ["encrypt", "decrypt"],
+  );
+  await assert.rejects(secondTab.unlockWithSessionKey(wrongKey));
+  assert.equal(await secondTab.status(), "locked");
+});
+
 test("rewrap migrates an unlocked Vault to a new account passphrase", async () => {
   const repository = memoryRepository();
   const vault = controller(repository);

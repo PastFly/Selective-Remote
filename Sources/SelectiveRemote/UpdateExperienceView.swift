@@ -34,7 +34,7 @@ struct AppSettingsView: View {
                 .tabItem { Label("Резервная копия", systemImage: "externaldrive.badge.timemachine") }
                 .tag("backup")
         }
-        .frame(width: 610, height: 520)
+        .frame(minWidth: 760, idealWidth: 820, minHeight: 600, idealHeight: 680)
         .background {
             AppWindowBackdrop(appearance: appearance.snapshot)
                 .ignoresSafeArea()

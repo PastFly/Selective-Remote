@@ -1818,6 +1818,10 @@ export async function initializeCloudAccount({
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
   let backgroundSyncing = false;
+  const sessionTabID = globalThis.crypto?.randomUUID?.() ?? null;
+  const sessionChannel = sessionTabID && typeof globalThis.BroadcastChannel === "function"
+    ? new globalThis.BroadcastChannel("selective-remote.personal-vault.session.v1")
+    : null;
   vaultUI.setConflictResetListener(() => {
     activeConflicts = null;
     conflictApply.disabled = true;
@@ -1869,6 +1873,56 @@ export async function initializeCloudAccount({
       backgroundSyncing = false;
     }
   }
+
+  async function requestUnlockedVaultFromOtherTab() {
+    const user = client.session();
+    if (!sessionChannel || !user || await vault.status() === "unlocked") return;
+    try {
+      sessionChannel.postMessage({
+        version: 1,
+        type: "request",
+        requester: sessionTabID,
+        userID: user.id,
+      });
+    } catch {
+      // Browser session remains signed in; manual account sign-in can still unlock the Vault.
+    }
+  }
+
+  sessionChannel?.addEventListener("message", (event) => {
+    const value = event?.data;
+    const user = client.session();
+    if (!value || value.version !== 1 || !user || value.userID !== user.id) return;
+    if (value.type === "request" && value.requester !== sessionTabID) {
+      try {
+        sessionChannel.postMessage({
+          version: 1,
+          type: "key",
+          requester: value.requester,
+          responder: sessionTabID,
+          userID: user.id,
+          key: vault.sessionKey(),
+        });
+      } catch {
+        // This tab is locked or the browser cannot clone CryptoKey values.
+      }
+      return;
+    }
+    if (value.type !== "key" || value.requester !== sessionTabID || value.responder === sessionTabID) return;
+    void (async () => {
+      try {
+        if (await vault.status() !== "locked") return;
+        await vault.unlockWithSessionKey(value.key);
+        vaultUI.mode("unlocked");
+        vaultUI.render();
+        setText(vaultMessage, "Personal Vault разблокирован активной вкладкой и синхронизируется автоматически.");
+        await backgroundPersonalVaultSync();
+      } catch {
+        // Only a key that decrypts this local encrypted snapshot is accepted.
+      }
+    })();
+  });
+  globalThis.addEventListener?.("pagehide", () => sessionChannel?.close(), { once: true });
 
   const personalVaultTimer = globalThis.setInterval(
     () => { void backgroundPersonalVaultSync(); },
@@ -2116,6 +2170,9 @@ export async function initializeCloudAccount({
   usernameForm.addEventListener("input", async () => {
     const username = usernameForm.elements.username.value.trim().toLowerCase();
     if (username.length < 3) return setSettingsMessage(usernameAvailability, "Минимум 3 символа.");
+    if (username === client.session()?.username.toLowerCase()) {
+      return setSettingsMessage(usernameAvailability, `@${username} — ваш текущий username.`);
+    }
     try {
       const result = await client.usernameAvailability(username);
       setSettingsMessage(usernameAvailability, result.available ? `@${result.username} свободен` : `@${result.username} уже занят`, result.available ? "success" : "error");
@@ -2126,6 +2183,12 @@ export async function initializeCloudAccount({
 
   usernameForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    const requestedUsername = usernameForm.elements.username.value.trim().toLowerCase();
+    if (requestedUsername === client.session()?.username.toLowerCase()) {
+      setSettingsMessage(usernameMessage, "Username уже установлен для этого аккаунта.");
+      usernameForm.elements.password.value = "";
+      return;
+    }
     const button = usernameForm.querySelector('button[type="submit"]');
     button.disabled = true;
     try {
@@ -2258,7 +2321,8 @@ export async function initializeCloudAccount({
     showSession(restoredUser);
     if (await vault.status() !== "unlocked") {
       vaultUI.mode("waiting");
-      setText(vaultMessage, "Personal Vault заблокирован. Войдите в аккаунт, чтобы увидеть данные.");
+      setText(vaultMessage, "Personal Vault заблокирован. Ищем открытую вкладку этого аккаунта…");
+      await requestUnlockedVaultFromOtherTab();
     }
     let identity = null;
     try {

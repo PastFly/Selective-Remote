@@ -8,6 +8,9 @@ extension Notification.Name {
     static let selectiveRemotePersonalVaultSyncNow = Notification.Name(
         "SelectiveRemote.personalVaultSyncNow"
     )
+    static let selectiveRemoteCloudTeamMembershipChanged = Notification.Name(
+        "SelectiveRemote.cloudTeamMembershipChanged"
+    )
 }
 
 @MainActor
@@ -156,6 +159,7 @@ struct SelectiveRemoteApp: App {
                     .environmentObject(appAppearance)
                     .environment(\.locale, language.locale)
                     .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
+                    .modifier(SelectiveRemoteCloudTeamInvitationPrompt())
                     .frame(minWidth: 1050, minHeight: 700)
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
