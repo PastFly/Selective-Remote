@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=120">
+  <link rel="stylesheet" href="/styles.css?v=121">
 </head>
 <body>
   <main class="shell">
@@ -251,6 +251,18 @@
           <button type="button" data-record-filter="snippet">Snippets</button>
           <button type="button" data-record-filter="forwarding">Forwarding</button>
         </nav>
+        <div class="personal-vault-browser" id="personal-vault-browser">
+          <label for="personal-vault-search">Поиск</label>
+          <input id="personal-vault-search" type="search" maxlength="120" placeholder="Название, адрес, логин или папка">
+          <label for="personal-vault-sort">Сортировка</label>
+          <select id="personal-vault-sort">
+            <option value="modified-desc">Сначала изменённые</option>
+            <option value="title-asc">По названию</option>
+            <option value="type-asc">По типу</option>
+          </select>
+          <label for="personal-vault-folder-filter">Папка Hosts</label>
+          <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
+        </div>
         <form class="record-form" id="local-vault-record-form">
           <label for="local-record-type">Тип записи</label>
           <select id="local-record-type" name="type">
@@ -265,7 +277,10 @@
           <input id="local-record-target" name="target" maxlength="2048">
           <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
           <textarea id="local-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
-          <button type="submit">Зашифровать и сохранить</button>
+          <div class="record-form-actions">
+            <button type="submit" id="local-record-save">Зашифровать и сохранить</button>
+            <button type="button" class="secondary" id="local-record-cancel" hidden>Отменить изменение</button>
+          </div>
         </form>
         <div class="vault-records" id="local-vault-records"></div>
         <dialog class="resource-detail" id="host-detail-dialog" aria-labelledby="host-detail-title">
@@ -593,6 +608,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=120"></script>
+  <script type="module" src="/app.js?v=121"></script>
 </body>
 </html>
