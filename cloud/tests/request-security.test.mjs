@@ -40,6 +40,9 @@ test("bundled ingress overwrites and authenticates the client IP header", async 
 
   assert.match(caddyfile, /header_up X-Selective-Client-IP \{remote_host\}/);
   assert.match(caddyfile, /header_up X-Selective-Proxy-Secret \{\$PROXY_SHARED_SECRET\}/);
+  assert.match(caddyfile, /Content-Security-Policy "default-src 'self'; script-src 'self';[^\n]*object-src 'none';[^\n]*frame-ancestors 'none'/);
+  assert.match(caddyfile, /Cross-Origin-Opener-Policy "same-origin"/);
+  assert.match(caddyfile, /Cross-Origin-Resource-Policy "same-origin"/);
   assert.match(compose, /PROXY_SHARED_SECRET: \$\{PROXY_SHARED_SECRET\}/);
   assert.doesNotMatch(compose, /8080:8080/);
 });
@@ -55,6 +58,8 @@ test("optional 443-only ingress keeps TCP 80 with the existing host service", as
   assert.match(caddyfile, /disable_http_challenge/);
   assert.match(caddyfile, /header_up X-Selective-Client-IP \{remote_host\}/);
   assert.match(caddyfile, /header_up X-Selective-Proxy-Secret \{\$PROXY_SHARED_SECRET\}/);
+  assert.match(caddyfile, /Content-Security-Policy "default-src 'self'; script-src 'self';[^\n]*object-src 'none';[^\n]*frame-ancestors 'none'/);
+  assert.match(caddyfile, /Cross-Origin-Opener-Policy "same-origin"/);
 
   assert.match(override, /ports: !override/);
   assert.doesNotMatch(override, /80:80/);

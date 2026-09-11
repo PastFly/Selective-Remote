@@ -14,10 +14,18 @@ const recordIDs = [
 
 function memoryRepository(initial = null) {
   let value = initial;
+  let sessionDeviceKey = null;
+  let sessionUnlock = null;
   return {
     async load() { return value ? structuredClone(value) : null; },
     async save(next) { value = structuredClone(next); },
+    async loadSessionDeviceKey() { return sessionDeviceKey ? structuredClone(sessionDeviceKey) : null; },
+    async saveSessionDeviceKey(next) { sessionDeviceKey = structuredClone(next); },
+    async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
+    async saveSessionUnlock(next) { sessionUnlock = structuredClone(next); },
+    async deleteSessionUnlock() { sessionUnlock = null; },
     snapshot() { return value ? structuredClone(value) : null; },
+    rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
   };
 }
 
@@ -80,6 +88,35 @@ test("an unlocked tab can hand its in-memory key to another tab without persisti
   );
   await assert.rejects(secondTab.unlockWithSessionKey(wrongKey));
   assert.equal(await secondTab.status(), "locked");
+});
+
+test("a trusted browser restores a non-extractable Vault key only for the authenticated account", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const otherAccountID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const repository = memoryRepository();
+  const firstPage = controller(repository);
+  await firstPage.create(passphrase);
+  await firstPage.upsert({ type: "host", data: { title: "After reload", address: "reload.invalid" } });
+
+  assert.equal(await firstPage.rememberSession(accountID), true);
+  assert.equal(JSON.stringify(repository.rememberedSession()).includes(passphrase), false);
+  firstPage.lock();
+
+  const wrongAccountPage = controller(repository);
+  assert.equal(await wrongAccountPage.restoreRememberedSession(otherAccountID), false);
+  assert.equal(await wrongAccountPage.status(), "locked");
+
+  await firstPage.unlock(passphrase);
+  assert.equal(await firstPage.rememberSession(accountID), true);
+  firstPage.lock();
+  const reloadedPage = controller(repository);
+  assert.equal(await reloadedPage.restoreRememberedSession(accountID), true);
+  assert.equal(reloadedPage.sessionKey().extractable, false);
+  assert.equal(reloadedPage.document().records[0].data.title, "After reload");
+
+  await reloadedPage.forgetRememberedSession();
+  reloadedPage.lock();
+  assert.equal(await reloadedPage.restoreRememberedSession(accountID), false);
 });
 
 test("rewrap migrates an unlocked Vault to a new account passphrase", async () => {

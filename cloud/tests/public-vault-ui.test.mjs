@@ -246,8 +246,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=123/u);
-  assert.match(html, /\/app\.js\?v=123/u);
+  assert.match(html, /\/styles\.css\?v=124/u);
+  assert.match(html, /\/app\.js\?v=124/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -259,6 +259,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
   assert.match(html, /id="local-vault-waiting"[^>]*hidden/u);
+  assert.match(html, /id="local-vault-actions"[^>]*hidden/u);
   assert.match(html, /Personal Vault заблокирован/u);
   assert.doesNotMatch(html, /cloud-vault-recovery|local-vault-(?:setup|unlock)-form/u);
   assert.doesNotMatch(html, /Recovery-фраза|recovery-фраза/iu);
@@ -348,6 +349,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
+  assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
+  assert.match(application, /vault\.rememberSession\(user\.id\)/u);
+  assert.match(application, /vault\.forgetRememberedSession\(\)/u);
+  assert.match(application, /visibilitychange/u);
+  assert.doesNotMatch(html, /<div class="vault-toolbar">\s*<div><h3>Личный Vault/u);
   assert.match(application, /ваш текущий username/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);

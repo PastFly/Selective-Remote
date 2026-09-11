@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=123">
+  <link rel="stylesheet" href="/styles.css?v=124">
 </head>
 <body>
   <main class="shell">
@@ -224,7 +224,14 @@
           <p class="eyebrow">PERSONAL VAULT · E2EE</p>
           <h2 id="local-vault-title">Личный Vault</h2>
         </div>
-        <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
+        <div class="vault-heading-side">
+          <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
+          <div class="vault-actions" id="local-vault-actions" hidden>
+            <button type="button" class="secondary" id="local-record-create">Добавить запись</button>
+            <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
+            <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
+          </div>
+        </div>
       </div>
 
       <div class="vault-panel vault-account-waiting" id="local-vault-waiting" hidden>
@@ -236,14 +243,6 @@
       </div>
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
-        <div class="vault-toolbar">
-          <div><h3>Личный Vault</h3><p>Зашифрованная копия, которая разблокируется только на вашем устройстве.</p></div>
-          <div class="vault-actions">
-            <button type="button" class="secondary" id="local-record-create">Добавить запись</button>
-            <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
-            <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
-          </div>
-        </div>
         <nav class="record-filters" id="personal-vault-filters" aria-label="Типы записей">
           <button type="button" class="active" data-record-filter="all">Все</button>
           <button type="button" data-record-filter="host">Hosts</button>
@@ -632,6 +631,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=123"></script>
+  <script type="module" src="/app.js?v=124"></script>
 </body>
 </html>

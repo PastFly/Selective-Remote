@@ -21,6 +21,10 @@ const snapshotKey = "personal";
 const syncKey = "personal-sync";
 const backupSnapshotKey = "personal-previous";
 const deviceKey = "browser-device";
+const sessionDeviceKey = "personal-session-device-key";
+const sessionUnlockKey = "personal-session-unlock";
+const sessionUnlockVersion = 1;
+const sessionUnlockContext = "selective-remote:personal-vault:browser-session:v1:";
 const exactUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
 const snapshotKeys = ["deviceID", "envelope", "revision"];
@@ -61,6 +65,42 @@ function normalizedDeviceID(value) {
   const deviceID = String(value ?? "").toLowerCase();
   if (!exactUUID.test(deviceID)) throw new Error("invalid_local_device");
   return deviceID;
+}
+
+function normalizedAccountID(value) {
+  const accountID = String(value ?? "").toLowerCase();
+  if (!exactUUID.test(accountID)) throw new Error("invalid_account");
+  return accountID;
+}
+
+function byteArray(value, length, code) {
+  if (!ArrayBuffer.isView(value) || value.BYTES_PER_ELEMENT !== 1 || value.byteLength !== length) {
+    throw new Error(code);
+  }
+  return new Uint8Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
+}
+
+function validatedSessionDeviceKey(value) {
+  const usages = Array.from(value?.usages ?? []);
+  if (value?.type !== "secret" || value?.extractable !== false
+      || value?.algorithm?.name !== "AES-GCM" || value?.algorithm?.length !== 256
+      || !usages.includes("encrypt") || !usages.includes("decrypt")) {
+    throw new Error("invalid_session_device_key");
+  }
+  return value;
+}
+
+function validatedSessionUnlock(value, accountID) {
+  exactKeys(value, ["accountID", "ciphertext", "nonce", "version"], "invalid_session_unlock");
+  if (value.version !== sessionUnlockVersion || normalizedAccountID(value.accountID) !== accountID) {
+    throw new Error("invalid_session_unlock");
+  }
+  return {
+    version: sessionUnlockVersion,
+    accountID,
+    nonce: byteArray(value.nonce, 12, "invalid_session_unlock"),
+    ciphertext: byteArray(value.ciphertext, 48, "invalid_session_unlock"),
+  };
 }
 
 function sameWrappedKey(left, right) {
@@ -135,6 +175,21 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
       const deviceID = normalizedDeviceID(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(deviceID, deviceKey));
     },
+    async loadSessionDeviceKey() {
+      return transaction(indexedDBValue, "readonly", (store) => store.get(sessionDeviceKey));
+    },
+    async saveSessionDeviceKey(value) {
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(value, sessionDeviceKey));
+    },
+    async loadSessionUnlock() {
+      return transaction(indexedDBValue, "readonly", (store) => store.get(sessionUnlockKey));
+    },
+    async saveSessionUnlock(value) {
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(value, sessionUnlockKey));
+    },
+    async deleteSessionUnlock() {
+      await transaction(indexedDBValue, "readwrite", (store) => store.delete(sessionUnlockKey));
+    },
   };
 }
 
@@ -198,6 +253,30 @@ export function createLocalVaultController({
     return clone(document);
   }
 
+  async function unlockUsingSessionKey(nextVaultKey) {
+    if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
+    const algorithm = nextVaultKey?.algorithm;
+    const usages = Array.from(nextVaultKey?.usages ?? []);
+    if (nextVaultKey?.type !== "secret"
+        || algorithm?.name !== "AES-GCM"
+        || algorithm?.length !== 256
+        || !usages.includes("encrypt")
+        || !usages.includes("decrypt")) {
+      throw new Error("invalid_vault_session_key");
+    }
+    const stored = await repository.load();
+    if (!stored) throw new Error("local_vault_missing");
+    const nextSnapshot = validatedSnapshot(stored);
+    const nextDocument = validateVaultDocument(
+      await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
+    );
+    snapshot = nextSnapshot;
+    vaultKey = nextVaultKey;
+    document = nextDocument;
+    pendingConflicts = null;
+    return clone(document);
+  }
+
   return {
     async status() {
       if (snapshot && vaultKey && document) return "unlocked";
@@ -248,28 +327,71 @@ export function createLocalVaultController({
       return vaultKey;
     },
 
-    async unlockWithSessionKey(nextVaultKey) {
-      if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
-      const algorithm = nextVaultKey?.algorithm;
-      const usages = Array.from(nextVaultKey?.usages ?? []);
-      if (nextVaultKey?.type !== "secret"
-          || algorithm?.name !== "AES-GCM"
-          || algorithm?.length !== 256
-          || !usages.includes("encrypt")
-          || !usages.includes("decrypt")) {
-        throw new Error("invalid_vault_session_key");
+    unlockWithSessionKey: unlockUsingSessionKey,
+
+    async rememberSession(accountValue) {
+      requireUnlocked();
+      if (typeof repository.loadSessionDeviceKey !== "function"
+          || typeof repository.saveSessionDeviceKey !== "function"
+          || typeof repository.saveSessionUnlock !== "function") return false;
+      if (vaultKey.extractable !== true) return false;
+      const accountID = normalizedAccountID(accountValue);
+      let sessionKey = await repository.loadSessionDeviceKey();
+      if (sessionKey) sessionKey = validatedSessionDeviceKey(sessionKey);
+      else {
+        sessionKey = await cryptoValue.subtle.generateKey(
+          { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+        );
+        await repository.saveSessionDeviceKey(sessionKey);
       }
-      const stored = await repository.load();
-      if (!stored) throw new Error("local_vault_missing");
-      const nextSnapshot = validatedSnapshot(stored);
-      const nextDocument = validateVaultDocument(
-        await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
-      );
-      snapshot = nextSnapshot;
-      vaultKey = nextVaultKey;
-      document = nextDocument;
-      pendingConflicts = null;
-      return clone(document);
+      const nonce = cryptoValue.getRandomValues(new Uint8Array(12));
+      const rawVaultKey = new Uint8Array(await cryptoValue.subtle.exportKey("raw", vaultKey));
+      try {
+        const ciphertext = new Uint8Array(await cryptoValue.subtle.encrypt(
+          { name: "AES-GCM", iv: nonce, additionalData: new TextEncoder().encode(`${sessionUnlockContext}${accountID}`) },
+          sessionKey,
+          rawVaultKey,
+        ));
+        await repository.saveSessionUnlock({
+          version: sessionUnlockVersion, accountID, nonce, ciphertext,
+        });
+        return true;
+      } finally {
+        rawVaultKey.fill(0);
+      }
+    },
+
+    async restoreRememberedSession(accountValue) {
+      if (typeof repository.loadSessionDeviceKey !== "function"
+          || typeof repository.loadSessionUnlock !== "function") return false;
+      if (snapshot && vaultKey && document) return false;
+      if (!await repository.load()) return false;
+      const accountID = normalizedAccountID(accountValue);
+      try {
+        const sessionKey = validatedSessionDeviceKey(await repository.loadSessionDeviceKey());
+        const remembered = validatedSessionUnlock(await repository.loadSessionUnlock(), accountID);
+        const rawVaultKey = new Uint8Array(await cryptoValue.subtle.decrypt(
+          { name: "AES-GCM", iv: remembered.nonce, additionalData: new TextEncoder().encode(`${sessionUnlockContext}${accountID}`) },
+          sessionKey,
+          remembered.ciphertext,
+        ));
+        try {
+          const nextVaultKey = await cryptoValue.subtle.importKey(
+            "raw", rawVaultKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+          );
+          await unlockUsingSessionKey(nextVaultKey);
+          return true;
+        } finally {
+          rawVaultKey.fill(0);
+        }
+      } catch {
+        if (typeof repository.deleteSessionUnlock === "function") await repository.deleteSessionUnlock();
+        return false;
+      }
+    },
+
+    async forgetRememberedSession() {
+      if (typeof repository.deleteSessionUnlock === "function") await repository.deleteSessionUnlock();
     },
 
     lock() {
