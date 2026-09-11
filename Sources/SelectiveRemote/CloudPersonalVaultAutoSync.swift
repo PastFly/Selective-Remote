@@ -183,6 +183,9 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
                     requiresInitialDownload: true
                 )
             } catch SelectiveRemotePersonalVaultError.invalidRecoveryPhrase {
+                guard exported.summary.total > 0 else {
+                    throw SelectiveRemotePersonalVaultError.legacyMigrationRequiresLocalData
+                }
                 // A legacy Recovery-wrapped revision cannot be opened with account credentials.
                 // Make this Mac's complete local snapshot authoritative automatically. The server
                 // keeps the previous ciphertext in vault_revisions, so migration is reversible by
