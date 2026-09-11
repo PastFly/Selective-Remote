@@ -246,8 +246,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=122/u);
-  assert.match(html, /\/app\.js\?v=122/u);
+  assert.match(html, /\/styles\.css\?v=123/u);
+  assert.match(html, /\/app\.js\?v=123/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -329,7 +329,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="personal-vault-search"/u);
   assert.match(html, /id="personal-vault-sort"/u);
   assert.match(html, /id="personal-vault-folder-filter"/u);
+  assert.match(html, /id="local-record-create"/u);
+  assert.match(html, /id="local-vault-record-form"[^>]*hidden/u);
   assert.match(html, /id="local-record-cancel"[^>]*hidden/u);
+  assert.doesNotMatch(html, /data-record-filter="all">Personal Vault/u);
+  assert.match(html, /class="workspace-nav-label">Команды/u);
   assert.match(html, /id="personal-host-fields"/u);
   assert.match(html, /id="local-host-protocol"/u);
   assert.match(html, /id="local-host-folder"/u);
@@ -389,6 +393,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /formatVaultTimestamp\(record\.modifiedAt\)/u);
   assert.match(application, /localVaultRecordFormValues\(record\)/u);
   assert.match(application, /editingRecordID/u);
+  assert.match(application, /closeEditor\(\)/u);
+  assert.match(application, /recordForm\.hidden = hide/u);
+  assert.match(application, /createButton\?\.addEventListener\("click", beginCreate\)/u);
+  assert.match(application, /setFilter\(value\) \{\s*resetEditor\(\)/u);
+  assert.match(application, /panelID !== "local-vault"\) vaultUI\?\.closeEditor\(\)/u);
   assert.match(application, /personalHostRecordData/u);
   assert.match(styles, /\.personal-vault-browser/u);
   assert.match(styles, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/u);

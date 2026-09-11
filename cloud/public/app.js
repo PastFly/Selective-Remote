@@ -303,6 +303,7 @@ export async function initializeLocalVault({
   const search = documentValue.querySelector("#personal-vault-search");
   const sort = documentValue.querySelector("#personal-vault-sort");
   const folderFilter = documentValue.querySelector("#personal-vault-folder-filter");
+  const createButton = documentValue.querySelector("#local-record-create");
   const saveButton = documentValue.querySelector("#local-record-save");
   const cancelButton = documentValue.querySelector("#local-record-cancel");
   const editorTitle = documentValue.querySelector("#local-record-editor-title");
@@ -347,20 +348,46 @@ export async function initializeLocalVault({
   let activeRecordFilter = "all";
   let editingRecordID = null;
 
-  function resetEditor() {
+  function updateCreateButton() {
+    const labels = {
+      host: "Добавить Host",
+      credential: "Добавить Credential",
+      snippet: "Добавить Snippet",
+      forwarding: "Добавить Forwarding",
+    };
+    setText(createButton, labels[activeRecordFilter] ?? "Добавить запись");
+  }
+
+  function resetEditor({ hide = true } = {}) {
     editingRecordID = null;
     recordForm.reset();
+    recordForm.hidden = hide;
     type.disabled = false;
     saveButton.textContent = "Зашифровать и сохранить";
-    cancelButton.hidden = true;
+    cancelButton.textContent = "Отменить";
+    cancelButton.hidden = hide;
     setText(editorTitle, "Новая запись");
     setText(editorHint, "Выберите тип и заполните поля. Всё шифруется в браузере.");
     updateLabels();
   }
 
+  function beginCreate() {
+    resetEditor({ hide: false });
+    if (["host", "credential", "snippet", "forwarding"].includes(activeRecordFilter)) {
+      type.value = activeRecordFilter;
+      type.disabled = true;
+    }
+    cancelButton.textContent = "Отменить создание";
+    updateLabels();
+    setText(message, "Новая запись. Заполните поля и сохраните зашифрованную версию.");
+    recordForm.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    title.focus?.();
+  }
+
   function beginEdit(record) {
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
+    recordForm.hidden = false;
     type.value = record.type;
     type.disabled = true;
     title.value = values.title;
@@ -378,6 +405,7 @@ export async function initializeLocalVault({
       hostDescription.value = host.description;
     }
     saveButton.textContent = "Сохранить изменения";
+    cancelButton.textContent = "Отменить изменение";
     cancelButton.hidden = false;
     setText(editorTitle, `Редактирование ${String(record.data?.title ?? "записи")}`);
     setText(editorHint, record.type === "host"
@@ -603,6 +631,7 @@ export async function initializeLocalVault({
   });
 
   type.addEventListener("change", updateLabels);
+  createButton?.addEventListener("click", beginCreate);
   hostProtocol.addEventListener("change", () => {
     if (hostProtocol.value === "ssh") hostPort.value = "22";
     if (hostProtocol.value === "telnet") hostPort.value = "23";
@@ -617,7 +646,9 @@ export async function initializeLocalVault({
   folderFilter?.addEventListener("change", render);
   for (const button of filterButtons) {
     button.addEventListener("click", () => {
+      resetEditor();
       activeRecordFilter = button.dataset.recordFilter || "all";
+      updateCreateButton();
       for (const candidate of filterButtons) {
         candidate.classList.toggle("active", candidate === button);
       }
@@ -635,6 +666,7 @@ export async function initializeLocalVault({
   });
 
   updateLabels();
+  updateCreateButton();
   try {
     const status = await controller.status();
     mode(status === "unlocked" ? "unlocked" : "waiting");
@@ -652,8 +684,13 @@ export async function initializeLocalVault({
     render,
     clearConflictUI,
     setConflictMode,
+    closeEditor() {
+      resetEditor();
+    },
     setFilter(value) {
+      resetEditor();
       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding", "sshKey"].includes(value) ? value : "all";
+      updateCreateButton();
       for (const button of filterButtons) {
         button.classList.toggle("active", button.dataset.recordFilter === activeRecordFilter);
       }
@@ -2667,6 +2704,7 @@ export function initializePortalNavigation({
 
   function selectWorkspacePanel(target, recordFilter = null, teamView = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
+    if (panelID !== "local-vault") vaultUI?.closeEditor();
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
     for (const button of sidebarButtons) {
       const matchesPanel = button.dataset.workspaceTarget === panelID;
@@ -2679,7 +2717,7 @@ export function initializePortalNavigation({
     setText(workspaceTitle, panelID === "local-vault"
       ? resourceTitles[recordFilter || "all"]
       : panelID === "team-vault" ? teamTitles[teamView || "teams"] : titles[panelID]);
-    if (recordFilter) vaultUI?.setFilter(recordFilter);
+    if (panelID === "local-vault") vaultUI?.setFilter(recordFilter || "all");
     if (panelID === "team-vault") teamUI?.setView(teamView || "teams");
   }
 
@@ -2702,6 +2740,7 @@ export function initializePortalNavigation({
   });
 
   function showLanding({ replace = false } = {}) {
+    vaultUI?.closeEditor();
     brand.hidden = false;
     publicActions.hidden = false;
     hero.hidden = false;
@@ -2716,6 +2755,7 @@ export function initializePortalNavigation({
   }
 
   function showAuthentication(mode = "login", { replace = false } = {}) {
+    vaultUI?.closeEditor();
     brand.hidden = false;
     publicActions.hidden = true;
     hero.hidden = false;
