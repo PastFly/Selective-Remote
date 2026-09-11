@@ -10,6 +10,8 @@ import {
   localVaultRecordFormValues,
   localVaultRecordSummary,
   parseTeamHostConnection,
+  personalHostEditorValues,
+  personalHostRecordData,
   sortLocalVaultRecords,
   teamHostConnectionData,
   teamHostRecordData,
@@ -94,6 +96,33 @@ test("Personal Vault editor preserves native fields and maps decrypted form valu
     type: "forwarding",
     data: { title: "DB", destination: "db.invalid:5432", configuration: "local 15432" },
   }), { title: "DB", target: "db.invalid:5432", secret: "local 15432" });
+});
+
+test("Personal Host editor updates organization and the embedded native profile together", () => {
+  const profile = {
+    id: "44444444-4444-4444-8444-444444444444", connectionType: "ssh",
+    friendlyName: "Old", host: "old.invalid", username: "root", sshPort: 22,
+    group: "Old", tags: ["legacy"], profileDescription: "Old description",
+    sshProxyMode: "none",
+  };
+  const encoded = Buffer.from(JSON.stringify(profile)).toString("base64url");
+  const baseData = { title: "Old", address: "old.invalid", connectionType: "ssh", profile: encoded };
+  const data = personalHostRecordData({
+    title: "Production", address: "prod.invalid", protocol: "ssh", port: "2222",
+    username: "deployer", folder: "Work/Production", tags: "linux, prod, linux",
+    description: "Primary endpoint", baseData,
+  });
+  const decoded = JSON.parse(Buffer.from(data.profile, "base64url").toString());
+  assert.deepEqual(personalHostEditorValues({ type: "host", data }), {
+    title: "Production", address: "prod.invalid", protocol: "ssh", port: 2222,
+    username: "deployer", folder: "Work/Production", tags: "linux, prod",
+    description: "Primary endpoint",
+  });
+  assert.equal(decoded.friendlyName, "Production");
+  assert.equal(decoded.host, "prod.invalid");
+  assert.equal(decoded.sshPort, 2222);
+  assert.equal(decoded.group, "Work/Production");
+  assert.equal(decoded.sshProxyMode, "none");
 });
 
 test("Vault timestamps render in the viewer time zone instead of raw UTC", () => {
@@ -217,8 +246,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=121/u);
-  assert.match(html, /\/app\.js\?v=121/u);
+  assert.match(html, /\/styles\.css\?v=122/u);
+  assert.match(html, /\/app\.js\?v=122/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -301,6 +330,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="personal-vault-sort"/u);
   assert.match(html, /id="personal-vault-folder-filter"/u);
   assert.match(html, /id="local-record-cancel"[^>]*hidden/u);
+  assert.match(html, /id="personal-host-fields"/u);
+  assert.match(html, /id="local-host-protocol"/u);
+  assert.match(html, /id="local-host-folder"/u);
   assert.match(html, /Откройте Vault, чтобы увидеть личные подключения/u);
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
@@ -357,7 +389,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /formatVaultTimestamp\(record\.modifiedAt\)/u);
   assert.match(application, /localVaultRecordFormValues\(record\)/u);
   assert.match(application, /editingRecordID/u);
+  assert.match(application, /personalHostRecordData/u);
   assert.match(styles, /\.personal-vault-browser/u);
+  assert.match(styles, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/u);
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);

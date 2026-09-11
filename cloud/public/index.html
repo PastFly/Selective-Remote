@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=121">
+  <link rel="stylesheet" href="/styles.css?v=122">
 </head>
 <body>
   <main class="shell">
@@ -252,18 +252,25 @@
           <button type="button" data-record-filter="forwarding">Forwarding</button>
         </nav>
         <div class="personal-vault-browser" id="personal-vault-browser">
-          <label for="personal-vault-search">Поиск</label>
-          <input id="personal-vault-search" type="search" maxlength="120" placeholder="Название, адрес, логин или папка">
-          <label for="personal-vault-sort">Сортировка</label>
-          <select id="personal-vault-sort">
-            <option value="modified-desc">Сначала изменённые</option>
-            <option value="title-asc">По названию</option>
-            <option value="type-asc">По типу</option>
-          </select>
-          <label for="personal-vault-folder-filter">Папка Hosts</label>
-          <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
+          <label class="personal-vault-control" for="personal-vault-search"><span>Поиск</span>
+            <input id="personal-vault-search" type="search" maxlength="120" placeholder="Название, адрес, логин или папка">
+          </label>
+          <label class="personal-vault-control" for="personal-vault-sort"><span>Сортировка</span>
+            <select id="personal-vault-sort">
+              <option value="modified-desc">Сначала изменённые</option>
+              <option value="title-asc">По названию</option>
+              <option value="type-asc">По типу</option>
+            </select>
+          </label>
+          <label class="personal-vault-control" for="personal-vault-folder-filter"><span>Папка Hosts</span>
+            <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
+          </label>
         </div>
         <form class="record-form" id="local-vault-record-form">
+          <div class="record-editor-heading">
+            <h3 id="local-record-editor-title">Новая запись</h3>
+            <p id="local-record-editor-hint">Выберите тип и заполните поля. Всё шифруется в браузере.</p>
+          </div>
           <label for="local-record-type">Тип записи</label>
           <select id="local-record-type" name="type">
             <option value="host">Host</option>
@@ -277,6 +284,23 @@
           <input id="local-record-target" name="target" maxlength="2048">
           <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
           <textarea id="local-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
+          <div class="personal-host-fields" id="personal-host-fields">
+            <label for="local-host-protocol">Протокол</label>
+            <select id="local-host-protocol" name="protocol">
+              <option value="ssh">SSH</option><option value="rdp">RDP</option>
+              <option value="telnet">Telnet</option><option value="serial">Serial</option>
+            </select>
+            <label for="local-host-port">Порт</label>
+            <input id="local-host-port" name="port" type="number" min="1" max="65535" value="22">
+            <label for="local-host-username">Логин</label>
+            <input id="local-host-username" name="username" maxlength="256" autocomplete="username">
+            <label for="local-host-folder">Папка</label>
+            <input id="local-host-folder" name="folder" maxlength="120" placeholder="Например, Работа/Production">
+            <label for="local-host-tags">Теги</label>
+            <input id="local-host-tags" name="tags" maxlength="512" placeholder="linux, production, eu-west">
+            <label for="local-host-description">Описание</label>
+            <textarea id="local-host-description" name="description" maxlength="2048" rows="3"></textarea>
+          </div>
           <div class="record-form-actions">
             <button type="submit" id="local-record-save">Зашифровать и сохранить</button>
             <button type="button" class="secondary" id="local-record-cancel" hidden>Отменить изменение</button>
@@ -608,6 +632,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=121"></script>
+  <script type="module" src="/app.js?v=122"></script>
 </body>
 </html>
