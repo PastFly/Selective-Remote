@@ -320,6 +320,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Recovery-фраза не проверялась/u);
   assert.match(application, /переведена на автоматическую разблокировку паролем аккаунта/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
+  assert.match(application, /Legacy Personal Vault будет автоматически переведён/u);
+  assert.match(application, /vaultUI\.mode\("waiting"\)/u);
+  assert.doesNotMatch(application, /vaultUI\.showRecovery\(\)/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
   assert.match(application, /provisionTeamVaultWrappers/u);

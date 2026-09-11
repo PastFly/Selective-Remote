@@ -9,6 +9,7 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
     case cryptoFailure
     case emptyLocalVault
     case remoteVaultNotEmpty(Int)
+    case legacyMigrationRequiresLocalData
     case uploadConflict(Int)
 
     var errorDescription: String? {
@@ -32,6 +33,11 @@ enum SelectiveRemotePersonalVaultError: LocalizedError, Equatable {
             UpdateLocalization.text(
                 ru: "Cloud Vault уже содержит ревизию \(revision). Автоматическая перезапись остановлена; сначала требуется безопасное объединение.",
                 en: "Cloud Vault already contains revision \(revision). Automatic replacement was stopped; a safe merge is required first."
+            )
+        case .legacyMigrationRequiresLocalData:
+            UpdateLocalization.text(
+                ru: "Legacy Personal Vault ожидает автоматической миграции с Mac, на котором сохранены локальные данные.",
+                en: "The legacy Personal Vault is waiting for automatic migration from a Mac that has local data."
             )
         case let .uploadConflict(revision):
             UpdateLocalization.text(

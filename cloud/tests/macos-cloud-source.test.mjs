@@ -479,4 +479,9 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(settings, /Последняя синхронизация/u);
   assert.match(settings, /Синхронизировать сейчас/u);
   assert.match(settings, /personalVaultSyncError/u);
+  assert.match(sync, /catch SelectiveRemotePersonalVaultError\.invalidRecoveryPhrase/u);
+  assert.match(sync, /guard exported\.summary\.total > 0/u);
+  assert.match(sync, /baseRevision: remote\.revision/u);
+  assert.match(sync, /legacyMigrationRequiresLocalData/u);
+  assert.match(sync, /previous ciphertext in vault_revisions/u);
 });

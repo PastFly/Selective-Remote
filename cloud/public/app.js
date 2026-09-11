@@ -2077,7 +2077,9 @@ export async function initializeCloudAccount({
         personalVaultReady = true;
         accountVaultMigrationPassphrase = null;
       } catch {
-        // Vaults created before account-password enrollment retain Recovery fallback.
+        // A legacy wrapper is migrated automatically by an updated Mac that has
+        // the authoritative local records. Do not expose Recovery in normal UI.
+        vaultUI.mode("waiting");
       }
       if (identity) {
         try {
@@ -2106,7 +2108,7 @@ export async function initializeCloudAccount({
         vaultMessage,
         personalVaultReady
           ? "Personal Vault открыт паролем аккаунта и синхронизируется автоматически."
-          : "Для ранее созданного Personal Vault один раз введите Recovery-фразу; новые входы используют пароль аккаунта."
+          : "Legacy Personal Vault будет автоматически переведён после входа в обновлённом приложении на Mac с локальными данными. Recovery-фраза не требуется."
       );
     } catch (error) {
       const code = String(error?.message ?? "");
@@ -2243,8 +2245,8 @@ export async function initializeCloudAccount({
         setText(vaultMessage, "Сессия истекла. Войдите снова.");
       } else if (code === "recovery_passphrase_required") {
         hideConflicts();
-        vaultUI.showRecovery();
-        setText(vaultMessage, "На сервере есть зашифрованный Vault. Введите recovery-фразу для локального импорта.");
+        vaultUI.mode("waiting");
+        setText(vaultMessage, "Legacy Personal Vault ожидает автоматической миграции после входа в обновлённом приложении на Mac с локальными данными.");
       } else {
         setText(vaultMessage, "Синхронизация не выполнена; локальные данные не потеряны.");
       }

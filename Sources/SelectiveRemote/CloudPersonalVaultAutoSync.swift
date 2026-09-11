@@ -146,54 +146,85 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
     ) async throws -> Int {
         let passphrase = try SelectiveRemotePersonalVaultCrypto.accountPassphrase(password)
         let remote = try await client.personalVault(endpoint: endpoint)
+        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+            profiles: profiles,
+            credentials: credentials,
+            snippets: snippets,
+            forwarding: forwarding,
+            sshKeys: sshKeys,
+            deviceID: deviceID,
+            allowEmpty: true
+        )
         let material: SelectiveRemotePersonalVaultKeyMaterial
         if remote.revision == 0 {
-            let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
-                profiles: profiles,
-                credentials: credentials,
-                snippets: snippets,
-                forwarding: forwarding,
-                sshKeys: sshKeys,
-                deviceID: deviceID,
-                allowEmpty: true
-            )
-            let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
-                exported.document,
-                recoveryPhrase: passphrase,
-                baseRevision: 0
-            )
-            let result = try await client.putPersonalVault(endpoint: endpoint, envelope: setup.envelope)
-            guard !result.conflict, result.revision == 1 else {
-                throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
-            }
-            material = try .init(
-                vaultID: remote.id,
-                vaultKey: setup.vaultKey,
-                wrappedKey: setup.envelope.wrappedKey,
-                revision: result.revision,
-                documentHash: Data(SHA256.hash(data: try exported.document.encoded()))
+            material = try await replaceWithLocalVault(
+                endpoint: endpoint,
+                remote: remote,
+                exported: exported,
+                passphrase: passphrase
             )
         } else {
             guard let envelope = remote.envelope else {
                 throw SelectiveRemotePersonalVaultError.invalidEnvelope
             }
-            let vaultKey = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
-                envelope.wrappedKey,
-                passphrase: passphrase
-            )
-            let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
-            material = try .init(
-                vaultID: remote.id,
-                vaultKey: vaultKey,
-                wrappedKey: envelope.wrappedKey,
-                revision: remote.revision,
-                documentHash: Data(SHA256.hash(data: try document.encoded())),
-                includesCredentials: document.records.contains { $0.type == .credential },
-                requiresInitialDownload: true
-            )
+            do {
+                let vaultKey = try SelectiveRemotePersonalVaultCrypto.unwrapVaultKey(
+                    envelope.wrappedKey,
+                    passphrase: passphrase
+                )
+                let document = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
+                material = try .init(
+                    vaultID: remote.id,
+                    vaultKey: vaultKey,
+                    wrappedKey: envelope.wrappedKey,
+                    revision: remote.revision,
+                    documentHash: Data(SHA256.hash(data: try document.encoded())),
+                    includesCredentials: document.records.contains { $0.type == .credential },
+                    requiresInitialDownload: true
+                )
+            } catch SelectiveRemotePersonalVaultError.invalidRecoveryPhrase {
+                guard exported.summary.total > 0 else {
+                    throw SelectiveRemotePersonalVaultError.legacyMigrationRequiresLocalData
+                }
+                // A legacy Recovery-wrapped revision cannot be opened with account credentials.
+                // Make this Mac's complete local snapshot authoritative automatically. The server
+                // keeps the previous ciphertext in vault_revisions, so migration is reversible by
+                // an administrator without exposing plaintext or asking the user for Recovery.
+                material = try await replaceWithLocalVault(
+                    endpoint: endpoint,
+                    remote: remote,
+                    exported: exported,
+                    passphrase: passphrase
+                )
+            }
         }
         try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
         return material.revision
+    }
+
+    private func replaceWithLocalVault(
+        endpoint: URL,
+        remote: SelectiveRemoteCloudPersonalVault,
+        exported: SelectiveRemotePersonalVaultExport,
+        passphrase: String
+    ) async throws -> SelectiveRemotePersonalVaultKeyMaterial {
+        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+            exported.document,
+            recoveryPhrase: passphrase,
+            baseRevision: remote.revision
+        )
+        let result = try await client.putPersonalVault(endpoint: endpoint, envelope: setup.envelope)
+        guard !result.conflict, result.revision == remote.revision + 1 else {
+            throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
+        }
+        return try .init(
+            vaultID: remote.id,
+            vaultKey: setup.vaultKey,
+            wrappedKey: setup.envelope.wrappedKey,
+            revision: result.revision,
+            documentHash: Data(SHA256.hash(data: try exported.document.encoded())),
+            includesCredentials: exported.document.records.contains { $0.type == .credential }
+        )
     }
 }
 
