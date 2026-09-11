@@ -195,6 +195,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="cloud-vault-sync"/u);
   assert.match(html, /id="cloud-logout"/u);
   assert.match(html, /id="cloud-vault-recovery-form"/u);
+  assert.match(html, /id="cloud-vault-recovery-account-password"[^>]*name="accountPassword"[^>]*autocomplete="current-password"/u);
+  assert.match(html, /recovery-фразу один раз/iu);
+  assert.match(html, /Сразу после обычного входа поле можно оставить пустым/u);
   assert.match(html, /id="local-vault-conflicts-form"/u);
   assert.match(html, /id="local-vault-conflicts-apply"[^>]*disabled/u);
   assert.match(html, /id="team-vault"[^>]*hidden/u);
@@ -310,7 +313,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /backgroundPersonalVaultSync/u);
   assert.match(application, /15_000/u);
   assert.match(application, /vault\.lock\(\)/u);
-  assert.match(application, /vault\.rewrap\(accountVaultMigrationPassphrase\)/u);
+  assert.match(application, /let migrationPassphrase = accountVaultMigrationPassphrase/u);
+  assert.match(application, /if \(!accountPassword\) throw new Error\("account_password_required"\)/u);
+  assert.match(application, /email: currentUser\.email,[\s\S]*password: accountPassword/u);
+  assert.match(application, /vault\.rewrap\(migrationPassphrase\)/u);
+  assert.match(application, /Recovery-фраза не проверялась/u);
   assert.match(application, /переведена на автоматическую разблокировку паролем аккаунта/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
