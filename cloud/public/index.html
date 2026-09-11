@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=114">
+  <link rel="stylesheet" href="/styles.css?v=115">
 </head>
 <body>
   <main class="shell">
@@ -192,14 +192,14 @@
             <button type="button" data-workspace-target="local-vault">Открыть Personal Vault</button>
           </div>
           <div class="workspace-stats">
-            <button type="button" data-workspace-target="local-vault" data-record-filter="host"><span id="workspace-host-count">0</span><strong>Hosts</strong><small>RDP и SSH подключения</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="credential"><span id="workspace-credential-count">0</span><strong>Credentials</strong><small>Секреты и учётные записи</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="snippet"><span id="workspace-snippet-count">0</span><strong>Snippets</strong><small>Сохранённые команды</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding"><span id="workspace-forwarding-count">0</span><strong>Forwarding</strong><small>Туннели и правила</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="host"><span id="workspace-host-count">—</span><strong>Hosts</strong><small>RDP и SSH подключения</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="credential"><span id="workspace-credential-count">—</span><strong>Credentials</strong><small>Секреты и учётные записи</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="snippet"><span id="workspace-snippet-count">—</span><strong>Snippets</strong><small>Сохранённые команды</small></button>
+            <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding"><span id="workspace-forwarding-count">—</span><strong>Forwarding</strong><small>Туннели и правила</small></button>
           </div>
-          <div class="workspace-notice">
-            <strong>Ожидается первая синхронизация с Mac</strong>
-            <p>Локальные подключения появятся здесь после защищённой синхронизации Personal Vault с Mac.</p>
+          <div class="workspace-notice" id="workspace-vault-notice">
+            <strong>Personal Vault заблокирован</strong>
+            <p>Откройте Vault, чтобы увидеть личные подключения.</p>
           </div>
         </section>
 
@@ -215,8 +215,8 @@
       <div class="vault-panel vault-account-waiting" id="local-vault-waiting" hidden>
         <span class="vault-account-waiting-icon" aria-hidden="true">⌁</span>
         <div>
-          <h3>Personal Vault защищён</h3>
-          <p>Vault открывается паролем аккаунта во время обычного входа. Если браузер восстановил только сессию, выйдите и войдите снова — отдельная секретная фраза не нужна.</p>
+          <h3>Personal Vault заблокирован</h3>
+          <p>Войдите в аккаунт, чтобы увидеть личные подключения.</p>
         </div>
       </div>
 
@@ -312,15 +312,30 @@
       <div class="vault-heading">
         <div><p class="eyebrow">SELECTIVE REMOTE</p><h2>О проекте</h2></div>
       </div>
-      <div class="about-project-card">
-        <h3>Открытый клиент удалённых подключений для macOS</h3>
-        <p>RDP, SSH, SFTP, туннели и сквозное шифрование личных и командных Vault.</p>
-        <div class="resource-detail-actions">
-          <a class="button-link" href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">Проект на GitHub</a>
-          <a class="button-link secondary" href="https://yoomoney.ru/to/4100119600001192" target="_blank" rel="noreferrer">ЮMoney</a>
-          <a class="button-link secondary" href="https://boosty.to/pastfly/single-payment/donation/821124/target?share=target_link" target="_blank" rel="noreferrer">Boosty</a>
-          <a class="button-link secondary" href="https://messenger.sbrf.ru/sl/0pRZ8zDZzpoim1on3" target="_blank" rel="noreferrer">Сбер</a>
-        </div>
+      <div class="about-layout">
+        <article class="about-project-card about-hero-card">
+          <p class="eyebrow">OPEN SOURCE · macOS</p>
+          <h3>Все удалённые подключения в одном приложении</h3>
+          <p>Selective Remote объединяет RDP, SSH, SFTP, туннели, команды и зашифрованные Vaults — без передачи открытых данных серверу.</p>
+          <div class="about-highlights" aria-label="Возможности проекта">
+            <span><strong>RDP · SSH · SFTP</strong><small>Подключения и файлы</small></span>
+            <span><strong>Personal и Team</strong><small>Раздельные Vaults</small></span>
+            <span><strong>E2EE</strong><small>Шифрование на устройстве</small></span>
+          </div>
+          <a class="button-link" href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">Открыть проект на GitHub ↗</a>
+        </article>
+        <section class="about-support-card" aria-labelledby="about-support-title">
+          <div class="about-support-copy">
+            <span class="about-support-icon" aria-hidden="true">♥</span>
+            <div><p class="eyebrow">ПОДДЕРЖАТЬ РАЗРАБОТКУ</p><h3 id="about-support-title">Помогите проекту развиваться</h3><p>Поддержка помогает оплачивать инфраструктуру Cloud и уделять больше времени новым функциям, стабильности и безопасности.</p></div>
+          </div>
+          <div class="donation-grid">
+            <a href="https://yoomoney.ru/to/4100119600001192" target="_blank" rel="noreferrer"><strong>ЮMoney</strong><small>Разовый перевод</small><span>Перейти ↗</span></a>
+            <a href="https://boosty.to/pastfly/single-payment/donation/821124/target?share=target_link" target="_blank" rel="noreferrer"><strong>Boosty</strong><small>Поддержка автора</small><span>Перейти ↗</span></a>
+            <a href="https://messenger.sbrf.ru/sl/0pRZ8zDZzpoim1on3" target="_blank" rel="noreferrer"><strong>Сбер</strong><small>Перевод через банк</small><span>Перейти ↗</span></a>
+          </div>
+          <p class="about-support-note">Любая сумма добровольна. Основные возможности Selective Remote остаются открытыми.</p>
+        </section>
       </div>
     </section>
 
@@ -562,6 +577,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=114"></script>
+  <script type="module" src="/app.js?v=115"></script>
 </body>
 </html>

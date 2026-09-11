@@ -18,6 +18,7 @@ const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const snapshotKey = "personal";
 const syncKey = "personal-sync";
+const backupSnapshotKey = "personal-previous";
 const deviceKey = "browser-device";
 const exactUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
@@ -112,6 +113,10 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
     async save(value) {
       const snapshot = validatedSnapshot(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), snapshotKey));
+    },
+    async savePrevious(value) {
+      const snapshot = validatedSnapshot(value);
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), backupSnapshotKey));
     },
     async loadSync() {
       const value = await transaction(indexedDBValue, "readonly", (store) => store.get(syncKey));
@@ -398,6 +403,25 @@ export function createLocalVaultController({
       const nextDocument = validateVaultDocument(
         await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
       );
+      await repository.save(remoteSnapshot);
+      await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
+      snapshot = remoteSnapshot;
+      vaultKey = nextVaultKey;
+      document = nextDocument;
+      pendingConflicts = null;
+      return clone(document);
+    },
+
+    async replaceLockedWithRemote({ revision, envelope }, passphrase) {
+      if (await this.status() !== "locked") throw new Error("local_vault_not_locked");
+      const deviceID = await stableDeviceID();
+      const remoteSnapshot = validatedSnapshot({ revision, deviceID, envelope });
+      const nextVaultKey = await unwrapVaultKey(remoteSnapshot.envelope.wrappedKey, passphrase, cryptoValue);
+      const nextDocument = validateVaultDocument(
+        await decryptVaultEnvelope(nextVaultKey, remoteSnapshot.envelope, cryptoValue),
+      );
+      const previousSnapshot = validatedSnapshot(await repository.load());
+      if (typeof repository.savePrevious === "function") await repository.savePrevious(previousSnapshot);
       await repository.save(remoteSnapshot);
       await saveSyncMetadata({ serverRevision: revision, localRevision: revision });
       snapshot = remoteSnapshot;

@@ -18,18 +18,61 @@ const recordB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 function memoryRepository() {
   let snapshot = null;
+  let previous = null;
   let sync = null;
   let deviceID = null;
   return {
     async load() { return snapshot ? structuredClone(snapshot) : null; },
     async save(value) { snapshot = structuredClone(value); },
+    async savePrevious(value) { previous = structuredClone(value); },
     async loadSync() { return sync ? structuredClone(sync) : null; },
     async saveSync(value) { sync = structuredClone(value); },
     async loadDeviceID() { return deviceID; },
     async saveDeviceID(value) { deviceID = value; },
     snapshot() { return snapshot ? structuredClone(snapshot) : null; },
+    previous() { return previous ? structuredClone(previous) : null; },
   };
 }
+
+test("verified remote snapshot replaces an incompatible locked browser snapshot and keeps a backup", async () => {
+  const oldRepository = memoryRepository();
+  const oldVault = localVault(oldRepository, [deviceA]);
+  await oldVault.create("an older local wrapper password");
+  await oldVault.upsert({ id: recordA, type: "host", data: { title: "Old", address: "old.invalid" } });
+  oldVault.lock();
+
+  const cloudRepository = memoryRepository();
+  const cloudVault = localVault(cloudRepository, [deviceB]);
+  await cloudVault.create(passphrase);
+  await cloudVault.upsert({ id: recordB, type: "host", data: { title: "Cloud", address: "cloud.invalid" } });
+  const remote = await cloudVault.prepareUpload(4);
+  const previousSnapshot = oldRepository.snapshot();
+
+  await oldVault.replaceLockedWithRemote({ revision: 5, envelope: remote.envelope }, passphrase);
+
+  assert.equal(oldVault.document().records[0].data.address, "cloud.invalid");
+  assert.deepEqual(oldRepository.previous(), previousSnapshot);
+  assert.deepEqual(await oldVault.syncState(), { localRevision: 5, serverRevision: 5, dirty: false });
+});
+
+test("an invalid account wrapper cannot replace or back up the locked browser snapshot", async () => {
+  const oldRepository = memoryRepository();
+  const oldVault = localVault(oldRepository, [deviceA]);
+  await oldVault.create("an older local wrapper password");
+  oldVault.lock();
+  const before = oldRepository.snapshot();
+
+  const cloudRepository = memoryRepository();
+  const cloudVault = localVault(cloudRepository, [deviceB]);
+  await cloudVault.create("a different account password");
+  const remote = await cloudVault.prepareUpload(1);
+
+  await assert.rejects(
+    oldVault.replaceLockedWithRemote({ revision: 2, envelope: remote.envelope }, passphrase),
+  );
+  assert.deepEqual(oldRepository.snapshot(), before);
+  assert.equal(oldRepository.previous(), null);
+});
 
 function localVault(repository, ids) {
   let index = 0;
