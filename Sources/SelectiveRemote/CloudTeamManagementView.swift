@@ -22,6 +22,10 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var isBusy = false
     @State private var statusMessage: String?
     @State private var errorMessage: String?
+    @State private var synchronizingVaultID: UUID?
+    @State private var renamingVaultID: UUID?
+    @State private var vaultNameDraft = ""
+    @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
     var body: some View {
         NavigationSplitView {
@@ -90,6 +94,8 @@ struct SelectiveRemoteCloudTeamManagementView: View {
         .task { await loadTeams() }
         .onChange(of: selectedTeamID) { _, _ in
             latestInvitationURL = nil
+            renamingVaultID = nil
+            vaultNameDraft = ""
             if selectedTeam?.role != .owner, invitationRole == .admin {
                 invitationRole = .viewer
             }
@@ -319,11 +325,59 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             Section("Team Vaults") {
                 ForEach(vaults) { vault in
                     HStack {
-                        Label(vault.name, systemImage: "lock.square.stack.fill")
+                        if renamingVaultID == vault.id {
+                            TextField(
+                                UpdateLocalization.text(ru: "Название Vault", en: "Vault Name"),
+                                text: $vaultNameDraft
+                            )
+                            .textFieldStyle(.roundedBorder)
+                        } else {
+                            Label(vault.name, systemImage: "lock.square.stack.fill")
+                        }
                         Spacer()
                         Text("r\(vault.revision) · k\(vault.keyGeneration)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
+                        Button(UpdateLocalization.text(ru: "Открыть хосты", en: "Open Hosts")) {
+                            NotificationCenter.default.post(
+                                name: .selectiveRemoteOpenTeamHosts,
+                                object: nil
+                            )
+                            dismiss()
+                        }
+                        .buttonStyle(.bordered)
+                        Button(
+                            UpdateLocalization.text(ru: "Синхронизировать", en: "Synchronize"),
+                            systemImage: "arrow.triangle.2.circlepath"
+                        ) {
+                            synchronizeVault(vault)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(isBusy || synchronizingVaultID != nil)
+                        if team.role == .owner || team.role == .admin {
+                            if renamingVaultID == vault.id {
+                                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
+                                    renameVault(vault, team: team)
+                                }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(normalized(vaultNameDraft).isEmpty || isBusy)
+                                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) {
+                                    renamingVaultID = nil
+                                    vaultNameDraft = ""
+                                }
+                                .buttonStyle(.bordered)
+                            } else {
+                                Button(
+                                    UpdateLocalization.text(ru: "Переименовать", en: "Rename"),
+                                    systemImage: "pencil"
+                                ) {
+                                    renamingVaultID = vault.id
+                                    vaultNameDraft = vault.name
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(isBusy)
+                            }
+                        }
                     }
                 }
             }
@@ -562,6 +616,79 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 _ = try await client.createSharedVault(endpoint: endpoint, teamID: team.id, name: name)
                 newVaultName = ""
                 statusMessage = UpdateLocalization.text(ru: "Shared Vault создан.", en: "Shared Vault created.")
+                onInventoryChanged()
+                await loadSelectedTeam()
+            } catch {
+                errorMessage = error.localizedDescription
+                isBusy = false
+            }
+        }
+    }
+
+    private func synchronizeVault(_ vault: SelectiveRemoteCloudSharedVault) {
+        guard let deviceID = UUID(uuidString: storedDeviceID),
+              deviceID.isSelectiveRemoteCloudUUID
+        else {
+            errorMessage = UpdateLocalization.text(
+                ru: "Сначала войдите в Cloud на этом Mac и зарегистрируйте устройство.",
+                en: "Sign in to Cloud on this Mac and register the device first."
+            )
+            return
+        }
+        Task { @MainActor in
+            isBusy = true
+            synchronizingVaultID = vault.id
+            errorMessage = nil
+            defer {
+                synchronizingVaultID = nil
+                isBusy = false
+            }
+            do {
+                let report = try await SelectiveRemoteTeamVaultAutoSync.shared.synchronizeOnce(
+                    endpoint: endpoint,
+                    deviceID: deviceID
+                )
+                if report.failures > 0 || report.pendingWrappers > 0 || report.rotations > 0 {
+                    let detail = report.lastFailure.map { " \($0)" } ?? ""
+                    errorMessage = UpdateLocalization.text(
+                        ru: "Синхронизация завершена не полностью: ошибок \(report.failures), ожидают wrapper \(report.pendingWrappers), требуют ротации \(report.rotations).",
+                        en: "Synchronization was incomplete: \(report.failures) failures, \(report.pendingWrappers) pending wrappers, \(report.rotations) rotations required."
+                    ) + detail
+                } else {
+                    statusMessage = UpdateLocalization.text(
+                        ru: "Team Vaults синхронизированы: получено \(report.synchronizedVaults), отправлено \(report.uploadedVaults), выдано wrappers \(report.wrappersGranted).",
+                        en: "Team Vaults synchronized: \(report.synchronizedVaults) received, \(report.uploadedVaults) uploaded, \(report.wrappersGranted) wrappers granted."
+                    )
+                }
+                await loadSelectedTeam()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func renameVault(
+        _ vault: SelectiveRemoteCloudSharedVault,
+        team: SelectiveRemoteCloudTeam
+    ) {
+        let name = normalized(vaultNameDraft)
+        guard !name.isEmpty else { return }
+        Task { @MainActor in
+            isBusy = true
+            errorMessage = nil
+            do {
+                _ = try await client.renameSharedVault(
+                    endpoint: endpoint,
+                    teamID: team.id,
+                    vaultID: vault.id,
+                    name: name
+                )
+                renamingVaultID = nil
+                vaultNameDraft = ""
+                statusMessage = UpdateLocalization.text(
+                    ru: "Team Vault переименован.",
+                    en: "The Team Vault was renamed."
+                )
                 onInventoryChanged()
                 await loadSelectedTeam()
             } catch {

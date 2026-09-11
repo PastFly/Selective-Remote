@@ -881,6 +881,22 @@ export function initializeTeamWorkspace({
     grantWrappersButton.disabled = mode !== "wrappers" || !controller || selectedVault?.rotationRequired;
   }
 
+  function teamVaultSynchronizationErrorMessage(code) {
+    const messages = {
+      authentication_required: "Сессия Cloud истекла. Войдите снова.",
+      device_approval_required: "Это устройство ещё не одобрено для Team Vault.",
+      team_vault_key_unavailable: "Для этого браузера пока нет wrapper ключа. Откройте «Управление Cloud» в приложении и запустите синхронизацию Team Vault.",
+      team_vault_rotation_required: "Синхронизация заморожена до безопасной ротации ключа.",
+      remote_revision_regressed: "Cloud вернул более старую ревизию; запись остановлена для защиты данных.",
+      team_vault_generation_changed: "Поколение ключа изменилось. Повторно откройте Team Vault после синхронизации доверенного устройства.",
+      invalid_remote_revision: "Cloud не подтвердил ожидаемую следующую ревизию; локальная копия сохранена.",
+      invalid_local_team_vault: "Локальная зашифрованная копия несовместима или повреждена; серверная версия не перезаписана.",
+      team_vault_storage_failed: "Браузер не смог сохранить локальную зашифрованную копию.",
+    };
+    return messages[code]
+      ?? "Синхронизация не выполнена; локальная зашифрованная копия сохранена.";
+  }
+
   function updateTeamMessage() {
     if (!selectedTeam) return;
     if (activeView === "teams") {
@@ -1485,7 +1501,7 @@ export function initializeTeamWorkspace({
         setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
       } else {
         setRecoveryControls(teamVaultRecoveryMode({ errorCode: code || "team_vault_sync_failed" }));
-        setText(workspaceStatus, "Автоматическая синхронизация временно остановилась; локальная зашифрованная копия сохранена.");
+        setText(workspaceStatus, teamVaultSynchronizationErrorMessage(code));
       }
     }
   }
@@ -1558,7 +1574,7 @@ export function initializeTeamWorkspace({
         ? "Запись заморожена: после отзыва участника или устройства требуется полная ротация ключа."
         : code === "team_vault_key_unavailable"
           ? "Для этого устройства пока нет wrapper ключа. Ожидаем автоматическую выдачу от любого активного участника с текущим ключом."
-          : "Shared Vault не открыт; локальные данные не изменены. Доступно безопасное повторение.");
+          : teamVaultSynchronizationErrorMessage(code));
     } finally {
       startBackgroundSync();
     }
@@ -1996,7 +2012,7 @@ export function initializeTeamWorkspace({
         ? "Синхронизация заморожена до безопасной ротации ключа."
         : code === "team_vault_key_unavailable"
           ? "Wrapper ещё недоступен. Любой активный участник с текущим ключом выдаст его автоматически."
-          : "Синхронизация не выполнена; локальная зашифрованная копия сохранена.");
+          : teamVaultSynchronizationErrorMessage(code));
     } finally {
       startBackgroundSync();
     }

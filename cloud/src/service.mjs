@@ -512,6 +512,17 @@ export class CloudService {
     return { vault: publicSharedVault(result.vault) };
   }
 
+  async renameSharedVault(session, teamID, vaultID, input, idempotencyKey) {
+    const result = await this.store.renameSharedVault({
+      actorUserID: session.user_id,
+      teamID,
+      vaultID,
+      name: validateTeamName(input?.name, "invalid_shared_vault"),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    return { vault: publicSharedVault(result.vault) };
+  }
+
   async approveDeviceKey(session, deviceID, input, idempotencyKey) {
     return this.store.approveDeviceKey({
       actorUserID: session.user_id,

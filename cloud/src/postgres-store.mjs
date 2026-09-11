@@ -1220,6 +1220,37 @@ export class PostgresStore {
     });
   }
 
+  async renameSharedVault({ actorUserID, teamID, vaultID, name, idempotencyKey }) {
+    return this.withTeamMutation(actorUserID, "team.vault.rename", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      if (!actor) throw new Error("team_not_found");
+      requireTeamPermission(actor.role, "rename_vault");
+      let vault;
+      try {
+        const result = await client.query(
+          `UPDATE shared_vaults SET name = $3, updated_at = now()
+           WHERE id = $1 AND team_id = $2 AND archived_at IS NULL
+           RETURNING id, team_id, name, revision, key_generation, rotation_required,
+             created_at, updated_at`,
+          [vaultID, teamID, name],
+        );
+        vault = result.rows[0];
+      } catch (error) {
+        if (error?.code === "23505") throw new Error("shared_vault_exists");
+        throw error;
+      }
+      if (!vault) throw new Error("team_not_found");
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.vault_renamed",
+        targetVaultID: vaultID,
+        metadata: { name },
+      });
+      return { vault };
+    });
+  }
+
   async listTeamKeyDevices(teamID, vaultID, actorUserID, actorDeviceID) {
     const access = await this.pool.query(
       `SELECT membership.role,

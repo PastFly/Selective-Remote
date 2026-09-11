@@ -254,8 +254,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=125/u);
-  assert.match(html, /\/app\.js\?v=125/u);
+  assert.match(html, /\/styles\.css\?v=126/u);
+  assert.match(html, /\/app\.js\?v=126/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -445,6 +445,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
   assert.match(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
+  assert.match(application, /teamVaultSynchronizationErrorMessage/u);
+  assert.match(application, /Управление Cloud/u);
   assert.match(application, /teamVaultRecoveryMode/u);
   assert.match(application, /setRecoveryControls/u);
   assert.doesNotMatch(application, /Owner\/Admin может выдать недостающие wrappers/u);

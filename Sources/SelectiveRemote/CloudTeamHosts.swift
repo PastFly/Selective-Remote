@@ -555,8 +555,16 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
     @State private var searchText = ""
     @State private var selectedFolder = ""
-    @State private var expandedTeamIDs: Set<UUID> = []
-    @State private var expandedFolderKeys: Set<String> = []
+    @State private var expandedTeamIDs = Set(
+        (UserDefaults.standard.stringArray(
+            forKey: "SelectiveRemote.team-host.expanded-teams.v1"
+        ) ?? []).compactMap { UUID(uuidString: $0) }
+    )
+    @State private var expandedFolderKeys = Set(
+        UserDefaults.standard.stringArray(
+            forKey: "SelectiveRemote.team-host.expanded-folders.v1"
+        ) ?? []
+    )
     @AppStorage("SelectiveRemote.cloud.endpoint.v1") private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
@@ -639,7 +647,11 @@ struct SelectiveRemoteTeamHostsView: View {
                             DisclosureGroup(
                                 isExpanded: expansionBinding(for: teamID)
                             ) {
-                                OutlineGroup(outlineItems(in: teamID), children: \.children) { item in
+                                SelectiveRemotePersistentOutlineRows(
+                                    items: outlineItems(in: teamID),
+                                    children: \.children,
+                                    expandedIDs: $expandedFolderKeys
+                                ) { item in
                                     switch item.kind {
                                     case let .folder(path, name):
                                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
@@ -757,11 +769,23 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .onAppear {
             normalizeSelection()
-            expandNewHierarchy()
+            restoreOrInitializeExpansion()
         }
-        .onChange(of: store.hosts.map(\.id)) { _, _ in
+        .onChange(of: store.hosts.map { "\($0.id.uuidString):\($0.profile.group)" }) { _, _ in
             normalizeSelection()
-            expandNewHierarchy()
+            sanitizeExpansion()
+        }
+        .onChange(of: expandedTeamIDs) { _, value in
+            UserDefaults.standard.set(
+                value.map(\.canonicalCloudString).sorted(),
+                forKey: "SelectiveRemote.team-host.expanded-teams.v1"
+            )
+        }
+        .onChange(of: expandedFolderKeys) { _, value in
+            UserDefaults.standard.set(
+                value.sorted(),
+                forKey: "SelectiveRemote.team-host.expanded-folders.v1"
+            )
         }
         .onChange(of: selectedHostID) { _, _ in resetConnectionFields() }
         .sheet(item: $editorRequest) { request in
@@ -1126,7 +1150,7 @@ struct SelectiveRemoteTeamHostsView: View {
         let scopedHosts = store.hosts.filter {
             $0.teamID == host.teamID && $0.vaultID == host.vaultID
         }
-        var grouped = Dictionary(grouping: scopedHosts) { candidate in
+        let grouped = Dictionary(grouping: scopedHosts) { candidate in
             candidate.id == host.id
                 ? folder
                 : SelectiveRemoteHostFolderPath.normalize(candidate.profile.group)
@@ -1187,23 +1211,34 @@ struct SelectiveRemoteTeamHostsView: View {
         )
     }
 
-    private func folderExpansionBinding(teamID: UUID, folder: String) -> Binding<Bool> {
-        let key = "\(teamID.uuidString.lowercased())/\(folder)"
-        return Binding(
-            get: { expandedFolderKeys.contains(key) },
-            set: { expanded in
-                if expanded { expandedFolderKeys.insert(key) }
-                else { expandedFolderKeys.remove(key) }
-            }
-        )
+    private func restoreOrInitializeExpansion() {
+        let defaults = UserDefaults.standard
+        let teamKey = "SelectiveRemote.team-host.expanded-teams.v1"
+        let folderKey = "SelectiveRemote.team-host.expanded-folders.v1"
+        if defaults.object(forKey: teamKey) == nil {
+            expandedTeamIDs = Set(store.hosts.map(\.teamID))
+        }
+        if defaults.object(forKey: folderKey) == nil {
+            expandedFolderKeys = Set(teamIDs.flatMap { teamID in
+                teamFolderIDs(outlineItems(in: teamID))
+            })
+        }
+        sanitizeExpansion()
     }
 
-    private func expandNewHierarchy() {
-        for host in store.hosts {
-            expandedTeamIDs.insert(host.teamID)
-            expandedFolderKeys.insert(
-                "\(host.teamID.uuidString.lowercased())/\(host.profile.group)"
-            )
+    private func sanitizeExpansion() {
+        let validTeams = Set(store.hosts.map(\.teamID))
+        expandedTeamIDs.formIntersection(validTeams)
+        let validFolders = Set(teamIDs.flatMap { teamID in
+            teamFolderIDs(outlineItems(in: teamID))
+        })
+        expandedFolderKeys.formIntersection(validFolders)
+    }
+
+    private func teamFolderIDs(_ items: [SelectiveRemoteTeamHostOutlineItem]) -> [String] {
+        items.flatMap { item -> [String] in
+            guard let children = item.children else { return [] }
+            return [item.id] + teamFolderIDs(children)
         }
     }
 

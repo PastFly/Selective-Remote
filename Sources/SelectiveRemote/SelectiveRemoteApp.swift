@@ -11,6 +11,12 @@ extension Notification.Name {
     static let selectiveRemoteCloudTeamMembershipChanged = Notification.Name(
         "SelectiveRemote.cloudTeamMembershipChanged"
     )
+    static let selectiveRemoteOpenTeamHosts = Notification.Name(
+        "SelectiveRemote.openTeamHosts"
+    )
+    static let selectiveRemoteTeamVaultSyncNow = Notification.Name(
+        "SelectiveRemote.teamVaultSyncNow"
+    )
 }
 
 @MainActor
@@ -137,7 +143,7 @@ struct SelectiveRemoteApp: App {
     @StateObject private var appAppearance = AppAppearanceStore.shared
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
-    private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync()
+    private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync.shared
 
     private var menuBarSystemImage: String {
         if appLock.isLocked { return "lock.fill" }
@@ -183,6 +189,11 @@ struct SelectiveRemoteApp: App {
                             try? await Task.sleep(for: .seconds(3))
                             await downloadPersonalVaultChanges()
                         }
+                    }
+                    .onReceive(NotificationCenter.default.publisher(
+                        for: .selectiveRemoteTeamVaultSyncNow
+                    )) { _ in
+                        Task { _ = try? await teamVaultAutoSync.synchronizeConfiguredAccountNow() }
                     }
             }
             .onChange(of: appLock.isLocked) { _, _ in

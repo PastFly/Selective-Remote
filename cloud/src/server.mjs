@@ -382,6 +382,18 @@ async function route(request, response) {
           () => service.getSharedVault(session, teamVaultMatch[1], teamVaultMatch[2]),
         );
       }
+      if (method === "PATCH") {
+        return handleOperation(
+          response,
+          async () => service.renameSharedVault(
+            session,
+            teamVaultMatch[1],
+            teamVaultMatch[2],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          ),
+        );
+      }
       if (method === "PUT") {
         try {
           const result = await service.putSharedVault(
