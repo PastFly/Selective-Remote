@@ -58,6 +58,36 @@ enum SelectiveRemoteCloudError: LocalizedError, Equatable {
                     ru: "Сервер ещё не настроен для отправки письма подтверждения.",
                     en: "The server is not configured to send verification email yet."
                 )
+            case "account_not_found":
+                UpdateLocalization.text(
+                    ru: "Пользователь с таким username не найден.",
+                    en: "No user with that username was found."
+                )
+            case "team_member_exists":
+                UpdateLocalization.text(
+                    ru: "Этот пользователь уже состоит в команде.",
+                    en: "This user is already a Team member."
+                )
+            case "username_exists":
+                UpdateLocalization.text(
+                    ru: "Этот username уже занят.",
+                    en: "This username is already taken."
+                )
+            case "team_access_denied":
+                UpdateLocalization.text(
+                    ru: "Для этого действия недостаточно прав в команде.",
+                    en: "Your Team role does not allow this action."
+                )
+            case "team_not_found":
+                UpdateLocalization.text(
+                    ru: "Команда больше не существует или недоступна.",
+                    en: "The Team no longer exists or is unavailable."
+                )
+            case "team_last_owner":
+                UpdateLocalization.text(
+                    ru: "В команде должен остаться хотя бы один владелец.",
+                    en: "A Team must keep at least one owner."
+                )
             default:
                 UpdateLocalization.text(
                     ru: "Cloud недоступен (HTTP \(status)\(code.map { ": \($0)" } ?? "")).",

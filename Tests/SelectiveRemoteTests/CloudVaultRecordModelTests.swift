@@ -193,6 +193,55 @@ struct CloudVaultRecordModelTests {
         #expect(resolved.tombstones[0].deletedAt == secondTime)
     }
 
+    @Test("Automatic policy keeps the newest concurrent value and joins histories")
+    func automaticNewestResolution() throws {
+        let older = try record(
+            id: recordA,
+            version: [deviceA: 2],
+            value: "older",
+            modifiedAt: firstTime
+        )
+        let newer = try record(
+            id: recordA,
+            version: [deviceB: 1],
+            value: "newer",
+            modifiedAt: secondTime
+        )
+        let result = try SelectiveRemoteVaultDocument(records: [older]).mergedKeepingNewest(
+            with: SelectiveRemoteVaultDocument(records: [newer]),
+            deviceID: deviceC,
+            resolvedAt: secondTime
+        )
+
+        #expect(result.resolvedConflictCount == 1)
+        #expect(result.document.records[0].data == .object(["value": .string("newer")]))
+        #expect(result.document.records[0].version.counters == [deviceA: 2, deviceB: 1, deviceC: 1])
+    }
+
+    @Test("Equal-time concurrent deletion wins automatically")
+    func automaticDeletionResolution() throws {
+        let edited = try record(
+            id: recordA,
+            version: [deviceA: 2],
+            value: "edited",
+            modifiedAt: secondTime
+        )
+        let deleted = try SelectiveRemoteVaultTombstone(
+            id: recordA,
+            version: .init([deviceA: 1, deviceB: 1]),
+            deletedAt: secondTime
+        )
+        let result = try SelectiveRemoteVaultDocument(records: [edited]).mergedKeepingNewest(
+            with: SelectiveRemoteVaultDocument(tombstones: [deleted]),
+            deviceID: deviceC,
+            resolvedAt: secondTime
+        )
+
+        #expect(result.resolvedConflictCount == 1)
+        #expect(result.document.records.isEmpty)
+        #expect(result.document.tombstones.count == 1)
+    }
+
     private func record(
         id: UUID,
         version: [UUID: Int],

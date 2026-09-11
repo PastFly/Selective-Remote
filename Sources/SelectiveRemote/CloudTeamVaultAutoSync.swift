@@ -142,11 +142,45 @@ actor SelectiveRemoteTeamVaultAutoSync {
                                 vault: vault,
                                 value: value
                             ))
+                        case let .conflict(conflict):
+                            let resolved = try await coordinator.resolveRecordConflictsKeepingNewest(
+                                conflict,
+                                resolvedAt: Self.timestamp(Date()),
+                                teamID: team.id,
+                                vaultID: vault.id,
+                                identity: identity
+                            )
+                            switch resolved {
+                            case let .uploaded(value, _):
+                                report.uploadedVaults += 1
+                                materialized.append(Self.materializedSnapshot(
+                                    team: team,
+                                    vault: vault,
+                                    value: value
+                                ))
+                            case .conflict:
+                                report.conflicts += 1
+                            }
+                        }
+                    case let .conflict(conflict):
+                        let resolved = try await coordinator.resolveRecordConflictsKeepingNewest(
+                            conflict,
+                            resolvedAt: Self.timestamp(Date()),
+                            teamID: team.id,
+                            vaultID: vault.id,
+                            identity: identity
+                        )
+                        switch resolved {
+                        case let .uploaded(value, _):
+                            report.uploadedVaults += 1
+                            materialized.append(Self.materializedSnapshot(
+                                team: team,
+                                vault: vault,
+                                value: value
+                            ))
                         case .conflict:
                             report.conflicts += 1
                         }
-                    case .conflict:
-                        report.conflicts += 1
                     }
                 } catch is CancellationError {
                     throw CancellationError()
@@ -179,6 +213,12 @@ actor SelectiveRemoteTeamVaultAutoSync {
             keyGeneration: value.snapshot.keyGeneration,
             payload: value.payload
         )
+    }
+
+    private static func timestamp(_ value: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: value)
     }
 
     private func runLoop() async {

@@ -173,6 +173,46 @@ function normalizedConflictEntity(entity, id) {
   return { kind: entity.kind, value };
 }
 
+function entityTimestamp(entity) {
+  return entity.kind === "tombstone" ? entity.value.deletedAt : entity.value.modifiedAt;
+}
+
+export function newestVaultConflictChoice(conflict) {
+  if (!conflict || typeof conflict !== "object") throw new Error("invalid_vault_conflict");
+  const id = normalizedUUID(conflict.id, "invalid_vault_conflict");
+  const local = normalizedConflictEntity(conflict.local, id);
+  const remote = normalizedConflictEntity(conflict.remote, id);
+  const localTimestamp = entityTimestamp(local);
+  const remoteTimestamp = entityTimestamp(remote);
+  if (localTimestamp !== remoteTimestamp) return localTimestamp > remoteTimestamp ? "local" : "remote";
+
+  // Equal-time edit/delete races must never resurrect a deleted record. Equal-time
+  // edit/edit races use canonical content as a stable, order-independent fallback.
+  if (local.kind !== remote.kind) return local.kind === "tombstone" ? "local" : "remote";
+  return canonicalEntity(local) >= canonicalEntity(remote) ? "local" : "remote";
+}
+
+export function resolveVaultConflictsByNewest(documentValue, conflicts, {
+  deviceID,
+  resolvedAt = new Date().toISOString(),
+} = {}) {
+  if (!Array.isArray(conflicts)) throw new Error("invalid_vault_conflict");
+  let document = validateVaultDocument(documentValue);
+  for (const conflict of conflicts) {
+    const winnerTimestamp = [
+      entityTimestamp(normalizedConflictEntity(conflict.local, conflict.id)),
+      entityTimestamp(normalizedConflictEntity(conflict.remote, conflict.id)),
+      normalizedTimestamp(resolvedAt, "invalid_modified_at"),
+    ].sort().at(-1);
+    document = resolveVaultConflict(document, conflict, {
+      choice: newestVaultConflictChoice(conflict),
+      deviceID,
+      resolvedAt: winnerTimestamp,
+    });
+  }
+  return document;
+}
+
 export function createEmptyVaultDocument() {
   return { schemaVersion: vaultDocumentSchemaVersion, records: [], tombstones: [] };
 }

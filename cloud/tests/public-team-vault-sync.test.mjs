@@ -271,7 +271,7 @@ test("a changed uncommitted initialization is never discarded for a concurrent r
   assert.equal(controllerA.document().records[0].data.title, "Local");
 });
 
-test("two Team devices merge causal updates and require explicit choices for concurrent records", async () => {
+test("two Team devices automatically keep the newer concurrent record", async () => {
   const a = await device(deviceA, membershipA);
   const b = await device(deviceB, membershipB);
   const server = sharedServer([a.keyDevice, b.keyDevice]);
@@ -306,15 +306,6 @@ test("two Team devices merge causal updates and require explicit choices for con
     { status: "uploaded", revision: 2 },
   );
 
-  const conflict = await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" });
-  assert.equal(conflict.status, "conflict");
-  assert.equal(conflict.conflicts.length, 1);
-  assert.equal(conflict.conflicts[0].local.value.data.title, "B");
-  assert.equal(conflict.conflicts[0].remote.value.data.title, "A");
-  await controllerB.resolveConflicts({
-    revision: conflict.revision,
-    resolutions: [{ id: recordID, choice: "local" }],
-  });
   assert.deepEqual(
     await synchronizeTeamVault({ client: clientB, controller: controllerB, role: "editor" }),
     { status: "uploaded", revision: 3 },
@@ -413,7 +404,7 @@ test("competing rotations commit once and never replace the losing local snapsho
   assert.equal(server.inspect().keyGeneration, 2);
 });
 
-test("rotation stops for an explicit causal conflict and resumes only after every choice", async () => {
+test("rotation automatically resolves a causal conflict before replacing the key", async () => {
   const a = await device(deviceA, membershipA);
   const b = await device(deviceB, membershipB);
   const server = sharedServer([a.keyDevice, b.keyDevice]);
@@ -434,14 +425,6 @@ test("rotation stops for an explicit causal conflict and resumes only after ever
   await synchronizeTeamVault({ client: clientA, controller: controllerA, role: "owner" });
   server.requireRotation([a.keyDevice, b.keyDevice]);
 
-  const conflict = await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" });
-  assert.equal(conflict.status, "conflict");
-  assert.equal(conflict.conflicts.length, 1);
-  assert.equal(server.inspect().rotationRequired, true);
-  await controllerB.resolveConflicts({
-    revision: conflict.revision,
-    resolutions: [{ id: recordID, choice: "local" }],
-  });
   assert.deepEqual(
     await rotateTeamVault({ client: clientB, controller: controllerB, role: "admin" }),
     { status: "rotated", revision: 3, keyGeneration: 2 },

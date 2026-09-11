@@ -94,7 +94,7 @@ test("macOS automatically provisions and synchronizes Team Vaults while unlocked
   assert.match(coordinator, /actor\.membershipID == remoteVersion\.wrapper\.membershipID/);
   assert.match(autoSync, /pollInterval: Duration = \.seconds\(15\)/);
   assert.match(autoSync, /case \.localChanges:/);
-  assert.match(autoSync, /case \.conflict:/);
+  assert.match(autoSync, /resolveRecordConflictsKeepingNewest/u);
   assert.doesNotMatch(autoSync, /func initialize\(/);
   assert.match(app, /appLock\.isLocked/);
   assert.match(app, /teamVaultAutoSync\.stop\(\)/);
@@ -465,6 +465,23 @@ test("macOS surfaces username Team invitations and uses a roomier settings windo
   assert.match(settings, /\.frame\(minWidth: 760, idealWidth: 820, minHeight: 600, idealHeight: 680\)/u);
 });
 
+test("macOS Team workspace is wide, action-oriented, and maps invitation errors", async () => {
+  const [management, client, records, sync] = await Promise.all([
+    readFile(new URL("CloudTeamManagementView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudVaultRecordModel.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(management, /minWidth: 1_020/u);
+  assert.match(management, /HSplitView/u);
+  assert.match(management, /Пригласить по username/u);
+  assert.match(management, /Активные приглашения/u);
+  assert.match(client, /case "team_member_exists"/u);
+  assert.match(client, /case "account_not_found"/u);
+  assert.match(records, /mergedKeepingNewest/u);
+  assert.match(sync, /mergedKeepingNewest/u);
+});
+
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
   const [sync, crypto, settings, app, snippets] = await Promise.all([
@@ -487,7 +504,7 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /remote\.revision > material\.revision/u);
   assert.match(sync, /func acceptDownload\(/u);
   assert.match(sync, /func mergeConcurrent\(/u);
-  assert.match(sync, /tombstone\.deletedAt >= record\.modifiedAt/u);
+  assert.match(sync, /mergedKeepingNewest/u);
   assert.match(sync, /if concurrentChange \{ return \}/u);
   assert.match(app, /runPersonalVaultInboundSyncLoop/u);
   assert.match(app, /Task\.sleep\(for: \.seconds\(15\)\)/u);

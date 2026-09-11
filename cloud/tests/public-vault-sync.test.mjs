@@ -74,13 +74,13 @@ test("an invalid account wrapper cannot replace or back up the locked browser sn
   assert.equal(oldRepository.previous(), null);
 });
 
-function localVault(repository, ids) {
+function localVault(repository, ids, nowValue = "2026-09-04T00:00:00.000Z") {
   let index = 0;
   return createLocalVaultController({
     repository,
     cryptoValue: webcrypto,
     randomUUID: () => ids[index++],
-    now: () => "2026-09-04T00:00:00.000Z",
+    now: () => nowValue,
   });
 }
 
@@ -243,11 +243,11 @@ test("remote and offline local changes merge locally before one conditional uplo
   assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 3, dirty: false });
 });
 
-test("concurrent record conflict blocks upload and preserves the local document", async () => {
+test("concurrent records automatically keep the newer version and upload the joined history", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
-  const vaultA = localVault(repoA, [deviceA]);
-  const vaultB = localVault(repoB, [deviceB]);
+  const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
+  const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
   await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
@@ -260,21 +260,25 @@ test("concurrent record conflict blocks upload and preserves the local document"
   const client = {
     session: () => ({ id: userID }),
     getVault: async () => remoteValue(2, remote.envelope),
-    putVault: async () => { putCalls += 1; throw new Error("must_not_upload"); },
+    putVault: async (_scope, envelope) => {
+      putCalls += 1;
+      assert.equal(envelope.baseRevision, 2);
+      return { conflict: false, revision: 3 };
+    },
   };
 
   const result = await synchronizeVault({ client, vault: vaultA });
-  assert.equal(result.status, "conflict");
-  assert.equal(result.conflicts.length, 1);
-  assert.equal(putCalls, 0);
-  assert.equal(vaultA.document().records[0].data.address, "local.invalid");
+  assert.deepEqual(result, { status: "uploaded", revision: 3 });
+  assert.equal(putCalls, 1);
+  assert.equal(vaultA.document().records[0].data.address, "remote.invalid");
+  assert.deepEqual(vaultA.document().records[0].version, { [deviceA]: 2, [deviceB]: 1 });
 });
 
-test("an explicit complete conflict choice joins histories and uploads from the observed remote revision", async () => {
+test("automatic newest resolution includes unrelated remote records in one conditional upload", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
-  const vaultA = localVault(repoA, [deviceA]);
-  const vaultB = localVault(repoB, [deviceB]);
+  const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
+  const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
   await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
@@ -296,37 +300,19 @@ test("an explicit complete conflict choice joins histories and uploads from the 
     },
   };
 
-  const conflict = await synchronizeVault({ client, vault: vaultA });
-  assert.equal(conflict.status, "conflict");
-  assert.deepEqual(vaultA.pendingConflicts(), { revision: 2, conflicts: conflict.conflicts });
-  assert.equal(vaultA.document().records.some((record) => record.id === recordB), false);
-
-  await assert.rejects(
-    vaultA.resolveConflicts({ revision: 2, resolutions: [] }),
-    /incomplete_conflict_resolution/,
-  );
-  assert.deepEqual(
-    await vaultA.resolveConflicts({
-      revision: 2,
-      resolutions: [{ id: recordA, choice: "local" }],
-    }),
-    { revision: 2, localRevision: 3, conflictsResolved: 1 },
-  );
+  assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
   assert.equal(vaultA.pendingConflicts(), null);
   assert.deepEqual(vaultA.document().records.map((record) => record.id), [recordA, recordB]);
-  assert.equal(vaultA.document().records[0].data.address, "local.invalid");
-  assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 2, dirty: true });
-
-  assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
+  assert.equal(vaultA.document().records[0].data.address, "remote.invalid");
   assert.equal(uploadedBase, 2);
   assert.deepEqual(await vaultA.syncState(), { localRevision: 3, serverRevision: 3, dirty: false });
 });
 
-test("local edits invalidate a pending conflict set instead of applying a stale choice", async () => {
+test("a local edit after automatic resolution starts a fresh dirty revision", async () => {
   const repoA = memoryRepository();
   const repoB = memoryRepository();
-  const vaultA = localVault(repoA, [deviceA]);
-  const vaultB = localVault(repoB, [deviceB]);
+  const vaultA = localVault(repoA, [deviceA], "2026-09-04T01:00:00.000Z");
+  const vaultB = localVault(repoB, [deviceB], "2026-09-04T02:00:00.000Z");
   await vaultA.create(passphrase);
   const initial = await vaultA.prepareUpload(0);
   await vaultA.markSynced({ serverRevision: 1, localRevision: initial.localRevision });
@@ -337,17 +323,13 @@ test("local edits invalidate a pending conflict set instead of applying a stale 
   const client = {
     session: () => ({ id: userID }),
     getVault: async () => remoteValue(2, remote.envelope),
-    putVault: async () => { throw new Error("must_not_upload"); },
+    putVault: async () => ({ conflict: false, revision: 3 }),
   };
 
-  const conflict = await synchronizeVault({ client, vault: vaultA });
-  assert.equal(conflict.status, "conflict");
+  assert.deepEqual(await synchronizeVault({ client, vault: vaultA }), { status: "uploaded", revision: 3 });
   await vaultA.upsert({ id: recordB, type: "snippet", data: { title: "New local edit", body: "date" } });
   assert.equal(vaultA.pendingConflicts(), null);
-  await assert.rejects(
-    vaultA.resolveConflicts({ revision: 2, resolutions: [{ id: recordA, choice: "remote" }] }),
-    /invalid_pending_conflicts/,
-  );
+  assert.deepEqual(await vaultA.syncState(), { localRevision: 4, serverRevision: 3, dirty: true });
 });
 
 test("a server-side optimistic conflict never marks local data as synchronized", async () => {
