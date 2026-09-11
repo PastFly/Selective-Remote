@@ -174,6 +174,15 @@ enum SelectiveRemotePersonalVaultImporter {
         value.id = record.id
         value.friendlyName = string(data["title"]) ?? address
         value.username = string(data["username"]) ?? ""
+        value.group = SelectiveRemoteHostFolderPath.normalize(string(data["folder"]) ?? "")
+        value.profileDescription = String((string(data["description"]) ?? "").prefix(2_048))
+        if case let .array(tagValues)? = data["tags"] {
+            value.tags = Array(tagValues.compactMap(string).prefix(24))
+        }
+        if (type == .ssh || type == .telnet), let port = integer(data["port"]),
+           (1 ... 65_535).contains(port) {
+            value.sshPort = port
+        }
         if type == .serial { value.serialDevicePath = address } else { value.host = address }
         return value
     }
@@ -269,6 +278,13 @@ enum SelectiveRemotePersonalVaultImporter {
     private static func string(_ value: SelectiveRemoteJSONValue?) -> String? {
         guard case let .string(result)? = value else { return nil }
         return result
+    }
+
+    private static func integer(_ value: SelectiveRemoteJSONValue?) -> Int? {
+        guard case let .number(result)? = value, result.rounded() == result,
+              result >= Double(Int.min), result <= Double(Int.max)
+        else { return nil }
+        return Int(result)
     }
 
     private static func decode<T: Decodable>(_ value: String, recordID: UUID) throws -> T {

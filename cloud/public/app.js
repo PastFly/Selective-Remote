@@ -113,6 +113,80 @@ export function sortLocalVaultRecords(records, mode = "modified-desc") {
   return values.sort((a, b) => String(b.modifiedAt ?? "").localeCompare(String(a.modifiedAt ?? "")));
 }
 
+function decodePortableRecord(value) {
+  const text = String(value ?? "");
+  if (!text || text.length > 1_048_576) throw new Error("invalid_portable_record");
+  const normalized = text.replace(/-/gu, "+").replace(/_/gu, "/");
+  const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
+  const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
+  const decoded = JSON.parse(new TextDecoder().decode(bytes));
+  if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) throw new Error("invalid_portable_record");
+  return decoded;
+}
+
+function encodePortableRecord(value) {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+}
+
+export function personalHostEditorValues(record) {
+  const data = record?.data ?? {};
+  let profile = null;
+  try { if (data.profile) profile = decodePortableRecord(data.profile); } catch { /* outer fields remain usable */ }
+  const connectionType = String(profile?.connectionType ?? data.connectionType ?? "ssh");
+  const address = connectionType === "serial"
+    ? String(profile?.serialDevicePath ?? data.address ?? "")
+    : String(profile?.host ?? data.address ?? "");
+  return {
+    title: String(profile?.friendlyName ?? data.title ?? ""),
+    address,
+    protocol: ["ssh", "rdp", "telnet", "serial"].includes(connectionType) ? connectionType : "ssh",
+    port: Number(profile?.sshPort ?? data.port ?? (connectionType === "telnet" ? 23 : connectionType === "rdp" ? 3389 : 22)),
+    username: String(profile?.username ?? data.username ?? ""),
+    folder: String(profile?.group ?? data.folder ?? ""),
+    tags: Array.isArray(profile?.tags ?? data.tags) ? (profile?.tags ?? data.tags).join(", ") : "",
+    description: String(profile?.profileDescription ?? data.description ?? ""),
+  };
+}
+
+export function personalHostRecordData({ title, address, protocol, port, username, folder, tags, description, baseData = null }) {
+  const normalizedProtocol = String(protocol ?? "ssh");
+  const normalizedPort = Number(port || (normalizedProtocol === "telnet" ? 23 : normalizedProtocol === "rdp" ? 3389 : 22));
+  const normalizedUsername = String(username ?? "").trim();
+  const normalizedFolder = String(folder ?? "").trim();
+  const normalizedDescription = String(description ?? "").trim();
+  const normalizedTags = [...new Set(String(tags ?? "").split(",").map((value) => value.trim()).filter(Boolean))];
+  if (!["ssh", "rdp", "telnet", "serial"].includes(normalizedProtocol)
+    || !Number.isSafeInteger(normalizedPort) || normalizedPort < 1 || normalizedPort > 65_535
+    || normalizedUsername.length > 256 || normalizedFolder.length > 120 || normalizedDescription.length > 2_048
+    || normalizedTags.length > 24 || normalizedTags.some((value) => value.length > 64)) {
+    throw new Error("invalid_personal_host");
+  }
+  const data = localVaultRecordData("host", { title, target: address, secret: "" }, baseData);
+  data.connectionType = normalizedProtocol;
+  data.port = normalizedPort;
+  data.username = normalizedUsername;
+  if (normalizedFolder) data.folder = normalizedFolder; else delete data.folder;
+  if (normalizedTags.length) data.tags = normalizedTags; else delete data.tags;
+  if (normalizedDescription) data.description = normalizedDescription; else delete data.description;
+  if (baseData?.profile) {
+    const profile = decodePortableRecord(baseData.profile);
+    profile.friendlyName = data.title;
+    profile.connectionType = normalizedProtocol;
+    profile.username = normalizedUsername;
+    profile.group = normalizedFolder;
+    profile.tags = normalizedTags;
+    profile.profileDescription = normalizedDescription;
+    if (normalizedProtocol === "serial") profile.serialDevicePath = data.address;
+    else profile.host = data.address;
+    if (normalizedProtocol === "ssh" || normalizedProtocol === "telnet") profile.sshPort = normalizedPort;
+    data.profile = encodePortableRecord(profile);
+  }
+  return data;
+}
+
 export function teamHostRecordData({ title, target, folder, tags, description, baseData = null }) {
   const data = localVaultRecordData("host", { title, target, secret: "" });
   const normalizedFolder = String(folder ?? "").trim();
@@ -231,6 +305,8 @@ export async function initializeLocalVault({
   const folderFilter = documentValue.querySelector("#personal-vault-folder-filter");
   const saveButton = documentValue.querySelector("#local-record-save");
   const cancelButton = documentValue.querySelector("#local-record-cancel");
+  const editorTitle = documentValue.querySelector("#local-record-editor-title");
+  const editorHint = documentValue.querySelector("#local-record-editor-hint");
   const lockButton = documentValue.querySelector("#local-vault-lock");
   const type = documentValue.querySelector("#local-record-type");
   const title = documentValue.querySelector("#local-record-title");
@@ -238,6 +314,13 @@ export async function initializeLocalVault({
   const secret = documentValue.querySelector("#local-record-secret");
   const targetLabel = documentValue.querySelector("#local-record-target-label");
   const secretLabel = documentValue.querySelector("#local-record-secret-label");
+  const hostFields = documentValue.querySelector("#personal-host-fields");
+  const hostProtocol = documentValue.querySelector("#local-host-protocol");
+  const hostPort = documentValue.querySelector("#local-host-port");
+  const hostUsername = documentValue.querySelector("#local-host-username");
+  const hostFolder = documentValue.querySelector("#local-host-folder");
+  const hostTags = documentValue.querySelector("#local-host-tags");
+  const hostDescription = documentValue.querySelector("#local-host-description");
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
@@ -270,6 +353,8 @@ export async function initializeLocalVault({
     type.disabled = false;
     saveButton.textContent = "Зашифровать и сохранить";
     cancelButton.hidden = true;
+    setText(editorTitle, "Новая запись");
+    setText(editorHint, "Выберите тип и заполните поля. Всё шифруется в браузере.");
     updateLabels();
   }
 
@@ -281,8 +366,23 @@ export async function initializeLocalVault({
     title.value = values.title;
     target.value = values.target;
     secret.value = values.secret;
+    if (record.type === "host") {
+      const host = personalHostEditorValues(record);
+      title.value = host.title;
+      target.value = host.address;
+      hostProtocol.value = host.protocol;
+      hostPort.value = String(host.port);
+      hostUsername.value = host.username;
+      hostFolder.value = host.folder;
+      hostTags.value = host.tags;
+      hostDescription.value = host.description;
+    }
     saveButton.textContent = "Сохранить изменения";
     cancelButton.hidden = false;
+    setText(editorTitle, `Редактирование ${String(record.data?.title ?? "записи")}`);
+    setText(editorHint, record.type === "host"
+      ? "Основные поля и организация Host синхронизируются с приложением. Расширенные SSH/RDP-параметры сохраняются без изменений."
+      : "Измените нужные поля и сохраните новую зашифрованную версию записи.");
     updateLabels();
     recordForm.scrollIntoView?.({ behavior: "smooth", block: "center" });
     title.focus?.();
@@ -326,6 +426,13 @@ export async function initializeLocalVault({
     setText(secretLabel, secretText);
     target.required = type.value !== "snippet";
     secret.required = type.value === "credential" || type.value === "snippet";
+    const isHost = type.value === "host";
+    hostFields.hidden = !isHost;
+    secretLabel.hidden = isHost;
+    secret.hidden = isHost;
+    hostPort.disabled = !["ssh", "telnet"].includes(hostProtocol.value);
+    if (hostProtocol.value === "rdp") hostPort.value = "3389";
+    if (hostProtocol.value === "serial") hostPort.value = "1";
   }
 
   function render() {
@@ -429,9 +536,9 @@ export async function initializeLocalVault({
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, formatVaultTimestamp(record.modifiedAt));
-          const connection = parseTeamHostConnection(record.data);
+          const connection = personalHostEditorValues(record);
           setText(hostDetailProtocol, connection.protocol.toUpperCase());
-          setText(hostDetailPort, String(connection.port));
+          setText(hostDetailPort, connection.protocol === "serial" ? "—" : String(connection.port));
           setText(hostDetailUsername, connection.username || "—");
           setText(hostDetailPasswordState, "Управляется приложением");
           setText(hostDetailFolder, String(record.data?.folder ?? "Личный Vault"));
@@ -467,14 +574,21 @@ export async function initializeLocalVault({
       const existing = editingRecordID
         ? controller.document().records.find((record) => record.id === editingRecordID)
         : null;
-      await controller.upsert({
-        ...(editingRecordID ? { id: editingRecordID } : {}),
-        type: type.value,
-        data: localVaultRecordData(
+      const data = type.value === "host"
+        ? personalHostRecordData({
+          title: title.value, address: target.value, protocol: hostProtocol.value,
+          port: hostPort.value, username: hostUsername.value, folder: hostFolder.value,
+          tags: hostTags.value, description: hostDescription.value, baseData: existing?.data,
+        })
+        : localVaultRecordData(
           type.value,
           { title: title.value, target: target.value, secret: secret.value },
           existing?.data,
-        ),
+        );
+      await controller.upsert({
+        ...(editingRecordID ? { id: editingRecordID } : {}),
+        type: type.value,
+        data,
       });
       const wasEditing = Boolean(editingRecordID);
       resetEditor();
@@ -489,6 +603,11 @@ export async function initializeLocalVault({
   });
 
   type.addEventListener("change", updateLabels);
+  hostProtocol.addEventListener("change", () => {
+    if (hostProtocol.value === "ssh") hostPort.value = "22";
+    if (hostProtocol.value === "telnet") hostPort.value = "23";
+    updateLabels();
+  });
   cancelButton.addEventListener("click", () => {
     resetEditor();
     setText(message, "Изменение отменено.");

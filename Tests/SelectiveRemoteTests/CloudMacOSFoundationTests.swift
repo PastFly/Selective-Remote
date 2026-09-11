@@ -1532,7 +1532,10 @@ struct PersonalVaultInitialDownloadDecoderTests {
         let snippetID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
         let document = try SelectiveRemoteVaultDocument(records: [
             try .init(id: hostID, type: .host, version: version, modifiedAt: "2026-09-10T00:00:00.000Z", data: .object([
-                "title": .string("Web Host"), "address": .string("web.example"), "username": .string("admin")
+                "title": .string("Web Host"), "address": .string("web.example"), "username": .string("admin"),
+                "connectionType": .string("ssh"), "port": .number(2_222),
+                "folder": .string("Work/Production"), "tags": .array([.string("linux"), .string("prod")]),
+                "description": .string("Created in browser")
             ])),
             try .init(id: snippetID, type: .snippet, version: version, modifiedAt: "2026-09-10T00:00:00.000Z", data: .object([
                 "title": .string("Status"), "body": .string("uptime")
@@ -1541,6 +1544,10 @@ struct PersonalVaultInitialDownloadDecoderTests {
         let decoded = try SelectiveRemotePersonalVaultImporter.decode(document)
         #expect(decoded.profiles.first?.id == hostID)
         #expect(decoded.profiles.first?.connectionType == .ssh)
+        #expect(decoded.profiles.first?.sshPort == 2_222)
+        #expect(decoded.profiles.first?.group == "Work/Production")
+        #expect(decoded.profiles.first?.tags == ["linux", "prod"])
+        #expect(decoded.profiles.first?.profileDescription == "Created in browser")
         #expect(decoded.snippets.first?.id == snippetID)
     }
 
