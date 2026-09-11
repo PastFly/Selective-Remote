@@ -1,5 +1,6 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
+import { newestVaultConflictChoice } from "./vault-model.js";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -1849,23 +1850,38 @@ export async function initializeCloudAccount({
       }
       status = "unlocked";
     }
-    let result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
+    let result = await synchronizePersonalVault({ recoveryPassphrase: passphrase });
     if (status === "empty" && result.status === "empty") {
       await vault.create(passphrase);
-      result = await synchronizeVault({ client, vault });
+      result = await synchronizePersonalVault();
     }
     vaultUI.mode("unlocked");
     vaultUI.render();
     return result;
   }
 
+  async function synchronizePersonalVault({ recoveryPassphrase = null } = {}) {
+    let result = await synchronizeVault({ client, vault, recoveryPassphrase });
+    if (result.status !== "conflict") return result;
+
+    const conflictsResolved = result.conflicts.length;
+    await vault.resolveConflicts({
+      revision: result.revision,
+      resolutions: result.conflicts.map((conflict) => ({
+        id: conflict.id,
+        choice: newestVaultConflictChoice(conflict),
+      })),
+    });
+    result = await synchronizeVault({ client, vault });
+    return { ...result, automaticallyResolved: conflictsResolved };
+  }
+
   async function backgroundPersonalVaultSync() {
     if (backgroundSyncing || !client.session() || await vault.status() !== "unlocked") return;
     backgroundSyncing = true;
     try {
-      const result = await synchronizeVault({ client, vault });
-      if (result.status === "conflict") renderConflicts(result);
-      else if (result.status !== "remote_changed") hideConflicts();
+      const result = await synchronizePersonalVault();
+      if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
     } catch {
       // Manual sync keeps the actionable error path; background failures never discard local state.
@@ -2262,7 +2278,7 @@ export async function initializeCloudAccount({
   syncButton.addEventListener("click", async () => {
     syncButton.disabled = true;
     try {
-      const result = await synchronizeVault({ client, vault });
+      const result = await synchronizePersonalVault();
       const messages = {
         empty: "Сначала создайте локальный Vault.",
         uploaded: `Зашифрованная ревизия ${result.revision} загружена.`,
@@ -2270,11 +2286,12 @@ export async function initializeCloudAccount({
         downloaded: `Зашифрованная ревизия ${result.revision} загружена и объединена локально.`,
         up_to_date: `Vault уже синхронизирован на ревизии ${result.revision}.`,
         remote_changed: `Удалённый Vault изменился до ревизии ${result.remoteRevision}. Повторите синхронизацию для безопасного merge.`,
-        conflict: `Обнаружено конфликтов: ${result.conflicts.length}. Upload остановлен; требуется явное разрешение конфликтов.`,
       };
-      if (result.status === "conflict") renderConflicts(result);
-      else hideConflicts();
-      setText(vaultMessage, messages[result.status] ?? "Синхронизация завершена.");
+      hideConflicts();
+      const automaticSuffix = result.automaticallyResolved
+        ? ` Автоматически разрешено конфликтов: ${result.automaticallyResolved}.`
+        : "";
+      setText(vaultMessage, `${messages[result.status] ?? "Синхронизация завершена."}${automaticSuffix}`);
     } catch (error) {
       const code = String(error?.message ?? "");
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");

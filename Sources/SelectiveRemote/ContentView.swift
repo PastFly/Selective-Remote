@@ -119,6 +119,9 @@ struct ContentView: View {
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
     @State private var profileToShare: ConnectionProfile?
+    @State private var showsPersonalFolderCreator = false
+    @State private var newPersonalFolderName = ""
+    @State private var newPersonalFolderParent = ""
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -271,6 +274,9 @@ struct ContentView: View {
         }
         .sheet(item: $profileToShare) { profile in
             SelectiveRemoteCloudProfileShareView(profile: profile)
+        }
+        .sheet(isPresented: $showsPersonalFolderCreator) {
+            personalFolderCreator
         }
         .onAppear {
             selectedTab = restoredProfileTab(for: profile.id)
@@ -536,6 +542,20 @@ struct ContentView: View {
                     Button("Новое Serial", systemImage: "cable.connector") {
                         model.addProfile(connectionType: .serial)
                     }
+                    Divider()
+                    Button(
+                        UpdateLocalization.text(
+                            ru: "Новая папка для выбранного Host…",
+                            en: "New Folder for Selected Host…"
+                        ),
+                        systemImage: "folder.badge.plus"
+                    ) {
+                        newPersonalFolderName = ""
+                        newPersonalFolderParent = SelectiveRemoteHostFolderPath.normalize(
+                            model.selectedProfile.group
+                        )
+                        showsPersonalFolderCreator = true
+                    }
                 } label: {
                     Image(systemName: "plus")
                 }
@@ -682,7 +702,6 @@ struct ContentView: View {
                             )
                             .tag(item.id)
                             .contentShape(Rectangle())
-                            .onTapGesture { openProfile(item.id) }
                             .contextMenu { profileContextMenu(item) }
                             .draggable("personal-host:\(item.id.uuidString)")
                             .dropDestination(for: String.self) { values, _ in
@@ -771,6 +790,74 @@ struct ContentView: View {
         else { return false }
         model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)
         return true
+    }
+
+    private var personalFolderPaths: [String] {
+        var paths = Set<String>()
+        for profile in model.profiles {
+            let components = SelectiveRemoteHostFolderPath.components(profile.group)
+            guard !components.isEmpty else { continue }
+            for depth in 1...components.count {
+                paths.insert(components.prefix(depth).joined(separator: "/"))
+            }
+        }
+        return paths.sorted { lhs, rhs in
+            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+    }
+
+    private var personalFolderCreator: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label(
+                UpdateLocalization.text(ru: "Новая папка", en: "New Folder"),
+                systemImage: "folder.badge.plus"
+            )
+            .font(.title2.bold())
+
+            Text(UpdateLocalization.text(
+                ru: "Выбранный Host будет перемещён в новую папку. Чтобы создать папку внутри папки, выберите родительскую.",
+                en: "The selected Host will move into the new folder. Choose a parent to create a nested folder."
+            ))
+            .foregroundStyle(.secondary)
+
+            Picker(
+                UpdateLocalization.text(ru: "Родительская папка", en: "Parent Folder"),
+                selection: $newPersonalFolderParent
+            ) {
+                Text(UpdateLocalization.text(ru: "Корень", en: "Root")).tag("")
+                ForEach(personalFolderPaths, id: \.self) { path in
+                    Text(path).tag(path)
+                }
+            }
+
+            TextField(
+                UpdateLocalization.text(ru: "Название папки", en: "Folder Name"),
+                text: $newPersonalFolderName
+            )
+            .textFieldStyle(.roundedBorder)
+
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {
+                    showsPersonalFolderCreator = false
+                }
+                Button(UpdateLocalization.text(ru: "Создать и переместить", en: "Create and Move")) {
+                    let component = SelectiveRemoteHostFolderPath.normalize(newPersonalFolderName)
+                    let path = SelectiveRemoteHostFolderPath.normalize(
+                        [newPersonalFolderParent, component]
+                            .filter { !$0.isEmpty }
+                            .joined(separator: "/")
+                    )
+                    guard !component.isEmpty, !path.isEmpty else { return }
+                    model.moveProfile(profileID: model.selectedProfile.id, toFolder: path)
+                    showsPersonalFolderCreator = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(SelectiveRemoteHostFolderPath.normalize(newPersonalFolderName).isEmpty)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 480)
     }
 
     @ViewBuilder
@@ -2742,12 +2829,24 @@ struct ContentView: View {
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
-                        Text(UpdateLocalization.text(ru: "Группа", en: "Group"))
+                        Text(UpdateLocalization.text(ru: "Папка", en: "Folder"))
                         TextField(
-                            UpdateLocalization.text(ru: "Например: Работа", en: "For example: Work"),
+                            UpdateLocalization.text(
+                                ru: "Например: Работа/Серверы/Linux",
+                                en: "For example: Work/Servers/Linux"
+                            ),
                             text: profileBinding.group
                         )
                             .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        Color.clear.frame(width: 1, height: 1)
+                        Text(UpdateLocalization.text(
+                            ru: "Символ / создаёт вложенный уровень папки.",
+                            en: "Use / to create a nested folder level."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     }
                     GridRow(alignment: .top) {
                         Text(UpdateLocalization.text(ru: "Теги", en: "Tags"))

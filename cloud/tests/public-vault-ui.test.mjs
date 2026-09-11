@@ -320,6 +320,13 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /unlockAndSyncPersonalVault\(password\)/u);
   assert.match(application, /backgroundPersonalVaultSync/u);
+  assert.match(application, /newestVaultConflictChoice/u);
+  assert.match(application, /async function synchronizePersonalVault/u);
+  assert.match(application, /automaticallyResolved: conflictsResolved/u);
+  assert.doesNotMatch(
+    application.match(/syncButton\.addEventListener\("click"[\s\S]*?conflictForm\.addEventListener/u)?.[0] ?? "",
+    /renderConflicts\(result\)/u,
+  );
   assert.match(application, /15_000/u);
   assert.match(application, /vault\.lock\(\)/u);
   assert.doesNotMatch(application, /accountVaultMigrationPassphrase|account_password_required/u);
