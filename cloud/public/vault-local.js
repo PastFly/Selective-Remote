@@ -242,6 +242,35 @@ export function createLocalVaultController({
       return clone(document);
     },
 
+    sessionKey() {
+      requireUnlocked();
+      return vaultKey;
+    },
+
+    async unlockWithSessionKey(nextVaultKey) {
+      if (snapshot || vaultKey || document) throw new Error("local_vault_not_locked");
+      const algorithm = nextVaultKey?.algorithm;
+      const usages = Array.from(nextVaultKey?.usages ?? []);
+      if (nextVaultKey?.type !== "secret"
+          || algorithm?.name !== "AES-GCM"
+          || algorithm?.length !== 256
+          || !usages.includes("encrypt")
+          || !usages.includes("decrypt")) {
+        throw new Error("invalid_vault_session_key");
+      }
+      const stored = await repository.load();
+      if (!stored) throw new Error("local_vault_missing");
+      const nextSnapshot = validatedSnapshot(stored);
+      const nextDocument = validateVaultDocument(
+        await decryptVaultEnvelope(nextVaultKey, nextSnapshot.envelope, cryptoValue),
+      );
+      snapshot = nextSnapshot;
+      vaultKey = nextVaultKey;
+      document = nextDocument;
+      pendingConflicts = null;
+      return clone(document);
+    },
+
     lock() {
       snapshot = null;
       vaultKey = null;

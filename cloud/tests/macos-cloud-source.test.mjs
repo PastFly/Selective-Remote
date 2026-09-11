@@ -450,6 +450,21 @@ test("macOS credentials, Cloud session, and device keys share one Keychain item"
   assert.doesNotMatch(envelope, /teamID|vaultID|hostID/u);
 });
 
+test("macOS surfaces username Team invitations and uses a roomier settings window", async () => {
+  const [prompt, app, settings] = await Promise.all([
+    readFile(new URL("CloudTeamInvitationPrompt.swift", sourceRoot), "utf8"),
+    readFile(new URL("SelectiveRemoteApp.swift", sourceRoot), "utf8"),
+    readFile(new URL("UpdateExperienceView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(prompt, /pendingTeamInvitations/u);
+  assert.match(prompt, /acceptTeamInvitation/u);
+  assert.match(prompt, /Приглашение в команду/u);
+  assert.match(prompt, /Позже/u);
+  assert.match(prompt, /Task\.sleep\(for: \.seconds\(60\)\)/u);
+  assert.match(app, /SelectiveRemoteCloudTeamInvitationPrompt/u);
+  assert.match(settings, /\.frame\(minWidth: 760, idealWidth: 820, minHeight: 600, idealHeight: 680\)/u);
+});
+
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
   const [sync, crypto, settings, app, snippets] = await Promise.all([

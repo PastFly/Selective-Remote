@@ -272,6 +272,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
   assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
+  assert.match(application, /ваш текущий username/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
   assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
   assert.match(application, /Команда «\$\{selectedTeam\.name\}» · папок: \$\{vaults\.length\}/u);
