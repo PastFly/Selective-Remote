@@ -165,6 +165,12 @@ struct SelectiveRemoteTeamHostEditorView: View {
                     UpdateLocalization.text(ru: "Папка", en: "Folder"),
                     text: $folder
                 )
+                Text(UpdateLocalization.text(
+                    ru: "Для вложенности укажите путь через /, например Работа/Серверы/Linux.",
+                    en: "For nesting, use a / path such as Work/Servers/Linux."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
                 TextField(
                     UpdateLocalization.text(
                         ru: "Теги через запятую",
