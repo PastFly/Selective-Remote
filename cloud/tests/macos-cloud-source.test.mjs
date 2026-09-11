@@ -358,17 +358,22 @@ test("macOS Team Host credentials stay inside the encrypted Team Vault lifecycle
 });
 
 
-test("macOS Team Hosts expose shared folders, tags, and local filtering controls", async () => {
-  const [hosts, editor] = await Promise.all([
+test("macOS Team Hosts expose nested shared folders, tags, filtering, and drag-and-drop", async () => {
+  const [hosts, editor, tree] = await Promise.all([
     readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+    readFile(new URL("HostFolderTree.swift", sourceRoot), "utf8"),
   ]);
   assert.match(hosts, /safe\.group = input\.group/u);
   assert.match(hosts, /safe\.tags = input\.tags/u);
   assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
   assert.match(hosts, /\.searchable\(/u);
   assert.match(hosts, /selectedFolder/u);
-  assert.match(hosts, /Label\(folderTitle\(folder\), systemImage: "folder"\)/u);
+  assert.match(hosts, /OutlineGroup\(outlineItems\(in: teamID\)/u);
+  assert.match(hosts, /\.draggable\("team-host:/u);
+  assert.match(hosts, /moveTeamHost/u);
+  assert.match(tree, /SelectiveRemoteTeamHostOutlineItem/u);
+  assert.match(tree, /"\\\(parent\)\/\\\(component\)"/u);
   assert.match(editor, /Теги через запятую/u);
   assert.match(editor, /Папка/u);
   assert.match(editor, /profile\.group = folder/u);
@@ -401,7 +406,7 @@ test("macOS Team Hosts nest teams and folders and expose SSH tools", async () =>
   ]);
   assert.match(hosts, /DisclosureGroup\(/u);
   assert.match(hosts, /Label\(teamName\(teamID\), systemImage: "person\.3\.fill"\)/u);
-  assert.match(hosts, /Label\(folderTitle\(folder\), systemImage: "folder"\)/u);
+  assert.match(hosts, /OutlineGroup\(outlineItems\(in: teamID\)/u);
   assert.match(editor, /ru: "Порт", en: "Port"/u);
   assert.match(editor, /profile\.sshPort = port/u);
   assert.match(hosts, /onOpenSFTP/u);

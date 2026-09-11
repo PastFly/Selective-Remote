@@ -261,6 +261,40 @@ struct CloudTeamHostsTests {
     }
 
     @MainActor
+    @Test("Team Host organization changes folder/order without rewriting credentials")
+    func organizationMutationPreservesCredentials() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let recordID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.id = recordID
+        profile.friendlyName = "Bastion"
+        profile.host = "bastion.example.invalid"
+        let created = try SelectiveRemoteTeamHostDocumentMutation.create(
+            profile: profile,
+            credentials: .init(password: "encrypted-secret", gatewayPassword: nil),
+            role: .editor,
+            deviceID: deviceID,
+            modifiedAt: "2026-09-11T11:00:00.000Z"
+        )
+        let credentialBefore = try #require(created.records.first { $0.type == .credential })
+        profile.group = "Infrastructure/Production"
+        profile.sortIndex = 4
+        let organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
+            in: created,
+            recordID: recordID,
+            profile: profile,
+            role: .editor,
+            deviceID: deviceID,
+            modifiedAt: "2026-09-11T11:01:00.000Z"
+        )
+        #expect(organized.records.first { $0.type == .credential } == credentialBefore)
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [Self.snapshot(payload: try organized.encoded(), role: .editor)])
+        #expect(store.hosts.first?.profile.group == "Infrastructure/Production")
+        #expect(store.hosts.first?.profile.sortIndex == 4)
+    }
+
+    @MainActor
     @Test("Team Host credentials are encrypted records, materialize for connection, and delete causally")
     func sharedCredentialLifecycle() throws {
         let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))

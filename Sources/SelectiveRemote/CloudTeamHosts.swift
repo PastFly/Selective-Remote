@@ -352,6 +352,7 @@ enum SelectiveRemoteTeamHostMaterializer {
         safe.detectedOperatingSystemLike = ""
         safe.operatingSystemDetectedAt = nil
         safe.group = input.group
+        safe.sortIndex = input.sortIndex
         safe.tags = input.tags
         safe.profileDescription = input.profileDescription
         safe.createdAt = Date(timeIntervalSince1970: 0)
@@ -594,6 +595,13 @@ struct SelectiveRemoteTeamHostsView: View {
             .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
     }
 
+    private func outlineItems(in teamID: UUID) -> [SelectiveRemoteTeamHostOutlineItem] {
+        SelectiveRemoteTeamHostOutlineItem.roots(
+            teamID: teamID,
+            hosts: visibleHosts.filter { $0.teamID == teamID }
+        )
+    }
+
     private var visibleHosts: [SelectiveRemoteTeamHost] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
         return store.hosts.filter { host in
@@ -631,21 +639,24 @@ struct SelectiveRemoteTeamHostsView: View {
                             DisclosureGroup(
                                 isExpanded: expansionBinding(for: teamID)
                             ) {
-                                ForEach(folders(in: teamID), id: \.self) { folder in
-                                    DisclosureGroup(
-                                        isExpanded: folderExpansionBinding(
-                                            teamID: teamID,
-                                            folder: folder
-                                        )
-                                    ) {
-                                        ForEach(visibleHosts.filter {
-                                            $0.teamID == teamID && $0.profile.group == folder
-                                        }) { host in
-                                            hostRow(host)
-                                                .tag(host.id)
-                                        }
-                                    } label: {
-                                        Label(folderTitle(folder), systemImage: "folder")
+                                OutlineGroup(outlineItems(in: teamID), children: \.children) { item in
+                                    switch item.kind {
+                                    case let .folder(path, name):
+                                        Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                            .dropDestination(for: String.self) { values, _ in
+                                                moveTeamHost(values, toFolder: path)
+                                            }
+                                    case let .host(host):
+                                        hostRow(host)
+                                            .tag(host.id)
+                                            .draggable("team-host:\(host.id.uuidString)")
+                                            .dropDestination(for: String.self) { values, _ in
+                                                moveTeamHost(
+                                                    values,
+                                                    toFolder: host.profile.group,
+                                                    before: host.id
+                                                )
+                                            }
                                     }
                                 }
                             } label: {
@@ -1095,6 +1106,65 @@ struct SelectiveRemoteTeamHostsView: View {
                 mutationMessage = .init(text: error.localizedDescription, isError: true)
             }
         }
+    }
+
+    private func moveTeamHost(
+        _ values: [String],
+        toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) -> Bool {
+        guard !isMutating,
+              let value = values.first,
+              value.hasPrefix("team-host:"),
+              let hostID = UUID(uuidString: String(value.dropFirst("team-host:".count))),
+              let host = store.hosts.first(where: { $0.id == hostID }),
+              let context = context(for: host),
+              SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
+        else { return false }
+
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        let scopedHosts = store.hosts.filter {
+            $0.teamID == host.teamID && $0.vaultID == host.vaultID
+        }
+        var grouped = Dictionary(grouping: scopedHosts) { candidate in
+            candidate.id == host.id
+                ? folder
+                : SelectiveRemoteHostFolderPath.normalize(candidate.profile.group)
+        }
+        var updates: [SelectiveRemoteTeamHostOrganizationUpdate] = []
+        for path in grouped.keys.sorted() {
+            var ordered = (grouped[path] ?? []).sorted { lhs, rhs in
+                if lhs.profile.sortIndex != rhs.profile.sortIndex {
+                    return lhs.profile.sortIndex < rhs.profile.sortIndex
+                }
+                return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                    rhs.profile.friendlyName
+                ) == .orderedAscending
+            }
+            if path == folder,
+               let source = ordered.firstIndex(where: { $0.id == host.id }) {
+                let moving = ordered.remove(at: source)
+                let destination = targetID.flatMap { id in
+                    ordered.firstIndex(where: { $0.id == id })
+                } ?? ordered.endIndex
+                ordered.insert(moving, at: destination)
+            }
+            for (sortIndex, candidate) in ordered.enumerated() {
+                var profile = candidate.profile
+                profile.group = path
+                profile.sortIndex = sortIndex
+                guard profile.group != candidate.profile.group
+                        || profile.sortIndex != candidate.profile.sortIndex
+                else { continue }
+                updates.append(.init(
+                    recordID: candidate.recordID,
+                    profile: profile
+                ))
+            }
+        }
+        guard !updates.isEmpty else { return false }
+        mutate(.organize(updates), context: context, selectedRecordID: host.recordID)
+        return true
     }
 
     private func resolvedDeviceID() -> UUID {

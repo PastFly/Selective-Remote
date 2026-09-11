@@ -98,6 +98,43 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         )
     }
 
+    static func organize(
+        in document: SelectiveRemoteVaultDocument,
+        recordID: UUID,
+        profile: ConnectionProfile,
+        role: SelectiveRemoteCloudTeamRole,
+        deviceID: UUID,
+        modifiedAt: String
+    ) throws -> SelectiveRemoteVaultDocument {
+        try requireWritable(role)
+        guard let existing = document.records.first(where: { $0.id == recordID }) else {
+            throw SelectiveRemoteTeamHostMutationError.hostNotFound
+        }
+        guard existing.type == .host else {
+            throw SelectiveRemoteTeamHostMutationError.recordIsNotHost
+        }
+        var exportedProfile = profile
+        exportedProfile.id = recordID
+        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+            profiles: [exportedProfile],
+            credentials: [],
+            snippets: [],
+            forwarding: [],
+            deviceID: deviceID
+        ).document.records[0]
+        let replacement = try SelectiveRemoteVaultRecord(
+            id: recordID,
+            type: .host,
+            version: existing.version.incrementing(deviceID),
+            modifiedAt: modifiedAt,
+            data: exported.data
+        )
+        return try .init(
+            records: document.records.map { $0.id == recordID ? replacement : $0 },
+            tombstones: document.tombstones
+        )
+    }
+
     static func delete(
         from document: SelectiveRemoteVaultDocument,
         recordID: UUID,
@@ -267,7 +304,13 @@ struct SelectiveRemoteTeamHostVaultContext: Identifiable, Equatable {
 enum SelectiveRemoteTeamHostMutationChange {
     case create(ConnectionProfile, SelectiveRemoteTeamHostCredentials)
     case update(recordID: UUID, profile: ConnectionProfile, credentials: SelectiveRemoteTeamHostCredentials)
+    case organize([SelectiveRemoteTeamHostOrganizationUpdate])
     case delete(recordID: UUID)
+}
+
+struct SelectiveRemoteTeamHostOrganizationUpdate {
+    let recordID: UUID
+    let profile: ConnectionProfile
 }
 
 @MainActor
@@ -398,6 +441,17 @@ final class SelectiveRemoteTeamHostMutationService {
                 deviceID: deviceID,
                 modifiedAt: timestamp
             )
+        case let .organize(updates):
+            try updates.reduce(document) { partial, update in
+                try SelectiveRemoteTeamHostDocumentMutation.organize(
+                    in: partial,
+                    recordID: update.recordID,
+                    profile: update.profile,
+                    role: role,
+                    deviceID: deviceID,
+                    modifiedAt: timestamp
+                )
+            }
         case let .delete(recordID):
             try SelectiveRemoteTeamHostDocumentMutation.delete(
                 from: document,

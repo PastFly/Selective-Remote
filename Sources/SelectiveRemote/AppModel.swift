@@ -1800,10 +1800,65 @@ final class AppModel: NSObject, ObservableObject {
 
     func setProfileGroup(profileID: UUID, group: String) {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
-        profiles[index].group = group.trimmingCharacters(in: .whitespacesAndNewlines)
+        profiles[index].group = SelectiveRemoteHostFolderPath.normalize(group)
         statusMessage = profiles[index].group.isEmpty
-            ? "Профиль перемещён в «Без группы»"
-            : "Профиль перемещён в группу «\(profiles[index].group)»"
+            ? UpdateLocalization.text(
+                ru: "Host перемещён в «Без папки»",
+                en: "Host moved to No Folder"
+            )
+            : UpdateLocalization.text(
+                ru: "Host перемещён в папку «\(profiles[index].group)»",
+                en: "Host moved to “\(profiles[index].group)”"
+            )
+    }
+
+    func moveProfile(
+        profileID: UUID,
+        toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) {
+        guard let sourceIndex = profiles.firstIndex(where: { $0.id == profileID }) else { return }
+        let oldFolder = SelectiveRemoteHostFolderPath.normalize(profiles[sourceIndex].group)
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        profiles[sourceIndex].group = folder
+
+        var destinationIDs = profiles
+            .filter {
+                $0.id != profileID
+                    && SelectiveRemoteHostFolderPath.normalize($0.group) == folder
+            }
+            .sorted { lhs, rhs in
+                if lhs.sortIndex != rhs.sortIndex { return lhs.sortIndex < rhs.sortIndex }
+                return lhs.friendlyName.localizedCaseInsensitiveCompare(rhs.friendlyName)
+                    == .orderedAscending
+            }
+            .map(\.id)
+        let insertionIndex = targetID.flatMap { destinationIDs.firstIndex(of: $0) }
+            ?? destinationIDs.endIndex
+        destinationIDs.insert(profileID, at: insertionIndex)
+        reindexProfiles(destinationIDs)
+
+        if oldFolder != folder {
+            let oldIDs = profiles
+                .filter { SelectiveRemoteHostFolderPath.normalize($0.group) == oldFolder }
+                .sorted { $0.sortIndex < $1.sortIndex }
+                .map(\.id)
+            reindexProfiles(oldIDs)
+        }
+        profileSortMode = .manual
+        statusMessage = folder.isEmpty
+            ? UpdateLocalization.text(ru: "Host перемещён без папки", en: "Host moved to No Folder")
+            : UpdateLocalization.text(
+                ru: "Host перемещён в «\(folder)»",
+                en: "Host moved to “\(folder)”"
+            )
+    }
+
+    private func reindexProfiles(_ ids: [UUID]) {
+        for (sortIndex, id) in ids.enumerated() {
+            guard let index = profiles.firstIndex(where: { $0.id == id }) else { continue }
+            profiles[index].sortIndex = sortIndex
+        }
     }
 
     var profileGroups: [ProfileGroupSection] {
@@ -1853,6 +1908,14 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
+    var profileFolderRoots: [SelectiveRemoteProfileFolderNode] {
+        SelectiveRemoteProfileFolderNode.roots(from: profileGroups)
+    }
+
+    var profileOutlineItems: [SelectiveRemoteProfileOutlineItem] {
+        SelectiveRemoteProfileOutlineItem.roots(from: profileFolderRoots)
+    }
+
     func isSessionRunning(profileID: UUID) -> Bool {
         sessions[profileID] != nil
     }
@@ -1883,6 +1946,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func addProfile(connectionType: ConnectionType = .rdp) {
         var profile = ConnectionProfile(connectionType: connectionType)
+        profile.sortIndex = (profiles.map(\.sortIndex).max() ?? -1) + 1
         if connectionType == .rdp {
             configureDefaultDisplays(for: &profile)
         }
@@ -6425,6 +6489,10 @@ final class AppModel: NSObject, ObservableObject {
     private func sortProfiles(_ values: [ConnectionProfile]) -> [ConnectionProfile] {
         values.sorted { lhs, rhs in
             switch profileSortMode {
+            case .manual:
+                if lhs.sortIndex != rhs.sortIndex { return lhs.sortIndex < rhs.sortIndex }
+                return lhs.friendlyName.localizedCaseInsensitiveCompare(rhs.friendlyName)
+                    == .orderedAscending
             case .favoritesAndName:
                 if lhs.isFavorite != rhs.isFavorite { return lhs.isFavorite }
                 return lhs.friendlyName.localizedCaseInsensitiveCompare(rhs.friendlyName)

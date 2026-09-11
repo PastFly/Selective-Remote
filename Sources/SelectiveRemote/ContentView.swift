@@ -665,9 +665,15 @@ struct ContentView: View {
                 get: { model.selectedProfileID },
                 set: { if let id = $0 { openProfile(id) } }
             )) {
-                ForEach(model.profileGroups) { group in
-                    Section(group.name) {
-                        ForEach(group.profiles) { item in
+                OutlineGroup(model.profileOutlineItems, children: \.children) { outline in
+                    switch outline.kind {
+                    case let .folder(path, name):
+                        Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                            .font(.headline)
+                            .dropDestination(for: String.self) { values, _ in
+                                movePersonalProfile(values, toFolder: path)
+                            }
+                    case let .profile(item):
                             ProfileRow(
                                 profile: item,
                                 session: model.sessions[item.id],
@@ -678,7 +684,14 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { openProfile(item.id) }
                             .contextMenu { profileContextMenu(item) }
-                        }
+                            .draggable("personal-host:\(item.id.uuidString)")
+                            .dropDestination(for: String.self) { values, _ in
+                                movePersonalProfile(
+                                    values,
+                                    toFolder: item.group,
+                                    before: item.id
+                                )
+                            }
                     }
                 }
             }
@@ -693,6 +706,12 @@ struct ContentView: View {
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
+                                .dropDestination(for: String.self) { values, _ in
+                                    movePersonalProfile(
+                                        values,
+                                        toFolder: group.profiles.first?.group ?? ""
+                                    )
+                                }
                             LazyVGrid(
                                 columns: [GridItem(.adaptive(minimum: 100), spacing: 8)],
                                 spacing: 9
@@ -713,6 +732,14 @@ struct ContentView: View {
                                     }
                                     .buttonStyle(.plain)
                                     .contextMenu { profileContextMenu(item) }
+                                    .draggable("personal-host:\(item.id.uuidString)")
+                                    .dropDestination(for: String.self) { values, _ in
+                                        movePersonalProfile(
+                                            values,
+                                            toFolder: item.group,
+                                            before: item.id
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -731,6 +758,19 @@ struct ContentView: View {
     private func openProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
         setMainArea(.connections)
+    }
+
+    private func movePersonalProfile(
+        _ values: [String],
+        toFolder folder: String,
+        before targetID: UUID? = nil
+    ) -> Bool {
+        guard let value = values.first,
+              value.hasPrefix("personal-host:"),
+              let profileID = UUID(uuidString: String(value.dropFirst("personal-host:".count)))
+        else { return false }
+        model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)
+        return true
     }
 
     @ViewBuilder
@@ -810,14 +850,17 @@ struct ContentView: View {
                 Text("Создайте тег в настройках профиля")
             }
         }
-        Menu("Переместить в группу", systemImage: "folder") {
-            Button("Без группы") {
-                model.setProfileGroup(profileID: item.id, group: "")
+        Menu(
+            UpdateLocalization.text(ru: "Переместить в папку", en: "Move to Folder"),
+            systemImage: "folder"
+        ) {
+            Button(UpdateLocalization.text(ru: "Без папки", en: "No Folder")) {
+                model.moveProfile(profileID: item.id, toFolder: "")
             }
             if !model.profileGroupNames.isEmpty { Divider() }
             ForEach(model.profileGroupNames, id: \.self) { groupName in
                 Button(groupName) {
-                    model.setProfileGroup(profileID: item.id, group: groupName)
+                    model.moveProfile(profileID: item.id, toFolder: groupName)
                 }
             }
         }
