@@ -206,11 +206,14 @@
       </div>
 
       <div class="vault-panel" id="cloud-vault-recovery" hidden>
-        <h3>Восстановить Vault из Cloud</h3>
-        <p>Зашифрованная ревизия уже существует. Введите независимую recovery-фразу: она используется только локально и не отправляется на сервер.</p>
+        <h3>Подключить существующий Vault</h3>
+        <p>Эта ревизия создана до привязки Vault к паролю аккаунта. Введите recovery-фразу один раз: она используется только локально и никогда не отправляется на сервер.</p>
         <form id="cloud-vault-recovery-form">
           <label for="cloud-vault-recovery-passphrase">Recovery-фраза</label>
           <input id="cloud-vault-recovery-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
+          <label for="cloud-vault-recovery-account-password">Пароль аккаунта</label>
+          <input id="cloud-vault-recovery-account-password" name="accountPassword" type="password" minlength="12" maxlength="1024" autocomplete="current-password">
+          <p class="auth-note">Если сессия была восстановлена после перезапуска браузера, пароль нужен для повторной проверки аккаунта и локального rewrap. Он не сохраняется. Сразу после обычного входа поле можно оставить пустым.</p>
           <div class="vault-actions">
             <button type="submit">Расшифровать и импортировать</button>
             <button type="button" class="secondary" id="cloud-vault-recovery-cancel">Отмена</button>
@@ -236,7 +239,7 @@
         <form id="local-vault-unlock-form">
           <label for="local-vault-unlock-passphrase">Recovery-фраза</label>
           <input id="local-vault-unlock-passphrase" name="passphrase" type="password" minlength="16" maxlength="1024" autocomplete="off" required>
-          <button type="submit">Разблокировать</button>
+          <button type="submit">Подключить и разблокировать</button>
         </form>
       </div>
 

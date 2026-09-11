@@ -2257,29 +2257,55 @@ export async function initializeCloudAccount({
     event.preventDefault();
     const button = recoveryForm.querySelector('button[type="submit"]');
     const passphrase = recoveryForm.elements.passphrase.value;
+    const accountPassword = recoveryForm.elements.accountPassword.value;
     button.disabled = true;
     try {
-      const result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
-      if (accountVaultMigrationPassphrase) {
-        await vault.rewrap(accountVaultMigrationPassphrase);
-        await synchronizeVault({ client, vault });
-        accountVaultMigrationPassphrase = null;
+      let migrationPassphrase = accountVaultMigrationPassphrase;
+      if (!migrationPassphrase) {
+        if (!accountPassword) throw new Error("account_password_required");
+        const currentUser = client.session();
+        if (!currentUser) throw new Error("authentication_required");
+        const deviceID = await vault.deviceID();
+        let identity = null;
+        try {
+          identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID });
+        } catch {
+          // Personal Vault recovery remains available when Team device storage is unavailable.
+        }
+        await client.login({
+          email: currentUser.email,
+          password: accountPassword,
+          deviceID,
+          publicKey: identity?.publicKey ?? null,
+        });
+        migrationPassphrase = accountVaultPassphrase(accountPassword);
       }
+      const result = await synchronizeVault({ client, vault, recoveryPassphrase: passphrase });
+      await vault.rewrap(migrationPassphrase);
+      await synchronizeVault({ client, vault });
+      accountVaultMigrationPassphrase = null;
       recoveryForm.reset();
       await vaultUI.hideRecoveryAndRestoreMode();
       vaultUI.mode("unlocked");
       vaultUI.render();
       setText(vaultMessage, `Зашифрованная ревизия ${result.revision} восстановлена и переведена на автоматическую разблокировку паролем аккаунта.`);
     } catch (error) {
+      const code = String(error?.message ?? "");
       recoveryForm.elements.passphrase.value = "";
-      if (String(error?.message ?? "") === "authentication_required") {
+      if (recoveryForm.elements.accountPassword) recoveryForm.elements.accountPassword.value = "";
+      if (code === "authentication_required") {
         showSession(null);
         await vaultUI.hideRecoveryAndRestoreMode();
         setText(vaultMessage, "Сессия истекла. Войдите снова.");
+      } else if (code === "account_password_required") {
+        setText(vaultMessage, "Введите пароль аккаунта, чтобы подтвердить восстановленную сессию и подключить Vault.");
+      } else if (code === "invalid_credentials") {
+        setText(vaultMessage, "Пароль аккаунта неверен. Recovery-фраза не проверялась.");
       } else {
         setText(vaultMessage, "Не удалось восстановить Vault. Recovery-фраза неверна или зашифрованные данные повреждены.");
       }
     } finally {
+      if (recoveryForm.elements.accountPassword) recoveryForm.elements.accountPassword.value = "";
       button.disabled = false;
     }
   });
