@@ -158,6 +158,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
         let material: SelectiveRemotePersonalVaultKeyMaterial
         if remote.revision == 0 {
             material = try await replaceWithLocalVault(
+                endpoint: endpoint,
                 remote: remote,
                 exported: exported,
                 passphrase: passphrase
@@ -187,6 +188,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
                 // keeps the previous ciphertext in vault_revisions, so migration is reversible by
                 // an administrator without exposing plaintext or asking the user for Recovery.
                 material = try await replaceWithLocalVault(
+                    endpoint: endpoint,
                     remote: remote,
                     exported: exported,
                     passphrase: passphrase
@@ -198,6 +200,7 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
     }
 
     private func replaceWithLocalVault(
+        endpoint: URL,
         remote: SelectiveRemoteCloudPersonalVault,
         exported: SelectiveRemotePersonalVaultExport,
         passphrase: String
@@ -219,8 +222,6 @@ struct SelectiveRemotePersonalVaultAccountEnrollment {
             documentHash: Data(SHA256.hash(data: try exported.document.encoded())),
             includesCredentials: exported.document.records.contains { $0.type == .credential }
         )
-        try keyStore.save(material, endpoint: endpoint, deviceID: deviceID)
-        return material.revision
     }
 }
 
