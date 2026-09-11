@@ -126,7 +126,7 @@ export class PostgresStore {
 
   async passwordIdentity(email) {
     const result = await this.pool.query(
-      `SELECT u.id, u.email, u.username, u.display_name, u.disabled_at, u.email_verified_at, i.password_hash
+      `SELECT u.id, u.email, u.username, u.display_name, u.created_at, u.disabled_at, u.email_verified_at, i.password_hash
        FROM users u JOIN account_identities i ON i.user_id = u.id
        WHERE i.provider = 'password' AND i.subject = $1`,
       [email],
