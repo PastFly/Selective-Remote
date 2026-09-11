@@ -296,6 +296,7 @@ export async function initializeLocalVault({
   if (!section) return null;
   const waiting = documentValue.querySelector("#local-vault-waiting");
   const workspace = documentValue.querySelector("#local-vault-workspace");
+  const actions = documentValue.querySelector("#local-vault-actions");
   const overviewNotice = documentValue.querySelector("#workspace-vault-notice");
   const message = documentValue.querySelector("#local-vault-message");
   const records = documentValue.querySelector("#local-vault-records");
@@ -345,6 +346,7 @@ export async function initializeLocalVault({
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
   let filterChangeListener = () => {};
+  let lockListener = async () => {};
   let activeRecordFilter = "all";
   let editingRecordID = null;
 
@@ -434,6 +436,7 @@ export async function initializeLocalVault({
   function mode(value) {
     workspace.hidden = value !== "unlocked";
     waiting.hidden = value === "unlocked";
+    if (actions) actions.hidden = value !== "unlocked";
     if (overviewNotice) overviewNotice.hidden = value === "unlocked";
     if (value !== "unlocked") {
       for (const recordType of ["host", "credential", "snippet", "forwarding", "sshKey"]) {
@@ -656,13 +659,22 @@ export async function initializeLocalVault({
       filterChangeListener(activeRecordFilter);
     });
   }
-  lockButton.addEventListener("click", () => {
+  lockButton.addEventListener("click", async () => {
+    lockButton.disabled = true;
+    try {
+      await lockListener();
+    } catch {
+      setText(message, "Не удалось удалить ключ доверенного браузера. Vault оставлен открытым.");
+      lockButton.disabled = false;
+      return;
+    }
     controller.lock();
     resetEditor();
     clearConflictUI();
     mode("waiting");
     records.replaceChildren();
     setText(message, "Vault заблокирован. Войдите в аккаунт снова, чтобы открыть его.");
+    lockButton.disabled = false;
   });
 
   updateLabels();
@@ -701,6 +713,9 @@ export async function initializeLocalVault({
     },
     setFilterChangeListener(listener) {
       filterChangeListener = typeof listener === "function" ? listener : () => {};
+    },
+    setLockListener(listener) {
+      lockListener = typeof listener === "function" ? listener : async () => {};
     },
     async restoreModeFromLocalStatus() {
       const status = await controller.status();
@@ -2102,6 +2117,9 @@ export async function initializeCloudAccount({
     activeConflicts = null;
     conflictApply.disabled = true;
   });
+  vaultUI.setLockListener(async () => {
+    await vault.forgetRememberedSession();
+  });
 
   function setAccountMessage(value, tone = null) {
     setText(message, value);
@@ -2155,11 +2173,15 @@ export async function initializeCloudAccount({
     if (backgroundSyncing || !client.session() || await vault.status() !== "unlocked") return;
     backgroundSyncing = true;
     try {
-      const result = await synchronizePersonalVault();
+      let result = await synchronizePersonalVault();
+      if (result.status === "remote_changed") result = await synchronizePersonalVault();
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
+      if (Number.isSafeInteger(result.revision)) {
+        setText(vaultMessage, `Personal Vault синхронизирован · r${result.revision}.`);
+      }
     } catch {
-      // Manual sync keeps the actionable error path; background failures never discard local state.
+      setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
     } finally {
       backgroundSyncing = false;
     }
@@ -2204,6 +2226,7 @@ export async function initializeCloudAccount({
       try {
         if (await vault.status() !== "locked") return;
         await vault.unlockWithSessionKey(value.key);
+        try { await vault.rememberSession(user.id); } catch {}
         vaultUI.mode("unlocked");
         vaultUI.render();
         setText(vaultMessage, "Personal Vault разблокирован активной вкладкой и синхронизируется автоматически.");
@@ -2220,6 +2243,10 @@ export async function initializeCloudAccount({
     15_000
   );
   personalVaultTimer?.unref?.();
+  documentValue.addEventListener?.("visibilitychange", () => {
+    if (!documentValue.hidden) void backgroundPersonalVaultSync();
+  });
+  globalThis.addEventListener?.("online", () => { void backgroundPersonalVaultSync(); });
 
   function setAuthMode(mode) {
     const registrationAvailable = metadata?.registrationEnabled === true || Boolean(initialTeamInvitationToken);
@@ -2241,7 +2268,7 @@ export async function initializeCloudAccount({
     } else if (mode === "recovery") {
       setAccountMessage("Мы отправим одноразовую ссылку для смены пароля, если аккаунт существует.");
     } else {
-      setAccountMessage("Сессионный токен хранится только в памяти этой вкладки.");
+      setAccountMessage("Сессия восстанавливается защищённой HttpOnly cookie; пароль в браузере не сохраняется.");
     }
   }
 
@@ -2398,6 +2425,7 @@ export async function initializeCloudAccount({
       try {
         await unlockAndSyncPersonalVault(password);
         personalVaultReady = true;
+        try { await vault.rememberSession(user.id); } catch {}
       } catch {
         vaultUI.mode("waiting");
       }
@@ -2419,7 +2447,7 @@ export async function initializeCloudAccount({
       } else {
         try {
           await teamWorkspace?.activate(identity);
-          setText(message, "Вход выполнен. Сессионный токен хранится только в памяти этой вкладки.");
+          setText(message, "Вход выполнен. Сессия защищена HttpOnly cookie; пароль не сохранён.");
         } catch {
           setText(message, "Вход выполнен. Team-раздел временно недоступен; личный Vault и сессия продолжают работать.");
         }
@@ -2448,13 +2476,14 @@ export async function initializeCloudAccount({
     try {
       await client.logout();
     } finally {
+      try { await vault.forgetRememberedSession(); } catch {}
       vault.lock();
       showSession(null);
       teamWorkspace?.deactivate();
       hideConflicts();
       await vaultUI.restoreModeFromLocalStatus();
       logoutButton.disabled = false;
-      setText(message, "Сессия завершена, токен удалён из памяти вкладки.");
+      setText(message, "Сессия завершена; cookie и ключ доверенного браузера удалены.");
     }
   });
 
@@ -2533,6 +2562,7 @@ export async function initializeCloudAccount({
       deleteAccountForm.reset();
       teamWorkspace?.deactivate();
       hideConflicts();
+      try { await vault.forgetRememberedSession(); } catch {}
       vault.lock();
       await vaultUI.restoreModeFromLocalStatus();
       showSession(null);
@@ -2611,7 +2641,14 @@ export async function initializeCloudAccount({
   try {
     const restoredUser = await client.restoreSession();
     showSession(restoredUser);
-    if (await vault.status() !== "unlocked") {
+    let restoredVault = await vault.status() === "unlocked";
+    if (!restoredVault) restoredVault = await vault.restoreRememberedSession(restoredUser.id);
+    if (restoredVault) {
+      vaultUI.mode("unlocked");
+      vaultUI.render();
+      setText(vaultMessage, "Personal Vault восстановлен на этом доверенном браузере. Синхронизируем изменения…");
+      await backgroundPersonalVaultSync();
+    } else {
       vaultUI.mode("waiting");
       setText(vaultMessage, "Personal Vault заблокирован. Ищем открытую вкладку этого аккаунта…");
       await requestUnlockedVaultFromOtherTab();
