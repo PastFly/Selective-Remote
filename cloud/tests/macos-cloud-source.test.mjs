@@ -487,6 +487,20 @@ test("macOS Team workspace is wide, action-oriented, and maps invitation errors"
   assert.match(sync, /mergedKeepingNewest/u);
 });
 
+test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-folder creator", async () => {
+  const [content, teamEditor] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
+  ]);
+  const personalRow = content.match(/\.tag\(item\.id\)[\s\S]*?\.draggable\("personal-host:/u)?.[0] ?? "";
+  assert.doesNotMatch(personalRow, /\.onTapGesture/u);
+  assert.match(content, /Новая папка для выбранного Host/u);
+  assert.match(content, /Родительская папка/u);
+  assert.match(content, /Работа\/Серверы\/Linux/u);
+  assert.match(content, /Символ \/ создаёт вложенный уровень папки/u);
+  assert.match(teamEditor, /Работа\/Серверы\/Linux/u);
+});
+
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
   const [sync, crypto, settings, app, snippets] = await Promise.all([
