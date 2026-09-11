@@ -507,7 +507,7 @@ async function serveStatic(pathname, response, head) {
     const types = { ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml" };
     response.writeHead(200, {
       "Content-Type": types[extname(relative)] ?? "application/octet-stream",
-      "Cache-Control": [".html", ".js", ".css"].includes(extname(relative)) ? "no-cache" : "public, max-age=3600",
+      "Cache-Control": [".html", ".js", ".css"].includes(extname(relative)) ? "no-store" : "public, max-age=3600",
       "Content-Security-Policy": "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     });
     response.end(head ? undefined : data);
