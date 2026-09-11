@@ -3,6 +3,7 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
+  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
@@ -443,8 +444,10 @@ export function createTeamVaultController({
       if (localDocument) {
         const merged = mergeVaultDocuments(localDocument, remoteDocument);
         if (merged.conflicts.length > 0) {
-          pendingConflicts = { revision: remote.revision, document: merged.document, conflicts: clone(merged.conflicts) };
-          return { conflicts: clone(merged.conflicts), revision: remote.revision };
+          merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
+            deviceID,
+            resolvedAt: now(),
+          });
         }
         nextDocument = merged.document;
       }
@@ -551,10 +554,14 @@ export function createTeamVaultController({
         cryptoValue,
       }));
       const merged = mergeVaultDocuments(document, remoteDocument);
-      if (merged.conflicts.length > 0) {
-        pendingConflicts = { revision: remote.revision, document: merged.document, conflicts: clone(merged.conflicts) };
-        return { conflicts: clone(merged.conflicts) };
+      const automaticallyResolved = merged.conflicts.length;
+      if (automaticallyResolved > 0) {
+        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
+          deviceID,
+          resolvedAt: now(),
+        });
       }
+      pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
       const localChanged = JSON.stringify(merged.document) !== JSON.stringify(document);
       if (matchesRemote) {
@@ -572,7 +579,7 @@ export function createTeamVaultController({
         await persist(merged.document);
         await save({ ...snapshot, serverRevision: remote.revision, wrapper: remote.wrapper ?? snapshot.wrapper });
       }
-      return { conflicts: [], matchesRemote, localChanged };
+      return { conflicts: [], automaticallyResolved, matchesRemote, localChanged };
     },
 
     async mergeRemoteGeneration(remote) {
@@ -598,10 +605,12 @@ export function createTeamVaultController({
         cryptoValue,
       }));
       const merged = mergeVaultDocuments(document, remoteDocument);
-      if (merged.conflicts.length > 0) {
-        pendingGeneration = { remote, vaultKey: nextKey, envelope, wrapper: remote.wrapper };
-        pendingConflicts = { revision: remote.revision, document: merged.document, conflicts: clone(merged.conflicts) };
-        return { conflicts: clone(merged.conflicts) };
+      const automaticallyResolved = merged.conflicts.length;
+      if (automaticallyResolved > 0) {
+        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
+          deviceID,
+          resolvedAt: now(),
+        });
       }
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
       const nextLocalRevision = snapshot.localRevision + 1;
@@ -629,7 +638,7 @@ export function createTeamVaultController({
       document = merged.document;
       pendingConflicts = null;
       pendingGeneration = null;
-      return { conflicts: [], matchesRemote };
+      return { conflicts: [], automaticallyResolved, matchesRemote };
     },
 
     pendingConflicts() {

@@ -338,7 +338,12 @@ actor SelectiveRemotePersonalVaultAutoSync {
         }
         let concurrentChange = remote.revision != material.revision
         let document = concurrentChange
-            ? try mergeConcurrent(local: exported.document, remote: remote, vaultKey: material.vaultKey)
+            ? try mergeConcurrent(
+                local: exported.document,
+                remote: remote,
+                vaultKey: material.vaultKey,
+                deviceID: deviceID
+            )
             : try mergedDocument(
                 local: exported.document,
                 remote: remote,
@@ -369,31 +374,20 @@ actor SelectiveRemotePersonalVaultAutoSync {
     private func mergeConcurrent(
         local: SelectiveRemoteVaultDocument,
         remote: SelectiveRemoteCloudPersonalVault,
-        vaultKey: Data
+        vaultKey: Data,
+        deviceID: UUID
     ) throws -> SelectiveRemoteVaultDocument {
         guard let envelope = remote.envelope else {
             throw SelectiveRemotePersonalVaultError.invalidEnvelope
         }
         let current = try SelectiveRemotePersonalVaultCrypto.open(envelope, vaultKey: vaultKey)
-        var records = Dictionary(uniqueKeysWithValues: current.records.map { ($0.id, $0) })
-        for record in local.records {
-            if let existing = records[record.id], existing.modifiedAt > record.modifiedAt { continue }
-            records[record.id] = record
-        }
-        var tombstones = Dictionary(uniqueKeysWithValues: current.tombstones.map { ($0.id, $0) })
-        for tombstone in local.tombstones {
-            if let existing = tombstones[tombstone.id], existing.deletedAt > tombstone.deletedAt { continue }
-            tombstones[tombstone.id] = tombstone
-        }
-        for (id, tombstone) in tombstones {
-            if let record = records[id], tombstone.deletedAt >= record.modifiedAt {
-                records.removeValue(forKey: id)
-            }
-        }
-        return try .init(
-            records: records.values.sorted { $0.id.uuidString < $1.id.uuidString },
-            tombstones: tombstones.values.sorted { $0.id.uuidString < $1.id.uuidString }
-        )
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return try local.mergedKeepingNewest(
+            with: current,
+            deviceID: deviceID,
+            resolvedAt: formatter.string(from: Date())
+        ).document
     }
 
     private func mergedDocument(

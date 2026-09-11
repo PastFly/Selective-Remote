@@ -70,7 +70,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 )
             }
         }
-        .frame(minWidth: 820, minHeight: 600)
+        .frame(
+            minWidth: 1_020,
+            idealWidth: 1_160,
+            minHeight: 700,
+            idealHeight: 800
+        )
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Button(UpdateLocalization.text(ru: "Обновить", en: "Refresh"), systemImage: "arrow.clockwise") {
@@ -133,54 +138,121 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func membersView(_ team: SelectiveRemoteCloudTeam) -> some View {
-        Form {
-            Section(UpdateLocalization.text(ru: "Участники", en: "Members")) {
-                ForEach(members) { member in
-                    HStack {
-                        VStack(alignment: .leading) {
+        HSplitView {
+            VStack(alignment: .leading, spacing: 12) {
+                Label(
+                    UpdateLocalization.text(ru: "Участники", en: "Members"),
+                    systemImage: "person.2.fill"
+                )
+                .font(.headline)
+
+                List(members) { member in
+                    HStack(spacing: 12) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(Color.accentColor)
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(member.displayName).font(.headline)
-                            Text("@\(member.username)").font(.caption).foregroundStyle(.secondary)
+                            Text("@\(member.username)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Text(roleTitle(member.role)).foregroundStyle(.secondary)
+                        Text(roleTitle(member.role))
+                            .font(.callout.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, 6)
+                }
+                .listStyle(.inset)
+            }
+            .padding(16)
+            .frame(minWidth: 360, idealWidth: 430, maxWidth: 520)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if team.role == .owner || team.role == .admin {
+                        usernameInvitationCard(team)
+                        alternativeInvitationCard(team)
+                        activeInvitationsCard
+                    } else {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(
+                                ru: "Управление участниками недоступно",
+                                en: "Member Management Unavailable"
+                            ),
+                            systemImage: "person.badge.shield.checkmark",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Приглашения доступны владельцу и администраторам команды.",
+                                en: "Invitations are available to the Team owner and administrators."
+                            ))
+                        )
                     }
                 }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
+            .frame(minWidth: 480, maxWidth: .infinity)
+        }
+    }
 
-            if team.role == .owner || team.role == .admin {
-                Section(UpdateLocalization.text(ru: "Пригласить на 48 часов", en: "Invite for 48 Hours")) {
-                    TextField("@username", text: $invitationUsername)
-                    Picker(UpdateLocalization.text(ru: "Роль", en: "Role"), selection: $invitationRole) {
-                        Text(roleTitle(.viewer)).tag(SelectiveRemoteCloudTeamRole.viewer)
-                        Text(roleTitle(.editor)).tag(SelectiveRemoteCloudTeamRole.editor)
-                        if team.role == .owner {
-                            Text(roleTitle(.admin)).tag(SelectiveRemoteCloudTeamRole.admin)
-                        }
+    private func usernameInvitationCard(_ team: SelectiveRemoteCloudTeam) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                TextField("@username", text: $invitationUsername)
+                    .textFieldStyle(.roundedBorder)
+                Picker(UpdateLocalization.text(ru: "Роль", en: "Role"), selection: $invitationRole) {
+                    Text(roleTitle(.viewer)).tag(SelectiveRemoteCloudTeamRole.viewer)
+                    Text(roleTitle(.editor)).tag(SelectiveRemoteCloudTeamRole.editor)
+                    if team.role == .owner {
+                        Text(roleTitle(.admin)).tag(SelectiveRemoteCloudTeamRole.admin)
                     }
-                    Button(UpdateLocalization.text(ru: "Отправить приглашение", en: "Send Invitation")) {
-                        invite(team)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(isBusy || normalized(invitationUsername).isEmpty)
+                }
+                .pickerStyle(.segmented)
+                Button(UpdateLocalization.text(ru: "Отправить приглашение", en: "Send Invitation")) {
+                    invite(team)
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(isBusy || normalized(invitationUsername).isEmpty)
+            }
+            .padding(4)
+        } label: {
+            Label(
+                UpdateLocalization.text(ru: "Пригласить по username", en: "Invite by Username"),
+                systemImage: "at"
+            )
+        }
+    }
 
+    private func alternativeInvitationCard(_ team: SelectiveRemoteCloudTeam) -> some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
                     TextField("Email", text: $invitationEmail)
-                    Button(UpdateLocalization.text(ru: "Пригласить по email", en: "Invite by Email")) { inviteByEmail(team) }
-                        .disabled(isBusy || normalized(invitationEmail).isEmpty)
+                        .textFieldStyle(.roundedBorder)
+                    Button(UpdateLocalization.text(ru: "Пригласить", en: "Invite")) {
+                        inviteByEmail(team)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isBusy || normalized(invitationEmail).isEmpty)
+                }
 
+                Divider()
+
+                HStack {
                     Button(
                         UpdateLocalization.text(ru: "Создать одноразовую ссылку", en: "Create Single-Use Link"),
                         systemImage: "link.badge.plus"
                     ) {
                         createInvitationLink(team)
                     }
+                    .buttonStyle(.bordered)
                     .disabled(isBusy)
-
+                    Spacer()
                     if let latestInvitationURL {
-                        Text(latestInvitationURL)
-                            .font(.caption.monospaced())
-                            .textSelection(.enabled)
                         Button(
-                            UpdateLocalization.text(ru: "Скопировать ссылку", en: "Copy Link"),
+                            UpdateLocalization.text(ru: "Скопировать", en: "Copy"),
                             systemImage: "doc.on.doc"
                         ) {
                             copyInvitationLink(latestInvitationURL)
@@ -188,33 +260,58 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     }
                 }
 
-                Section(UpdateLocalization.text(ru: "Активные приглашения", en: "Active Invitations")) {
-                    if invitations.isEmpty {
-                        Text(UpdateLocalization.text(ru: "Активных приглашений нет.", en: "There are no active invitations."))
-                            .foregroundStyle(.secondary)
-                    }
-                    ForEach(invitations) { invitation in
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(invitationTitle(invitation))
-                                Text("\(roleTitle(invitation.role)) · \(invitation.expiresAt)")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            Button(
-                                UpdateLocalization.text(ru: "Отозвать", en: "Revoke"),
-                                role: .destructive
-                            ) {
-                                cancel(invitation)
-                            }
-                            .disabled(isBusy)
+                if let latestInvitationURL {
+                    Text(latestInvitationURL)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            .padding(4)
+        } label: {
+            Label(
+                UpdateLocalization.text(ru: "Другие способы", en: "Other Methods"),
+                systemImage: "paperplane"
+            )
+        }
+    }
+
+    private var activeInvitationsCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                if invitations.isEmpty {
+                    Text(UpdateLocalization.text(
+                        ru: "Активных приглашений нет.",
+                        en: "There are no active invitations."
+                    ))
+                    .foregroundStyle(.secondary)
+                }
+                ForEach(invitations) { invitation in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(invitationTitle(invitation))
+                            Text("\(roleTitle(invitation.role)) · \(invitation.expiresAt)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
+                        Spacer()
+                        Button(
+                            UpdateLocalization.text(ru: "Отозвать", en: "Revoke"),
+                            role: .destructive
+                        ) {
+                            cancel(invitation)
+                        }
+                        .disabled(isBusy)
                     }
                 }
             }
+            .padding(4)
+        } label: {
+            Label(
+                UpdateLocalization.text(ru: "Активные приглашения", en: "Active Invitations"),
+                systemImage: "clock.badge"
+            )
         }
-        .formStyle(.grouped)
     }
 
     private func vaultsView(_ team: SelectiveRemoteCloudTeam) -> some View {
@@ -250,8 +347,8 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             Label("Team Hosts", systemImage: "server.rack")
         } description: {
             Text(UpdateLocalization.text(
-                ru: "Хосты добавляются из контекстного меню основного списка: «Поделиться с командой…». Просмотр и редактирование Team Hosts появятся здесь следующим этапом.",
-                en: "Add hosts from the main list context menu using Share with Team. Team Host browsing and editing will be added here next."
+                ru: "Просмотр, подключение и редактирование доступны в разделе Team Hosts главного окна. Вложенные папки и drag-and-drop добавляются следующим этапом.",
+                en: "Browse, connect, and edit in Team Hosts in the main window. Nested folders and drag-and-drop are the next milestone."
             ))
         }
     }

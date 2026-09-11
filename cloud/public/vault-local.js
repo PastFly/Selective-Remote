@@ -9,6 +9,7 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
+  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
@@ -355,13 +356,12 @@ export function createLocalVaultController({
         throw new Error("remote_wrapped_key_changed");
       }
       const merged = mergeVaultDocuments(document, remoteDocument);
-      if (merged.conflicts.length > 0) {
-        pendingConflicts = {
-          revision,
-          document: merged.document,
-          conflicts: clone(merged.conflicts),
-        };
-        return { conflicts: clone(merged.conflicts) };
+      const automaticallyResolved = merged.conflicts.length;
+      if (automaticallyResolved > 0) {
+        merged.document = resolveVaultConflictsByNewest(merged.document, merged.conflicts, {
+          deviceID: snapshot.deviceID,
+          resolvedAt: now(),
+        });
       }
       pendingConflicts = null;
       const matchesRemote = JSON.stringify(merged.document) === JSON.stringify(remoteDocument);
@@ -369,6 +369,7 @@ export function createLocalVaultController({
       if (localChanged) await persist(merged.document);
       return {
         conflicts: [],
+        automaticallyResolved,
         matchesRemote,
         localChanged,
       };

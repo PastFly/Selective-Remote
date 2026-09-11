@@ -273,6 +273,11 @@ struct SelectiveRemoteVaultMerge: Equatable, Sendable {
     let conflicts: [SelectiveRemoteVaultConflict]
 }
 
+struct SelectiveRemoteVaultAutomaticMerge: Equatable, Sendable {
+    let document: SelectiveRemoteVaultDocument
+    let resolvedConflictCount: Int
+}
+
 enum SelectiveRemoteVaultConflictChoice: String, Codable, Equatable, Hashable, Sendable {
     case local
     case remote
@@ -397,6 +402,32 @@ struct SelectiveRemoteVaultDocument: Equatable, Sendable, Codable {
         return try .init(document: .init(records: records, tombstones: tombstones), conflicts: conflicts)
     }
 
+    func mergedKeepingNewest(
+        with remote: Self,
+        deviceID: UUID,
+        resolvedAt: String
+    ) throws -> SelectiveRemoteVaultAutomaticMerge {
+        let merge = try merged(with: remote)
+        let resolutions = try merge.conflicts.map { conflict in
+            SelectiveRemoteVaultConflictResolution(
+                id: conflict.id,
+                choice: try conflict.newestChoice()
+            )
+        }
+        let monotonicResolvedAt = merge.conflicts.reduce(resolvedAt) { result, conflict in
+            max(result, max(conflict.local.eventTimestamp, conflict.remote.eventTimestamp))
+        }
+        return try .init(
+            document: merge.document.resolving(
+                merge.conflicts,
+                with: resolutions,
+                deviceID: deviceID,
+                resolvedAt: monotonicResolvedAt
+            ),
+            resolvedConflictCount: merge.conflicts.count
+        )
+    }
+
     func resolving(
         _ conflicts: [SelectiveRemoteVaultConflict],
         with resolutions: [SelectiveRemoteVaultConflictResolution],
@@ -462,6 +493,45 @@ struct SelectiveRemoteVaultDocument: Equatable, Sendable, Codable {
     }
 }
 
+private extension SelectiveRemoteVaultEntity {
+    var eventTimestamp: String {
+        switch self {
+        case let .record(value): value.modifiedAt
+        case let .tombstone(value): value.deletedAt
+        }
+    }
+
+    var isDeletion: Bool {
+        if case .tombstone = self { return true }
+        return false
+    }
+
+    func canonicalData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        switch self {
+        case let .record(value):
+            return Data([0]) + (try encoder.encode(value))
+        case let .tombstone(value):
+            return Data([1]) + (try encoder.encode(value))
+        }
+    }
+}
+
+private extension SelectiveRemoteVaultConflict {
+    func newestChoice() throws -> SelectiveRemoteVaultConflictChoice {
+        if local.eventTimestamp != remote.eventTimestamp {
+            return local.eventTimestamp > remote.eventTimestamp ? .local : .remote
+        }
+        if local.isDeletion != remote.isDeletion {
+            return local.isDeletion ? .local : .remote
+        }
+        let localData = try local.canonicalData()
+        let remoteData = try remote.canonicalData()
+        return remoteData.lexicographicallyPrecedes(localData) ? .local : .remote
+    }
+}
+
 struct SelectiveRemoteTeamVaultRecordConflict: Equatable, Sendable {
     let transport: SelectiveRemoteTeamVaultConflict
     let mergedDocument: SelectiveRemoteVaultDocument
@@ -514,6 +584,30 @@ extension SelectiveRemoteTeamVaultSyncCoordinator {
         case let .conflict(updated):
             return .conflict(try prepareRecordConflict(updated))
         }
+    }
+
+    func resolveRecordConflictsKeepingNewest(
+        _ conflict: SelectiveRemoteTeamVaultConflict,
+        resolvedAt: String,
+        teamID: UUID,
+        vaultID: UUID,
+        identity: SelectiveRemoteTeamDeviceIdentity
+    ) async throws -> SelectiveRemoteTeamVaultRecordPushOutcome {
+        let prepared = try prepareRecordConflict(conflict)
+        let resolutions = try prepared.recordConflicts.map { value in
+            SelectiveRemoteVaultConflictResolution(
+                id: value.id,
+                choice: try value.newestChoice()
+            )
+        }
+        return try await resolveRecordConflicts(
+            prepared,
+            resolutions: resolutions,
+            resolvedAt: resolvedAt,
+            teamID: teamID,
+            vaultID: vaultID,
+            identity: identity
+        )
     }
 }
 

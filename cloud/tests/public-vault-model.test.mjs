@@ -4,6 +4,8 @@ import {
   createEmptyVaultDocument,
   deleteVaultRecord,
   mergeVaultDocuments,
+  newestVaultConflictChoice,
+  resolveVaultConflictsByNewest,
   resolveVaultConflict,
   upsertVaultRecord,
   validateVaultDocument,
@@ -94,6 +96,38 @@ test("concurrent edit and deletion require an explicit resolution", () => {
   assert.equal(result.conflicts.length, 1);
   assert.equal(result.conflicts[0].local.kind, "record");
   assert.equal(result.conflicts[0].remote.kind, "tombstone");
+});
+
+test("newest conflict policy picks the later edit and joins both causal histories", () => {
+  const base = host();
+  const local = host(base, "Older local edit", deviceA, secondTime);
+  const remote = host(base, "Newer remote edit", deviceB, thirdTime);
+  const merge = mergeVaultDocuments(local, remote);
+
+  assert.equal(newestVaultConflictChoice(merge.conflicts[0]), "remote");
+  const resolved = resolveVaultConflictsByNewest(merge.document, merge.conflicts, {
+    deviceID: deviceC,
+    resolvedAt: thirdTime,
+  });
+  assert.equal(resolved.records[0].data.title, "Newer remote edit");
+  assert.deepEqual(resolved.records[0].version, { [deviceA]: 2, [deviceB]: 1, [deviceC]: 1 });
+  assert.equal(mergeVaultDocuments(resolved, local).conflicts.length, 0);
+});
+
+test("newest conflict policy keeps a later deletion and never resurrects an equal-time delete", () => {
+  const base = host();
+  const edited = host(base, "Offline edit", deviceA, secondTime);
+  const laterDeletion = deleteVaultRecord(base, { id: recordID, deviceID: deviceB, deletedAt: thirdTime });
+  const laterMerge = mergeVaultDocuments(edited, laterDeletion);
+  assert.equal(newestVaultConflictChoice(laterMerge.conflicts[0]), "remote");
+  assert.equal(resolveVaultConflictsByNewest(laterMerge.document, laterMerge.conflicts, {
+    deviceID: deviceC,
+    resolvedAt: thirdTime,
+  }).tombstones.length, 1);
+
+  const equalDeletion = deleteVaultRecord(base, { id: recordID, deviceID: deviceB, deletedAt: secondTime });
+  const equalMerge = mergeVaultDocuments(edited, equalDeletion);
+  assert.equal(newestVaultConflictChoice(equalMerge.conflicts[0]), "remote");
 });
 
 test("validation rejects duplicate identities, unknown fields and unsafe record data", () => {
