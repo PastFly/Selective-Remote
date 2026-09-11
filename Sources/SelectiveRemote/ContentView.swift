@@ -4498,3 +4498,291 @@ private struct ProfileTagsEditor: View {
                         .foregroundStyle(.secondary)
                     TextField("Новое название", text: $renamedTag)
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit { rename(oldTag) }
+                    HStack {
+                        Spacer()
+                        Button("Отмена") { renamingTag = nil }
+                        Button("Переименовать") { rename(oldTag) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(
+                                AppModel.normalizedProfileTagName(renamedTag).isEmpty
+                            )
+                    }
+                }
+                .padding(24)
+                .frame(width: 390)
+            }
+        }
+    }
+
+    private func addNewTag() {
+        guard model.addProfileTag(newTag, to: profileID) else { return }
+        newTag = ""
+    }
+
+    private func rename(_ oldTag: String) {
+        let normalized = AppModel.normalizedProfileTagName(renamedTag)
+        guard !normalized.isEmpty else { return }
+        model.renameProfileTag(oldTag, to: normalized)
+        renamingTag = nil
+    }
+}
+
+private struct FlowLayout: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        layout(proposal: proposal, subviews: subviews).size
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        let result = layout(
+            proposal: ProposedViewSize(width: bounds.width, height: bounds.height),
+            subviews: subviews
+        )
+        for (index, point) in result.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                anchor: .topLeading,
+                proposal: .unspecified
+            )
+        }
+    }
+
+    private func layout(
+        proposal: ProposedViewSize,
+        subviews: Subviews
+    ) -> (size: CGSize, points: [CGPoint]) {
+        let maxWidth = proposal.width ?? .greatestFiniteMagnitude
+        var points: [CGPoint] = []
+        var x: CGFloat = 0
+        var y: CGFloat = 0
+        var lineHeight: CGFloat = 0
+
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > maxWidth {
+                x = 0
+                y += lineHeight + spacing
+                lineHeight = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            lineHeight = max(lineHeight, size.height)
+        }
+        return (
+            CGSize(
+                width: proposal.width ?? max(0, x - spacing),
+                height: y + lineHeight
+            ),
+            points
+        )
+    }
+}
+
+private struct ProfileRow: View {
+    let profile: ConnectionProfile
+    let session: RDPSessionSummary?
+    let hasActiveSSH: Bool
+    let activeTunnelCount: Int
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ProfileOperatingSystemBadge(
+                profile: profile,
+                connectionActive: session != nil || hasActiveSSH,
+                tunnelActive: activeTunnelCount > 0
+            )
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 5) {
+                    Text(
+                        profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                            : profile.friendlyName
+                    )
+                        .lineLimit(1)
+                    if profile.isFavorite {
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(.yellow)
+                            .font(.caption)
+                    }
+                }
+                Text(
+                    session?.phase.rawValue
+                        ?? (hasActiveSSH
+                            ? "SSH-сессия активна"
+                            : activeTunnelCount > 0
+                            ? "Туннелей: \(activeTunnelCount)"
+                            : inactiveProfileSubtitle)
+                )
+                    .font(.caption)
+                .foregroundStyle(
+                    session != nil || hasActiveSSH
+                        ? Color.green
+                        : activeTunnelCount > 0 ? Color.orange : Color.secondary
+                )
+                    .lineLimit(1)
+                if !profile.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(Array(profile.tags.prefix(2)), id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 9, weight: .medium))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.11), in: Capsule())
+                                .lineLimit(1)
+                        }
+                        if profile.tags.count > 2 {
+                            Text("+\(profile.tags.count - 2)")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 5)
+        .contentShape(Rectangle())
+    }
+
+    private var inactiveProfileSubtitle: String {
+        if profile.connectionType == .serial {
+            return profile.serialDevicePath.isEmpty
+                ? UpdateLocalization.text(ru: "Устройство не выбрано", en: "No device selected")
+                : profile.serialDevicePath
+        }
+        guard !profile.host.isEmpty else { return "Hostname не указан" }
+        guard profile.connectionType == .ssh,
+              !profile.detectedOperatingSystem.isEmpty
+        else { return profile.host }
+        return "\(profile.host) · \(profile.detectedOperatingSystem)"
+    }
+}
+
+private struct ProfileGridCard: View {
+    let profile: ConnectionProfile
+    let isSelected: Bool
+    let session: RDPSessionSummary?
+    let hasActiveSSH: Bool
+    let activeTunnelCount: Int
+
+    private var connectionActive: Bool { session != nil || hasActiveSSH }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(alignment: .top) {
+                ProfileOperatingSystemBadge(
+                    profile: profile,
+                    connectionActive: connectionActive,
+                    tunnelActive: activeTunnelCount > 0
+                )
+                Spacer()
+                if profile.isFavorite {
+                    Image(systemName: "star.fill")
+                        .font(.caption)
+                        .foregroundStyle(.yellow)
+                }
+            }
+            Text(
+                profile.friendlyName.isEmpty
+                    ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                    : profile.friendlyName
+            )
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(2)
+            Text(
+                profile.connectionType == .serial
+                    ? (profile.serialDevicePath.isEmpty ? "Устройство не выбрано" : profile.serialDevicePath)
+                    : (profile.host.isEmpty ? "Hostname не указан" : profile.host)
+            )
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+
+            if !profile.tags.isEmpty {
+                HStack(spacing: 4) {
+                    Image(systemName: "tag.fill")
+                    Text(profile.tags.prefix(2).joined(separator: ", "))
+                        .lineLimit(1)
+                }
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+            }
+
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(
+                        connectionActive
+                            ? Color.green
+                            : activeTunnelCount > 0 ? Color.orange : Color.secondary.opacity(0.45)
+                    )
+                    .frame(width: 6, height: 6)
+                Text(
+                    connectionActive
+                        ? "Подключено"
+                        : activeTunnelCount > 0 ? "Туннель активен" : profile.connectionType.title
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+        }
+        .padding(9)
+        .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
+        .background(
+            isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(
+                    isSelected ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.08),
+                    lineWidth: isSelected ? 1.5 : 1
+                )
+        }
+    }
+}
+
+private func routeNode(title: String, subtitle: String, systemImage: String) -> some View {
+    VStack(spacing: 6) {
+        Image(systemName: systemImage)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .lineLimit(1)
+        Text(subtitle)
+            .font(.caption2.monospaced())
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+    }
+    .frame(maxWidth: .infinity)
+}
+
+private struct ModernGroupBoxStyle: GroupBoxStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 15) {
+            configuration.label
+                .font(.headline)
+                .foregroundStyle(.primary)
+            configuration.content
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.075))
+        }
+        .shadow(color: Color.black.opacity(0.035), radius: 12, y: 5)
+    }
+}
