@@ -1522,6 +1522,9 @@ export function initializeTeamWorkspace({
   function setView(view) {
     activeView = ["teams", "members", "vaults", "hosts", "management"].includes(view) ? view : "teams";
     section.dataset.teamView = activeView;
+    for (const button of documentValue.querySelectorAll("#team-view-tabs [data-team-view]")) {
+      button.classList.toggle("active", button.dataset.teamView === activeView);
+    }
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
       hosts: "Хосты команд", management: "Управление командой",
@@ -2781,7 +2784,8 @@ export function initializePortalNavigation({
       const matchesFilter = panelID !== "local-vault"
         || (button.dataset.recordFilter || "all") === (recordFilter || "all");
       const matchesTeamView = panelID !== "team-vault"
-        || (button.dataset.teamView || "teams") === (teamView || "teams");
+        || !button.dataset.teamView
+        || button.dataset.teamView === (teamView || "teams");
       button.classList.toggle("active", matchesPanel && matchesFilter && matchesTeamView);
     }
     setText(workspaceTitle, panelID === "local-vault"

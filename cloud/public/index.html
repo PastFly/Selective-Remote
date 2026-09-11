@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=126">
+  <link rel="stylesheet" href="/styles.css?v=127">
 </head>
 <body>
   <main class="shell">
@@ -149,11 +149,7 @@
           <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
           <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
           <p class="workspace-nav-label">Команды</p>
-          <button type="button" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники команд</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Папки команд</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Хосты команд</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление командой</button>
+          <button type="button" data-workspace-target="team-vault">Команды</button>
           <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-workspace-target="workspace-devices">Устройства</button>
           <button type="button" data-workspace-target="workspace-settings">Настройки</button>
@@ -243,6 +239,10 @@
       </div>
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
+        <nav class="host-scope-switcher" aria-label="Область Hosts">
+          <button type="button" class="active" data-workspace-target="local-vault" data-record-filter="host">Личные</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Командные</button>
+        </nav>
         <nav class="record-filters" id="personal-vault-filters" aria-label="Типы записей">
           <button type="button" class="active" data-record-filter="all">Все</button>
           <button type="button" data-record-filter="host">Hosts</button>
@@ -448,6 +448,14 @@
         <p id="team-vault-message" aria-live="polite">Загрузка Teams…</p>
       </div>
 
+      <nav class="team-section-tabs" id="team-view-tabs" aria-label="Управление командами">
+        <button type="button" class="active" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Vaults</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Хосты</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление</button>
+      </nav>
+
       <div class="team-onboarding" id="team-onboarding">
         <form id="team-create-form">
           <h3>Создать Team</h3>
@@ -553,6 +561,10 @@
         </section>
 
         <div class="vault-workspace" id="team-vault-workspace" hidden>
+          <nav class="host-scope-switcher" aria-label="Область Hosts">
+            <button type="button" data-workspace-target="local-vault" data-record-filter="host">Личные</button>
+            <button type="button" class="active" data-workspace-target="team-vault" data-team-view="hosts">Командные</button>
+          </nav>
           <div class="vault-toolbar">
             <div>
               <h3 id="team-vault-workspace-title">Папка команды</h3>
@@ -605,10 +617,12 @@
           </form>
           </details>
           <div class="team-host-browser" id="team-host-browser">
-            <label for="team-host-search">Найти Host</label>
-            <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
-            <label for="team-host-folder-filter">Папка</label>
-            <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
+            <label class="personal-vault-control" for="team-host-search"><span>Поиск</span>
+              <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
+            </label>
+            <label class="personal-vault-control" for="team-host-folder-filter"><span>Папка</span>
+              <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
+            </label>
           </div>
           <div class="vault-records" id="team-vault-records"></div>
           <section class="vault-conflicts" id="team-vault-conflicts" aria-labelledby="team-vault-conflicts-title" hidden>
@@ -631,6 +645,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=126"></script>
+  <script type="module" src="/app.js?v=127"></script>
 </body>
 </html>

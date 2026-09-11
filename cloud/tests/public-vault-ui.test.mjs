@@ -254,8 +254,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=126/u);
-  assert.match(html, /\/app\.js\?v=126/u);
+  assert.match(html, /\/styles\.css\?v=127/u);
+  assert.match(html, /\/app\.js\?v=127/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -304,10 +304,13 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="host">Хосты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты/u);
   assert.match(html, /data-workspace-target="local-vault" data-record-filter="credential">Учётные данные/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="teams">Команды/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="members">Участники команд/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="vaults">Папки команд/u);
-  assert.match(html, /data-workspace-target="team-vault" data-team-view="hosts">Хосты команд/u);
+  assert.match(html, /data-workspace-target="team-vault">Команды/u);
+  assert.match(html, /id="team-view-tabs"/u);
+  assert.match(html, /data-team-view="members">Участники/u);
+  assert.match(html, /data-team-view="vaults">Vaults/u);
+  assert.match(html, /data-team-view="hosts">Хосты/u);
+  assert.match(html, /class="host-scope-switcher"/u);
+  assert.match(html, />Личные<\/button>[\s\S]*data-team-view="hosts">Командные/u);
   assert.match(html, /id="team-record-editor"/u);
   assert.match(html, /id="host-detail-dialog"/u);
   assert.match(html, /id="host-detail-copy"/u);
@@ -418,6 +421,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /personalHostRecordData/u);
   assert.match(styles, /\.personal-vault-browser/u);
   assert.match(styles, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/u);
+  assert.match(styles, /\.team-host-browser \{ display:grid; grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
+  assert.match(styles, /\.record-form input\[type="checkbox"\] \{ width:auto/u);
+  assert.match(styles, /\.team-section-tabs,\.host-scope-switcher/u);
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);

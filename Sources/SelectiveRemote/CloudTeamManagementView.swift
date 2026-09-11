@@ -137,7 +137,9 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 vaultsView(team)
                     .tabItem { Label("Team Vaults", systemImage: "lock.square.stack") }
                 hostsView
-                    .tabItem { Label("Team Hosts", systemImage: "server.rack") }
+                    .tabItem {
+                        Label(UpdateLocalization.text(ru: "Хосты", en: "Hosts"), systemImage: "server.rack")
+                    }
             }
             .padding()
         }
@@ -398,11 +400,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     private var hostsView: some View {
         ContentUnavailableView {
-            Label("Team Hosts", systemImage: "server.rack")
+            Label(UpdateLocalization.text(ru: "Командные хосты", en: "Team Hosts"), systemImage: "server.rack")
         } description: {
             Text(UpdateLocalization.text(
-                ru: "Просмотр, подключение и редактирование доступны в разделе Team Hosts главного окна. Вложенные папки и drag-and-drop добавляются следующим этапом.",
-                en: "Browse, connect, and edit in Team Hosts in the main window. Nested folders and drag-and-drop are the next milestone."
+                ru: "Просмотр, подключение, редактирование, папки и drag-and-drop доступны в разделе «Хосты» главного окна — переключите область на «Командные».",
+                en: "Browse, connect, edit, organize, and drag Team Hosts in the main Hosts area by switching the scope to Team."
             ))
         }
     }
