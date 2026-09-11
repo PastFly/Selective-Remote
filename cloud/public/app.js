@@ -228,6 +228,7 @@ export async function initializeLocalVault({
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
+  let filterChangeListener = () => {};
   let activeRecordFilter = "all";
 
   function clearConflictUI() {
@@ -383,6 +384,7 @@ export async function initializeLocalVault({
         candidate.classList.toggle("active", candidate === button);
       }
       if (!workspace.hidden) render();
+      filterChangeListener(activeRecordFilter);
     });
   }
   lockButton.addEventListener("click", () => {
@@ -420,6 +422,9 @@ export async function initializeLocalVault({
     },
     setConflictResetListener(listener) {
       conflictResetListener = typeof listener === "function" ? listener : () => {};
+    },
+    setFilterChangeListener(listener) {
+      filterChangeListener = typeof listener === "function" ? listener : () => {};
     },
     async restoreModeFromLocalStatus() {
       const status = await controller.status();
@@ -519,6 +524,9 @@ export function initializeTeamWorkspace({
   const conflictForm = documentValue.querySelector("#team-vault-conflicts-form");
   const conflictList = documentValue.querySelector("#team-vault-conflicts-list");
   const conflictApply = documentValue.querySelector("#team-vault-conflicts-apply");
+  const overviewTeamCount = documentValue.querySelector("#workspace-team-count");
+  const overviewInvitationCount = documentValue.querySelector("#workspace-team-invitation-count");
+  const overviewStatus = documentValue.querySelector("#workspace-team-overview-status");
   let identity = null;
   let teams = [];
   let vaults = [];
@@ -534,6 +542,18 @@ export function initializeTeamWorkspace({
   let vaultOperation = null;
   let editingHostID = null;
   let detailedHostID = null;
+
+  function renderOverviewSummary() {
+    setText(overviewTeamCount, identity ? String(teams.length) : "—");
+    setText(overviewInvitationCount, identity ? String(accountInvitations.length) : "—");
+    setText(overviewStatus, !identity
+      ? "Войдите, чтобы открыть командное пространство."
+      : teams.length > 0
+        ? `Команд: ${teams.length}. Новых приглашений: ${accountInvitations.length}.`
+        : accountInvitations.length > 0
+          ? "У вас есть новое приглашение в команду."
+          : "Создайте первую команду или примите приглашение.");
+  }
 
   if (initialInvitationToken) acceptInvitationForm.elements.token.value = initialInvitationToken;
 
@@ -1011,6 +1031,7 @@ export function initializeTeamWorkspace({
   async function loadPendingInvitations() {
     accountInvitations = await client.listPendingTeamInvitations();
     renderPendingInvitations();
+    renderOverviewSummary();
   }
 
   function populateVaults() {
@@ -1278,6 +1299,7 @@ export function initializeTeamWorkspace({
 
   async function loadTeams(preferredID = null) {
     teams = await client.listTeams();
+    renderOverviewSummary();
     teamSelect.replaceChildren();
     for (const team of teams) {
       const option = documentValue.createElement("option");
@@ -1714,11 +1736,13 @@ export function initializeTeamWorkspace({
   });
 
   updateRecordLabels();
+  renderOverviewSummary();
   setView("teams");
   return {
     setView,
     async activate(nextIdentity) {
       identity = nextIdentity;
+      renderOverviewSummary();
       await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams()]);
     },
     deactivate() {
@@ -1739,6 +1763,7 @@ export function initializeTeamWorkspace({
       inviteLinkResult.hidden = true;
       inviteLinkValue.value = "";
       selectedPanel.hidden = true;
+      renderOverviewSummary();
     },
   };
 }
@@ -2350,6 +2375,12 @@ export function initializePortalNavigation({
     const [target, recordFilter, teamView] = workspaceRoutes[pathname] ?? workspaceRoutes["/app"];
     selectWorkspacePanel(target, recordFilter, teamView);
   }
+
+  vaultUI?.setFilterChangeListener((recordFilter) => {
+    selectWorkspacePanel("local-vault", recordFilter, null);
+    requestedWorkspaceRoute = routeForWorkspace("local-vault", recordFilter, null);
+    setPath(requestedWorkspaceRoute);
+  });
 
   function showLanding({ replace = false } = {}) {
     brand.hidden = false;
