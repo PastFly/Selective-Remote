@@ -666,6 +666,7 @@ struct SSHKeyRecord: Codable, Equatable, Identifiable, Sendable {
 }
 
 enum ProfileSortMode: String, CaseIterable, Identifiable {
+    case manual
     case favoritesAndName
     case name
     case host
@@ -675,6 +676,7 @@ enum ProfileSortMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
+        case .manual: UpdateLocalization.text(ru: "Вручную", en: "Manual")
         case .favoritesAndName: "Избранное и название"
         case .name: "Название"
         case .host: "Hostname"
@@ -781,6 +783,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var connectionType: ConnectionType
     var friendlyName: String
     var group: String
+    var sortIndex: Int
     var tags: [String]
     var profileDescription: String
     var detectedOperatingSystem: String
@@ -866,6 +869,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
             friendlyName = UpdateLocalization.text(ru: "Новое Serial-подключение", en: "New Serial Connection")
         }
         group = ""
+        sortIndex = 0
         tags = []
         profileDescription = ""
         detectedOperatingSystem = ""
@@ -939,7 +943,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, connectionType, friendlyName, group, tags, profileDescription
+        case id, connectionType, friendlyName, group, sortIndex, tags, profileDescription
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
@@ -973,6 +977,8 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         friendlyName = try container.decodeIfPresent(String.self, forKey: .friendlyName)
             ?? defaults.friendlyName
         group = try container.decodeIfPresent(String.self, forKey: .group) ?? defaults.group
+        sortIndex = try container.decodeIfPresent(Int.self, forKey: .sortIndex)
+            ?? defaults.sortIndex
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? defaults.tags
         profileDescription = try container.decodeIfPresent(
             String.self,
@@ -1155,6 +1161,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(connectionType, forKey: .connectionType)
         try container.encode(friendlyName, forKey: .friendlyName)
         try container.encode(group, forKey: .group)
+        try container.encode(sortIndex, forKey: .sortIndex)
         try container.encode(tags, forKey: .tags)
         try container.encode(profileDescription, forKey: .profileDescription)
         try container.encode(detectedOperatingSystem, forKey: .detectedOperatingSystem)

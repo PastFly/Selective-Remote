@@ -35,6 +35,47 @@ struct ProfileOrganizationAndSecurityTests {
         #expect(migrated.tags.isEmpty)
     }
 
+    @Test("Путь вложенных папок нормализуется, а ручной порядок мигрирует совместимо")
+    func nestedFolderPathAndManualOrderAreBackwardCompatible() throws {
+        #expect(
+            SelectiveRemoteHostFolderPath.normalize("  Infrastructure // Production / Linux  ")
+                == "Infrastructure/Production/Linux"
+        )
+        #expect(SelectiveRemoteHostFolderPath.components("A/B/C") == ["A", "B", "C"])
+
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.group = "Infrastructure/Production"
+        profile.sortIndex = 7
+        let encoded = try JSONEncoder().encode(profile)
+        let restored = try JSONDecoder().decode(ConnectionProfile.self, from: encoded)
+        #expect(restored.sortIndex == 7)
+
+        var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacy.removeValue(forKey: "sortIndex")
+        let migrated = try JSONDecoder().decode(
+            ConnectionProfile.self,
+            from: JSONSerialization.data(withJSONObject: legacy)
+        )
+        #expect(migrated.sortIndex == 0)
+    }
+
+    @Test("Дерево Personal Hosts строит папку внутри папки")
+    func personalHostTreeBuildsNestedFolders() throws {
+        var host = ConnectionProfile(connectionType: .ssh)
+        host.group = "Infrastructure/Production/Linux"
+        host.friendlyName = "Bastion"
+        let roots = SelectiveRemoteProfileFolderNode.roots(from: [
+            .init(name: host.group, profiles: [host])
+        ])
+        let infrastructure = try #require(roots.first)
+        #expect(infrastructure.path == "Infrastructure")
+        let production = try #require(infrastructure.children.first)
+        #expect(production.path == "Infrastructure/Production")
+        let linux = try #require(production.children.first)
+        #expect(linux.path == "Infrastructure/Production/Linux")
+        #expect(linux.profiles.map(\.id) == [host.id])
+    }
+
     @Test("Названия пользовательских тегов нормализуются и ограничиваются")
     func customTagNamesAreNormalized() {
         #expect(AppModel.normalizedProfileTagName("  production   servers  ") == "production servers")
@@ -96,5 +137,7 @@ struct ProfileOrganizationAndSecurityTests {
         #expect(content.contains("GridItem(.adaptive(minimum: 100)"))
         #expect(content.contains("Создать свой тег"))
         #expect(content.contains("ConnectionActivityView"))
+        #expect(content.contains(".draggable(\"personal-host:"))
+        #expect(content.contains("movePersonalProfile"))
     }
 }
