@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=122">
+  <link rel="stylesheet" href="/styles.css?v=123">
 </head>
 <body>
   <main class="shell">
@@ -148,8 +148,7 @@
           <button type="button" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
           <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
           <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
-          <p class="workspace-nav-label">Хранилища</p>
-          <button type="button" data-workspace-target="local-vault" data-record-filter="all">Personal Vault</button>
+          <p class="workspace-nav-label">Команды</p>
           <button type="button" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
           <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники команд</button>
           <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Папки команд</button>
@@ -240,6 +239,7 @@
         <div class="vault-toolbar">
           <div><h3>Личный Vault</h3><p>Зашифрованная копия, которая разблокируется только на вашем устройстве.</p></div>
           <div class="vault-actions">
+            <button type="button" class="secondary" id="local-record-create">Добавить запись</button>
             <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
             <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
           </div>
@@ -266,7 +266,7 @@
             <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
           </label>
         </div>
-        <form class="record-form" id="local-vault-record-form">
+        <form class="record-form" id="local-vault-record-form" hidden>
           <div class="record-editor-heading">
             <h3 id="local-record-editor-title">Новая запись</h3>
             <p id="local-record-editor-hint">Выберите тип и заполните поля. Всё шифруется в браузере.</p>
@@ -632,6 +632,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=122"></script>
+  <script type="module" src="/app.js?v=123"></script>
 </body>
 </html>
