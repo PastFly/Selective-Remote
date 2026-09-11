@@ -196,7 +196,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="cloud-logout"/u);
   assert.match(html, /id="cloud-vault-recovery-form"/u);
   assert.match(html, /id="cloud-vault-recovery-account-password"[^>]*name="accountPassword"[^>]*autocomplete="current-password"/u);
-  assert.match(html, /Recovery-фраза[^<]*один раз/u);
+  assert.match(html, /recovery-фразу один раз/iu);
   assert.match(html, /Сразу после обычного входа поле можно оставить пустым/u);
   assert.match(html, /id="local-vault-conflicts-form"/u);
   assert.match(html, /id="local-vault-conflicts-apply"[^>]*disabled/u);
