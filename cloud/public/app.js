@@ -105,6 +105,14 @@ export function formatVaultTimestamp(value, { locales, timeZone } = {}) {
   }).format(date);
 }
 
+export function formatVaultSynchronizationSummary(revision, at = new Date().toISOString(), options = {}) {
+  const normalizedRevision = Number(revision);
+  if (!Number.isSafeInteger(normalizedRevision) || normalizedRevision < 0) {
+    return "Последняя синхронизация: —";
+  }
+  return `Последняя синхронизация: ${formatVaultTimestamp(at, options)} · r${normalizedRevision}.`;
+}
+
 export function sortLocalVaultRecords(records, mode = "modified-desc") {
   const values = [...records];
   const title = (record) => String(record?.data?.title ?? "");
@@ -149,6 +157,10 @@ export function personalHostEditorValues(record) {
     tags: Array.isArray(profile?.tags ?? data.tags) ? (profile?.tags ?? data.tags).join(", ") : "",
     description: String(profile?.profileDescription ?? data.description ?? ""),
   };
+}
+
+export function personalHostFolderName(record) {
+  return personalHostEditorValues(record).folder.trim() || "Без папки";
 }
 
 export function personalHostRecordData({ title, address, protocol, port, username, folder, tags, description, baseData = null }) {
@@ -475,7 +487,7 @@ export async function initializeLocalVault({
     for (const [recordType, count] of Object.entries(counts)) {
       setText(documentValue.querySelector(`#workspace-${recordType}-count`), String(count));
     }
-    const hostFolderName = (record) => String(record?.data?.folder ?? "").trim() || "Без папки";
+    const hostFolderName = personalHostFolderName;
     const selectedFolder = String(folderFilter?.value ?? "all");
     const folders = [...new Set(current.records.filter((record) => record.type === "host").map(hostFolderName))]
       .sort((a, b) => a.localeCompare(b));
@@ -497,7 +509,9 @@ export async function initializeLocalVault({
     const visibleRecords = sortLocalVaultRecords(filteredRecords.filter((record) => {
       if (!query) return true;
       const data = record.data ?? {};
+      const host = record.type === "host" ? personalHostEditorValues(record) : null;
       const searchable = [data.title, data.address, data.username, data.destination, data.folder,
+        host?.title, host?.address, host?.username, host?.folder, host?.tags,
         ...(Array.isArray(data.tags) ? data.tags : [])];
       return searchable.some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
     }), sort?.value);
@@ -532,7 +546,7 @@ export async function initializeLocalVault({
       const remove = documentValue.createElement("button");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
-      metadata.textContent = `${record.type} · ${formatVaultTimestamp(record.modifiedAt)}`;
+      metadata.textContent = `${record.type} · Изменено: ${formatVaultTimestamp(record.modifiedAt)}`;
       actions.className = "record-actions";
       edit.type = "button";
       edit.className = "secondary record-edit";
@@ -572,9 +586,9 @@ export async function initializeLocalVault({
           setText(hostDetailPort, connection.protocol === "serial" ? "—" : String(connection.port));
           setText(hostDetailUsername, connection.username || "—");
           setText(hostDetailPasswordState, "Управляется приложением");
-          setText(hostDetailFolder, String(record.data?.folder ?? "Личный Vault"));
-          setText(hostDetailTags, Array.isArray(record.data?.tags) && record.data.tags.length ? record.data.tags.join(", ") : "—");
-          setText(hostDetailDescription, String(record.data?.description ?? "—"));
+          setText(hostDetailFolder, connection.folder || "Без папки");
+          setText(hostDetailTags, connection.tags || "—");
+          setText(hostDetailDescription, connection.description || "—");
           hostDetailEdit.hidden = false;
           hostDetailEdit.onclick = () => { hostDetail.close?.(); beginEdit(record); };
           hostDetailCopyPassword.hidden = true;
@@ -2178,7 +2192,7 @@ export async function initializeCloudAccount({
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
       if (Number.isSafeInteger(result.revision)) {
-        setText(vaultMessage, `Personal Vault синхронизирован · r${result.revision}.`);
+        setText(vaultMessage, formatVaultSynchronizationSummary(result.revision));
       }
     } catch {
       setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
@@ -2596,7 +2610,10 @@ export async function initializeCloudAccount({
       const automaticSuffix = result.automaticallyResolved
         ? ` Автоматически разрешено конфликтов: ${result.automaticallyResolved}.`
         : "";
-      setText(vaultMessage, `${messages[result.status] ?? "Синхронизация завершена."}${automaticSuffix}`);
+      const synchronizedAt = Number.isSafeInteger(result.revision)
+        ? ` ${formatVaultSynchronizationSummary(result.revision)}`
+        : "";
+      setText(vaultMessage, `${messages[result.status] ?? "Синхронизация завершена."}${automaticSuffix}${synchronizedAt}`);
     } catch (error) {
       const code = String(error?.message ?? "");
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
