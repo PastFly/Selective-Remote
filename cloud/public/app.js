@@ -763,6 +763,10 @@ export function initializeTeamWorkspace({
   const teamRole = documentValue.querySelector("#team-role");
   const members = documentValue.querySelector("#team-members");
   const membersView = documentValue.querySelector("#team-members-view");
+  const memberSearch = documentValue.querySelector("#team-member-search");
+  const memberRoleFilter = documentValue.querySelector("#team-member-role-filter");
+  const memberCount = documentValue.querySelector("#team-member-count");
+  const memberMore = documentValue.querySelector("#team-member-more");
   const inviteForm = documentValue.querySelector("#team-invite-form");
   const inviteEmailSubmit = documentValue.querySelector("#team-invite-email-submit");
   const inviteLinkCreate = documentValue.querySelector("#team-invite-link-create");
@@ -836,6 +840,11 @@ export function initializeTeamWorkspace({
   let teams = [];
   let vaults = [];
   let teamMembers = [];
+  let ownershipMembers = [];
+  let memberNextCursor = null;
+  let memberTotal = 0;
+  let memberSearchTimer = null;
+  let memberRequestGeneration = 0;
   let teamInvitations = [];
   let accountInvitations = [];
   let selectedTeam = null;
@@ -900,7 +909,7 @@ export function initializeTeamWorkspace({
   function updateTeamMessage() {
     if (!selectedTeam) return;
     if (activeView === "teams") {
-      setText(message, `Team «${selectedTeam.name}» · участников: ${teamMembers.length}.`);
+      setText(message, `Team «${selectedTeam.name}» · участников: ${memberTotal}.`);
     } else if (activeView === "members") {
       setText(message, `Команда «${selectedTeam.name}» · участники и приглашения.`);
     } else if (activeView === "management") {
@@ -1201,15 +1210,37 @@ export function initializeTeamWorkspace({
 
   function renderMembers(values) {
     members.replaceChildren();
+    memberCount.textContent = `${values.length} из ${memberTotal}`;
+    memberMore.hidden = !memberNextCursor;
+    memberMore.disabled = false;
+    if (values.length === 0) {
+      const empty = documentValue.createElement("p");
+      empty.className = "vault-empty";
+      empty.textContent = "Участники не найдены.";
+      members.append(empty);
+      return;
+    }
     for (const member of values) {
       const card = documentValue.createElement("article");
+      const avatar = documentValue.createElement("span");
+      const identityBlock = documentValue.createElement("div");
       const name = documentValue.createElement("strong");
       const detail = documentValue.createElement("small");
+      const roleBadge = documentValue.createElement("span");
+      const actions = documentValue.createElement("details");
+      const actionsLabel = documentValue.createElement("summary");
+      const actionMenu = documentValue.createElement("div");
       const role = documentValue.createElement("select");
       const save = documentValue.createElement("button");
       const revoke = documentValue.createElement("button");
+      avatar.className = "team-member-avatar";
+      avatar.textContent = (member.displayName || member.username).trim().slice(0, 1).toUpperCase();
+      identityBlock.className = "team-member-identity";
       name.textContent = member.displayName || `@${member.username}`;
       detail.textContent = `@${member.username} · epoch ${member.epoch}`;
+      identityBlock.append(name, detail);
+      roleBadge.className = "team-member-role";
+      roleBadge.textContent = member.role;
       const editableByActor = selectedTeam.role === "owner"
         || (selectedTeam.role === "admin" && ["editor", "viewer"].includes(member.role));
       const self = member.id === selectedTeam.membershipID;
@@ -1223,13 +1254,14 @@ export function initializeTeamWorkspace({
       }
       role.disabled = !editableByActor || self;
       save.type = "button";
-      save.textContent = "Изменить роль";
+      save.textContent = "Сохранить роль";
       save.disabled = !editableByActor || self;
       save.addEventListener("click", async () => {
         save.disabled = true;
         try {
           await client.updateTeamMemberRole({ teamID: selectedTeam.id, membershipID: member.id, role: role.value });
-          await loadSelectedTeam();
+          ownershipMembers = [];
+          await loadMemberPage({ reset: true });
           setText(message, "Роль участника обновлена.");
         } catch {
           setText(message, "Роль не изменена: проверьте полномочия и правило последнего Owner.");
@@ -1245,6 +1277,7 @@ export function initializeTeamWorkspace({
         revoke.disabled = true;
         try {
           const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
+          ownershipMembers = [];
           await loadSelectedTeam();
           lockCurrentVault();
           setText(message, `Доступ отозван. Vaults для обязательной ротации: ${result.rotationRequiredVaults}.`);
@@ -1253,9 +1286,19 @@ export function initializeTeamWorkspace({
           revoke.disabled = !editableByActor || self;
         }
       });
-      card.append(name, detail, role, save, revoke);
+      actions.className = "team-member-actions";
+      actionsLabel.textContent = "•••";
+      actionsLabel.setAttribute("aria-label", `Действия для @${member.username}`);
+      actionMenu.className = "team-member-action-menu";
+      actionMenu.append(role, save, revoke);
+      actions.append(actionsLabel, actionMenu);
+      actions.hidden = !editableByActor || self;
+      card.append(avatar, identityBlock, roleBadge, actions);
       members.append(card);
     }
+  }
+
+  function renderOwnershipMembers(values) {
     transferOwnershipMember.replaceChildren();
     for (const member of values.filter((value) => value.id !== selectedTeam.membershipID)) {
       const option = documentValue.createElement("option");
@@ -1264,6 +1307,30 @@ export function initializeTeamWorkspace({
       transferOwnershipMember.append(option);
     }
     transferOwnershipForm.querySelector("button").disabled = transferOwnershipMember.options.length === 0;
+  }
+
+  async function loadMemberPage({ reset = false } = {}) {
+    if (!selectedTeam) return;
+    const generation = ++memberRequestGeneration;
+    memberMore.disabled = true;
+    const page = await client.listTeamMembersPage(selectedTeam.id, {
+      search: memberSearch.value,
+      role: memberRoleFilter.value,
+      limit: 50,
+      cursor: reset ? null : memberNextCursor,
+    });
+    if (generation !== memberRequestGeneration) return;
+    teamMembers = reset ? page.members : [...teamMembers, ...page.members];
+    memberNextCursor = page.nextCursor;
+    memberTotal = page.total;
+    renderMembers(teamMembers);
+  }
+
+  async function loadOwnershipMembers() {
+    if (!selectedTeam || selectedTeam.role !== "owner" || ownershipMembers.length > 0) return;
+    transferOwnershipForm.querySelector("button").disabled = true;
+    ownershipMembers = await client.listTeamMembers(selectedTeam.id);
+    renderOwnershipMembers(ownershipMembers);
   }
 
   function invitationTarget(invitation) {
@@ -1533,6 +1600,11 @@ export function initializeTeamWorkspace({
     membersView.hidden = activeView !== "members";
     vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
+    if (activeView === "management" && selectedTeam?.role === "owner") {
+      void loadOwnershipMembers().catch(() => {
+        setText(message, "Не удалось загрузить список для передачи владения.");
+      });
+    }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     workspace.hidden = activeView !== "hosts" || !controller;
     if (activeView === "hosts") recordType.value = "host";
@@ -1584,9 +1656,15 @@ export function initializeTeamWorkspace({
   }
 
   async function loadSelectedTeam() {
+    const memberGeneration = ++memberRequestGeneration;
     selectedTeam = teams.find((team) => team.id === teamSelect.value) ?? null;
     lockCurrentVault();
     if (!selectedTeam) {
+      teamMembers = [];
+      ownershipMembers = [];
+      memberNextCursor = null;
+      memberTotal = 0;
+      renderMembers(teamMembers);
       teamInvitations = [];
       renderTeamInvitations();
       selectedPanel.hidden = true;
@@ -1606,18 +1684,32 @@ export function initializeTeamWorkspace({
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
     transferOwnershipForm.reset();
-    const [loadedMembers, sharedVaults, loadedInvitations] = await Promise.all([
-      client.listTeamMembers(selectedTeam.id),
+    const loadedTeamID = selectedTeam.id;
+    ownershipMembers = [];
+    transferOwnershipMember.replaceChildren();
+    transferOwnershipForm.querySelector("button").disabled = true;
+    const [loadedMemberPage, sharedVaults, loadedInvitations] = await Promise.all([
+      client.listTeamMembersPage(selectedTeam.id, {
+        search: memberSearch.value,
+        role: memberRoleFilter.value,
+        limit: 50,
+      }),
       client.listSharedVaults(selectedTeam.id),
       canManage() ? client.listTeamInvitations(selectedTeam.id) : Promise.resolve([]),
     ]);
-    teamMembers = loadedMembers;
-    renderMembers(teamMembers);
+    if (selectedTeam?.id !== loadedTeamID) return;
+    if (memberGeneration === memberRequestGeneration) {
+      teamMembers = loadedMemberPage.members;
+      memberNextCursor = loadedMemberPage.nextCursor;
+      memberTotal = loadedMemberPage.total;
+      renderMembers(teamMembers);
+    }
     vaults = sharedVaults;
     teamInvitations = loadedInvitations;
     renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
+    if (activeView === "management" && selectedTeam.role === "owner") await loadOwnershipMembers();
     if (activeView === "hosts" && vaults.length > 0) await openSelectedVault();
   }
 
@@ -1846,6 +1938,21 @@ export function initializeTeamWorkspace({
     loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team."));
   });
   teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
+  memberSearch.addEventListener("input", () => {
+    clearTimeout(memberSearchTimer);
+    memberSearchTimer = setTimeout(() => {
+      loadMemberPage({ reset: true }).catch(() => setText(message, "Не удалось выполнить поиск участников."));
+    }, 250);
+  });
+  memberRoleFilter.addEventListener("change", () => {
+    loadMemberPage({ reset: true }).catch(() => setText(message, "Не удалось применить фильтр роли."));
+  });
+  memberMore.addEventListener("click", () => {
+    loadMemberPage().catch(() => {
+      memberMore.disabled = false;
+      setText(message, "Не удалось загрузить следующую страницу участников.");
+    });
+  });
   devicesRefresh.addEventListener("click", () => loadDevices().catch(() => setText(message, "Не удалось обновить устройства.")));
   vaultOpen.addEventListener("click", () => {
     if (activeView === "vaults") {
@@ -2074,6 +2181,11 @@ export function initializeTeamWorkspace({
       teams = [];
       vaults = [];
       teamMembers = [];
+      ownershipMembers = [];
+      memberNextCursor = null;
+      memberTotal = 0;
+      memberRequestGeneration += 1;
+      clearTimeout(memberSearchTimer);
       teamInvitations = [];
       accountInvitations = [];
       selectedTeam = null;

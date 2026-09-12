@@ -108,6 +108,28 @@ struct CloudMacOSFoundationTests {
                     "createdAt": "2026-09-09T00:00:00.000Z", "updatedAt": "2026-09-09T00:00:00.000Z"
                 ]])
             case ("GET", "/v1/teams/\(teamID.canonicalCloudString)/members"):
+                if let components = URLComponents(url: try #require(request.url), resolvingAgainstBaseURL: false),
+                   components.queryItems != nil {
+                    if components.queryItems?.first(where: { $0.name == "search" })?.value == "legacy" {
+                        return Self.response(request, status: 200, json: ["members": [[
+                            "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
+                            "username": "owner", "displayName": "Owner", "role": "owner",
+                            "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
+                        ]]])
+                    }
+                    #expect(components.queryItems?.first(where: { $0.name == "search" })?.value == "owner")
+                    #expect(components.queryItems?.first(where: { $0.name == "role" })?.value == "owner")
+                    #expect(components.queryItems?.first(where: { $0.name == "limit" })?.value == "50")
+                    return Self.response(request, status: 200, json: [
+                        "members": [[
+                            "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
+                            "username": "owner", "displayName": "Owner", "role": "owner",
+                            "epoch": 1, "joinedAt": "2026-09-09T00:00:00.000Z"
+                        ]],
+                        "nextCursor": NSNull(),
+                        "total": 1,
+                    ])
+                }
                 return Self.response(request, status: 200, json: ["members": [[
                     "id": membershipID.canonicalCloudString, "userID": userID.canonicalCloudString,
                     "username": "owner", "displayName": "Owner", "role": "owner",
@@ -173,6 +195,22 @@ struct CloudMacOSFoundationTests {
 
         #expect(try await client.createTeam(endpoint: endpoint, name: " Platform ").name == "Platform")
         #expect(try await client.teamMembers(endpoint: endpoint, teamID: teamID).first?.role == .owner)
+        let memberPage = try await client.teamMembersPage(
+            endpoint: endpoint,
+            teamID: teamID,
+            search: "owner",
+            role: .owner
+        )
+        #expect(memberPage.members.first?.role == .owner)
+        #expect(memberPage.total == 1)
+        #expect(memberPage.nextCursor == nil)
+        let legacyPage = try await client.teamMembersPage(
+            endpoint: endpoint,
+            teamID: teamID,
+            search: "legacy"
+        )
+        #expect(legacyPage.members.isEmpty)
+        #expect(legacyPage.total == 0)
         #expect(try await client.inviteTeamMember(
             endpoint: endpoint, teamID: teamID, username: " @Viewer ", role: .viewer
         ).targetUsername == "viewer")

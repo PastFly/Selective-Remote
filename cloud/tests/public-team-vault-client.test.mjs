@@ -328,6 +328,14 @@ test("browser Team management covers lifecycle, members, invitations and shared 
       if (path === `/v1/teams/${teamID}` && options.method === "DELETE") {
         return jsonResponse(200, { archived: true, teamID });
       }
+      if (path.startsWith(`/v1/teams/${teamID}/members?`) && !options.method) {
+        const query = new URLSearchParams(path.split("?", 2)[1]);
+        if (query.get("search") === "legacy") return jsonResponse(200, { members: [member] });
+        assert.equal(query.get("search"), "user");
+        assert.equal(query.get("role"), "owner");
+        assert.equal(query.get("limit"), "50");
+        return jsonResponse(200, { members: [member], nextCursor: null, total: 1 });
+      }
       if (path.endsWith("/members") && !options.method) return jsonResponse(200, { members: [member] });
       if (path === `/v1/teams/${teamID}/invitations` && !options.method) {
         return jsonResponse(200, { invitations: [usernameInvitation, { ...linkInvitation, acceptanceURL: null }] });
@@ -384,6 +392,12 @@ test("browser Team management covers lifecycle, members, invitations and shared 
   }), /team_name_mismatch/);
   assert.equal(calls.filter(({ path, options }) => path === `/v1/teams/${teamID}` && options.method === "DELETE").length, 1);
   assert.deepEqual(await client.listTeamMembers(teamID), [member]);
+  assert.deepEqual(await client.listTeamMembersPage(teamID, { search: " User ", role: "OWNER" }), {
+    members: [member], nextCursor: null, total: 1,
+  });
+  assert.deepEqual(await client.listTeamMembersPage(teamID, { search: "legacy" }), {
+    members: [], nextCursor: null, total: 0,
+  });
   assert.deepEqual(await client.listTeamInvitations(teamID), [usernameInvitation, { ...linkInvitation, acceptanceURL: null }]);
   assert.deepEqual(await client.listPendingTeamInvitations(), [pendingInvitation]);
   const invitation = await client.inviteTeamMember({ teamID, username: "@MEMBER", role: "viewer" });

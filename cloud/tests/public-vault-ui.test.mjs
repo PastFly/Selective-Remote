@@ -254,8 +254,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=127/u);
-  assert.match(html, /\/app\.js\?v=127/u);
+  assert.match(html, /\/styles\.css\?v=128/u);
+  assert.match(html, /\/app\.js\?v=128/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -307,6 +307,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-workspace-target="team-vault">Команды/u);
   assert.match(html, /id="team-view-tabs"/u);
   assert.match(html, /data-team-view="members">Участники/u);
+  assert.match(html, /id="team-member-search"/u);
+  assert.match(html, /id="team-member-role-filter"/u);
+  assert.match(html, /id="team-member-more"/u);
   assert.match(html, /data-team-view="vaults">Vaults/u);
   assert.match(html, /data-team-view="hosts">Хосты/u);
   assert.match(html, /class="host-scope-switcher"/u);
@@ -357,7 +360,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /:root\[data-theme="light"\] \.resource-card-clickable:hover/u);
   assert.match(styles, /@keyframes reveal-up/u);
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
-  assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:minmax\(180px,1fr\) minmax\(110px,auto\)/u);
+  assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:36px minmax\(0,1fr\) auto auto/u);
+  assert.match(styles, /\.team-member-actions/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
@@ -367,7 +371,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /<div class="vault-toolbar">\s*<div><h3>Личный Vault/u);
   assert.match(application, /ваш текущий username/u);
   assert.match(application, /teamUI\?\.setView\(teamView \|\| "teams"\)/u);
-  assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{teamMembers\.length\}/u);
+  assert.match(application, /Team «\$\{selectedTeam\.name\}» · участников: \$\{memberTotal\}/u);
+  assert.match(application, /listTeamMembersPage/u);
   assert.match(application, /Команда «\$\{selectedTeam\.name\}» · папок: \$\{vaults\.length\}/u);
   assert.match(application, /createVaultForm\.hidden = activeView !== "vaults" \|\| !canManage\(\)/u);
   assert.match(application, /workspace\.hidden = activeView !== "hosts" \|\| !controller/u);

@@ -71,6 +71,39 @@ function mutationReservation(sql) {
   return sql.includes("INSERT INTO team_mutation_receipts") ? { rows: [{ actor_user_id: actorUserID }] } : null;
 }
 
+test("Team member pages use stable cursor ordering and bounded server-side filters", async () => {
+  const secondID = "87806d7b-d3a9-4701-8262-f247bd5de1e9";
+  const thirdID = "97806d7b-d3a9-4701-8262-f247bd5de1e9";
+  const rows = [membershipID, secondID, thirdID].map((id, index) => ({
+    id,
+    user_id: `user-${index}`,
+    username: `member${index}`,
+    display_name: `Member ${index}`,
+    role: "viewer",
+    epoch: 1,
+    joined_at: "2026-09-12T00:00:00.000Z",
+    filtered_total: 3,
+  }));
+  const f = fixture((sql) => sql.includes("WITH filtered AS") ? { rows } : { rows: [] });
+  assert.deepEqual(await f.store.listTeamMembers(teamID, actorUserID, {
+    search: "member",
+    role: "viewer",
+    limit: 2,
+    cursor: null,
+  }), {
+    rows: rows.slice(0, 2).map((row) => {
+      const member = { ...row };
+      delete member.filtered_total;
+      return member;
+    }),
+    nextCursor: secondID,
+    total: 3,
+  });
+  assert.deepEqual(f.queries[0].parameters, [teamID, actorUserID, "member", "viewer", null, 3]);
+  assert.match(f.queries[0].sql, /strpos\(lower\(account\.username\), \$3\)/u);
+  assert.match(f.queries[0].sql, /\(role_rank, sort_username, id\) >/u);
+});
+
 test("Team invitation listing exposes only active invitations manageable by the actor", async () => {
   const viewerInvitation = {
     actor_role: "admin", id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d", role: "viewer",
