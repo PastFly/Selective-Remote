@@ -125,11 +125,40 @@ struct TerminalUX0250Tests {
         #expect(appearance.contains("Прозрачный фон терминала"))
         #expect(appearance.contains("backgroundTransparencyEnabled"))
         #expect(appearance.contains("backgroundOpacity"))
+        #expect(appearance.contains("func applyingGlobalBackground"))
         #expect(host.contains("allowTransparency: true"))
         #expect(host.contains("settings.backgroundTransparencyEnabled === true"))
         #expect(host.contains("const resolvedBackground"))
+        #expect(host.contains("`rgba(${red}, ${green}, ${blue}, 0)`"))
         #expect(embedded.contains(".opacity(paneAppearance.backgroundOpacity)"))
         #expect(local.contains(".opacity(paneAppearance.backgroundOpacity)"))
+        #expect(embedded.contains("from: appearance.snapshot"))
+        #expect(local.contains("from: appearance.snapshot"))
+    }
+
+    @Test("Global terminal transparency overrides existing pane opacity without changing its theme")
+    @MainActor
+    func globalTerminalTransparencyAppliesToExistingPane() {
+        let suite = "SelectiveRemote.TerminalTransparencyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let global = TerminalAppearanceStore(defaults: defaults)
+        global.backgroundTransparencyEnabled = true
+        global.backgroundOpacity = 0.37
+
+        let pane = TerminalAppearanceStore(
+            defaults: defaults,
+            storageNamespace: "existing-pane",
+            cloneGlobalIfMissing: false
+        )
+        pane.applyPreset(.dracula)
+        pane.backgroundTransparencyEnabled = false
+
+        let effective = pane.snapshot.applyingGlobalBackground(from: global.snapshot)
+        #expect(effective.backgroundTransparencyEnabled == true)
+        #expect(effective.backgroundOpacity == 0.37)
+        #expect(effective.theme == TerminalThemePreset.dracula.palette)
     }
 
     @Test("Single-monitor fullscreen keeps macOS controls and reserves top safe area")

@@ -2086,12 +2086,14 @@
                     const green = Number.parseInt(hex.slice(2, 4), 16);
                     const blue = Number.parseInt(hex.slice(4, 6), 16);
                     const requestedOpacity = Number(settings.backgroundOpacity);
-                    const backgroundOpacity = settings.backgroundTransparencyEnabled === true
+                    const transparentBackground = settings.backgroundTransparencyEnabled === true
                         && Number.isFinite(requestedOpacity)
-                        ? Math.min(1.0, Math.max(0.20, requestedOpacity))
-                        : 1.0;
-                    const resolvedBackground = backgroundOpacity < 0.999
-                        ? `rgba(${red}, ${green}, ${blue}, ${backgroundOpacity})`
+                        && requestedOpacity < 0.999;
+                    // SwiftUI paints the selected theme color exactly once at the
+                    // requested opacity. xterm and its CSS host must stay clear or
+                    // several alpha layers compound into an almost opaque surface.
+                    const resolvedBackground = transparentBackground
+                        ? `rgba(${red}, ${green}, ${blue}, 0)`
                         : settings.theme.background;
                     const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
                     document.documentElement.classList.toggle(

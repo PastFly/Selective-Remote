@@ -755,8 +755,9 @@ struct SSHTerminalView: View {
                 .frame(minHeight: 280)
                 .layoutPriority(1)
                 .background(
-                    TerminalColorCodecView.color(appearance.palette.background)
-                        .opacity(appearance.snapshot.backgroundOpacity)
+                    appearance.snapshot.backgroundTransparencyEnabled
+                        ? Color.clear
+                        : TerminalColorCodecView.color(appearance.palette.background)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
@@ -1623,7 +1624,9 @@ struct SSHTerminalView: View {
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
         let color = paneColor(for: tab)
-        let paneAppearance = tab.appearance.snapshot
+        let paneAppearance = tab.appearance.snapshot.applyingGlobalBackground(
+            from: appearance.snapshot
+        )
         let isSelected = tab.id == workspace.selectedTabID
         let state = sessionState(for: tab)
         let broadcastTarget = broadcastsInput && tab.session.isRunning

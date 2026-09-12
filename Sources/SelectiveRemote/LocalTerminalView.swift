@@ -329,7 +329,9 @@ struct LocalTerminalView: View {
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
-        let paneAppearance = tab.appearance.snapshot
+        let paneAppearance = tab.appearance.snapshot.applyingGlobalBackground(
+            from: appearance.snapshot
+        )
         return EmbeddedTerminalWebView(
             session: tab.session,
             appearance: paneAppearance,

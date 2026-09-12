@@ -542,6 +542,27 @@ struct TerminalAppearanceSnapshot: Codable, Equatable, Sendable {
     let backgroundTransparencyEnabled: Bool
     let backgroundOpacity: Double
     let theme: TerminalPalette
+
+    func applyingGlobalBackground(
+        from global: TerminalAppearanceSnapshot
+    ) -> TerminalAppearanceSnapshot {
+        TerminalAppearanceSnapshot(
+            fontFamily: fontFamily,
+            fontSize: fontSize,
+            lineHeight: lineHeight,
+            cursorStyle: cursorStyle,
+            cursorBlink: cursorBlink,
+            syntaxHighlighting: syntaxHighlighting,
+            syntaxScope: syntaxScope,
+            syntaxHistoryOpacity: syntaxHistoryOpacity,
+            syntaxBoldCommands: syntaxBoldCommands,
+            syntaxPalette: syntaxPalette,
+            padding: padding,
+            backgroundTransparencyEnabled: global.backgroundTransparencyEnabled,
+            backgroundOpacity: global.backgroundOpacity,
+            theme: theme
+        )
+    }
 }
 
 struct TerminalAppearanceWorkspaceSnapshot: Codable, Equatable, Sendable {
@@ -1023,33 +1044,36 @@ struct TerminalAppearanceView: View {
             Section("Терминал") {
                 TerminalThemeSelector(store: store)
 
-                DisclosureGroup("Фон и прозрачность") {
-                    Toggle(
-                        "Прозрачный фон терминала",
-                        isOn: $store.backgroundTransparencyEnabled
-                    )
+                if includesApplicationSettings {
+                    DisclosureGroup("Фон и прозрачность") {
+                        Toggle(
+                            "Прозрачный фон терминала",
+                            isOn: $store.backgroundTransparencyEnabled
+                        )
 
-                    LabeledContent("Непрозрачность фона") {
-                        HStack {
-                            Slider(
-                                value: $store.backgroundOpacity,
-                                in: 0.20...1.0,
-                                step: 0.01
-                            )
-                            .frame(width: 180)
-                            Text("\(store.backgroundOpacityPercent)%")
-                                .monospacedDigit()
-                                .frame(width: 44, alignment: .trailing)
+                        LabeledContent("Непрозрачность фона") {
+                            HStack {
+                                Slider(
+                                    value: $store.backgroundOpacity,
+                                    in: 0.20...1.0,
+                                    step: 0.01
+                                )
+                                .frame(width: 180)
+                                Text("\(store.backgroundOpacityPercent)%")
+                                    .monospacedDigit()
+                                    .frame(width: 44, alignment: .trailing)
+                            }
                         }
-                    }
-                    .disabled(!store.backgroundTransparencyEnabled)
+                        .disabled(!store.backgroundTransparencyEnabled)
 
-                    Text(
-                        "Настройка действует отдельно от прозрачности окна приложения. "
-                            + "Текст, курсор и панели управления остаются контрастными."
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                        Text(
+                            "Единая настройка для всех открытых и новых терминалов. Она действует "
+                                + "отдельно от прозрачности окна приложения; текст, курсор и панели "
+                                + "управления остаются контрастными."
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
                 }
 
                 DisclosureGroup("Шрифт и курсор") {
