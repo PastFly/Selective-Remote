@@ -361,9 +361,21 @@ export class CloudService {
     });
   }
 
-  async listTeamMembers(session, teamID) {
-    const rows = await this.store.listTeamMembers(teamID, session.user_id);
-    return { members: rows.map(publicTeamMember) };
+  async listTeamMembers(session, teamID, input = null) {
+    if (input === null) {
+      const rows = await this.store.listTeamMembers(teamID, session.user_id);
+      return { members: rows.map(publicTeamMember) };
+    }
+    const page = await this.store.listTeamMembers(
+      teamID,
+      session.user_id,
+      validateTeamMemberListQuery(input),
+    );
+    return {
+      members: page.rows.map(publicTeamMember),
+      nextCursor: page.nextCursor,
+      total: page.total,
+    };
   }
 
   async listTeamInvitations(session, teamID) {
@@ -655,6 +667,24 @@ function publicTeamMember(row) {
     epoch: Number(row.epoch),
     joinedAt: row.joined_at,
   };
+}
+
+function validateTeamMemberListQuery(input) {
+  const search = String(input?.search ?? "").trim().toLowerCase();
+  if (search.length > 120) throw new Error("invalid_team_member_query");
+  const role = String(input?.role ?? "").trim().toLowerCase();
+  if (role && !["owner", "admin", "editor", "viewer"].includes(role)) {
+    throw new Error("invalid_team_member_query");
+  }
+  const rawLimit = String(input?.limit ?? "50").trim();
+  if (!/^\d{1,3}$/.test(rawLimit)) throw new Error("invalid_team_member_query");
+  const limit = Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error("invalid_team_member_query");
+  }
+  const cursor = String(input?.cursor ?? "").trim().toLowerCase();
+  if (cursor && !isUUID(cursor)) throw new Error("invalid_team_member_query");
+  return { search: search || null, role: role || null, limit, cursor: cursor || null };
 }
 
 function publicTeamInvitation(row, acceptanceURL = null) {

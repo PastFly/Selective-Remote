@@ -212,7 +212,7 @@ than overloading the personal route.
 | `PATCH` | `/v1/teams/{teamID}` | Rename a Team (Owner only) |
 | `POST` | `/v1/teams/{teamID}/ownership-transfer` | Re-authenticate and atomically transfer Owner |
 | `DELETE` | `/v1/teams/{teamID}` | Re-authenticate, confirm exact name and soft-archive Team |
-| `GET` | `/v1/teams/{teamID}/members` | List active Team members |
+| `GET` | `/v1/teams/{teamID}/members` | List active Team members; optional `search`, `role`, `limit` and `cursor` enable a bounded directory page while the parameter-free legacy response remains compatible |
 | `GET` | `/v1/teams/{teamID}/invitations` | List active role-manageable invitations |
 | `POST` | `/v1/teams/{teamID}/invitations` | Create an `@username` or single-use-link invitation |
 | `DELETE` | `/v1/teams/{teamID}/invitations/{invitationID}` | Cancel a pending invitation |

@@ -715,6 +715,34 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return result.members.map(normalizedTeamMember);
     },
 
+    async listTeamMembersPage(teamID, { search = "", role = "", limit = 50, cursor = null } = {}) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedSearch = String(search ?? "").trim().toLowerCase();
+      const normalizedRole = String(role ?? "").trim().toLowerCase();
+      if (normalizedSearch.length > 120
+        || (normalizedRole && !["owner", "admin", "editor", "viewer"].includes(normalizedRole))
+        || !Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        throw new Error("invalid_team_member_query");
+      }
+      const normalizedCursor = cursor === null ? null : normalizedUUID(cursor, "invalid_team_member_query");
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (normalizedSearch) query.set("search", normalizedSearch);
+      if (normalizedRole) query.set("role", normalizedRole);
+      if (normalizedCursor) query.set("cursor", normalizedCursor);
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/members?${query}`);
+      const result = await responseJSON(response, "team_members_download_failed");
+      if (!response.ok || !Array.isArray(result.members) || result.members.length > limit
+        || !Number.isSafeInteger(result.total) || result.total < result.members.length
+        || (result.nextCursor !== null && !uuidPattern.test(String(result.nextCursor ?? "")))) {
+        throw new Error("team_members_download_failed");
+      }
+      return {
+        members: result.members.map(normalizedTeamMember),
+        nextCursor: result.nextCursor,
+        total: result.total,
+      };
+    },
+
     async listTeamInvitations(teamID) {
       const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
       const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/invitations`);

@@ -178,6 +178,9 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(teamManagement, /NavigationSplitView/);
   assert.match(teamManagement, /client\.createTeam/);
   assert.match(teamManagement, /client\.teamMembers/);
+  assert.match(teamManagement, /client\.teamMembersPage/);
+  assert.match(teamManagement, /\.searchable\(/);
+  assert.match(teamManagement, /memberRoleFilter/);
   assert.match(teamManagement, /client\.inviteTeamMember/);
   assert.match(teamManagement, /client\.createTeamInvitationLink/);
   assert.match(teamManagement, /client\.pendingTeamInvitations/);

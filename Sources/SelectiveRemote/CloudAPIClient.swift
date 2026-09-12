@@ -154,6 +154,12 @@ struct SelectiveRemoteCloudTeamMember: Codable, Equatable, Identifiable, Sendabl
     var joinedAt: String
 }
 
+struct SelectiveRemoteCloudTeamMemberPage: Equatable, Sendable {
+    var members: [SelectiveRemoteCloudTeamMember]
+    var nextCursor: UUID?
+    var total: Int
+}
+
 enum SelectiveRemoteCloudTeamInvitationType: String, Codable, Equatable, Sendable {
     case email
     case username
@@ -533,6 +539,44 @@ actor SelectiveRemoteCloudAPIClient {
         return result.members
     }
 
+    func teamMembersPage(
+        endpoint: URL,
+        teamID: UUID,
+        search: String = "",
+        role: SelectiveRemoteCloudTeamRole? = nil,
+        limit: Int = 50,
+        cursor: UUID? = nil
+    ) async throws -> SelectiveRemoteCloudTeamMemberPage {
+        let normalizedSearch = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard teamID.isSelectiveRemoteCloudUUID,
+              normalizedSearch.count <= 120,
+              (1...100).contains(limit),
+              cursor?.isSelectiveRemoteCloudUUID ?? true
+        else { throw SelectiveRemoteCloudError.invalidRequest }
+        var queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        if !normalizedSearch.isEmpty { queryItems.append(URLQueryItem(name: "search", value: normalizedSearch)) }
+        if let role { queryItems.append(URLQueryItem(name: "role", value: role.rawValue)) }
+        if let cursor { queryItems.append(URLQueryItem(name: "cursor", value: cursor.canonicalCloudString)) }
+        let data = try await authorizedData(
+            endpoint: endpoint,
+            path: "v1/teams/\(teamID.canonicalCloudString)/members",
+            queryItems: queryItems
+        )
+        guard Self.validTeamMemberPageJSON(data),
+              let result = try? decoder.decode(TeamMemberPageResponse.self, from: data),
+              result.members.count <= limit,
+              result.total >= result.members.count,
+              result.members.allSatisfy(Self.validTeamMember),
+              Set(result.members.map(\.id)).count == result.members.count,
+              result.nextCursor?.isSelectiveRemoteCloudUUID ?? true
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return SelectiveRemoteCloudTeamMemberPage(
+            members: result.members,
+            nextCursor: result.nextCursor,
+            total: result.total
+        )
+    }
+
     func teamInvitations(
         endpoint: URL,
         teamID: UUID
@@ -902,8 +946,16 @@ actor SelectiveRemoteCloudAPIClient {
         try tokenStore.removeToken(for: endpoint)
     }
 
-    private func authorizedData(endpoint: URL, path: String) async throws -> Data {
-        let (data, http) = try await authorizedResponse(endpoint: endpoint, path: path)
+    private func authorizedData(
+        endpoint: URL,
+        path: String,
+        queryItems: [URLQueryItem] = []
+    ) async throws -> Data {
+        let (data, http) = try await authorizedResponse(
+            endpoint: endpoint,
+            path: path,
+            queryItems: queryItems
+        )
         guard (200..<300).contains(http.statusCode) else {
             throw serviceError(status: http.statusCode, data: data)
         }
@@ -915,13 +967,17 @@ actor SelectiveRemoteCloudAPIClient {
         path: String,
         method: String = "GET",
         body: Data? = nil,
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        queryItems: [URLQueryItem] = []
     ) async throws -> (Data, HTTPURLResponse) {
         guard let token = try storedToken(for: endpoint) else {
             throw SelectiveRemoteCloudError.authenticationRequired
         }
+        var components = URLComponents(url: endpoint.appending(path: path), resolvingAgainstBaseURL: false)
+        components?.queryItems = queryItems.isEmpty ? nil : queryItems
+        guard let requestURL = components?.url else { throw SelectiveRemoteCloudError.invalidRequest }
         var request = JSONRequest(
-            url: endpoint.appending(path: path),
+            url: requestURL,
             method: method,
             body: body
         ).value
@@ -1045,6 +1101,16 @@ actor SelectiveRemoteCloudAPIClient {
     private static func validTeamMembersJSON(_ data: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: data),
               exactKeys(object, expected: ["members"]),
+              let members = (object as? [String: Any])?["members"] as? [Any]
+        else { return false }
+        return members.allSatisfy { exactKeys($0, expected: [
+            "id", "userID", "username", "displayName", "role", "epoch", "joinedAt"
+        ]) }
+    }
+
+    private static func validTeamMemberPageJSON(_ data: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              exactKeys(object, expected: ["members", "nextCursor", "total"]),
               let members = (object as? [String: Any])?["members"] as? [Any]
         else { return false }
         return members.allSatisfy { exactKeys($0, expected: [
@@ -1344,6 +1410,12 @@ private struct TeamResponse: Decodable {
 
 private struct TeamMembersResponse: Decodable {
     var members: [SelectiveRemoteCloudTeamMember]
+}
+
+private struct TeamMemberPageResponse: Decodable {
+    var members: [SelectiveRemoteCloudTeamMember]
+    var nextCursor: UUID?
+    var total: Int
 }
 
 private struct TeamInvitationResponse: Decodable {

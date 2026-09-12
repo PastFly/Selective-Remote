@@ -144,9 +144,13 @@ class TeamStore {
     return { revoked: true, rotationRequiredVaults: 2 };
   }
 
-  async listTeamMembers(team, actor) {
-    this.calls.push(["listTeamMembers", team, actor]);
-    return [{ id: membershipID, user_id: "user-1", role: "owner", epoch: 1 }];
+  async listTeamMembers(team, actor, page = null) {
+    this.calls.push(["listTeamMembers", team, actor, page]);
+    const member = {
+      id: membershipID, user_id: "user-1", username: "owner", display_name: "Owner",
+      role: "owner", epoch: 1, joined_at: "2026-09-12T00:00:00.000Z",
+    };
+    return page ? { rows: [member], nextCursor: null, total: 1 } : [member];
   }
 
   async listSharedVaults(team, actor) {
@@ -513,6 +517,28 @@ test("member and shared-Vault operations preserve explicit Team scope", async ()
   for (const [, value] of store.calls) {
     if (value && typeof value === "object" && "actorUserID" in value) assert.equal(value.actorUserID, "user-1");
   }
+});
+
+test("member directory query is normalized without changing the legacy response contract", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+  assert.deepEqual(await service.listTeamMembers(session, teamID, {
+    search: "  OWN  ", role: "OWNER", limit: "25", cursor: membershipID,
+  }), {
+    members: [{
+      id: membershipID, userID: "user-1", username: "owner", displayName: "Owner",
+      role: "owner", epoch: 1, joinedAt: "2026-09-12T00:00:00.000Z",
+    }],
+    nextCursor: null,
+    total: 1,
+  });
+  assert.deepEqual(store.calls[0], ["listTeamMembers", teamID, "user-1", {
+    search: "own", role: "owner", limit: 25, cursor: membershipID,
+  }]);
+  await assert.rejects(
+    service.listTeamMembers(session, teamID, { limit: "101" }),
+    /invalid_team_member_query/,
+  );
 });
 
 test("Team ciphertext service binds session device, generation and wrapper context", async () => {
