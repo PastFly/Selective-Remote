@@ -9,6 +9,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var teams: [SelectiveRemoteCloudTeam] = []
     @State private var selectedTeamID: UUID?
+    @State private var teamSearch = ""
     @State private var members: [SelectiveRemoteCloudTeamMember] = []
     @State private var memberSearch = ""
     @State private var memberRoleFilter = ""
@@ -36,10 +37,33 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     var body: some View {
         NavigationSplitView {
             List(selection: $selectedTeamID) {
+                Section {
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                        TextField(
+                            UpdateLocalization.text(ru: "Найти команду", en: "Search Teams"),
+                            text: $teamSearch
+                        )
+                        .textFieldStyle(.plain)
+                        if !teamSearch.isEmpty {
+                            Button { teamSearch = "" } label: {
+                                Image(systemName: "xmark.circle.fill")
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 Section(UpdateLocalization.text(ru: "Команды", en: "Teams")) {
-                    ForEach(teams) { team in
+                    ForEach(visibleTeams) { team in
                         Label(team.name, systemImage: "person.3.fill")
                             .tag(team.id)
+                    }
+                    if visibleTeams.isEmpty {
+                        Text(UpdateLocalization.text(ru: "Команды не найдены", en: "No Teams Found"))
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -70,15 +94,19 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 }
             }
             .navigationTitle(UpdateLocalization.text(ru: "Cloud Workspace", en: "Cloud Workspace"))
+            .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 280)
         } detail: {
-            if let team = selectedTeam {
-                teamDetail(team)
-            } else {
-                ContentUnavailableView(
-                    UpdateLocalization.text(ru: "Выберите команду", en: "Select a Team"),
-                    systemImage: "person.3"
-                )
+            Group {
+                if let team = selectedTeam {
+                    teamDetail(team)
+                } else {
+                    ContentUnavailableView(
+                        UpdateLocalization.text(ru: "Выберите команду", en: "Select a Team"),
+                        systemImage: "person.3"
+                    )
+                }
             }
+            .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(
             minWidth: 1_020,
@@ -111,6 +139,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     private var selectedTeam: SelectiveRemoteCloudTeam? {
         teams.first { $0.id == selectedTeamID }
+    }
+
+    private var visibleTeams: [SelectiveRemoteCloudTeam] {
+        let query = teamSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return teams }
+        return teams.filter { $0.name.localizedCaseInsensitiveContains(query) }
     }
 
     @ViewBuilder
@@ -175,6 +209,30 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                         .foregroundStyle(.secondary)
                 }
 
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        UpdateLocalization.text(ru: "Имя или @username", en: "Name or @username"),
+                        text: $memberSearch
+                    )
+                    .textFieldStyle(.plain)
+                    if !memberSearch.isEmpty {
+                        Button { memberSearch = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(height: 34)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 9)
+                        .strokeBorder(Color.primary.opacity(0.08))
+                }
+
                 List(members) { member in
                     HStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.fill")
@@ -194,10 +252,6 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     .padding(.vertical, 6)
                 }
                 .listStyle(.inset)
-                .searchable(
-                    text: $memberSearch,
-                    prompt: UpdateLocalization.text(ru: "Имя или @username", en: "Name or @username")
-                )
                 .task(id: memberSearch) {
                     try? await Task.sleep(for: .milliseconds(250))
                     guard !Task.isCancelled else { return }
@@ -215,7 +269,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 }
             }
             .padding(16)
-            .frame(minWidth: 360, idealWidth: 430, maxWidth: 520)
+            .frame(minWidth: 300, idealWidth: 350, maxWidth: 430)
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
@@ -240,7 +294,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .frame(minWidth: 480, maxWidth: .infinity)
+            .frame(minWidth: 360, maxWidth: .infinity)
         }
     }
 
@@ -256,7 +310,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                         Text(roleTitle(.admin)).tag(SelectiveRemoteCloudTeamRole.admin)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 Button(UpdateLocalization.text(ru: "Отправить приглашение", en: "Send Invitation")) {
                     invite(team)
                 }
