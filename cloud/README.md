@@ -90,7 +90,9 @@ the database stores and replays the committed response atomically.
   compatibility. Supplying any of `search`, `role`, `limit` or `cursor` enables
   the bounded directory response `{ members, nextCursor, total }`; `limit`
   defaults to 50 and is capped at 100. The opaque cursor is the last returned
-  membership UUID and must be reused with the same filters.
+  membership UUID and must be reused with the same filters. New browser/macOS
+  clients also recognize the legacy `{ members }` response and apply the same
+  bounded directory behavior locally during a staged server rollout.
 - `GET|POST /v1/teams/{teamID}/invitations` lists manageable active
   invitations or creates a rate-limited invitation by public `@username` or a
   revocable 48-hour single-use link. Admins cannot invite Admins and

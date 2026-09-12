@@ -562,6 +562,34 @@ actor SelectiveRemoteCloudAPIClient {
             path: "v1/teams/\(teamID.canonicalCloudString)/members",
             queryItems: queryItems
         )
+        if Self.validTeamMembersJSON(data),
+           let legacy = try? decoder.decode(TeamMembersResponse.self, from: data),
+           legacy.members.count <= 10_000,
+           legacy.members.allSatisfy(Self.validTeamMember),
+           Set(legacy.members.map(\.id)).count == legacy.members.count {
+            let searchValue = normalizedSearch.lowercased()
+            let filtered = legacy.members.filter { member in
+                (searchValue.isEmpty
+                    || member.username.lowercased().contains(searchValue)
+                    || member.displayName.lowercased().contains(searchValue))
+                    && (role == nil || member.role == role)
+            }
+            let start: Int
+            if let cursor {
+                guard let cursorIndex = filtered.firstIndex(where: { $0.id == cursor })
+                else { throw SelectiveRemoteCloudError.invalidResponse }
+                start = filtered.index(after: cursorIndex)
+            } else {
+                start = filtered.startIndex
+            }
+            let end = min(start + limit, filtered.endIndex)
+            let members = Array(filtered[start..<end])
+            return SelectiveRemoteCloudTeamMemberPage(
+                members: members,
+                nextCursor: end < filtered.endIndex ? members.last?.id : nil,
+                total: filtered.count
+            )
+        }
         guard Self.validTeamMemberPageJSON(data),
               let result = try? decoder.decode(TeamMemberPageResponse.self, from: data),
               result.members.count <= limit,
