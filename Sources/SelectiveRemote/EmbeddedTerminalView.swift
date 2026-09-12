@@ -754,7 +754,10 @@ struct SSHTerminalView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 280)
                 .layoutPriority(1)
-                .background(TerminalColorCodecView.color(appearance.palette.background))
+                .background(
+                    TerminalColorCodecView.color(appearance.palette.background)
+                        .opacity(appearance.snapshot.backgroundOpacity)
+                )
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -1854,7 +1857,10 @@ struct SSHTerminalView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TerminalColorCodecView.color(paneAppearance.theme.background))
+        .background(
+            TerminalColorCodecView.color(paneAppearance.theme.background)
+                .opacity(paneAppearance.backgroundOpacity)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)

@@ -539,6 +539,8 @@ struct TerminalAppearanceSnapshot: Codable, Equatable, Sendable {
     let syntaxBoldCommands: Bool
     let syntaxPalette: TerminalSyntaxPalette
     let padding: Double
+    let backgroundTransparencyEnabled: Bool
+    let backgroundOpacity: Double
     let theme: TerminalPalette
 }
 
@@ -558,6 +560,8 @@ struct TerminalAppearanceWorkspaceSnapshot: Codable, Equatable, Sendable {
     let syntaxBoldCommands: Bool
     let syntaxCustomPalette: TerminalSyntaxPalette
     let padding: Double
+    let backgroundTransparencyEnabled: Bool?
+    let backgroundOpacity: Double?
 }
 
 @MainActor
@@ -577,13 +581,16 @@ final class TerminalAppearanceStore: ObservableObject {
         static let syntaxBoldCommands = "SelectiveRemote.terminal.syntaxBoldCommands.v1"
         static let syntaxPalette = "SelectiveRemote.terminal.syntaxPalette.v1"
         static let padding = "SelectiveRemote.terminal.padding.v1"
+        static let backgroundTransparencyEnabled = "SelectiveRemote.terminal.backgroundTransparencyEnabled.v1"
+        static let backgroundOpacity = "SelectiveRemote.terminal.backgroundOpacity.v1"
         static let customPalette = "SelectiveRemote.terminal.customPalette.v1"
         static let themeFavorites = "SelectiveRemote.terminal.themeFavorites.v1"
 
         static let all = [
             preset, palette, font, fontSize, lineHeight, cursorStyle, cursorBlink,
             syntaxHighlighting, syntaxScope, syntaxFollowTheme, syntaxHistoryOpacity,
-            syntaxBoldCommands, syntaxPalette, padding, customPalette, themeFavorites
+            syntaxBoldCommands, syntaxPalette, padding, backgroundTransparencyEnabled,
+            backgroundOpacity, customPalette, themeFavorites
         ]
     }
 
@@ -623,6 +630,14 @@ final class TerminalAppearanceStore: ObservableObject {
     @Published private(set) var syntaxCustomPalette: TerminalSyntaxPalette
     @Published var padding: Double {
         didSet { saveScalar(clampedPadding, key: Key.padding) }
+    }
+    @Published var backgroundTransparencyEnabled: Bool {
+        didSet {
+            saveScalar(backgroundTransparencyEnabled, key: Key.backgroundTransparencyEnabled)
+        }
+    }
+    @Published var backgroundOpacity: Double {
+        didSet { saveScalar(clampedBackgroundOpacity, key: Key.backgroundOpacity) }
     }
 
     private let defaults: UserDefaults
@@ -714,6 +729,15 @@ final class TerminalAppearanceStore: ObservableObject {
         padding = defaults.object(forKey: resolvedKey(Key.padding)) == nil
             ? 10
             : min(max(storedPadding, 0), 28)
+        backgroundTransparencyEnabled = defaults.object(
+            forKey: resolvedKey(Key.backgroundTransparencyEnabled)
+        ) as? Bool ?? false
+        let storedBackgroundOpacity = defaults.double(
+            forKey: resolvedKey(Key.backgroundOpacity)
+        )
+        backgroundOpacity = storedBackgroundOpacity > 0
+            ? min(max(storedBackgroundOpacity, 0.20), 1.0)
+            : 0.78
     }
 
     var snapshot: TerminalAppearanceSnapshot {
@@ -729,6 +753,8 @@ final class TerminalAppearanceStore: ObservableObject {
             syntaxBoldCommands: syntaxBoldCommands,
             syntaxPalette: effectiveSyntaxPalette,
             padding: clampedPadding,
+            backgroundTransparencyEnabled: backgroundTransparencyEnabled,
+            backgroundOpacity: effectiveBackgroundOpacity,
             theme: palette
         )
     }
@@ -749,7 +775,9 @@ final class TerminalAppearanceStore: ObservableObject {
             syntaxHistoryOpacity: clampedSyntaxHistoryOpacity,
             syntaxBoldCommands: syntaxBoldCommands,
             syntaxCustomPalette: syntaxCustomPalette,
-            padding: clampedPadding
+            padding: clampedPadding,
+            backgroundTransparencyEnabled: backgroundTransparencyEnabled,
+            backgroundOpacity: clampedBackgroundOpacity
         )
     }
 
@@ -769,6 +797,8 @@ final class TerminalAppearanceStore: ObservableObject {
         syntaxBoldCommands = snapshot.syntaxBoldCommands
         syntaxCustomPalette = snapshot.syntaxCustomPalette
         padding = min(max(snapshot.padding, 0), 28)
+        backgroundTransparencyEnabled = snapshot.backgroundTransparencyEnabled ?? false
+        backgroundOpacity = min(max(snapshot.backgroundOpacity ?? 0.78, 0.20), 1.0)
         saveCustomPalette()
         saveSyntaxPalette()
         savePresetAndPalette()
@@ -841,6 +871,8 @@ final class TerminalAppearanceStore: ObservableObject {
         )
         saveSyntaxPalette()
         padding = 10
+        backgroundTransparencyEnabled = false
+        backgroundOpacity = 0.78
         customPalette = TerminalThemePreset.midnight.palette
         saveCustomPalette()
         applyPreset(.midnight)
@@ -863,6 +895,8 @@ final class TerminalAppearanceStore: ObservableObject {
         syntaxBoldCommands = source.syntaxBoldCommands
         syntaxCustomPalette = source.syntaxCustomPalette
         padding = source.padding
+        backgroundTransparencyEnabled = source.backgroundTransparencyEnabled
+        backgroundOpacity = source.backgroundOpacity
         saveCustomPalette()
         saveSyntaxPalette()
         savePresetAndPalette()
@@ -928,6 +962,18 @@ final class TerminalAppearanceStore: ObservableObject {
         defaults.set(value, forKey: storageKey(key))
     }
 
+    var backgroundOpacityPercent: Int {
+        Int((clampedBackgroundOpacity * 100).rounded())
+    }
+
+    private var clampedBackgroundOpacity: Double {
+        min(max(backgroundOpacity, 0.20), 1.0)
+    }
+
+    private var effectiveBackgroundOpacity: Double {
+        backgroundTransparencyEnabled ? clampedBackgroundOpacity : 1.0
+    }
+
     private func storageKey(_ key: String) -> String {
         guard let storageNamespace, !storageNamespace.isEmpty else { return key }
         return "\(key).scope.\(storageNamespace)"
@@ -976,6 +1022,35 @@ struct TerminalAppearanceView: View {
 
             Section("Терминал") {
                 TerminalThemeSelector(store: store)
+
+                DisclosureGroup("Фон и прозрачность") {
+                    Toggle(
+                        "Прозрачный фон терминала",
+                        isOn: $store.backgroundTransparencyEnabled
+                    )
+
+                    LabeledContent("Непрозрачность фона") {
+                        HStack {
+                            Slider(
+                                value: $store.backgroundOpacity,
+                                in: 0.20...1.0,
+                                step: 0.01
+                            )
+                            .frame(width: 180)
+                            Text("\(store.backgroundOpacityPercent)%")
+                                .monospacedDigit()
+                                .frame(width: 44, alignment: .trailing)
+                        }
+                    }
+                    .disabled(!store.backgroundTransparencyEnabled)
+
+                    Text(
+                        "Настройка действует отдельно от прозрачности окна приложения. "
+                            + "Текст, курсор и панели управления остаются контрастными."
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
 
                 DisclosureGroup("Шрифт и курсор") {
                     Picker("Шрифт", selection: $store.font) {

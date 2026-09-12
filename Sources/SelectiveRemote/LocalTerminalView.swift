@@ -370,7 +370,10 @@ struct LocalTerminalView: View {
         )
         .id(tab.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TerminalColorCodecView.color(paneAppearance.theme.background))
+        .background(
+            TerminalColorCodecView.color(paneAppearance.theme.background)
+                .opacity(paneAppearance.backgroundOpacity)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)

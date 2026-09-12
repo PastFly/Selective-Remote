@@ -145,6 +145,7 @@
 
     const terminal = new Terminal({
         allowProposedApi: false,
+        allowTransparency: true,
         convertEol: false,
         cursorBlink: true,
         cursorStyle: "block",
@@ -2084,6 +2085,14 @@
                     const red = Number.parseInt(hex.slice(0, 2), 16);
                     const green = Number.parseInt(hex.slice(2, 4), 16);
                     const blue = Number.parseInt(hex.slice(4, 6), 16);
+                    const requestedOpacity = Number(settings.backgroundOpacity);
+                    const backgroundOpacity = settings.backgroundTransparencyEnabled === true
+                        && Number.isFinite(requestedOpacity)
+                        ? Math.min(1.0, Math.max(0.20, requestedOpacity))
+                        : 1.0;
+                    const resolvedBackground = backgroundOpacity < 0.999
+                        ? `rgba(${red}, ${green}, ${blue}, ${backgroundOpacity})`
+                        : settings.theme.background;
                     const luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
                     document.documentElement.classList.toggle(
                         "terminal-theme-light",
@@ -2092,11 +2101,14 @@
                     document.documentElement.style.colorScheme =
                         luminance > 160 ? "light" : "dark";
                     theme.selectionForeground = luminance > 160 ? "#111827" : "#FFFFFF";
+                    theme.background = resolvedBackground;
+                    rootStyle.setProperty("--terminal-background", resolvedBackground);
+                } else {
+                    rootStyle.setProperty(
+                        "--terminal-background",
+                        settings.theme.background
+                    );
                 }
-                document.documentElement.style.setProperty(
-                    "--terminal-background",
-                    settings.theme.background
-                );
             }
             terminal.options.theme = theme;
         }
