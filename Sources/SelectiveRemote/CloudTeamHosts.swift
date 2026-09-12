@@ -539,12 +539,12 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
+    @Binding var selectedHostID: UUID?
     @ObservedObject private var personalSettingsStore =
         SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onOpenSFTP: (SelectiveRemoteTeamHost, String, String?) -> Void
 
-    @State private var selectedHostID: UUID?
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""

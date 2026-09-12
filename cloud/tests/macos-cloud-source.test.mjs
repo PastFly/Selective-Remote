@@ -112,7 +112,12 @@ test("Host context menu opens a real encrypted Team Vault share flow", async () 
   assert.match(sharing, /coordinator\.initialize/);
   assert.match(sharing, /coordinator\.stage/);
   assert.match(sharing, /coordinator\.push/);
-  assert.match(sharing, /without its saved password/);
+  assert.match(sharing, /includePassword = false/);
+  assert.match(sharing, /authenticateDeviceOwner/);
+  assert.match(sharing, /credentialsForShare/);
+  assert.match(sharing, /SelectiveRemoteHostFolderPath\.normalize\(sharedFolder\)/);
+  assert.match(sharing, /text: \$teamSearch/u);
+  assert.match(sharing, /Cloud receives E2EE ciphertext only/);
   assert.match(coordinator, /enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable/);
   assert.match(coordinator, /case \.missingDeviceWrapper:[\s\S]*?wrapper будет выдан автоматически/);
   assert.doesNotMatch(coordinator, /выдайте недостающие wrappers/);
@@ -180,7 +185,7 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
   assert.match(teamManagement, /client\.teamMembers/);
   assert.match(teamManagement, /client\.teamMembersPage/);
   assert.match(client, /validTeamMembersJSON\(data\)[\s\S]*legacy\.members/u);
-  assert.match(teamManagement, /\.searchable\(/);
+  assert.match(teamManagement, /TextField\([\s\S]*text: \$memberSearch/u);
   assert.match(teamManagement, /memberRoleFilter/);
   assert.match(teamManagement, /client\.inviteTeamMember/);
   assert.match(teamManagement, /client\.createTeamInvitationLink/);
@@ -220,6 +225,24 @@ test("macOS exposes direct Cloud management and persists Personal and Team outli
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-folders\.v1/u);
   assert.match(rows, /DisclosureGroup\(isExpanded:/u);
   assert.match(rows, /@Binding var expandedIDs/u);
+});
+
+test("macOS keeps Hosts navigation stable and gates Team UI behind a Cloud session", async () => {
+  const [content, hosts, teamManagement] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamManagementView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(content, /\.connectionCenter, \.hosts, \.ssh, \.terminal, \.sftp/u);
+  assert.match(content, /private let secondaryMainAreas[\s\S]*\.sessionLogs/u);
+  assert.match(content, /sidebarHostSearchBinding/u);
+  assert.match(content, /if cloudSessionAvailable \|\| !teamHosts\.hosts\.isEmpty/u);
+  assert.match(content, /SelectiveRemoteCloudOnboardingSheet/u);
+  assert.match(content, /personalHostsManagementDetail/u);
+  assert.match(content, /selectedHostID: \$selectedTeamHostID/u);
+  assert.match(hosts, /@Binding var selectedHostID: UUID\?/u);
+  assert.match(teamManagement, /navigationSplitViewColumnWidth\(min: 210, ideal: 240, max: 280\)/u);
+  assert.doesNotMatch(teamManagement, /\.searchable\(/u);
 });
 
 test("connection checks preserve the signed-in account and inventory failures stay isolated", async () => {

@@ -135,6 +135,10 @@ struct ContentView: View {
     @State private var newPersonalFolderName = ""
     @State private var newPersonalFolderParent = ""
     @State private var showsCloudManagement = false
+    @State private var showsCloudOnboarding = false
+    @State private var cloudSessionAvailable = false
+    @State private var teamHostSearchText = ""
+    @State private var selectedTeamHostID: UUID?
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -146,10 +150,10 @@ struct ContentView: View {
     private let cloudClient = SelectiveRemoteCloudAPIClient()
 
     private let primaryMainAreas: [MainArea] = [
-        .connectionCenter, .hosts, .ssh, .sftp, .forwarding, .snippets,
+        .connectionCenter, .hosts, .ssh, .terminal, .sftp, .forwarding, .snippets,
     ]
     private let secondaryMainAreas: [MainArea] = [
-        .terminal, .sessionLogs, .activity, .diagnostics, .keychain,
+        .sessionLogs, .activity, .diagnostics, .keychain,
     ]
 
     private var profile: ConnectionProfile { model.selectedProfile }
@@ -310,6 +314,7 @@ struct ContentView: View {
         .onAppear {
             selectedTab = restoredProfileTab(for: profile.id)
             profileTabs[profile.id] = selectedTab
+            refreshCloudSessionAvailability()
         }
         .onChange(of: profile.id) { oldProfileID, newProfileID in
             setTerminalFocusMode(false)
@@ -359,6 +364,11 @@ struct ContentView: View {
                     }
                 )
             }
+        }
+        .sheet(isPresented: $showsCloudOnboarding, onDismiss: {
+            refreshCloudSessionAvailability()
+        }) {
+            SelectiveRemoteCloudOnboardingSheet(model: model)
         }
     }
 
@@ -498,34 +508,42 @@ struct ContentView: View {
             .padding(.top, 18)
             .padding(.bottom, 16)
 
-            if mainArea == .hosts, hostScope == .personal {
-                HStack(spacing: 7) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundStyle(.secondary)
-                    TextField("Поиск", text: $model.searchText)
-                        .textFieldStyle(.plain)
-                    if !model.searchText.isEmpty {
-                        Button { model.searchText = "" } label: {
-                            Image(systemName: "xmark.circle.fill")
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 7) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(.secondary)
+                TextField(
+                    hostScope == .personal
+                        ? UpdateLocalization.text(ru: "Поиск личных хостов", en: "Search Personal Hosts")
+                        : UpdateLocalization.text(ru: "Поиск командных хостов", en: "Search Team Hosts"),
+                    text: sidebarHostSearchBinding
+                )
+                .textFieldStyle(.plain)
+                if !sidebarHostSearchBinding.wrappedValue.isEmpty {
+                    Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
+                        Image(systemName: "xmark.circle.fill")
                     }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
                 }
-                .padding(.horizontal, 11)
-                .frame(height: 38)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
             }
+            .padding(.horizontal, 11)
+            .frame(height: 38)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.08))
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 10)
 
             VStack(spacing: 5) {
                 Button {
-                    showsCloudManagement = true
+                    refreshCloudSessionAvailability()
+                    if cloudSessionAvailable {
+                        showsCloudManagement = true
+                    } else {
+                        showsCloudOnboarding = true
+                    }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "cloud")
@@ -624,7 +642,7 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            if mainArea == .hosts {
+            if cloudSessionAvailable || !teamHosts.hosts.isEmpty {
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -634,31 +652,21 @@ struct ContentView: View {
                 .labelsHidden()
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
-
-                if hostScope == .personal {
-                    profileTagFilterBar
-                    profileCollection
-                } else {
-                    VStack(spacing: 10) {
-                        Image(systemName: "person.2.fill")
-                            .font(.title2)
-                            .foregroundStyle(Color.accentColor)
-                        Text(UpdateLocalization.text(
-                            ru: "Командные хосты открыты справа",
-                            en: "Team Hosts are open on the right"
-                        ))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
+                .onChange(of: hostScope) { _, scope in
+                    if scope == .team {
+                        setMainArea(.hosts)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding()
                 }
-            } else {
-                Spacer(minLength: 0)
             }
 
-            if mainArea == .hosts, hostScope == .personal {
+            if hostScope == .personal {
+                profileTagFilterBar
+                profileCollection
+            } else {
+                teamHostSidebarCollection
+            }
+
+            if hostScope == .personal {
                 Divider()
                 HStack(spacing: 9) {
                 Menu {
@@ -917,8 +925,144 @@ struct ContentView: View {
         }
     }
 
+    private var sidebarHostSearchBinding: Binding<String> {
+        Binding(
+            get: {
+                hostScope == .personal ? model.searchText : teamHostSearchText
+            },
+            set: { value in
+                if hostScope == .personal {
+                    model.searchText = value
+                } else {
+                    teamHostSearchText = value
+                }
+            }
+        )
+    }
+
+    private var visibleSidebarTeamHosts: [SelectiveRemoteTeamHost] {
+        let query = teamHostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return teamHosts.hosts }
+        return teamHosts.hosts.filter { host in
+            [
+                host.profile.friendlyName,
+                host.address,
+                host.profile.username,
+                host.teamName,
+                host.vaultName,
+                host.profile.group,
+                host.profile.tags.joined(separator: " ")
+            ].contains { $0.localizedCaseInsensitiveContains(query) }
+        }
+    }
+
+    @ViewBuilder
+    private var teamHostSidebarCollection: some View {
+        if visibleSidebarTeamHosts.isEmpty {
+            ContentUnavailableView {
+                Label(
+                    UpdateLocalization.text(ru: "Командные хосты не найдены", en: "No Team Hosts Found"),
+                    systemImage: "person.2.slash"
+                )
+            } description: {
+                Text(UpdateLocalization.text(
+                    ru: teamHosts.hosts.isEmpty
+                        ? "Синхронизируйте Team Vault или переключитесь на личные хосты."
+                        : "Измените строку поиска.",
+                    en: teamHosts.hosts.isEmpty
+                        ? "Synchronize a Team Vault or switch to Personal Hosts."
+                        : "Change the search query."
+                ))
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(selection: $selectedTeamHostID) {
+                ForEach(visibleSidebarTeamHosts) { host in
+                    Button {
+                        selectedTeamHostID = host.id
+                        setMainArea(.hosts)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Label(
+                                host.profile.friendlyName.isEmpty
+                                    ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                                    : host.profile.friendlyName,
+                                systemImage: host.profile.connectionType.systemImage
+                            )
+                            .font(.headline)
+                            Text("\(host.teamName) · \(host.vaultName)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                            Text(host.address)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .tag(host.id)
+                }
+            }
+            .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+        }
+    }
+
+    private var personalHostsManagementDetail: some View {
+        HSplitView {
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
+                            .font(.headline)
+                        Text(UpdateLocalization.text(
+                            ru: "Папки, порядок и быстрый выбор",
+                            en: "Folders, ordering, and quick selection"
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
+                        .font(.caption.bold().monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                .padding(16)
+                Divider()
+                profileTagFilterBar
+                profileCollection
+            }
+            .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
+
+            profileDetail
+                .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     private func activeTunnelCount(for profileID: UUID) -> Int {
         model.sshTunnels.values.filter { $0.profileID == profileID }.count
+    }
+
+    @MainActor
+    private func refreshCloudSessionAvailability() {
+        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint) else {
+            cloudSessionAvailable = false
+            hostScope = .personal
+            return
+        }
+        do {
+            cloudSessionAvailable = try SelectiveRemoteCloudKeychainTokenStore()
+                .token(for: endpoint) != nil
+        } catch {
+            cloudSessionAvailable = false
+        }
+        if !cloudSessionAvailable, teamHosts.hosts.isEmpty {
+            hostScope = .personal
+        }
     }
 
     private func openProfile(_ profileID: UUID) {
@@ -1133,11 +1277,12 @@ struct ContentView: View {
                 connectionCenterDetail
             case .hosts:
                 if hostScope == .personal {
-                    profileDetail
+                    personalHostsManagementDetail
                 } else {
                     SelectiveRemoteTeamHostsView(
                         store: teamHosts,
                         model: model,
+                        selectedHostID: $selectedTeamHostID,
                         onOpenTerminal: openTeamTerminal,
                         onOpenSFTP: openTeamSFTP
                     )
@@ -4586,6 +4731,44 @@ private struct FlowLayout: Layout {
             ),
             points
         )
+    }
+}
+
+private struct SelectiveRemoteCloudOnboardingSheet: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 14) {
+                Image(systemName: "cloud.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 52, height: 52)
+                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(UpdateLocalization.text(
+                        ru: "Подключите Selective Remote Cloud",
+                        en: "Connect Selective Remote Cloud"
+                    ))
+                    .font(.title2.bold())
+                    Text(UpdateLocalization.text(
+                        ru: "Локальный режим останется доступен. Аккаунт добавляет E2EE-синхронизацию, команды, Team Vaults и общий доступ к хостам.",
+                        en: "Local mode remains available. An account adds E2EE sync, Teams, Team Vaults, and shared Hosts."
+                    ))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Готово", en: "Done")) { dismiss() }
+                    .buttonStyle(.borderedProminent)
+            }
+            .padding(20)
+
+            Divider()
+            CloudSettingsView(model: model)
+        }
+        .frame(minWidth: 720, idealWidth: 820, minHeight: 680, idealHeight: 780)
     }
 }
 
