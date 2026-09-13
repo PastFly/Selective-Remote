@@ -86,7 +86,13 @@ the database stores and replays the committed response atomically.
 - `DELETE /v1/teams/{teamID}` requires rate-limited password re-authentication
   and exact current-name confirmation, then transactionally soft-archives the
   Team and Vaults while retiring pending invitations, delivery and rotations.
-- `GET /v1/teams/{teamID}/members` lists active members.
+- `GET /v1/teams/{teamID}/members` lists all active members for released-client
+  compatibility. Supplying any of `search`, `role`, `limit` or `cursor` enables
+  the bounded directory response `{ members, nextCursor, total }`; `limit`
+  defaults to 50 and is capped at 100. The opaque cursor is the last returned
+  membership UUID and must be reused with the same filters. New browser/macOS
+  clients also recognize the legacy `{ members }` response and apply the same
+  bounded directory behavior locally during a staged server rollout.
 - `GET|POST /v1/teams/{teamID}/invitations` lists manageable active
   invitations or creates a rate-limited invitation by public `@username` or a
   revocable 48-hour single-use link. Admins cannot invite Admins and

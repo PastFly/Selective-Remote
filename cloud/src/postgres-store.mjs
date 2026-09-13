@@ -797,7 +797,8 @@ export class PostgresStore {
     });
   }
 
-  async listTeamMembers(teamID, actorUserID) {
+  async listTeamMembers(teamID, actorUserID, page = null) {
+    if (page !== null) return this.listTeamMembersPage(teamID, actorUserID, page);
     const result = await this.pool.query(
       `SELECT member.id, member.user_id, member.role, member.epoch,
          member.joined_at, account.username, account.display_name
@@ -812,6 +813,55 @@ export class PostgresStore {
     );
     if (result.rows.length === 0) throw new Error("team_not_found");
     return result.rows;
+  }
+
+  async listTeamMembersPage(teamID, actorUserID, { search, role, limit, cursor }) {
+    const result = await this.pool.query(
+      `WITH filtered AS (
+         SELECT member.id, member.user_id, member.role, member.epoch,
+           member.joined_at, account.username, account.display_name,
+           CASE member.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1
+             WHEN 'editor' THEN 2 ELSE 3 END AS role_rank,
+           lower(account.username) AS sort_username
+         FROM team_memberships AS actor
+         JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+         JOIN team_memberships AS member ON member.team_id = team.id AND member.revoked_at IS NULL
+         JOIN users AS account ON account.id = member.user_id AND account.disabled_at IS NULL
+         WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
+           AND ($3::text IS NULL OR strpos(lower(account.username), $3) > 0
+             OR strpos(lower(account.display_name), $3) > 0)
+           AND ($4::text IS NULL OR member.role = $4)
+       ), cursor_position AS (
+         SELECT role_rank, sort_username, id FROM filtered WHERE id = $5::uuid
+       )
+       SELECT id, user_id, role, epoch, joined_at, username, display_name,
+         (SELECT count(*)::integer FROM filtered) AS filtered_total
+       FROM filtered
+       WHERE $5::uuid IS NULL OR (role_rank, sort_username, id) >
+         (SELECT role_rank, sort_username, id FROM cursor_position)
+       ORDER BY role_rank, sort_username, id
+       LIMIT $6`,
+      [teamID, actorUserID, search, role, cursor, limit + 1],
+    );
+    if (result.rows.length === 0) {
+      const actor = await this.pool.query(
+        `SELECT 1 FROM team_memberships AS membership
+         JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+         WHERE membership.team_id = $1 AND membership.user_id = $2
+           AND membership.revoked_at IS NULL`,
+        [teamID, actorUserID],
+      );
+      if (!actor.rows[0]) throw new Error("team_not_found");
+      return { rows: [], nextCursor: null, total: 0 };
+    }
+    const total = Number(result.rows[0].filtered_total);
+    const hasMore = result.rows.length > limit;
+    const rows = result.rows.slice(0, limit).map((row) => {
+      const member = { ...row };
+      delete member.filtered_total;
+      return member;
+    });
+    return { rows, nextCursor: hasMore ? rows.at(-1).id : null, total };
   }
 
   async listTeamInvitations(teamID, actorUserID) {

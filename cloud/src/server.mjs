@@ -251,7 +251,21 @@ async function route(request, response) {
     const teamMembersMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/members$/i);
     if (method === "GET" && teamMembersMatch) {
       if (!isUUID(teamMembersMatch[1])) return sendError(response, 404, "team_not_found");
-      return handleOperation(response, () => service.listTeamMembers(session, teamMembersMatch[1]));
+      const paged = ["search", "role", "limit", "cursor"]
+        .some((name) => url.searchParams.has(name));
+      return handleOperation(
+        response,
+        () => service.listTeamMembers(
+          session,
+          teamMembersMatch[1],
+          paged ? {
+            search: url.searchParams.get("search"),
+            role: url.searchParams.get("role"),
+            limit: url.searchParams.get("limit"),
+            cursor: url.searchParams.get("cursor"),
+          } : null,
+        ),
+      );
     }
     const teamInvitationsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations$/i);
     if (teamInvitationsMatch) {

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=127">
+  <link rel="stylesheet" href="/styles.css?v=128">
 </head>
 <body>
   <main class="shell">
@@ -488,33 +488,57 @@
         </div>
         <div class="team-columns">
           <div id="team-members-view">
-            <h3>Участники</h3>
-            <div class="team-members" id="team-members"></div>
-            <form id="team-invite-form">
-              <h4>Пригласить на 48 часов</h4>
-              <label for="team-invite-username">Публичный @username</label>
-              <input id="team-invite-username" name="username" minlength="3" maxlength="32" autocomplete="off" placeholder="username" required>
-              <label for="team-invite-role">Роль</label>
-              <select id="team-invite-role" name="role">
-                <option value="viewer">Viewer</option>
-                <option value="editor">Editor</option>
-                <option value="admin">Admin</option>
-              </select>
-              <button type="submit">Пригласить по @username</button>
-              <label for="team-invite-email">Email</label>
-              <input id="team-invite-email" name="email" type="email" maxlength="320" autocomplete="off" placeholder="user@example.com">
-              <button type="button" class="secondary" id="team-invite-email-submit">Отправить приглашение по email</button>
-              <button type="button" class="secondary" id="team-invite-link-create">Создать одноразовую ссылку</button>
-              <div id="team-invite-link-result" hidden>
-                <label for="team-invite-link-value">Одноразовая ссылка</label>
-                <input id="team-invite-link-value" type="text" readonly>
-                <button type="button" class="secondary" id="team-invite-link-copy">Скопировать ссылку</button>
-              </div>
-            </form>
-            <section aria-labelledby="team-active-invitations-title">
-              <h4 id="team-active-invitations-title">Активные приглашения</h4>
-              <div class="team-invitations" id="team-active-invitations"></div>
-            </section>
+            <div class="team-members-layout">
+              <section class="team-member-directory" aria-labelledby="team-members-title">
+                <div class="team-member-directory-heading">
+                  <h3 id="team-members-title">Участники</h3>
+                  <span id="team-member-count" aria-live="polite">0</span>
+                </div>
+                <div class="team-member-toolbar">
+                  <label for="team-member-search"><span>Поиск</span>
+                    <input id="team-member-search" type="search" maxlength="120" placeholder="Имя или @username">
+                  </label>
+                  <label for="team-member-role-filter"><span>Роль</span>
+                    <select id="team-member-role-filter">
+                      <option value="">Все роли</option>
+                      <option value="owner">Owner</option>
+                      <option value="admin">Admin</option>
+                      <option value="editor">Editor</option>
+                      <option value="viewer">Viewer</option>
+                    </select>
+                  </label>
+                </div>
+                <div class="team-members" id="team-members"></div>
+                <button type="button" class="secondary team-member-more" id="team-member-more" hidden>Показать ещё</button>
+              </section>
+              <aside class="team-member-invitations" aria-labelledby="team-invitations-title">
+                <form id="team-invite-form">
+                  <h4 id="team-invitations-title">Пригласить на 48 часов</h4>
+                  <label for="team-invite-username">Публичный @username</label>
+                  <input id="team-invite-username" name="username" minlength="3" maxlength="32" autocomplete="off" placeholder="username" required>
+                  <label for="team-invite-role">Роль</label>
+                  <select id="team-invite-role" name="role">
+                    <option value="viewer">Viewer</option>
+                    <option value="editor">Editor</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                  <button type="submit">Пригласить по @username</button>
+                  <label for="team-invite-email">Email</label>
+                  <input id="team-invite-email" name="email" type="email" maxlength="320" autocomplete="off" placeholder="user@example.com">
+                  <button type="button" class="secondary" id="team-invite-email-submit">Отправить приглашение по email</button>
+                  <button type="button" class="secondary" id="team-invite-link-create">Создать одноразовую ссылку</button>
+                  <div id="team-invite-link-result" hidden>
+                    <label for="team-invite-link-value">Одноразовая ссылка</label>
+                    <input id="team-invite-link-value" type="text" readonly>
+                    <button type="button" class="secondary" id="team-invite-link-copy">Скопировать ссылку</button>
+                  </div>
+                </form>
+                <section aria-labelledby="team-active-invitations-title">
+                  <h4 id="team-active-invitations-title">Активные приглашения</h4>
+                  <div class="team-invitations" id="team-active-invitations"></div>
+                </section>
+              </aside>
+            </div>
           </div>
           <div id="team-vault-directory-view">
             <h3 class="team-vault-directory-heading">Папки команды</h3>
@@ -645,6 +669,6 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=127"></script>
+  <script type="module" src="/app.js?v=128"></script>
 </body>
 </html>

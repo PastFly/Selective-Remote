@@ -10,6 +10,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var teams: [SelectiveRemoteCloudTeam] = []
     @State private var selectedTeamID: UUID?
     @State private var members: [SelectiveRemoteCloudTeamMember] = []
+    @State private var memberSearch = ""
+    @State private var memberRoleFilter = ""
+    @State private var memberNextCursor: UUID?
+    @State private var memberTotal = 0
+    @State private var isLoadingMembers = false
+    @State private var memberRequestID = UUID()
     @State private var vaults: [SelectiveRemoteCloudSharedVault] = []
     @State private var invitations: [SelectiveRemoteCloudTeamInvitation] = []
     @State private var pendingInvitations: [SelectiveRemoteCloudTeamInvitation] = []
@@ -154,6 +160,21 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 )
                 .font(.headline)
 
+                HStack(spacing: 10) {
+                    Picker(UpdateLocalization.text(ru: "Роль", en: "Role"), selection: $memberRoleFilter) {
+                        Text(UpdateLocalization.text(ru: "Все роли", en: "All Roles")).tag("")
+                        Text(roleTitle(.owner)).tag(SelectiveRemoteCloudTeamRole.owner.rawValue)
+                        Text(roleTitle(.admin)).tag(SelectiveRemoteCloudTeamRole.admin.rawValue)
+                        Text(roleTitle(.editor)).tag(SelectiveRemoteCloudTeamRole.editor.rawValue)
+                        Text(roleTitle(.viewer)).tag(SelectiveRemoteCloudTeamRole.viewer.rawValue)
+                    }
+                    .pickerStyle(.menu)
+                    Spacer()
+                    Text("\(members.count) / \(memberTotal)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 List(members) { member in
                     HStack(spacing: 12) {
                         Image(systemName: "person.crop.circle.fill")
@@ -173,6 +194,25 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     .padding(.vertical, 6)
                 }
                 .listStyle(.inset)
+                .searchable(
+                    text: $memberSearch,
+                    prompt: UpdateLocalization.text(ru: "Имя или @username", en: "Name or @username")
+                )
+                .task(id: memberSearch) {
+                    try? await Task.sleep(for: .milliseconds(250))
+                    guard !Task.isCancelled else { return }
+                    await loadMembers(team, reset: true)
+                }
+                .onChange(of: memberRoleFilter) { _, _ in
+                    Task { await loadMembers(team, reset: true) }
+                }
+
+                if memberNextCursor != nil {
+                    Button(UpdateLocalization.text(ru: "Показать ещё", en: "Load More")) {
+                        Task { await loadMembers(team, reset: false) }
+                    }
+                    .disabled(isLoadingMembers)
+                }
             }
             .padding(16)
             .frame(minWidth: 360, idealWidth: 430, maxWidth: 520)
@@ -439,24 +479,41 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     private func loadSelectedTeam() async {
         guard let team = selectedTeam else {
             members = []
+            memberNextCursor = nil
+            memberTotal = 0
             vaults = []
             invitations = []
             return
         }
         isBusy = true
         errorMessage = nil
+        let requestedMemberSearch = memberSearch
+        let requestedMemberRole = memberRoleFilter
+        let memberLoadID = UUID()
+        memberRequestID = memberLoadID
         do {
-            async let loadedMembers = client.teamMembers(endpoint: endpoint, teamID: team.id)
+            async let loadedMemberPage = client.teamMembersPage(
+                endpoint: endpoint,
+                teamID: team.id,
+                search: requestedMemberSearch,
+                role: SelectiveRemoteCloudTeamRole(rawValue: requestedMemberRole),
+                limit: 50
+            )
             async let loadedVaults = client.sharedVaults(endpoint: endpoint, teamID: team.id)
-            let (memberResult, vaultResult) = try await (loadedMembers, loadedVaults)
+            let (memberPage, vaultResult) = try await (loadedMemberPage, loadedVaults)
             let invitationResult: [SelectiveRemoteCloudTeamInvitation]
             if team.role == .owner || team.role == .admin {
                 invitationResult = try await client.teamInvitations(endpoint: endpoint, teamID: team.id)
             } else {
                 invitationResult = []
             }
-            members = memberResult.sorted {
-                $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+            if selectedTeamID == team.id,
+               memberRequestID == memberLoadID,
+               memberSearch == requestedMemberSearch,
+               memberRoleFilter == requestedMemberRole {
+                members = memberPage.members
+                memberNextCursor = memberPage.nextCursor
+                memberTotal = memberPage.total
             }
             vaults = vaultResult.sorted {
                 $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
@@ -466,6 +523,38 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = error.localizedDescription
         }
         isBusy = false
+    }
+
+    @MainActor
+    private func loadMembers(_ team: SelectiveRemoteCloudTeam, reset: Bool) async {
+        guard selectedTeamID == team.id else { return }
+        let requestedSearch = memberSearch
+        let requestedRole = memberRoleFilter
+        let requestedCursor = reset ? nil : memberNextCursor
+        let requestID = UUID()
+        memberRequestID = requestID
+        isLoadingMembers = true
+        errorMessage = nil
+        do {
+            let page = try await client.teamMembersPage(
+                endpoint: endpoint,
+                teamID: team.id,
+                search: requestedSearch,
+                role: SelectiveRemoteCloudTeamRole(rawValue: requestedRole),
+                limit: 50,
+                cursor: requestedCursor
+            )
+            if selectedTeamID == team.id,
+               memberSearch == requestedSearch,
+               memberRoleFilter == requestedRole {
+                members = reset ? page.members : members + page.members
+                memberNextCursor = page.nextCursor
+                memberTotal = page.total
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        if memberRequestID == requestID { isLoadingMembers = false }
     }
 
     private func createTeam() {
