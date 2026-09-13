@@ -329,7 +329,9 @@ struct LocalTerminalView: View {
     }
 
     private func terminalPane(_ tab: TerminalWorkspaceTab) -> some View {
-        let paneAppearance = tab.appearance.snapshot
+        let paneAppearance = tab.appearance.snapshot.applyingGlobalBackground(
+            from: appearance.snapshot
+        )
         return EmbeddedTerminalWebView(
             session: tab.session,
             appearance: paneAppearance,
@@ -370,7 +372,10 @@ struct LocalTerminalView: View {
         )
         .id(tab.id)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(TerminalColorCodecView.color(paneAppearance.theme.background))
+        .background(
+            TerminalColorCodecView.color(paneAppearance.theme.background)
+                .opacity(paneAppearance.backgroundOpacity)
+        )
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .overlay {
             RoundedRectangle(cornerRadius: 14)

@@ -70,6 +70,8 @@ struct TerminalUX0250Tests {
         global.syntaxHistoryOpacity = 0.65
         global.syntaxBoldCommands = false
         global.padding = 22
+        global.backgroundTransparencyEnabled = true
+        global.backgroundOpacity = 0.64
 
         let pane = TerminalAppearanceStore(
             defaults: defaults,
@@ -82,18 +84,22 @@ struct TerminalUX0250Tests {
         #expect(pane.cursorStyle == .bar)
         #expect(pane.syntaxHighlighting == false)
         #expect(pane.padding == 22)
+        #expect(pane.backgroundTransparencyEnabled == true)
+        #expect(pane.backgroundOpacity == 0.64)
 
         pane.applyPreset(.hackerGreen)
         pane.font = .monaco
         pane.fontSize = 20
         pane.syntaxHighlighting = true
         pane.padding = 7
+        pane.backgroundOpacity = 0.42
 
         #expect(global.selectedPreset == .dracula)
         #expect(global.font == .menlo)
         #expect(global.fontSize == 18)
         #expect(global.syntaxHighlighting == false)
         #expect(global.padding == 22)
+        #expect(global.backgroundOpacity == 0.64)
 
         let restored = TerminalAppearanceStore(
             defaults: defaults,
@@ -105,6 +111,54 @@ struct TerminalUX0250Tests {
         #expect(restored.fontSize == 20)
         #expect(restored.syntaxHighlighting == true)
         #expect(restored.padding == 7)
+        #expect(restored.backgroundTransparencyEnabled == true)
+        #expect(restored.backgroundOpacity == 0.42)
+    }
+
+    @Test("Terminal background transparency is independent from app window opacity")
+    func terminalTransparencyUsesTransparentWebViewAndPaneBackgrounds() throws {
+        let appearance = try source("Sources/SelectiveRemote/TerminalAppearance.swift")
+        let embedded = try source("Sources/SelectiveRemote/EmbeddedTerminalView.swift")
+        let local = try source("Sources/SelectiveRemote/LocalTerminalView.swift")
+        let host = try source("Sources/SelectiveRemote/TerminalResources/terminal-host.js")
+
+        #expect(appearance.contains("Прозрачный фон терминала"))
+        #expect(appearance.contains("backgroundTransparencyEnabled"))
+        #expect(appearance.contains("backgroundOpacity"))
+        #expect(appearance.contains("func applyingGlobalBackground"))
+        #expect(host.contains("allowTransparency: true"))
+        #expect(host.contains("settings.backgroundTransparencyEnabled === true"))
+        #expect(host.contains("const resolvedBackground"))
+        #expect(host.contains("`rgba(${red}, ${green}, ${blue}, 0)`"))
+        #expect(embedded.contains(".opacity(paneAppearance.backgroundOpacity)"))
+        #expect(local.contains(".opacity(paneAppearance.backgroundOpacity)"))
+        #expect(embedded.contains("from: appearance.snapshot"))
+        #expect(local.contains("from: appearance.snapshot"))
+    }
+
+    @Test("Global terminal transparency overrides existing pane opacity without changing its theme")
+    @MainActor
+    func globalTerminalTransparencyAppliesToExistingPane() {
+        let suite = "SelectiveRemote.TerminalTransparencyTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        let global = TerminalAppearanceStore(defaults: defaults)
+        global.backgroundTransparencyEnabled = true
+        global.backgroundOpacity = 0.37
+
+        let pane = TerminalAppearanceStore(
+            defaults: defaults,
+            storageNamespace: "existing-pane",
+            cloneGlobalIfMissing: false
+        )
+        pane.applyPreset(.dracula)
+        pane.backgroundTransparencyEnabled = false
+
+        let effective = pane.snapshot.applyingGlobalBackground(from: global.snapshot)
+        #expect(effective.backgroundTransparencyEnabled == true)
+        #expect(effective.backgroundOpacity == 0.37)
+        #expect(effective.theme == TerminalThemePreset.dracula.palette)
     }
 
     @Test("Single-monitor fullscreen keeps macOS controls and reserves top safe area")
