@@ -465,6 +465,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /rotateTeamVault/u);
   assert.match(application, /teamDevicePublicKeyFingerprint/u);
   assert.match(application, /client\.approveDeviceKey/u);
+  assert.match(application, /client\.listTeamMembershipDevices/u);
+  assert.match(application, /client\.admitTeamMembershipDevice/u);
+  assert.match(application, /Допустить этот ключ только к текущему членству в команде/u);
   assert.match(application, /client\.revokeDevice/u);
   assert.match(application, /client\.renameTeam/u);
   assert.match(application, /client\.transferTeamOwnership/u);

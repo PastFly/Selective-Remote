@@ -104,6 +104,150 @@ test("Team member pages use stable cursor ordering and bounded server-side filte
   assert.match(f.queries[0].sql, /\(role_rank, sort_username, id\) >/u);
 });
 
+test("an Owner can list and membership-scope a registered member device", async () => {
+  const targetMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
+  const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";
+  const targetDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+  const publicKey = JSON.stringify({
+    kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],
+  });
+  const device = {
+    id: targetDeviceID,
+    name: "Web browser",
+    platform: "web",
+    app_version: "0.32.0",
+    public_key_algorithm: "p256-ecdh-v1",
+    public_key: publicKey,
+    account_key_approved: false,
+    admitted: false,
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("target.id AS target_id")) return { rows: [{
+      id: membershipID,
+      user_id: actorUserID,
+      role: "owner",
+      epoch: 1,
+      target_id: targetMembershipID,
+      target_user_id: targetUserID,
+      target_role: "editor",
+      target_epoch: 4,
+      actor_device_authorized: true,
+    }] };
+    if (sql.includes("device.key_approved_at IS NOT NULL AS account_key_approved")) {
+      return { rows: [device] };
+    }
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1 }] };
+    }
+    if (sql.includes("WHERE team_id = $1 AND id = $2") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: targetMembershipID, user_id: targetUserID, role: "editor", epoch: 4 }] };
+    }
+    if (sql.includes("AS authorized") && sql.includes("FOR UPDATE OF device")) {
+      return { rows: [{ id: deviceID, authorized: true }] };
+    }
+    if (sql.includes("SELECT id, public_key FROM devices")) {
+      return { rows: [{ id: targetDeviceID, public_key: publicKey }] };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(
+    await f.store.listTeamMembershipDevices(teamID, targetMembershipID, actorUserID, deviceID),
+    [device],
+  );
+  assert.deepEqual(await f.store.admitTeamMembershipDevice({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    membershipID: targetMembershipID,
+    deviceID: targetDeviceID,
+    expectedPublicKey: publicKey,
+    idempotencyKey: "request:team-member-device-admit-01",
+  }), { admitted: true, membershipID: targetMembershipID, deviceID: targetDeviceID });
+  const admission = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions")
+    && sql.includes("ON CONFLICT"));
+  assert.deepEqual(admission.parameters, [targetMembershipID, 4, targetDeviceID]);
+  const audit = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_audit_events"));
+  assert.match(audit.parameters.at(-1), /"deviceID":"aef6452c-1ad8-48bb-b4b5-ea9c207b707b"/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at")), false);
+  assert.equal(f.queries.at(-2).sql, "COMMIT");
+});
+
+test("an Editor cannot inspect or admit another member device", async () => {
+  const targetMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
+  const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("target.id AS target_id")) return { rows: [{
+      id: membershipID, user_id: actorUserID, role: "editor", epoch: 1,
+      target_id: targetMembershipID, target_user_id: targetUserID, target_role: "viewer", target_epoch: 1,
+      actor_device_authorized: true,
+    }] };
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "editor", epoch: 1 }] };
+    }
+    if (sql.includes("WHERE team_id = $1 AND id = $2") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: targetMembershipID, user_id: targetUserID, role: "viewer", epoch: 1 }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(
+    f.store.listTeamMembershipDevices(teamID, targetMembershipID, actorUserID, deviceID),
+    /team_access_denied/u,
+  );
+  await assert.rejects(f.store.admitTeamMembershipDevice({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    membershipID: targetMembershipID,
+    deviceID,
+    expectedPublicKey: "{}",
+    idempotencyKey: "request:team-member-device-admit-denied",
+  }), /team_access_denied/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions")), false);
+});
+
+test("an unapproved manager device cannot inspect or admit member keys", async () => {
+  const targetMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
+  const targetUserID = "6a812c55-aa74-4be4-bf1a-4cfcd362b459";
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("target.id AS target_id")) return { rows: [{
+      id: membershipID, user_id: actorUserID, role: "owner", epoch: 1,
+      target_id: targetMembershipID, target_user_id: targetUserID, target_role: "editor", target_epoch: 1,
+      actor_device_authorized: false,
+    }] };
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1 }] };
+    }
+    if (sql.includes("WHERE team_id = $1 AND id = $2") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ id: targetMembershipID, user_id: targetUserID, role: "editor", epoch: 1 }] };
+    }
+    if (sql.includes("AS authorized") && sql.includes("FOR UPDATE OF device")) {
+      return { rows: [{ id: deviceID, authorized: false }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(
+    f.store.listTeamMembershipDevices(teamID, targetMembershipID, actorUserID, deviceID),
+    /device_approval_required/u,
+  );
+  await assert.rejects(f.store.admitTeamMembershipDevice({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    membershipID: targetMembershipID,
+    deviceID,
+    expectedPublicKey: "{}",
+    idempotencyKey: "request:team-member-device-admit-unapproved",
+  }), /device_approval_required/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions")), false);
+});
+
 test("Team invitation listing exposes only active invitations manageable by the actor", async () => {
   const viewerInvitation = {
     actor_role: "admin", id: "471c3424-b6aa-41a0-959f-aeaa1e3ef79d", role: "viewer",

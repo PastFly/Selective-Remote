@@ -864,6 +864,105 @@ export class PostgresStore {
     return { rows, nextCursor: hasMore ? rows.at(-1).id : null, total };
   }
 
+  async listTeamMembershipDevices(teamID, membershipID, actorUserID, actorDeviceID) {
+    const access = await this.pool.query(
+      `SELECT actor.id, actor.user_id, actor.role, actor.epoch,
+         target.id AS target_id, target.user_id AS target_user_id,
+         target.role AS target_role, target.epoch AS target_epoch,
+         (actor_device.key_approved_at IS NOT NULL OR actor_admission.device_id IS NOT NULL)
+           AS actor_device_authorized
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       JOIN team_memberships AS target
+         ON target.team_id = team.id AND target.id = $2 AND target.revoked_at IS NULL
+       JOIN devices AS actor_device
+         ON actor_device.id = $4 AND actor_device.user_id = actor.user_id
+        AND actor_device.revoked_at IS NULL
+        AND actor_device.public_key IS NOT NULL
+        AND actor_device.public_key_algorithm = 'p256-ecdh-v1'
+       LEFT JOIN team_membership_device_admissions AS actor_admission
+         ON actor_admission.membership_id = actor.id
+        AND actor_admission.membership_epoch = actor.epoch
+        AND actor_admission.device_id = actor_device.id
+       WHERE actor.team_id = $1 AND actor.user_id = $3 AND actor.revoked_at IS NULL`,
+      [teamID, membershipID, actorUserID, actorDeviceID],
+    );
+    const row = access.rows[0];
+    if (!row) throw new Error("team_not_found");
+    if (!row.actor_device_authorized) throw new Error("device_approval_required");
+    requireMembershipChange(
+      { id: row.id, user_id: row.user_id, role: row.role, epoch: row.epoch },
+      { id: row.target_id, user_id: row.target_user_id, role: row.target_role, epoch: row.target_epoch },
+    );
+    const result = await this.pool.query(
+      `SELECT device.id, device.name, device.platform, device.app_version,
+         device.public_key_algorithm, device.public_key,
+         device.key_approved_at IS NOT NULL AS account_key_approved,
+         admission.device_id IS NOT NULL AS admitted
+       FROM devices AS device
+       LEFT JOIN team_membership_device_admissions AS admission
+         ON admission.membership_id = $1
+        AND admission.membership_epoch = $2
+        AND admission.device_id = device.id
+       WHERE device.user_id = $3 AND device.revoked_at IS NULL
+         AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
+       ORDER BY device.last_seen_at DESC, device.id`,
+      [membershipID, Number(row.target_epoch), row.target_user_id],
+    );
+    return result.rows;
+  }
+
+  async admitTeamMembershipDevice({
+    actorUserID, actorDeviceID, teamID, membershipID, deviceID, expectedPublicKey, idempotencyKey,
+  }) {
+    return this.withTeamMutation(actorUserID, "team.member.device.admit", idempotencyKey, async (client) => {
+      const actor = await lockTeamActor(client, teamID, actorUserID);
+      const target = await lockTeamMembership(client, teamID, membershipID);
+      if (!actor || !target) throw new Error("team_not_found");
+      requireMembershipChange(actor, target);
+      const actorDeviceResult = await client.query(
+        `SELECT device.id,
+           (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL) AS authorized
+         FROM devices AS device
+         LEFT JOIN team_membership_device_admissions AS admission
+           ON admission.membership_id = $1
+          AND admission.membership_epoch = $2
+          AND admission.device_id = device.id
+         WHERE device.id = $3 AND device.user_id = $4 AND device.revoked_at IS NULL
+           AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
+         FOR UPDATE OF device`,
+        [actor.id, Number(actor.epoch), actorDeviceID, actorUserID],
+      );
+      if (actorDeviceResult.rows[0]?.authorized !== true) throw new Error("device_approval_required");
+      const deviceResult = await client.query(
+        `SELECT id, public_key FROM devices
+         WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+           AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+         FOR UPDATE`,
+        [deviceID, target.user_id],
+      );
+      const device = deviceResult.rows[0];
+      if (!device) throw new Error("device_not_found");
+      if (device.public_key !== expectedPublicKey) throw new Error("device_public_key_mismatch");
+      await client.query(
+        `INSERT INTO team_membership_device_admissions
+          (membership_id, membership_epoch, device_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING`,
+        [target.id, Number(target.epoch), deviceID],
+      );
+      await writeTeamAudit(client, {
+        teamID,
+        actorUserID,
+        action: "team.member_device_admitted",
+        targetUserID: target.user_id,
+        targetMembershipID: target.id,
+        metadata: { membershipEpoch: Number(target.epoch), deviceID },
+      });
+      return { admitted: true, membershipID: target.id, deviceID };
+    });
+  }
+
   async listTeamInvitations(teamID, actorUserID) {
     const result = await this.pool.query(
       `SELECT actor.role AS actor_role, invitation.id, invitation.team_id,

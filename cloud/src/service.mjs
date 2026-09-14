@@ -558,6 +558,28 @@ export class CloudService {
     });
   }
 
+  async listTeamMembershipDevices(session, teamID, membershipID) {
+    const rows = await this.store.listTeamMembershipDevices(
+      teamID,
+      membershipID,
+      session.user_id,
+      session.device_id,
+    );
+    return { devices: rows.map(publicTeamMembershipDevice) };
+  }
+
+  async admitTeamMembershipDevice(session, teamID, membershipID, deviceID, input, idempotencyKey) {
+    return this.store.admitTeamMembershipDevice({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      teamID,
+      membershipID,
+      deviceID,
+      expectedPublicKey: validateDevicePublicKey(input?.publicKey),
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
   async requirePasswordReauthentication(session, value) {
     const password = validatePassword(value);
     const identity = await this.store.passwordIdentity(session.email);
@@ -732,6 +754,19 @@ function publicTeamKeyDevice(row) {
     publicKeyAlgorithm: row.public_key_algorithm,
     publicKey: JSON.parse(row.public_key),
     hasWrapper: row.has_wrapper === true,
+  };
+}
+
+function publicTeamMembershipDevice(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    platform: row.platform,
+    appVersion: row.app_version,
+    publicKeyAlgorithm: row.public_key_algorithm,
+    publicKey: JSON.parse(row.public_key),
+    accountKeyApproved: row.account_key_approved === true,
+    admitted: row.admitted === true,
   };
 }
 

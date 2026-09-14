@@ -13,6 +13,8 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
     "teamInvitationsMatch",
     "teamInvitationMatch",
     "teamMemberMatch",
+    "teamMemberDevicesMatch",
+    "teamMemberDeviceMatch",
     "teamVaultsMatch",
     "teamVaultMatch",
     "teamVaultDevicesMatch",
@@ -34,6 +36,8 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
   assert.match(serverSource, /service\.renameSharedVault/);
   assert.match(serverSource, /service\.approveDeviceKey/);
   assert.match(serverSource, /service\.bootstrapDeviceKey/);
+  assert.match(serverSource, /service\.listTeamMembershipDevices/);
+  assert.match(serverSource, /service\.admitTeamMembershipDevice/);
   assert.match(serverSource, /service\.grantSharedVaultWrapper/);
   assert.match(serverSource, /store\.revokeDevice\(session\.user_id, deviceMatch\[1\], session\.device_id\)/);
   assert.ok(serverSource.indexOf('url.pathname === "/v1/devices/bootstrap-key"')
@@ -50,6 +54,8 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
 test("malformed or cross-scope Team identifiers use the same not-found boundary", () => {
   assert.match(serverSource, /!isUUID\(teamMembersMatch\[1\]\).*team_not_found/s);
   assert.match(serverSource, /!isUUID\(teamMemberMatch\[1\]\) \|\| !isUUID\(teamMemberMatch\[2\]\).*team_not_found/s);
+  assert.match(serverSource, /!teamMemberDevicesMatch\.slice\(1\)\.every\(isUUID\).*team_not_found/s);
+  assert.match(serverSource, /!teamMemberDeviceMatch\.slice\(1\)\.every\(isUUID\).*team_not_found/s);
   assert.match(serverSource, /!isUUID\(teamVaultsMatch\[1\]\).*team_not_found/s);
   assert.match(serverSource, /!isUUID\(teamVaultMatch\[1\]\) \|\| !isUUID\(teamVaultMatch\[2\]\).*team_not_found/s);
 });

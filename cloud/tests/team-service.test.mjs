@@ -4,6 +4,7 @@ import { CloudService } from "../src/service.mjs";
 
 const teamID = "84f6c860-0d26-4ef5-8652-27cb8b991b70";
 const membershipID = "7026d8a4-116a-4f61-9d8e-ff04e3a73360";
+const targetMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
 const deviceID = "33cc880e-084a-4d9a-b1ea-f99d2ff86032";
 const vaultID = "bc01823b-1401-4058-9488-f4f6d1839b3b";
 const session = {
@@ -185,6 +186,25 @@ class TeamStore {
   async approveDeviceKey(input) {
     this.calls.push(["approveDeviceKey", input]);
     return { approved: true, deviceID: input.deviceID };
+  }
+
+  async listTeamMembershipDevices(team, membership, actor, device) {
+    this.calls.push(["listTeamMembershipDevices", team, membership, actor, device]);
+    return [{
+      id: deviceID,
+      name: "Web browser",
+      platform: "web",
+      app_version: "0.32.0",
+      public_key_algorithm: "p256-ecdh-v1",
+      public_key: JSON.stringify({ kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) }),
+      account_key_approved: false,
+      admitted: false,
+    }];
+  }
+
+  async admitTeamMembershipDevice(input) {
+    this.calls.push(["admitTeamMembershipDevice", input]);
+    return { admitted: true, membershipID: input.membershipID, deviceID: input.deviceID };
   }
 
   async passwordIdentity(email) {
@@ -601,6 +621,36 @@ test("Team ciphertext service binds session device, generation and wrapper conte
     ...devicePublicKey,
     ext: true,
     key_ops: [],
+  });
+});
+
+test("Team managers can inspect and admit a member device without account-wide approval", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+  const publicKey = { kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) };
+  const devices = await service.listTeamMembershipDevices(session, teamID, targetMembershipID);
+  assert.equal(devices.devices[0].accountKeyApproved, false);
+  assert.equal(devices.devices[0].admitted, false);
+  assert.deepEqual(devices.devices[0].publicKey, publicKey);
+  assert.deepEqual(await service.admitTeamMembershipDevice(
+    session,
+    teamID,
+    targetMembershipID,
+    deviceID,
+    { publicKey },
+    "request:team-member-device-admit-01",
+  ), { admitted: true, membershipID: targetMembershipID, deviceID });
+  assert.deepEqual(store.calls[0], [
+    "listTeamMembershipDevices", teamID, targetMembershipID, session.user_id, session.device_id,
+  ]);
+  assert.deepEqual(store.calls[1][1], {
+    actorUserID: session.user_id,
+    actorDeviceID: session.device_id,
+    teamID,
+    membershipID: targetMembershipID,
+    deviceID,
+    expectedPublicKey: JSON.stringify({ ...publicKey, ext: true, key_ops: [] }),
+    idempotencyKey: "request:team-member-device-admit-01",
   });
 });
 

@@ -1232,6 +1232,7 @@ export function initializeTeamWorkspace({
       const actionMenu = documentValue.createElement("div");
       const role = documentValue.createElement("select");
       const save = documentValue.createElement("button");
+      const admitDevices = documentValue.createElement("button");
       const revoke = documentValue.createElement("button");
       avatar.className = "team-member-avatar";
       avatar.textContent = (member.displayName || member.username).trim().slice(0, 1).toUpperCase();
@@ -1268,6 +1269,58 @@ export function initializeTeamWorkspace({
           save.disabled = !editableByActor || self;
         }
       });
+      admitDevices.type = "button";
+      admitDevices.textContent = "Допустить устройства";
+      admitDevices.disabled = !editableByActor || self;
+      admitDevices.addEventListener("click", async () => {
+        const activeTeam = selectedTeam;
+        if (!activeTeam) return;
+        admitDevices.disabled = true;
+        try {
+          const memberDevices = await client.listTeamMembershipDevices({
+            teamID: activeTeam.id,
+            membershipID: member.id,
+          });
+          const pending = memberDevices.filter((device) => !device.accountKeyApproved && !device.admitted);
+          let admitted = 0;
+          let wrappersGranted = 0;
+          for (const device of pending) {
+            const fingerprint = await teamDevicePublicKeyFingerprint(device.publicKey);
+            const approved = confirmValue(
+              `Устройство участника @${member.username}:\n`
+              + `${device.name || "Без названия"} · ${device.platform || "unknown"}\n`
+              + `SHA-256: ${fingerprint}\n\n`
+              + "Допустить этот ключ только к текущему членству в команде?",
+            );
+            if (!approved) continue;
+            await client.admitTeamMembershipDevice({
+              teamID: activeTeam.id,
+              membershipID: member.id,
+              deviceID: device.id,
+              publicKey: device.publicKey,
+            });
+            admitted += 1;
+          }
+          if (selectedTeam?.id === activeTeam.id && controller && selectedVault) {
+            const outcome = await synchronizeAndProvision();
+            applySynchronizationOutcome(outcome);
+            wrappersGranted = outcome?.wrapperProvisioning?.granted ?? 0;
+          }
+          if (pending.length === 0) {
+            setText(message, `У @${member.username} нет новых недоверенных устройств. Недостающие wrappers безопасно проверены.`);
+          } else if (admitted > 0) {
+            setText(message, wrappersGranted > 0
+              ? `Допущено устройств: ${admitted}. Для открытого Team Vault выдано wrappers: ${wrappersGranted}.`
+              : `Допущено устройств: ${admitted}. Wrapper выдаст любой активный клиент, уже владеющий ключом Team Vault.`);
+          } else {
+            setText(message, "Допуск устройств отменён; ключи и wrappers не изменены.");
+          }
+        } catch {
+          setText(message, "Устройства не допущены: проверьте полномочия, отпечаток и доступность Team Vault key.");
+        } finally {
+          admitDevices.disabled = !editableByActor || self;
+        }
+      });
       revoke.type = "button";
       revoke.className = "danger";
       revoke.textContent = "Отозвать доступ";
@@ -1290,7 +1343,7 @@ export function initializeTeamWorkspace({
       actionsLabel.textContent = "•••";
       actionsLabel.setAttribute("aria-label", `Действия для @${member.username}`);
       actionMenu.className = "team-member-action-menu";
-      actionMenu.append(role, save, revoke);
+      actionMenu.append(role, save, admitDevices, revoke);
       actions.append(actionsLabel, actionMenu);
       actions.hidden = !editableByActor || self;
       card.append(avatar, identityBlock, roleBadge, actions);

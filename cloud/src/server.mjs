@@ -315,6 +315,41 @@ async function route(request, response) {
         ),
       );
     }
+    const teamMemberDeviceMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/members\/([^/]+)\/devices\/([^/]+)$/i,
+    );
+    if (method === "POST" && teamMemberDeviceMatch) {
+      if (!teamMemberDeviceMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        async () => service.admitTeamMembershipDevice(
+          session,
+          teamMemberDeviceMatch[1],
+          teamMemberDeviceMatch[2],
+          teamMemberDeviceMatch[3],
+          await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request),
+        ),
+      );
+    }
+    const teamMemberDevicesMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/members\/([^/]+)\/devices$/i,
+    );
+    if (method === "GET" && teamMemberDevicesMatch) {
+      if (!teamMemberDevicesMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        () => service.listTeamMembershipDevices(
+          session,
+          teamMemberDevicesMatch[1],
+          teamMemberDevicesMatch[2],
+        ),
+      );
+    }
     const teamMemberMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/members\/([^/]+)$/i);
     if (teamMemberMatch) {
       if (!isUUID(teamMemberMatch[1]) || !isUUID(teamMemberMatch[2])) {
