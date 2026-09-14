@@ -100,6 +100,11 @@ private enum HostScope: String, CaseIterable, Identifiable {
     }
 }
 
+private enum PersonalHostCollectionSurface: String {
+    case sidebar
+    case navigator
+}
+
 private struct SFTPWorkspaceSidebarStatus: View {
     @ObservedObject var workspace: SFTPWorkspaceModel
 
@@ -140,7 +145,9 @@ struct ContentView: View {
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID: UUID?
     @State private var requestedTeamHostAction: SelectiveRemoteTeamHostActionRequest?
-    @State private var personalHostsPresentationID = UUID()
+    @State private var hostScopePresentationID = UUID()
+    @State private var personalHostSidebarPresentationID = UUID()
+    @State private var personalHostNavigatorPresentationID = UUID()
     @State private var expandedSidebarTeamIDs = Set(
         (UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.sidebar-team-host.expanded-teams.v1"
@@ -674,6 +681,10 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
                 .onChange(of: hostScope) { _, scope in
+                    personalHostDropTargetID = nil
+                    DispatchQueue.main.async {
+                        refreshHostPresentations()
+                    }
                     if scope == .team {
                         setMainArea(.hosts)
                     }
@@ -682,9 +693,11 @@ struct ContentView: View {
 
             if hostScope == .personal {
                 profileTagFilterBar
-                profileCollection
+                profileCollection(surface: .sidebar)
+                    .id("personal-sidebar-\(hostScopePresentationID)")
             } else {
                 teamHostSidebarCollection
+                    .id("team-sidebar-\(hostScopePresentationID)")
             }
 
             if hostScope == .personal {
@@ -899,7 +912,9 @@ struct ContentView: View {
     }
 
     @ViewBuilder
-    private var profileCollection: some View {
+    private func profileCollection(
+        surface: PersonalHostCollectionSurface
+    ) -> some View {
         if model.profileGroups.isEmpty {
             ContentUnavailableView {
                 Label("Подключения не найдены", systemImage: "rectangle.stack.badge.questionmark")
@@ -935,7 +950,7 @@ struct ContentView: View {
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
                                 activeTunnelCount: activeTunnelCount(for: item.id)
                             )
-                            .id("management-profile:\(item.id.uuidString)")
+                            .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                             .overlay(alignment: .top) {
                                 personalHostInsertionIndicator(for: item.id)
                             }
@@ -962,7 +977,7 @@ struct ContentView: View {
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
-            .id(personalHostsPresentationID)
+            .id(personalHostsPresentationID(for: surface))
             .onAppear { restoreOrInitializePersonalFolderExpansion() }
             .onChange(of: expandedPersonalFolderIDs) { _, value in
                 UserDefaults.standard.set(
@@ -1475,7 +1490,7 @@ struct ContentView: View {
                     .padding(16)
                     Divider()
                     profileTagFilterBar
-                    profileCollection
+                    profileCollection(surface: .navigator)
                 }
                 .frame(
                     minWidth: 300,
@@ -1514,8 +1529,19 @@ struct ContentView: View {
         )
         .onChange(of: personalHostDetailVisible) { _, _ in
             DispatchQueue.main.async {
-                personalHostsPresentationID = UUID()
+                personalHostNavigatorPresentationID = UUID()
             }
+        }
+    }
+
+    private func personalHostsPresentationID(
+        for surface: PersonalHostCollectionSurface
+    ) -> UUID {
+        switch surface {
+        case .sidebar:
+            personalHostSidebarPresentationID
+        case .navigator:
+            personalHostNavigatorPresentationID
         }
     }
 
@@ -1774,6 +1800,7 @@ struct ContentView: View {
             case .hosts:
                 if hostScope == .personal {
                     personalHostsManagementDetail
+                        .id("personal-host-detail-\(hostScopePresentationID)")
                 } else {
                     SelectiveRemoteTeamHostsView(
                         store: teamHosts,
@@ -1784,6 +1811,7 @@ struct ContentView: View {
                         onOpenTerminal: openTeamTerminal,
                         onOpenSFTP: openTeamSFTP
                     )
+                    .id("team-host-detail-\(hostScopePresentationID)")
                 }
             case .snippets:
                 TerminalSnippetsLibraryView(
@@ -3586,9 +3614,16 @@ struct ContentView: View {
             setTerminalFocusMode(false)
         }
         if area == .hosts, mainArea != .hosts {
-            personalHostsPresentationID = UUID()
+            refreshHostPresentations()
         }
         mainArea = area
+    }
+
+    private func refreshHostPresentations() {
+        hostScopePresentationID = UUID()
+        personalHostSidebarPresentationID = UUID()
+        personalHostNavigatorPresentationID = UUID()
+        personalHostDropTargetID = nil
     }
 
     private func openPersonalHosts() {
