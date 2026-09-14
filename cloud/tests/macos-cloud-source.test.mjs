@@ -416,7 +416,7 @@ test("macOS Team Hosts expose nested shared folders, tags, filtering, and drag-a
   assert.match(hosts, /safe\.group = input\.group/u);
   assert.match(hosts, /safe\.tags = input\.tags/u);
   assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
-  assert.match(hosts, /\.searchable\(/u);
+  assert.match(hosts, /@Binding var searchText: String/u);
   assert.match(hosts, /selectedFolder/u);
   assert.match(hosts, /SelectiveRemotePersistentOutlineRows\([\s\S]*outlineItems\(in: teamID\)/u);
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-folders\.v1/u);
