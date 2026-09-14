@@ -18,7 +18,7 @@ test("converts GitHub release Markdown into readable Telegram text", () => {
 
   assert.match(result, /^Что изменилось/mu);
   assert.match(result, /• Добавлен Team Vault/u);
-  assert.doesNotMatch(result, /\\*\\*/u);
+  assert.doesNotMatch(result, /\*\*/u);
   assert.match(result, /Исправлен SFTP/u);
   assert.match(result, /Полная история — https:\/\/example\.invalid\/changelog/u);
   assert.doesNotMatch(result, /^##/mu);
@@ -58,7 +58,8 @@ test("removes a release-owned summary heading after the fixed introduction", () 
   assert.doesNotMatch(message, /Что изменилось в 0\.31\.0/u);
   assert.match(message, /• Исправлена навигация/u);
 });
-\ntest("marks prereleases and truncates long release notes safely", () => {
+
+test("marks prereleases and truncates long release notes safely", () => {
   const message = buildTelegramReleaseMessage({
     tag_name: "v0.33.0-beta.1",
     name: "",
