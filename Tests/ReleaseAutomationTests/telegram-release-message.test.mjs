@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   buildTelegramReleaseMessage,
+  compactReleaseBody,
   releaseBodyToPlainText,
 } from "../../scripts/telegram_release_message.mjs";
 
@@ -22,6 +23,26 @@ test("converts GitHub release Markdown into readable Telegram text", () => {
   assert.match(result, /Исправлен SFTP/u);
   assert.match(result, /Полная история — https:\/\/example\.invalid\/changelog/u);
   assert.doesNotMatch(result, /^##/mu);
+});
+
+test("keeps release announcements to six highlights and one release link", () => {
+  const bullets = Array.from(
+    { length: 10 },
+    (_, index) => "- Изменение " + (index + 1),
+  ).join("\n");
+  const compact = compactReleaseBody(
+    releaseBodyToPlainText(
+      "## Что изменилось в 0.32.0\n\n"
+        + bullets
+        + "\n\n---\nПолная история: [CHANGELOG.md](https://example.invalid/CHANGELOG.md)",
+    ),
+  );
+
+  assert.equal((compact.match(/^• /gmu) ?? []).length, 7);
+  assert.match(compact, /• Изменение 6/u);
+  assert.doesNotMatch(compact, /Изменение 7/u);
+  assert.match(compact, /Остальные изменения — на странице релиза/u);
+  assert.doesNotMatch(compact, /CHANGELOG/u);
 });
 
 test("builds a stable release announcement with download and donation links", () => {
