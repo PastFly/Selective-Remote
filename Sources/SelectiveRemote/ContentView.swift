@@ -724,11 +724,7 @@ struct ContentView: View {
                         ),
                         systemImage: "folder.badge.plus"
                     ) {
-                        newPersonalFolderName = ""
-                        newPersonalFolderParent = SelectiveRemoteHostFolderPath.normalize(
-                            model.selectedProfile.group
-                        )
-                        showsPersonalFolderCreator = true
+                        preparePersonalFolderCreator()
                     }
                 } label: {
                     Image(systemName: "plus")
@@ -927,10 +923,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if model.profileCollectionDisplayMode == .list {
-            List(selection: Binding(
-                get: { model.selectedProfileID },
-                set: { if let id = $0 { openProfile(id) } }
-            )) {
+            List {
                 SelectiveRemotePersistentOutlineRows(
                     items: model.profileOutlineItems,
                     children: \.children,
@@ -944,34 +937,44 @@ struct ContentView: View {
                                 movePersonalProfile(values, toFolder: path)
                             }
                     case let .profile(item):
+                        Button {
+                            openProfile(item.id)
+                        } label: {
                             ProfileRow(
                                 profile: item,
                                 session: model.sessions[item.id],
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
                                 activeTunnelCount: activeTunnelCount(for: item.id)
                             )
-                            .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
-                            .overlay(alignment: .top) {
-                                personalHostInsertionIndicator(for: item.id)
-                            }
-                            .tag(item.id)
-                            .contentShape(Rectangle())
-                            .contextMenu { profileContextMenu(item) }
-                            .draggable("personal-host:\(item.id.uuidString)")
-                            .dropDestination(for: String.self) { values, _ in
+                        }
+                        .buttonStyle(.plain)
+                        .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
+                        .listRowBackground(
+                            showsPersonalHostSelection(on: surface)
+                                && model.selectedProfileID == item.id
+                                ? Color.accentColor.opacity(0.24)
+                                : Color.clear
+                        )
+                        .overlay(alignment: .top) {
+                            personalHostInsertionIndicator(for: item.id)
+                        }
+                        .contentShape(Rectangle())
+                        .contextMenu { profileContextMenu(item) }
+                        .draggable("personal-host:\(item.id.uuidString)")
+                        .dropDestination(for: String.self) { values, _ in
+                            setPersonalHostDropTarget(nil)
+                            return movePersonalProfile(
+                                values,
+                                toFolder: item.group,
+                                before: item.id
+                            )
+                        } isTargeted: { isTargeted in
+                            if isTargeted {
+                                setPersonalHostDropTarget(item.id)
+                            } else if personalHostDropTargetID == item.id {
                                 setPersonalHostDropTarget(nil)
-                                return movePersonalProfile(
-                                    values,
-                                    toFolder: item.group,
-                                    before: item.id
-                                )
-                            } isTargeted: { isTargeted in
-                                if isTargeted {
-                                    setPersonalHostDropTarget(item.id)
-                                } else if personalHostDropTargetID == item.id {
-                                    setPersonalHostDropTarget(nil)
-                                }
                             }
+                        }
                     }
                 }
             }
@@ -1013,7 +1016,8 @@ struct ContentView: View {
                                     } label: {
                                         ProfileGridCard(
                                             profile: item,
-                                            isSelected: model.selectedProfileID == item.id,
+                                            isSelected: showsPersonalHostSelection(on: surface)
+                                                && model.selectedProfileID == item.id,
                                             session: model.sessions[item.id],
                                             hasActiveSSH: model.isSSHTerminalRunning(
                                                 profileID: item.id
@@ -1491,6 +1495,8 @@ struct ContentView: View {
                     Divider()
                     profileTagFilterBar
                     profileCollection(surface: .navigator)
+                    Divider()
+                    personalHostNavigatorFooter
                 }
                 .frame(
                     minWidth: 300,
@@ -1534,6 +1540,107 @@ struct ContentView: View {
         }
     }
 
+    private func showsPersonalHostSelection(
+        on surface: PersonalHostCollectionSurface
+    ) -> Bool {
+        switch surface {
+        case .sidebar:
+            return mainArea != .hosts || !personalHostNavigatorVisible
+        case .navigator:
+            return true
+        }
+    }
+
+    private var personalHostNavigatorFooter: some View {
+        HStack(spacing: 8) {
+            Label(
+                "\(model.profiles.count)",
+                systemImage: "internaldrive"
+            )
+            .help(UpdateLocalization.text(
+                ru: "Личных хостов: \(model.profiles.count)",
+                en: "Personal Hosts: \(model.profiles.count)"
+            ))
+
+            Spacer()
+
+            Menu {
+                Button(
+                    UpdateLocalization.text(
+                        ru: "Новая папка для выбранного Host…",
+                        en: "New Folder for Selected Host…"
+                    ),
+                    systemImage: "folder.badge.plus"
+                ) {
+                    preparePersonalFolderCreator()
+                }
+
+                Divider()
+
+                Button(
+                    UpdateLocalization.text(ru: "Без папки", en: "No Folder")
+                ) {
+                    model.moveProfile(
+                        profileID: model.selectedProfile.id,
+                        toFolder: ""
+                    )
+                }
+                ForEach(model.profileGroupNames, id: \.self) { groupName in
+                    Button(groupName) {
+                        model.moveProfile(
+                            profileID: model.selectedProfile.id,
+                            toFolder: groupName
+                        )
+                    }
+                }
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Папка", en: "Folder"),
+                    systemImage: "folder"
+                )
+            }
+            .help(UpdateLocalization.text(
+                ru: "Создать папку или переместить выбранный Host",
+                en: "Create a folder or move the selected Host"
+            ))
+
+            Menu {
+                Button(
+                    UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
+                    systemImage: "desktopcomputer"
+                ) {
+                    model.addProfile(connectionType: .rdp)
+                }
+                Button(
+                    UpdateLocalization.text(ru: "Новый SSH", en: "New SSH"),
+                    systemImage: "terminal"
+                ) {
+                    model.addProfile(connectionType: .ssh)
+                }
+                Button(
+                    UpdateLocalization.text(ru: "Новый Telnet", en: "New Telnet"),
+                    systemImage: "network"
+                ) {
+                    model.addProfile(connectionType: .telnet)
+                }
+                Button(
+                    UpdateLocalization.text(ru: "Новый Serial", en: "New Serial"),
+                    systemImage: "cable.connector"
+                ) {
+                    model.addProfile(connectionType: .serial)
+                }
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"),
+                    systemImage: "plus"
+                )
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(10)
+    }
+
     private func personalHostsPresentationID(
         for surface: PersonalHostCollectionSurface
     ) -> UUID {
@@ -1570,6 +1677,14 @@ struct ContentView: View {
     private func openProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
         openPersonalHosts()
+    }
+
+    private func preparePersonalFolderCreator() {
+        newPersonalFolderName = ""
+        newPersonalFolderParent = SelectiveRemoteHostFolderPath.normalize(
+            model.selectedProfile.group
+        )
+        showsPersonalFolderCreator = true
     }
 
     private func movePersonalProfile(
