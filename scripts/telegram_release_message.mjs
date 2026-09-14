@@ -18,6 +18,7 @@ export function releaseBodyToPlainText(value = "") {
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/gu, "$1 — $2")
       .replace(/\[([^\]]+)\]\([^)]+\)/gu, "$1")
       .replace(/`([^`]+)`/gu, "$1")
+      .replace(/\*\*([^*\n]+)\*\*/gu, "$1")
       .replace(/^\s*---+\s*$/gmu, "")
       .replace(/^\s*[-*]\s+/gmu, "• "),
   );
@@ -56,7 +57,12 @@ export function buildTelegramReleaseMessage(
   }
   const footer = "\n\n" + footerParts.join("\n\n");
   const emptyBody = "Подробности обновления доступны на странице релиза.";
-  const body = releaseBodyToPlainText(release.body) || emptyBody;
+  const normalizedBody = releaseBodyToPlainText(release.body);
+  const bodyWithoutRepeatedHeading = normalizedBody.replace(
+    /^(?:Что изменилось(?:\s+в\s+[^\n]+)?|What's changed(?:\s+in\s+[^\n]+)?)\s*\n+/iu,
+    "",
+  );
+  const body = bodyWithoutRepeatedHeading || normalizedBody || emptyBody;
   const continuation = "\n\nПолный список изменений доступен по ссылке ниже.";
   const bodyBudget = Math.max(
     0,
