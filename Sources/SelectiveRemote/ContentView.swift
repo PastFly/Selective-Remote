@@ -143,6 +143,8 @@ struct ContentView: View {
     @State private var personalHostDropTargetID: UUID?
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
+    @AppStorage("SelectiveRemote.personal-host.detail-visible.v1")
+    private var personalHostDetailVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -352,7 +354,7 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteOpenTeamHosts)) { _ in
             showsCloudManagement = false
-            hostScope = .team
+            hostScope = teamHosts.vaults.isEmpty ? .personal : .team
             setMainArea(.hosts)
         }
         .sheet(isPresented: $showsCloudManagement) {
@@ -1047,7 +1049,50 @@ struct ContentView: View {
                         Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
                             .font(.caption.bold().monospacedDigit())
                             .foregroundStyle(.secondary)
+                        Menu {
+                            Picker(
+                                UpdateLocalization.text(ru: "Вид", en: "View"),
+                                selection: $model.profileCollectionDisplayMode
+                            ) {
+                                ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                                }
+                            }
+                            Divider()
+                            Picker(
+                                UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                                selection: $model.profileSortMode
+                            ) {
+                                ForEach(ProfileSortMode.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help(UpdateLocalization.text(
+                            ru: "Вид и сортировка списка хостов",
+                            en: "Host list view and sorting"
+                        ))
                         Button {
+                            personalHostDetailVisible.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(personalHostDetailVisible
+                            ? UpdateLocalization.text(
+                                ru: "Свернуть карточку хоста",
+                                en: "Collapse Host details"
+                            )
+                            : UpdateLocalization.text(
+                                ru: "Показать карточку хоста",
+                                en: "Show Host details"
+                            )
+                        )
+                        Button {
+                            personalHostDetailVisible = true
                             personalHostNavigatorVisible = false
                         } label: {
                             Image(systemName: "sidebar.left")
@@ -1063,34 +1108,44 @@ struct ContentView: View {
                     profileTagFilterBar
                     profileCollection
                 }
-                .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
+                .frame(
+                    minWidth: 300,
+                    idealWidth: 380,
+                    maxWidth: personalHostDetailVisible ? 500 : .infinity
+                )
             }
 
-            profileDetail
-                .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
-                .overlay(alignment: .topLeading) {
-                    if !personalHostNavigatorVisible {
-                        Button {
-                            personalHostNavigatorVisible = true
-                        } label: {
-                            Label(
-                                UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
-                                systemImage: "sidebar.left"
-                            )
+            if personalHostDetailVisible {
+                profileDetail
+                    .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                    .overlay(alignment: .topLeading) {
+                        if !personalHostNavigatorVisible {
+                            Button {
+                                personalHostNavigatorVisible = true
+                            } label: {
+                                Label(
+                                    UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
+                                    systemImage: "sidebar.left"
+                                )
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .padding(10)
+                            .help(UpdateLocalization.text(
+                                ru: "Показать список хостов",
+                                en: "Show Host list"
+                            ))
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .padding(10)
-                        .help(UpdateLocalization.text(
-                            ru: "Показать список хостов",
-                            en: "Show Host list"
-                        ))
                     }
-                }
+            }
         }
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
             value: personalHostNavigatorVisible
+        )
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.18),
+            value: personalHostDetailVisible
         )
     }
 
