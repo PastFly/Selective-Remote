@@ -52,13 +52,20 @@ struct AppAboutView: View {
                 }
             }
 
-            HStack(spacing: 10) {
-                Button(UpdateLocalization.text(ru: "Проект на GitHub", en: "Project on GitHub"), systemImage: "chevron.left.forwardslash.chevron.right") {
-                    openURL(ProjectSupport.githubURL)
+            VStack(spacing: 10) {
+                HStack(spacing: 10) {
+                    Button(UpdateLocalization.text(ru: "Проект на GitHub", en: "Project on GitHub"), systemImage: "chevron.left.forwardslash.chevron.right") {
+                        openURL(ProjectSupport.githubURL)
+                    }
+                    Button(UpdateLocalization.text(ru: "Сайт проекта", en: "Project Website"), systemImage: "globe") {
+                        openURL(ProjectSupport.websiteURL)
+                    }
                 }
-                Button(UpdateLocalization.text(ru: "Сайт проекта", en: "Project Website"), systemImage: "globe") {
-                    openURL(ProjectSupport.websiteURL)
+
+                Button(UpdateLocalization.text(ru: "Официальный Telegram-канал", en: "Official Telegram Channel"), systemImage: "paperplane.fill") {
+                    openURL(ProjectSupport.telegramURL)
                 }
+                .accessibilityIdentifier("aboutTelegramChannelButton")
             }
             .buttonStyle(.bordered)
 
