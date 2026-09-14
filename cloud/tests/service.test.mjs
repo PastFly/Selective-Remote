@@ -33,6 +33,9 @@ class MemoryStore {
   }
   async passwordIdentity(email) { return this.identity?.email === email ? this.identity : null; }
   async teamInvitationRegistrationTarget() { return this.invitationRegistrationTarget; }
+  async usernameAvailable(username, excludingUserID = null) {
+    return username !== "taken.username" || excludingUserID === "owner-user";
+  }
   async usernameAvailable(username, excludingUserID) { return username !== "taken" || this.identity?.id === excludingUserID && this.identity?.username === username; }
   async updateUsername(userID, username) { if (username === "taken") throw new Error("username_exists"); this.identity.username = username; return username; }
   async changePassword(userID, sessionID, passwordHash) { this.identity.password_hash = passwordHash; this.lastPasswordHash = passwordHash; for (const [key, value] of this.sessions) if (value.session_id !== sessionID) this.sessions.delete(key); return { changed: true }; }
@@ -449,4 +452,24 @@ test("recovery responses do not wait for SMTP and enforce a common minimum delay
   releaseDelivery();
   await service.waitForBackgroundTasks();
   assert.equal(service.backgroundTasks.size, 0);
+});
+
+test("username availability works before registration and preserves account self-exclusion", async () => {
+  const service = new CloudService(new MemoryStore(), config);
+  assert.deepEqual(
+    await service.usernameAvailability(null, { username: "Fresh.User" }),
+    { username: "fresh.user", available: true },
+  );
+  assert.deepEqual(
+    await service.usernameAvailability(null, { username: "taken.username" }),
+    { username: "taken.username", available: false },
+  );
+  assert.deepEqual(
+    await service.usernameAvailability({ user_id: "owner-user" }, { username: "taken.username" }),
+    { username: "taken.username", available: true },
+  );
+  await assert.rejects(
+    service.usernameAvailability(null, { username: "bad username" }),
+    /invalid_username/,
+  );
 });

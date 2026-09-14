@@ -593,3 +593,22 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /legacyMigrationRequiresLocalData/u);
   assert.match(sync, /previous ciphertext in vault_revisions/u);
 });
+
+test("macOS registration checks username availability and explains password strength", async () => {
+  const [client, accountViews, settings] = await Promise.all([
+    readFile(new URL("CloudAPIClient.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudAccountViews.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(client, /v1\/auth\/username-availability/u);
+  assert.match(client, /UsernameAvailabilityResponse/u);
+  assert.match(accountViews, /Checking username/u);
+  assert.match(accountViews, /Username is available/u);
+  assert.match(accountViews, /This username is already taken/u);
+  assert.match(accountViews, /Password strength/u);
+  assert.match(accountViews, /case weak/u);
+  assert.match(accountViews, /case medium/u);
+  assert.match(accountViews, /case strong/u);
+  assert.match(accountViews, /usernameAvailability == \.available/u);
+  assert.match(settings, /registrationUsernameAvailable/u);
+});

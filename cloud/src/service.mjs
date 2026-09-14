@@ -244,7 +244,10 @@ export class CloudService {
 
   async usernameAvailability(session, input) {
     const username = normalizeUsername(input?.username);
-    return { username, available: await this.store.usernameAvailable(username, session.user_id) };
+    return {
+      username,
+      available: await this.store.usernameAvailable(username, session?.user_id ?? null),
+    };
   }
 
   async updateUsername(session, input) {

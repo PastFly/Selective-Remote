@@ -47,6 +47,15 @@ async function route(request, response) {
   if (method === "GET" && url.pathname === "/v1/meta") {
     return sendJSON(response, 200, { apiVersion: 1, vaultSchemaVersion: 1, registrationEnabled: config.allowRegistration });
   }
+  if (method === "GET" && url.pathname === "/v1/auth/username-availability") {
+    return handleOperation(response, async () => {
+      await authRateLimiter.require(
+        "username_availability_ip",
+        clientIPAddress(request, config.proxySharedSecret),
+      );
+      return service.usernameAvailability(null, { username: url.searchParams.get("username") });
+    });
+  }
   if (method === "POST" && url.pathname === "/v1/auth/register") {
     return handleAuthOperation(request, response, "register_ip", "register_email", service.register.bind(service), 201);
   }
