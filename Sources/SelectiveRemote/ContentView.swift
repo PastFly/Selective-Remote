@@ -139,7 +139,22 @@ struct ContentView: View {
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID: UUID?
+    @State private var requestedTeamHostAction: SelectiveRemoteTeamHostActionRequest?
     @State private var personalHostsPresentationID = UUID()
+    @State private var expandedSidebarTeamIDs = Set(
+        (UserDefaults.standard.stringArray(
+            forKey: "SelectiveRemote.sidebar-team-host.expanded-teams.v1"
+        ) ?? []).compactMap { UUID(uuidString: $0) }
+    )
+    @State private var expandedSidebarTeamFolderIDs = Set(
+        UserDefaults.standard.stringArray(
+            forKey: "SelectiveRemote.sidebar-team-host.expanded-folders.v1"
+        ) ?? []
+    )
+    @AppStorage("SelectiveRemote.team-host.display-mode.v1")
+    private var teamHostDisplayMode = ProfileCollectionDisplayMode.list
+    @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
+    private var teamHostSortMode = SelectiveRemoteTeamHostSortMode.manual
     @State private var personalHostDropTargetID: UUID?
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
@@ -762,6 +777,75 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
+            } else {
+                Divider()
+                HStack(spacing: 9) {
+                    Button {
+                        NotificationCenter.default.post(
+                            name: .selectiveRemoteTeamVaultSyncNow,
+                            object: nil
+                        )
+                    } label: {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                    }
+                    .help(UpdateLocalization.text(
+                        ru: "Синхронизировать Team Vaults",
+                        en: "Synchronize Team Vaults"
+                    ))
+
+                    Spacer()
+
+                    Menu {
+                        Picker(
+                            UpdateLocalization.text(ru: "Вид", en: "View"),
+                            selection: $teamHostDisplayMode
+                        ) {
+                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                                Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: teamHostDisplayMode.systemImage)
+                    }
+                    .help(UpdateLocalization.text(
+                        ru: "Список или плитка Team Hosts",
+                        en: "Team Hosts list or grid"
+                    ))
+
+                    Menu {
+                        Picker(
+                            UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                            selection: $teamHostSortMode
+                        ) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "arrow.up.arrow.down")
+                    }
+                    .help(UpdateLocalization.text(
+                        ru: "Сортировка Team Hosts",
+                        en: "Sort Team Hosts"
+                    ))
+
+                    Button {
+                        refreshCloudSessionAvailability()
+                        if cloudSessionAvailable {
+                            showsCloudManagement = true
+                        } else {
+                            showsCloudOnboarding = true
+                        }
+                    } label: {
+                        Image(systemName: "cloud")
+                    }
+                    .help(UpdateLocalization.text(
+                        ru: "Управление Team Vaults",
+                        en: "Manage Team Vaults"
+                    ))
+                }
+                .buttonStyle(.borderless)
+                .padding(12)
             }
         }
         .background(.ultraThinMaterial)
@@ -960,9 +1044,8 @@ struct ContentView: View {
 
     private var visibleSidebarTeamHosts: [SelectiveRemoteTeamHost] {
         let query = teamHostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return teamHosts.hosts }
         return teamHosts.hosts.filter { host in
-            [
+            query.isEmpty || [
                 host.profile.friendlyName,
                 host.address,
                 host.profile.username,
@@ -972,6 +1055,38 @@ struct ContentView: View {
                 host.profile.tags.joined(separator: " ")
             ].contains { $0.localizedCaseInsensitiveContains(query) }
         }
+        .sorted { lhs, rhs in sidebarTeamHostComesBefore(lhs, rhs) }
+    }
+
+    private var sidebarTeamIDs: [UUID] {
+        Array(Set(visibleSidebarTeamHosts.map(\.teamID))).sorted { lhs, rhs in
+            sidebarTeamName(lhs).localizedCaseInsensitiveCompare(
+                sidebarTeamName(rhs)
+            ) == .orderedAscending
+        }
+    }
+
+    private func sidebarTeamName(_ teamID: UUID) -> String {
+        teamHosts.hosts.first(where: { $0.teamID == teamID })?.teamName
+            ?? UpdateLocalization.text(ru: "Команда", en: "Team")
+    }
+
+    private func sidebarTeamFolders(_ teamID: UUID) -> [String] {
+        Array(Set(visibleSidebarTeamHosts.filter { $0.teamID == teamID }.map {
+            $0.profile.group
+        })).sorted {
+            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
+        }
+    }
+
+    private func sidebarTeamOutlineItems(
+        _ teamID: UUID
+    ) -> [SelectiveRemoteTeamHostOutlineItem] {
+        SelectiveRemoteTeamHostOutlineItem.roots(
+            teamID: teamID,
+            hosts: visibleSidebarTeamHosts.filter { $0.teamID == teamID },
+            areInIncreasingOrder: { lhs, rhs in sidebarTeamHostComesBefore(lhs, rhs) }
+        )
     }
 
     @ViewBuilder
@@ -993,40 +1108,294 @@ struct ContentView: View {
                 ))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
+        } else if teamHostDisplayMode == .list {
             List(selection: $selectedTeamHostID) {
-                ForEach(visibleSidebarTeamHosts) { host in
-                    Button {
-                        selectedTeamHostID = host.id
-                        setMainArea(.hosts)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Label(
-                                host.profile.friendlyName.isEmpty
-                                    ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
-                                    : host.profile.friendlyName,
-                                systemImage: host.profile.connectionType.systemImage
-                            )
-                            .font(.headline)
-                            Text("\(host.teamName) · \(host.vaultName)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Text(host.address)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                ForEach(sidebarTeamIDs, id: \.self) { teamID in
+                    DisclosureGroup(
+                        isExpanded: sidebarTeamExpansionBinding(teamID)
+                    ) {
+                        SelectiveRemotePersistentOutlineRows(
+                            items: sidebarTeamOutlineItems(teamID),
+                            children: \.children,
+                            expandedIDs: sidebarTeamFolderExpansionBinding
+                        ) { item in
+                            switch item.kind {
+                            case let .folder(path, name):
+                                Label(
+                                    name,
+                                    systemImage: path.isEmpty ? "tray" : "folder"
+                                )
+                            case let .host(host):
+                                teamHostSidebarRow(host)
+                                    .tag(host.id)
+                                    .contextMenu { teamHostContextMenu(host) }
+                            }
                         }
-                        .padding(.vertical, 4)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
+                    } label: {
+                        Label(sidebarTeamName(teamID), systemImage: "person.3.fill")
+                            .font(.headline)
                     }
-                    .buttonStyle(.plain)
-                    .tag(host.id)
                 }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .id("sidebar-team-list-\(teamHostSortMode.rawValue)")
+            .onAppear { restoreOrInitializeSidebarTeamExpansion() }
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(sidebarTeamIDs, id: \.self) { teamID in
+                        Label(sidebarTeamName(teamID), systemImage: "person.3.fill")
+                            .font(.caption.bold())
+                            .foregroundStyle(.secondary)
+                        ForEach(sidebarTeamFolders(teamID), id: \.self) { folder in
+                            VStack(alignment: .leading, spacing: 7) {
+                                Label(
+                                    folder.isEmpty
+                                        ? UpdateLocalization.text(ru: "Без папки", en: "No Folder")
+                                        : folder,
+                                    systemImage: folder.isEmpty ? "tray" : "folder"
+                                )
+                                .font(.caption2.bold())
+                                .foregroundStyle(.secondary)
+
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
+                                    spacing: 8
+                                ) {
+                                    ForEach(visibleSidebarTeamHosts.filter {
+                                        $0.teamID == teamID && $0.profile.group == folder
+                                    }) { host in
+                                        Button {
+                                            openTeamHostCard(host)
+                                        } label: {
+                                            teamHostSidebarGridCard(host)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .contextMenu { teamHostContextMenu(host) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+            }
+        }
+    }
+
+    private func teamHostSidebarRow(_ host: SelectiveRemoteTeamHost) -> some View {
+        Button {
+            openTeamHostCard(host)
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Label(
+                    host.profile.friendlyName.isEmpty
+                        ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                        : host.profile.friendlyName,
+                    systemImage: host.profile.connectionType.systemImage
+                )
+                .font(.headline)
+                Text("\(host.vaultName) · \(host.profile.connectionType.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(host.address)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func teamHostSidebarGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Image(systemName: host.profile.connectionType.systemImage)
+                .font(.title3)
+                .foregroundStyle(Color.accentColor)
+            Text(host.profile.friendlyName)
+                .font(.caption.bold())
+                .lineLimit(2)
+            Text(host.address)
+                .font(.caption2.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
+        .padding(9)
+        .background(
+            selectedTeamHostID == host.id
+                ? Color.accentColor.opacity(0.16)
+                : Color.primary.opacity(0.05),
+            in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(
+                    selectedTeamHostID == host.id
+                        ? Color.accentColor.opacity(0.7)
+                        : Color.primary.opacity(0.07)
+                )
+        }
+        .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
+        Button(
+            UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
+            systemImage: "sidebar.right"
+        ) {
+            openTeamHostCard(host)
+        }
+        if host.profile.connectionType != .rdp {
+            Button(
+                UpdateLocalization.text(ru: "Открыть терминал", en: "Open Terminal"),
+                systemImage: "terminal"
+            ) {
+                openTeamTerminal(
+                    host,
+                    username: host.profile.username,
+                    temporaryPassword: host.credentials.password
+                )
+            }
+        }
+        if host.profile.connectionType == .ssh {
+            Button(
+                UpdateLocalization.text(ru: "Открыть SFTP", en: "Open SFTP"),
+                systemImage: "folder.badge.gearshape"
+            ) {
+                openTeamSFTP(
+                    host,
+                    username: host.profile.username,
+                    temporaryPassword: host.credentials.password
+                )
+            }
+        }
+        Divider()
+        Button(
+            UpdateLocalization.text(ru: "Мои настройки", en: "My Settings"),
+            systemImage: "person.crop.circle.badge.gearshape"
+        ) {
+            requestTeamHostAction(.personalSettings, for: host)
+        }
+        if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            Button(
+                UpdateLocalization.text(ru: "Изменить", en: "Edit"),
+                systemImage: "pencil"
+            ) {
+                requestTeamHostAction(.edit, for: host)
+            }
+            Button(
+                UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                systemImage: "trash",
+                role: .destructive
+            ) {
+                requestTeamHostAction(.delete, for: host)
+            }
+        }
+    }
+
+    private func openTeamHostCard(_ host: SelectiveRemoteTeamHost) {
+        hostScope = .team
+        selectedTeamHostID = host.id
+        UserDefaults.standard.set(
+            true,
+            forKey: "SelectiveRemote.team-host.detail-visible.v1"
+        )
+        setMainArea(.hosts)
+    }
+
+    private func requestTeamHostAction(
+        _ action: SelectiveRemoteTeamHostRequestedAction,
+        for host: SelectiveRemoteTeamHost
+    ) {
+        openTeamHostCard(host)
+        requestedTeamHostAction = .init(hostID: host.id, action: action)
+    }
+
+    private func sidebarTeamHostComesBefore(
+        _ lhs: SelectiveRemoteTeamHost,
+        _ rhs: SelectiveRemoteTeamHost
+    ) -> Bool {
+        switch teamHostSortMode {
+        case .manual:
+            if lhs.profile.sortIndex != rhs.profile.sortIndex {
+                return lhs.profile.sortIndex < rhs.profile.sortIndex
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameAscending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameDescending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedDescending
+        case .address:
+            let order = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
+            return order == .orderedSame
+                ? lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                    rhs.profile.friendlyName
+                ) == .orderedAscending
+                : order == .orderedAscending
+        }
+    }
+
+    private func sidebarTeamExpansionBinding(_ teamID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { expandedSidebarTeamIDs.contains(teamID) },
+            set: { expanded in
+                if expanded { expandedSidebarTeamIDs.insert(teamID) }
+                else { expandedSidebarTeamIDs.remove(teamID) }
+                UserDefaults.standard.set(
+                    expandedSidebarTeamIDs.map(\.canonicalCloudString).sorted(),
+                    forKey: "SelectiveRemote.sidebar-team-host.expanded-teams.v1"
+                )
+            }
+        )
+    }
+
+    private var sidebarTeamFolderExpansionBinding: Binding<Set<String>> {
+        Binding(
+            get: { expandedSidebarTeamFolderIDs },
+            set: { value in
+                expandedSidebarTeamFolderIDs = value
+                UserDefaults.standard.set(
+                    value.sorted(),
+                    forKey: "SelectiveRemote.sidebar-team-host.expanded-folders.v1"
+                )
+            }
+        )
+    }
+
+    private func restoreOrInitializeSidebarTeamExpansion() {
+        let defaults = UserDefaults.standard
+        let teamKey = "SelectiveRemote.sidebar-team-host.expanded-teams.v1"
+        let folderKey = "SelectiveRemote.sidebar-team-host.expanded-folders.v1"
+        if defaults.object(forKey: teamKey) == nil {
+            expandedSidebarTeamIDs = Set(sidebarTeamIDs)
+        }
+        if defaults.object(forKey: folderKey) == nil {
+            expandedSidebarTeamFolderIDs = Set(sidebarTeamIDs.flatMap {
+                sidebarTeamFolderIDs(sidebarTeamOutlineItems($0))
+            })
+        }
+    }
+
+    private func sidebarTeamFolderIDs(
+        _ items: [SelectiveRemoteTeamHostOutlineItem]
+    ) -> [String] {
+        items.flatMap { item -> [String] in
+            guard let children = item.children else { return [] }
+            return [item.id] + sidebarTeamFolderIDs(children)
         }
     }
 
@@ -1143,10 +1512,11 @@ struct ContentView: View {
             reduceMotion ? nil : .easeInOut(duration: 0.18),
             value: personalHostNavigatorVisible
         )
-        .animation(
-            reduceMotion ? nil : .easeInOut(duration: 0.18),
-            value: personalHostDetailVisible
-        )
+        .onChange(of: personalHostDetailVisible) { _, _ in
+            DispatchQueue.main.async {
+                personalHostsPresentationID = UUID()
+            }
+        }
     }
 
     private func activeTunnelCount(for profileID: UUID) -> Int {
@@ -1409,6 +1779,7 @@ struct ContentView: View {
                         store: teamHosts,
                         model: model,
                         selectedHostID: $selectedTeamHostID,
+                        requestedAction: $requestedTeamHostAction,
                         onOpenTerminal: openTeamTerminal,
                         onOpenSFTP: openTeamSFTP
                     )
