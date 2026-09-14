@@ -643,7 +643,7 @@ test("macOS Hosts workspace falls back to Personal and persists layout controls"
   assert.match(content, /sidebarTeamOutlineItems/);
   assert.match(content, /teamHostContextMenu/);
   assert.match(content, /requestedAction: \$requestedTeamHostAction/);
-  assert.match(content, /DispatchQueue\.main\.async[\s\S]*personalHostsPresentationID = UUID\(\)/);
+  assert.match(content, /DispatchQueue\.main\.async[\s\S]*refreshHostPresentations\(\)/);
   assert.match(teamHosts, /Все командные хосты/u);
   assert.match(teamHosts, /@Binding var searchText: String/);
   assert.match(teamHosts, /handleRequestedAction/);
