@@ -356,6 +356,10 @@ test("macOS projects Team Hosts separately and connects without Personal persist
   assert.match(content, /personalHostSidebarPresentationID = UUID\(\)/u);
   assert.match(content, /personalHostNavigatorPresentationID = UUID\(\)/u);
   assert.match(content, /refreshHostPresentations\(\)/u);
+  assert.match(content, /showsPersonalHostSelection\(on: surface\)/u);
+  assert.doesNotMatch(content, /List\(selection: Binding\(/u);
+  assert.match(content, /private var personalHostNavigatorFooter: some View/u);
+  assert.match(content, /ru: "Добавить Host", en: "Add Host"/u);
   assert.doesNotMatch(content, /@State private var personalHostsPresentationID/u);
   assert.match(content, /ForEach\(primaryMainAreas\)/u);
   assert.match(content, /ru: "Инструменты"/u);
