@@ -241,17 +241,16 @@ struct SelectiveRemoteCloudRegistrationView: View {
                         .textContentType(.newPassword)
                         .disabled(isRegistering)
                     if !password.isEmpty {
-                        let strength = SelectiveRemoteCloudPasswordStrength.evaluate(password)
                         VStack(alignment: .leading, spacing: 5) {
                             HStack {
                                 Text(UpdateLocalization.text(ru: "Надёжность пароля", en: "Password strength"))
                                 Spacer()
-                                Text(strength.title)
-                                    .foregroundStyle(strength.color)
+                                Text(passwordStrength.title)
+                                    .foregroundStyle(passwordStrength.color)
                                     .fontWeight(.semibold)
                             }
-                            ProgressView(value: strength.progress)
-                                .tint(strength.color)
+                            ProgressView(value: passwordStrength.progress)
+                                .tint(passwordStrength.color)
                         }
                         .font(.caption)
                     }
@@ -337,6 +336,10 @@ struct SelectiveRemoteCloudRegistrationView: View {
 
     private var normalizedUsername: String {
         username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var passwordStrength: SelectiveRemoteCloudPasswordStrength {
+        SelectiveRemoteCloudPasswordStrength.evaluate(password)
     }
 
     private var usernameIsValid: Bool {
