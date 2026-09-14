@@ -584,6 +584,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
+    @State private var teamHostDropTargetID: String?
     @State private var selectedFolder = ""
     @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
     private var hostNavigatorVisible = true
@@ -974,26 +975,59 @@ struct SelectiveRemoteTeamHostsView: View {
                         ) { item in
                             switch item.kind {
                             case let .folder(path, name):
+                                let targetID = teamHostFolderDropTargetID(
+                                    teamID: teamID,
+                                    path: path
+                                )
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                    .background {
+                                        teamHostDropHighlight(for: targetID)
+                                    }
                                     .dropDestination(for: String.self) { values, _ in
-                                        moveTeamHost(values, toFolder: path)
+                                        setTeamHostDropTarget(nil)
+                                        return moveTeamHost(values, toFolder: path)
+                                    } isTargeted: { isTargeted in
+                                        setTeamHostDropTarget(isTargeted ? targetID : nil)
                                     }
                             case let .host(host):
+                                let targetID = teamHostHostDropTargetID(host.id)
                                 hostRow(host)
                                     .tag(host.id)
+                                    .contentShape(Rectangle())
+                                    .contextMenu { teamHostContextMenu(host) }
                                     .draggable("team-host:\(host.id.uuidString)")
+                                    .overlay(alignment: .top) {
+                                        teamHostInsertionIndicator(for: targetID)
+                                    }
                                     .dropDestination(for: String.self) { values, _ in
-                                        moveTeamHost(
+                                        setTeamHostDropTarget(nil)
+                                        return moveTeamHost(
                                             values,
                                             toFolder: host.profile.group,
                                             before: host.id
                                         )
+                                    } isTargeted: { isTargeted in
+                                        setTeamHostDropTarget(isTargeted ? targetID : nil)
                                     }
                             }
                         }
                     } label: {
+                        let targetID = teamHostTeamDropTargetID(teamID)
                         Label(teamName(teamID), systemImage: "person.3.fill")
                             .font(.headline)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background {
+                                teamHostDropHighlight(for: targetID)
+                            }
+                            .dropDestination(for: String.self) { values, _ in
+                                setTeamHostDropTarget(nil)
+                                return moveTeamHost(values, toFolder: "")
+                            } isTargeted: { isTargeted in
+                                setTeamHostDropTarget(isTargeted ? targetID : nil)
+                            }
                     }
                 }
             }
@@ -1013,8 +1047,28 @@ struct SelectiveRemoteTeamHostsView: View {
                                 )
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .background {
+                                    teamHostDropHighlight(
+                                        for: teamHostFolderDropTargetID(
+                                            teamID: teamID,
+                                            path: folder
+                                        )
+                                    )
+                                }
                                 .dropDestination(for: String.self) { values, _ in
-                                    moveTeamHost(values, toFolder: folder)
+                                    setTeamHostDropTarget(nil)
+                                    return moveTeamHost(values, toFolder: folder)
+                                } isTargeted: { isTargeted in
+                                    setTeamHostDropTarget(
+                                        isTargeted
+                                            ? teamHostFolderDropTargetID(
+                                                teamID: teamID,
+                                                path: folder
+                                            )
+                                            : nil
+                                    )
                                 }
 
                                 LazyVGrid(
@@ -1030,12 +1084,25 @@ struct SelectiveRemoteTeamHostsView: View {
                                             teamHostGridCard(host)
                                         }
                                         .buttonStyle(.plain)
+                                        .contextMenu { teamHostContextMenu(host) }
                                         .draggable("team-host:\(host.id.uuidString)")
+                                        .overlay(alignment: .top) {
+                                            teamHostInsertionIndicator(
+                                                for: teamHostHostDropTargetID(host.id)
+                                            )
+                                        }
                                         .dropDestination(for: String.self) { values, _ in
-                                            moveTeamHost(
+                                            setTeamHostDropTarget(nil)
+                                            return moveTeamHost(
                                                 values,
                                                 toFolder: host.profile.group,
                                                 before: host.id
+                                            )
+                                        } isTargeted: { isTargeted in
+                                            setTeamHostDropTarget(
+                                                isTargeted
+                                                    ? teamHostHostDropTargetID(host.id)
+                                                    : nil
                                             )
                                         }
                                     }
@@ -1173,6 +1240,149 @@ struct SelectiveRemoteTeamHostsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
+        Button(
+            UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
+            systemImage: "sidebar.right"
+        ) {
+            revealTeamHost(host)
+        }
+        if host.profile.connectionType == .rdp {
+            Button(
+                UpdateLocalization.text(ru: "Подключить RDP", en: "Connect RDP"),
+                systemImage: "display"
+            ) {
+                connectFromContextMenu(host)
+            }
+        } else {
+            Button(
+                UpdateLocalization.text(ru: "Открыть терминал", en: "Open Terminal"),
+                systemImage: "terminal"
+            ) {
+                connectFromContextMenu(host)
+            }
+        }
+        if host.profile.connectionType == .ssh {
+            Button(
+                UpdateLocalization.text(ru: "Открыть SFTP", en: "Open SFTP"),
+                systemImage: "folder.badge.gearshape"
+            ) {
+                openSFTPFromContextMenu(host)
+            }
+        }
+        Divider()
+        Button(
+            UpdateLocalization.text(ru: "Мои настройки", en: "My Settings"),
+            systemImage: "person.crop.circle.badge.gearshape"
+        ) {
+            revealTeamHost(host)
+            personalSettingsHost = host
+        }
+        if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            Button(
+                UpdateLocalization.text(ru: "Изменить", en: "Edit"),
+                systemImage: "pencil"
+            ) {
+                revealTeamHost(host)
+                if let context = context(for: host) {
+                    editorRequest = .init(context: context, host: host)
+                }
+            }
+            Button(
+                UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                systemImage: "trash",
+                role: .destructive
+            ) {
+                revealTeamHost(host)
+                hostPendingDeletion = host
+            }
+        }
+    }
+
+    private func revealTeamHost(_ host: SelectiveRemoteTeamHost) {
+        selectedHostID = host.id
+        hostDetailVisible = true
+        resetConnectionFields()
+    }
+
+    private func contextMenuUsername(for host: SelectiveRemoteTeamHost) -> String {
+        let preferred = personalSettingsStore.settings(
+            for: host,
+            endpoint: endpoint
+        ).preferredUsername
+        return preferred.isEmpty ? host.profile.username : preferred
+    }
+
+    private func connectFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        let resolvedUsername = contextMenuUsername(for: host)
+        if host.profile.connectionType == .rdp {
+            var profile = personalSettingsStore.appliedProfile(
+                for: host,
+                endpoint: endpoint
+            )
+            profile.username = resolvedUsername
+            model.connectTeamHost(
+                profile,
+                password: host.credentials.password ?? "",
+                gatewayPassword: host.credentials.gatewayPassword ?? ""
+            )
+        } else {
+            onOpenTerminal(host, resolvedUsername, host.credentials.password)
+        }
+    }
+
+    private func openSFTPFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        onOpenSFTP(
+            host,
+            contextMenuUsername(for: host),
+            host.credentials.password
+        )
+    }
+
+    private func teamHostTeamDropTargetID(_ teamID: UUID) -> String {
+        "team:\(teamID.canonicalCloudString)"
+    }
+
+    private func teamHostFolderDropTargetID(teamID: UUID, path: String) -> String {
+        "folder:\(teamID.canonicalCloudString):\(SelectiveRemoteHostFolderPath.normalize(path))"
+    }
+
+    private func teamHostHostDropTargetID(_ hostID: UUID) -> String {
+        "host:\(hostID.canonicalCloudString)"
+    }
+
+    @ViewBuilder
+    private func teamHostDropHighlight(for targetID: String) -> some View {
+        if teamHostDropTargetID == targetID {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.accentColor.opacity(0.14))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.65), lineWidth: 1)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func teamHostInsertionIndicator(for targetID: String) -> some View {
+        if teamHostDropTargetID == targetID {
+            Capsule()
+                .fill(Color.accentColor)
+                .frame(height: 3)
+                .padding(.horizontal, 4)
+                .shadow(color: Color.accentColor.opacity(0.45), radius: 3)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func setTeamHostDropTarget(_ targetID: String?) {
+        guard teamHostDropTargetID != targetID else { return }
+        withAnimation(.easeOut(duration: 0.14)) {
+            teamHostDropTargetID = targetID
+        }
     }
 
     private func folderTitle(_ folder: String) -> String {
@@ -1435,6 +1645,9 @@ struct SelectiveRemoteTeamHostsView: View {
         else { return false }
 
         let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        if targetID != nil {
+            sortMode = .manual
+        }
         let scopedHosts = store.hosts.filter {
             $0.teamID == host.teamID && $0.vaultID == host.vaultID
         }
