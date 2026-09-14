@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
@@ -61,4 +62,20 @@ test("requires a release tag and URL", () => {
     () => buildTelegramReleaseMessage({ body: "Missing identity" }),
     /tag_name and html_url are required/u,
   );
+});
+
+
+test("release workflow explicitly calls the reusable Telegram workflow", async () => {
+  const [releaseWorkflow, telegramWorkflow] = await Promise.all([
+    readFile(new URL("../../.github/workflows/release.yml", import.meta.url), "utf8"),
+    readFile(new URL("../../.github/workflows/telegram-release.yml", import.meta.url), "utf8"),
+  ]);
+
+  assert.match(releaseWorkflow, /announce-telegram:/u);
+  assert.match(releaseWorkflow, /needs\.release\.outputs\.published == 'true'/u);
+  assert.match(releaseWorkflow, /uses: \.\/\.github\/workflows\/telegram-release\.yml/u);
+  assert.match(releaseWorkflow, /secrets: inherit/u);
+  assert.match(telegramWorkflow, /workflow_call:/u);
+  assert.match(telegramWorkflow, /github\.event_name == 'workflow_call'/u);
+  assert.doesNotMatch(telegramWorkflow, /release:\s*\n\s*types: \[published\]/u);
 });
