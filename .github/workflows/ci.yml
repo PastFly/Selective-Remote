@@ -95,6 +95,9 @@ jobs:
       - name: Test terminal web interactions
         run: node --test Tests/TerminalResourcesTests/*.test.js
 
+      - name: Test release automation
+        run: node --test Tests/ReleaseAutomationTests/*.test.mjs
+
       - name: Test Selective Remote Cloud
         working-directory: cloud
         run: |
