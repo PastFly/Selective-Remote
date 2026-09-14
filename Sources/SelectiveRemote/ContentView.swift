@@ -859,7 +859,7 @@ struct ContentView: View {
                             .draggable("personal-host:\(item.id.uuidString)")
                             .dropDestination(for: String.self) { values, _ in
                                 setPersonalHostDropTarget(nil)
-                                movePersonalProfile(
+                                return movePersonalProfile(
                                     values,
                                     toFolder: item.group,
                                     before: item.id
@@ -1142,7 +1142,7 @@ struct ContentView: View {
                 .frame(height: 3)
                 .padding(.horizontal, 4)
                 .shadow(color: Color.accentColor.opacity(0.45), radius: 3)
-                .transition(.opacity.combined(with: .scale(x: 0.82, y: 1)))
+                .transition(.opacity.combined(with: .scale(scale: 0.82, anchor: .center)))
                 .accessibilityHidden(true)
         }
     }
