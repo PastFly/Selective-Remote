@@ -4,6 +4,7 @@ import SwiftUI
 enum ProjectSupport {
     static let githubURL = URL(string: "https://github.com/PastFly/Selective-Remote")!
     static let websiteURL = URL(string: "https://pastfly.github.io/Selective-Remote/")!
+    static let telegramURL = URL(string: "https://t.me/SelectiveRemoteApp")!
     static let yoomoneyURL = URL(
         string: "https://yoomoney.ru/to/4100119600001192"
     )!
