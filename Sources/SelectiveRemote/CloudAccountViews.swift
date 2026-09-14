@@ -230,8 +230,6 @@ struct SelectiveRemoteCloudRegistrationView: View {
                         .disabled(isRegistering)
                     TextField(UpdateLocalization.text(ru: "Логин", en: "Username"), text: $username)
                         .textContentType(.username)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
                         .disabled(isRegistering)
                     usernameAvailabilityView
                     TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
