@@ -430,9 +430,24 @@ test("browser Team management covers lifecycle, members, invitations and shared 
         return jsonResponse(200, { invitations: [pendingInvitation] });
       }
       if (path === `/v1/teams/${teamID}/invitations` && options.method === "POST") {
+        const isLink = JSON.parse(options.body).type === "link";
         return jsonResponse(201, {
-          invitation: JSON.parse(options.body).type === "link" ? linkInvitation : usernameInvitation,
+          invitation: isLink ? linkInvitation : usernameInvitation,
+          preprovisioning: isLink ? null : {
+            membershipID: otherMembershipID,
+            membershipEpoch: 2,
+            devices: [{
+              deviceID: otherDeviceID,
+              publicKeyAlgorithm: "p256-ecdh-v1",
+              publicKey: identity.publicKey,
+            }],
+            vaults: [{ vaultID, keyGeneration: 1 }],
+          },
         });
+      }
+      if (path === `/v1/teams/${teamID}/invitations/${usernameInvitation.id}/wrappers`
+        && options.method === "POST") {
+        return jsonResponse(200, { ready: true, wrappers: JSON.parse(options.body).wrappers.length });
       }
       if (path === `/v1/teams/${teamID}/invitations/${linkInvitation.id}` && options.method === "DELETE") {
         return jsonResponse(200, { cancelled: true });
@@ -489,6 +504,26 @@ test("browser Team management covers lifecycle, members, invitations and shared 
   const invitation = await client.inviteTeamMember({ teamID, username: "@MEMBER", role: "viewer" });
   assert.equal(invitation.targetUsername, "member");
   assert.equal("token" in invitation, false);
+  assert.equal(invitation.preprovisioning.membershipID, otherMembershipID);
+  assert.deepEqual(await client.preprovisionTeamInvitationWrappers({
+    teamID,
+    invitationID: invitation.id,
+    wrappers: [{
+      vaultID,
+      keyGeneration: 1,
+      wrapper: {
+        membershipID: otherMembershipID,
+        membershipEpoch: 2,
+        deviceID: otherDeviceID,
+        wrapperVersion: 1,
+        ephemeralPublicKey: identity.publicKey,
+        ciphertext: "G".repeat(43),
+        nonce: "H".repeat(16),
+        authTag: "I".repeat(22),
+        contextHash: "J".repeat(43),
+      },
+    }],
+  }), { ready: true, wrappers: 1 });
   const link = await client.inviteTeamMember({ teamID, type: "link", role: "viewer" });
   assert.match(link.acceptanceURL, /#accept-team-invitation\?token=/u);
   assert.deepEqual(await client.acceptTeamInvitation({ token: "x".repeat(48) }), member);

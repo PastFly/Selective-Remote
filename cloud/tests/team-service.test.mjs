@@ -88,7 +88,18 @@ class TeamStore {
       role: input.role,
       created_at: "now",
       expires_at: input.expiresAt,
-    }, linkSecretEnvelope: input.linkSecretEnvelope };
+    }, linkSecretEnvelope: input.linkSecretEnvelope, preprovisioning: input.invitationType === "username" ? {
+      membershipID: targetMembershipID,
+      membershipEpoch: 2,
+      devices: [{
+        device_id: "55555555-5555-4555-8555-555555555555",
+        public_key_algorithm: "p256-ecdh-v1",
+        public_key: JSON.stringify({
+          kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],
+        }),
+      }],
+      vaults: [{ vault_id: vaultID, key_generation: 3 }],
+    } : null };
   }
 
   async listTeamInvitations(teamID, userID) {
@@ -128,6 +139,11 @@ class TeamStore {
       epoch: 2,
       joined_at: "now",
     } };
+  }
+
+  async preprovisionTeamInvitationWrappers(input) {
+    this.calls.push(["preprovisionTeamInvitationWrappers", input]);
+    return { ready: true, wrappers: input.wrappers.length };
   }
 
   async cancelTeamInvitation(input) {
@@ -409,16 +425,19 @@ test("username invitations are account-bound while link invitations return one s
   const usernameResponse = await service.createTeamInvitation(
     session,
     teamID,
-    { username: " Member.Name ", role: "viewer" },
+    { username: " Member.Name ", role: "viewer", preprovisionWrappers: true },
     "request:team-username-01",
   );
   const usernameStored = store.calls[0][1];
   assert.equal(usernameStored.invitationType, "username");
+  assert.equal(usernameStored.preprovisionWrappers, true);
   assert.equal(usernameStored.username, "member.name");
   assert.equal(usernameStored.email, null);
   assert.equal(usernameStored.outboxEnvelope, null);
   assert.equal(usernameResponse.invitation.targetUsername, "member.name");
   assert.equal(usernameResponse.invitation.acceptanceURL, null);
+  assert.equal(usernameResponse.preprovisioning.membershipID, targetMembershipID);
+  assert.equal(usernameResponse.preprovisioning.vaults[0].keyGeneration, 3);
 
   const linkResponse = await service.createTeamInvitation(
     session,
@@ -434,6 +453,39 @@ test("username invitations are account-bound while link invitations return one s
   assert.match(linkResponse.invitation.acceptanceURL, /^https:\/\/cloud\.example\.invalid\/#accept-team-invitation\?token=/u);
   assert.equal("token" in linkResponse.invitation, false);
   assert.equal("email" in linkResponse.invitation, false);
+});
+
+test("invitation wrapper preprovisioning remains device-bound and ciphertext-only", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+  const invitationID = "471c3424-b6aa-41a0-959f-aeaa1e3ef79d";
+  const wrapper = {
+    membershipID: targetMembershipID,
+    membershipEpoch: 2,
+    deviceID: "55555555-5555-4555-8555-555555555555",
+    wrapperVersion: 1,
+    ephemeralPublicKey: {
+      kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [],
+    },
+    ciphertext: "C".repeat(43),
+    nonce: "N".repeat(16),
+    authTag: "T".repeat(22),
+    contextHash: "H".repeat(43),
+  };
+
+  assert.deepEqual(await service.preprovisionTeamInvitationWrappers(
+    session,
+    teamID,
+    invitationID,
+    { wrappers: [{ vaultID, keyGeneration: 3, wrapper }] },
+    "request:team-invite-wrapper-01",
+  ), { ready: true, wrappers: 1 });
+  const stored = store.calls[0][1];
+  assert.equal(stored.actorUserID, session.user_id);
+  assert.equal(stored.actorDeviceID, session.device_id);
+  assert.equal(stored.invitationID, invitationID);
+  assert.equal(stored.wrappers[0].wrapper.ciphertext, wrapper.ciphertext);
+  assert.doesNotMatch(JSON.stringify(stored), /privateKey|vaultKey|plaintext/u);
 });
 
 test("failed invitation delivery is sanitized and durably rescheduled", async () => {

@@ -822,6 +822,61 @@ export async function maintainAccessibleTeamVaultWrappers({
   return outcome;
 }
 
+export async function preprovisionTeamInvitationWrappers({
+  client,
+  identity,
+  team,
+  invitation,
+  repositoryFactory = createIndexedDBTeamVaultRepository,
+  controllerFactory = createTeamVaultController,
+  synchronize = synchronizeTeamVault,
+} = {}) {
+  const plan = invitation?.preprovisioning;
+  if (!client || !identity || !team?.id || !team?.role || !invitation?.id || !plan) {
+    throw new Error("invalid_team_invitation_preprovisioning");
+  }
+  const wrappers = [];
+  for (const plannedVault of plan.vaults) {
+    const scope = { type: "team", teamID: team.id, vaultID: plannedVault.vaultID };
+    const temporaryController = controllerFactory({
+      repository: repositoryFactory(scope),
+      identity,
+      scope,
+    });
+    try {
+      const outcome = await synchronize({ client, controller: temporaryController, role: team.role });
+      if (["conflict", "remote_changed"].includes(outcome.status)) {
+        throw new Error("team_invitation_wrapper_preprovision_failed");
+      }
+      const state = await temporaryController.syncState();
+      if (state.keyGeneration !== plannedVault.keyGeneration) {
+        throw new Error("team_invitation_wrapper_preprovision_failed");
+      }
+      for (const device of plan.devices) {
+        wrappers.push({
+          vaultID: plannedVault.vaultID,
+          keyGeneration: plannedVault.keyGeneration,
+          wrapper: await temporaryController.prepareWrapper({
+            ...device,
+            membershipID: plan.membershipID,
+            membershipEpoch: plan.membershipEpoch,
+          }),
+        });
+      }
+    } finally {
+      temporaryController?.lock?.();
+    }
+  }
+  if (wrappers.length !== plan.devices.length * plan.vaults.length) {
+    throw new Error("team_invitation_wrapper_preprovision_failed");
+  }
+  return client.preprovisionTeamInvitationWrappers({
+    teamID: team.id,
+    invitationID: invitation.id,
+    wrappers,
+  });
+}
+
 export function initializeTeamWorkspace({
   documentValue = document,
   client,
@@ -2032,19 +2087,45 @@ export function initializeTeamWorkspace({
     const button = inviteForm.querySelector("button");
     button.disabled = true;
     try {
-      await client.inviteTeamMember({
+      const invitation = await client.inviteTeamMember({
         teamID: selectedTeam.id,
         username: inviteForm.elements.username.value,
         type: "username",
         role: inviteForm.elements.role.value,
       });
+      if (invitation.preprovisioning) {
+        try {
+          const prepared = await exclusiveVaultOperation(() => preprovisionTeamInvitationWrappers({
+            client,
+            identity,
+            team: selectedTeam,
+            invitation,
+          }));
+          if (!prepared?.ready) throw new Error("team_invitation_wrapper_preprovision_failed");
+        } catch (error) {
+          await client.cancelTeamInvitation({
+            teamID: selectedTeam.id,
+            invitationID: invitation.id,
+          }).catch(() => {});
+          throw error;
+        }
+      }
       inviteForm.reset();
       inviteLinkResult.hidden = true;
       inviteLinkValue.value = "";
       await loadSelectedTeam();
-      setText(message, "Приглашение по @username создано на 48 часов.");
-    } catch {
-      setText(message, "Приглашение не создано. Проверьте @username, роль и полномочия.");
+      setText(message, invitation.preprovisioning
+        ? "Приглашение создано. Доступ к текущим Team Vault подготовлен заранее — приглашающий может выйти."
+        : "Приглашение по @username создано на 48 часов.");
+    } catch (error) {
+      const code = String(error?.message ?? "");
+      setText(message, [
+        "team_invitation_wrapper_preprovision_failed",
+        "team_vault_key_unavailable",
+        "team_vault_rotation_required",
+      ].includes(code)
+        ? "Приглашение отменено: не удалось заранее подготовить доступ ко всем Team Vault. Синхронизируйте или завершите ротацию и повторите."
+        : "Приглашение не создано. Проверьте @username, роль и полномочия.");
     } finally {
       button.disabled = false;
     }

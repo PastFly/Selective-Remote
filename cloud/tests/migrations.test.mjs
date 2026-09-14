@@ -19,8 +19,22 @@ test("numbered migrations have stable checksums", async () => {
     { version: 9, name: "009_team_invitation_modes.sql" },
     { version: 10, name: "010_team_membership_device_admissions.sql" },
     { version: 11, name: "011_team_device_admission_policy.sql" },
+    { version: 12, name: "012_team_invitation_wrapper_preprovision.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("username invitations can carry client-created wrappers for one reserved membership epoch", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const preprovision = migrations.find(({ version }) => version === 12);
+
+  assert.match(preprovision.sql, /reserved_membership_id uuid/u);
+  assert.match(preprovision.sql, /reserved_membership_epoch bigint/u);
+  assert.match(preprovision.sql, /CREATE TABLE team_invitation_wrapper_devices/u);
+  assert.match(preprovision.sql, /CREATE TABLE team_invitation_wrapper_vaults/u);
+  assert.match(preprovision.sql, /CREATE TABLE team_invitation_vault_wrappers/u);
+  assert.match(preprovision.sql, /REFERENCES team_invitations\(id\) ON DELETE CASCADE/u);
+  assert.doesNotMatch(preprovision.sql, /private_key|vault_key|plaintext/u);
 });
 
 test("Team device admission policy defaults on and backfills only registered P-256 devices", async () => {
