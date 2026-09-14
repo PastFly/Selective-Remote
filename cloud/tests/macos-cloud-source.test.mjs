@@ -629,6 +629,6 @@ test("macOS Hosts workspace falls back to Personal and persists layout controls"
   assert.match(teamHosts, /SelectiveRemote\.team-host\.sort-mode\.v1/);
   assert.match(teamHosts, /teamHostNavigatorCollection/);
   assert.match(teamHosts, /GridItem\(\.adaptive\(minimum: 190\)/);
-  assert.match(teamHosts, /areInIncreasingOrder: teamHostComesBefore/);
+  assert.match(teamHosts, /areInIncreasingOrder: \{ lhs, rhs in teamHostComesBefore\(lhs, rhs\) \}/);
   assert.match(folderTree, /sorted\(by: areInIncreasingOrder\)/);
 });
