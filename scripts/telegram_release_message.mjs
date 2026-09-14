@@ -54,7 +54,12 @@ export function compactReleaseBody(
     }
     return highlights.join("\n");
   }
-  return truncateCodePoints(meaningfulLines.join("\n\n"), 1_200);
+  const prose = meaningfulLines.join("\n\n");
+  if (Array.from(prose).length > 1_200) {
+    return truncateCodePoints(prose, 1_120)
+      + "\n\nПолный список изменений доступен по ссылке ниже.";
+  }
+  return prose;
 }
 
 export function buildTelegramReleaseMessage(
