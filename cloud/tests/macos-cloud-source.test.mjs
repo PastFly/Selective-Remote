@@ -631,4 +631,13 @@ test("macOS Hosts workspace falls back to Personal and persists layout controls"
   assert.match(teamHosts, /GridItem\(\.adaptive\(minimum: 190\)/);
   assert.match(teamHosts, /areInIncreasingOrder: \{ lhs, rhs in teamHostComesBefore\(lhs, rhs\) \}/);
   assert.match(folderTree, /sorted\(by: areInIncreasingOrder\)/);
+  assert.match(content, /SelectiveRemote\.sidebar-team-host\.expanded-folders\.v1/);
+  assert.match(content, /sidebarTeamOutlineItems/);
+  assert.match(content, /teamHostContextMenu/);
+  assert.match(content, /requestedAction: \$requestedTeamHostAction/);
+  assert.match(content, /DispatchQueue\.main\.async[\s\S]*personalHostsPresentationID = UUID\(\)/);
+  assert.match(teamHosts, /Все командные хосты/u);
+  assert.match(teamHosts, /@Binding var searchText: String/);
+  assert.match(teamHosts, /handleRequestedAction/);
+  assert.doesNotMatch(teamHosts, /\.searchable\([\s\S]{0,160}text: \$searchText/);
 });
