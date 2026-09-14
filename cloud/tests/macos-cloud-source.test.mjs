@@ -416,7 +416,7 @@ test("macOS Team Hosts expose nested shared folders, tags, filtering, and drag-a
   assert.match(hosts, /safe\.group = input\.group/u);
   assert.match(hosts, /safe\.tags = input\.tags/u);
   assert.match(hosts, /safe\.profileDescription = input\.profileDescription/u);
-  assert.match(hosts, /\.searchable\(/u);
+  assert.match(hosts, /@Binding var searchText: String/u);
   assert.match(hosts, /selectedFolder/u);
   assert.match(hosts, /SelectiveRemotePersistentOutlineRows\([\s\S]*outlineItems\(in: teamID\)/u);
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-folders\.v1/u);
@@ -611,4 +611,33 @@ test("macOS registration checks username availability and explains password stre
   assert.match(accountViews, /case strong/u);
   assert.match(accountViews, /usernameAvailability == \.available/u);
   assert.match(settings, /registrationUsernameAvailable/u);
+});
+
+
+test("macOS Hosts workspace falls back to Personal and persists layout controls", async () => {
+  const [content, teamHosts, folderTree] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("HostFolderTree.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(content, /hostScope = teamHosts\.vaults\.isEmpty \? \.personal : \.team/);
+  assert.match(content, /SelectiveRemote\.personal-host\.detail-visible\.v1/);
+  assert.match(content, /selection: \$model\.profileCollectionDisplayMode/);
+  assert.match(content, /selection: \$model\.profileSortMode/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.detail-visible\.v1/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.display-mode\.v1/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.sort-mode\.v1/);
+  assert.match(teamHosts, /teamHostNavigatorCollection/);
+  assert.match(teamHosts, /GridItem\(\.adaptive\(minimum: 190\)/);
+  assert.match(teamHosts, /areInIncreasingOrder: \{ lhs, rhs in teamHostComesBefore\(lhs, rhs\) \}/);
+  assert.match(folderTree, /sorted\(by: areInIncreasingOrder\)/);
+  assert.match(content, /SelectiveRemote\.sidebar-team-host\.expanded-folders\.v1/);
+  assert.match(content, /sidebarTeamOutlineItems/);
+  assert.match(content, /teamHostContextMenu/);
+  assert.match(content, /requestedAction: \$requestedTeamHostAction/);
+  assert.match(content, /DispatchQueue\.main\.async[\s\S]*personalHostsPresentationID = UUID\(\)/);
+  assert.match(teamHosts, /Все командные хосты/u);
+  assert.match(teamHosts, /@Binding var searchText: String/);
+  assert.match(teamHosts, /handleRequestedAction/);
+  assert.doesNotMatch(teamHosts, /\.searchable\([\s\S]{0,160}text: \$searchText/);
 });

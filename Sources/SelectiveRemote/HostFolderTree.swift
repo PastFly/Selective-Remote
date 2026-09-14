@@ -124,16 +124,34 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
     let children: [SelectiveRemoteTeamHostOutlineItem]?
 
     static func roots(teamID: UUID, hosts: [SelectiveRemoteTeamHost]) -> [Self] {
+        roots(
+            teamID: teamID,
+            hosts: hosts,
+            areInIncreasingOrder: defaultHostOrder
+        )
+    }
+
+    static func roots(
+        teamID: UUID,
+        hosts: [SelectiveRemoteTeamHost],
+        areInIncreasingOrder: (SelectiveRemoteTeamHost, SelectiveRemoteTeamHost) -> Bool
+    ) -> [Self] {
         let entries = hosts.map {
             (SelectiveRemoteHostFolderPath.normalize($0.profile.group), $0)
         }
-        return children(teamID: teamID, parent: "", entries: entries)
+        return children(
+            teamID: teamID,
+            parent: "",
+            entries: entries,
+            areInIncreasingOrder: areInIncreasingOrder
+        )
     }
 
     private static func children(
         teamID: UUID,
         parent: String,
-        entries: [(String, SelectiveRemoteTeamHost)]
+        entries: [(String, SelectiveRemoteTeamHost)],
+        areInIncreasingOrder: (SelectiveRemoteTeamHost, SelectiveRemoteTeamHost) -> Bool
     ) -> [Self] {
         let prefix = parent.isEmpty ? "" : "\(parent)/"
         var childNames = Set<String>()
@@ -147,8 +165,17 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
         }.map { component in
             let path = parent.isEmpty ? component : "\(parent)/\(component)"
             let nested = entries.filter { $0.0 == path || $0.0.hasPrefix("\(path)/") }
-            let descendants = children(teamID: teamID, parent: path, entries: nested)
-                + hostItems(teamID: teamID, path: path, entries: nested)
+            let descendants = children(
+                teamID: teamID,
+                parent: path,
+                entries: nested,
+                areInIncreasingOrder: areInIncreasingOrder
+            ) + hostItems(
+                teamID: teamID,
+                path: path,
+                entries: nested,
+                areInIncreasingOrder: areInIncreasingOrder
+            )
             return Self(
                 id: "team-folder:\(teamID.uuidString):\(path)",
                 kind: .folder(path: path, name: SelectiveRemoteHostFolderPath.displayName(path)),
@@ -156,7 +183,12 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
             )
         }
         if parent.isEmpty {
-            let ungrouped = hostItems(teamID: teamID, path: "", entries: entries)
+            let ungrouped = hostItems(
+                teamID: teamID,
+                path: "",
+                entries: entries,
+                areInIncreasingOrder: areInIncreasingOrder
+            )
             if !ungrouped.isEmpty {
                 result.insert(
                     Self(
@@ -177,18 +209,12 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
     private static func hostItems(
         teamID: UUID,
         path: String,
-        entries: [(String, SelectiveRemoteTeamHost)]
+        entries: [(String, SelectiveRemoteTeamHost)],
+        areInIncreasingOrder: (SelectiveRemoteTeamHost, SelectiveRemoteTeamHost) -> Bool
     ) -> [Self] {
         entries.filter { $0.0 == path }
             .map(\.1)
-            .sorted { lhs, rhs in
-                if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                    return lhs.profile.sortIndex < rhs.profile.sortIndex
-                }
-                return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                    rhs.profile.friendlyName
-                ) == .orderedAscending
-            }
+            .sorted(by: areInIncreasingOrder)
             .map {
                 Self(
                     id: "team-host:\(teamID.uuidString):\($0.id.uuidString)",
@@ -197,4 +223,16 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
                 )
             }
     }
+    private static func defaultHostOrder(
+        _ lhs: SelectiveRemoteTeamHost,
+        _ rhs: SelectiveRemoteTeamHost
+    ) -> Bool {
+        if lhs.profile.sortIndex != rhs.profile.sortIndex {
+            return lhs.profile.sortIndex < rhs.profile.sortIndex
+        }
+        return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+            rhs.profile.friendlyName
+        ) == .orderedAscending
+    }
+
 }
