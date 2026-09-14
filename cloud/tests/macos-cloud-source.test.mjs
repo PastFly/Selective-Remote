@@ -349,6 +349,18 @@ test("macOS projects Team Hosts separately and connects without Personal persist
   assert.match(content, /case hosts = "Hosts"/);
   assert.match(content, /case personal[\s\S]*case team/u);
   assert.match(content, /Picker\("", selection: \$hostScope\)/u);
+  assert.match(content, /private enum PersonalHostCollectionSurface:[\s\S]*case sidebar[\s\S]*case navigator/u);
+  assert.match(content, /profileCollection\(surface: \.sidebar\)/u);
+  assert.match(content, /profileCollection\(surface: \.navigator\)/u);
+  assert.match(content, /hostScopePresentationID = UUID\(\)/u);
+  assert.match(content, /personalHostSidebarPresentationID = UUID\(\)/u);
+  assert.match(content, /personalHostNavigatorPresentationID = UUID\(\)/u);
+  assert.match(content, /refreshHostPresentations\(\)/u);
+  assert.match(content, /showsPersonalHostSelection\(on: surface\)/u);
+  assert.doesNotMatch(content, /List\(selection: Binding\(/u);
+  assert.match(content, /private var personalHostNavigatorFooter: some View/u);
+  assert.match(content, /ru: "Добавить Host", en: "Add Host"/u);
+  assert.doesNotMatch(content, /@State private var personalHostsPresentationID/u);
   assert.match(content, /ForEach\(primaryMainAreas\)/u);
   assert.match(content, /ru: "Инструменты"/u);
   assert.match(content, /SelectiveRemoteTeamHostsView/);
@@ -635,7 +647,7 @@ test("macOS Hosts workspace falls back to Personal and persists layout controls"
   assert.match(content, /sidebarTeamOutlineItems/);
   assert.match(content, /teamHostContextMenu/);
   assert.match(content, /requestedAction: \$requestedTeamHostAction/);
-  assert.match(content, /DispatchQueue\.main\.async[\s\S]*personalHostsPresentationID = UUID\(\)/);
+  assert.match(content, /DispatchQueue\.main\.async[\s\S]*refreshHostPresentations\(\)/);
   assert.match(teamHosts, /Все командные хосты/u);
   assert.match(teamHosts, /@Binding var searchText: String/);
   assert.match(teamHosts, /handleRequestedAction/);
