@@ -536,7 +536,7 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     }
 }
 
-private enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
+enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
     case manual
     case nameAscending
     case nameDescending
@@ -554,10 +554,22 @@ private enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable
     }
 }
 
+enum SelectiveRemoteTeamHostRequestedAction: Equatable {
+    case edit
+    case delete
+    case personalSettings
+}
+
+struct SelectiveRemoteTeamHostActionRequest: Equatable {
+    let hostID: UUID
+    let action: SelectiveRemoteTeamHostRequestedAction
+}
+
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
     @Binding var selectedHostID: UUID?
+    @Binding var requestedAction: SelectiveRemoteTeamHostActionRequest?
     @ObservedObject private var personalSettingsStore =
         SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
@@ -658,32 +670,24 @@ struct SelectiveRemoteTeamHostsView: View {
         HSplitView {
             if hostNavigatorVisible {
                 VStack(spacing: 0) {
-                    if store.hosts.isEmpty {
-                        ContentUnavailableView(
-                            UpdateLocalization.text(
-                                ru: "Team Hosts пока не синхронизированы",
-                                en: "Team Hosts have not synchronized yet"
-                            ),
-                            systemImage: "person.2.slash",
-                            description: Text(UpdateLocalization.text(
-                                ru: "Разблокируйте приложение и дождитесь безопасного Team Vault sync.",
-                                en: "Unlock the app and wait for a safe Team Vault sync."
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(UpdateLocalization.text(
+                                ru: "Все командные хосты",
+                                en: "All Team Hosts"
                             ))
-                        )
-                    } else {
-                        teamHostNavigatorCollection
-                    }
-
-                    Divider()
-                    HStack(spacing: 8) {
-                        Label(
-                            "\(store.hosts.count)",
-                            systemImage: "externaldrive.connected.to.line.below"
-                        )
-                        if let lastUpdatedAt = store.lastUpdatedAt {
-                            Text(lastUpdatedAt, style: .time)
+                            .font(.headline)
+                            Text(UpdateLocalization.text(
+                                ru: "Команды, папки и быстрый выбор",
+                                en: "Teams, folders, and quick selection"
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Text("\(store.hosts.count)")
+                            .font(.caption.bold().monospacedDigit())
+                            .foregroundStyle(.secondary)
                         Menu {
                             Picker(
                                 UpdateLocalization.text(ru: "Вид", en: "View"),
@@ -737,6 +741,37 @@ struct SelectiveRemoteTeamHostsView: View {
                             ru: "Свернуть список Team Hosts",
                             en: "Collapse Team Host list"
                         ))
+                    }
+                    .padding(16)
+                    Divider()
+
+                    if store.hosts.isEmpty {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(
+                                ru: "Team Hosts пока не синхронизированы",
+                                en: "Team Hosts have not synchronized yet"
+                            ),
+                            systemImage: "person.2.slash",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Разблокируйте приложение и дождитесь безопасного Team Vault sync.",
+                                en: "Unlock the app and wait for a safe Team Vault sync."
+                            ))
+                        )
+                    } else {
+                        teamHostNavigatorCollection
+                    }
+
+                    Divider()
+                    HStack(spacing: 8) {
+                        if let lastUpdatedAt = store.lastUpdatedAt {
+                            Label {
+                                Text(lastUpdatedAt, style: .time)
+                            } icon: {
+                                Image(systemName: "arrow.triangle.2.circlepath")
+                            }
+                            Text(lastUpdatedAt, style: .time)
+                        }
+                        Spacer()
                         Menu {
                             Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
                                 selectedFolder = ""
@@ -836,6 +871,10 @@ struct SelectiveRemoteTeamHostsView: View {
         .onAppear {
             normalizeSelection()
             restoreOrInitializeExpansion()
+            handleRequestedAction()
+        }
+        .onChange(of: requestedAction) { _, _ in
+            handleRequestedAction()
         }
         .onChange(of: store.hosts.map { "\($0.id.uuidString):\($0.profile.group)" }) { _, _ in
             normalizeSelection()
@@ -960,6 +999,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
             .listStyle(.sidebar)
+            .id("team-host-list-\(displayMode.rawValue)-\(hostDetailVisible)")
             .searchable(
                 text: $searchText,
                 prompt: UpdateLocalization.text(
@@ -1096,6 +1136,28 @@ struct SelectiveRemoteTeamHostsView: View {
                 rhs.profile.friendlyName
             ) == .orderedAscending
         }
+    }
+
+    private func handleRequestedAction() {
+        guard let request = requestedAction,
+              let host = store.hosts.first(where: { $0.id == request.hostID })
+        else { return }
+        selectedHostID = host.id
+        hostDetailVisible = true
+        switch request.action {
+        case .edit:
+            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
+               let context = context(for: host) {
+                editorRequest = .init(context: context, host: host)
+            }
+        case .delete:
+            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                hostPendingDeletion = host
+            }
+        case .personalSettings:
+            personalSettingsHost = host
+        }
+        requestedAction = nil
     }
 
     private func hostRow(_ host: SelectiveRemoteTeamHost) -> some View {
