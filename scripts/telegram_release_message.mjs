@@ -30,6 +30,33 @@ function truncateCodePoints(value, maximum) {
   return points.slice(0, Math.max(0, maximum - 1)).join("").trimEnd() + "…";
 }
 
+export function compactReleaseBody(
+  value,
+  { maximumHighlights = 6, maximumHighlightLength = 220 } = {},
+) {
+  const lines = collapseBlankLines(String(value ?? ""))
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const meaningfulLines = lines.filter((line) => {
+    if (/^(?:Полная история|Full (?:history|changelog))\s*:/iu.test(line)) {
+      return false;
+    }
+    return !/^https?:\/\/[^\s]*CHANGELOG(?:\.md)?(?:\?.*)?$/iu.test(line);
+  });
+  const bullets = meaningfulLines.filter((line) => line.startsWith("• "));
+  if (bullets.length > 0) {
+    const highlights = bullets
+      .slice(0, maximumHighlights)
+      .map((line) => truncateCodePoints(line, maximumHighlightLength));
+    if (bullets.length > maximumHighlights) {
+      highlights.push("• Остальные изменения — на странице релиза.");
+    }
+    return highlights.join("\n");
+  }
+  return truncateCodePoints(meaningfulLines.join("\n\n"), 1_200);
+}
+
 export function buildTelegramReleaseMessage(
   release,
   { donationURL = "", maximumLength = DEFAULT_SAFE_LIMIT } = {},
@@ -62,7 +89,9 @@ export function buildTelegramReleaseMessage(
     /^(?:Что изменилось(?:\s+в\s+[^\n]+)?|What's changed(?:\s+in\s+[^\n]+)?)\s*\n+/iu,
     "",
   );
-  const body = bodyWithoutRepeatedHeading || normalizedBody || emptyBody;
+  const body = compactReleaseBody(
+    bodyWithoutRepeatedHeading || normalizedBody,
+  ) || emptyBody;
   const continuation = "\n\nПолный список изменений доступен по ссылке ниже.";
   const bodyBudget = Math.max(
     0,
