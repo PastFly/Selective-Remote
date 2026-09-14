@@ -772,6 +772,56 @@ export async function initializeLocalVault({
   };
 }
 
+export async function maintainAccessibleTeamVaultWrappers({
+  client,
+  identity,
+  team,
+  vaults = [],
+  repositoryFactory = createIndexedDBTeamVaultRepository,
+  controllerFactory = createTeamVaultController,
+  synchronize = synchronizeTeamVault,
+  provision = provisionTeamVaultWrappers,
+} = {}) {
+  if (!client || !identity || !team?.id || !team?.role || !Array.isArray(vaults)) {
+    throw new Error("invalid_team_vault_maintenance");
+  }
+  const outcome = { attempted: 0, synchronized: 0, granted: 0, unavailable: 0, failed: 0 };
+  for (const vault of vaults.slice(0, 256)) {
+    if (!vault?.id || vault.rotationRequired) continue;
+    outcome.attempted += 1;
+    const scope = { type: "team", teamID: team.id, vaultID: vault.id };
+    const maintenanceController = controllerFactory({
+      repository: repositoryFactory(scope),
+      identity,
+      scope,
+    });
+    try {
+      const synchronization = await synchronize({
+        client,
+        controller: maintenanceController,
+        role: team.role,
+      });
+      if (["conflict", "remote_changed"].includes(synchronization.status)) {
+        outcome.failed += 1;
+        continue;
+      }
+      outcome.synchronized += 1;
+      const provisioning = await provision({ client, controller: maintenanceController });
+      outcome.granted += provisioning?.granted ?? 0;
+    } catch (error) {
+      if (["team_vault_key_unavailable", "device_approval_required", "team_vault_rotation_required"]
+        .includes(String(error?.message ?? ""))) {
+        outcome.unavailable += 1;
+      } else {
+        outcome.failed += 1;
+      }
+    } finally {
+      maintenanceController?.lock?.();
+    }
+  }
+  return outcome;
+}
+
 export function initializeTeamWorkspace({
   documentValue = document,
   client,
@@ -892,6 +942,7 @@ export function initializeTeamWorkspace({
   let activeConflicts = null;
   let activeView = "teams";
   let backgroundSyncTimer = null;
+  let backgroundMaintenanceOperation = null;
   let vaultOperation = null;
   let editingHostID = null;
   let detailedHostID = null;
@@ -949,7 +1000,7 @@ export function initializeTeamWorkspace({
     const messages = {
       authentication_required: "Сессия Cloud истекла. Войдите снова.",
       device_approval_required: "Это устройство ещё не одобрено для Team Vault.",
-      team_vault_key_unavailable: "Для этого браузера пока нет wrapper ключа. Откройте «Управление Cloud» в приложении и запустите синхронизацию Team Vault.",
+      team_vault_key_unavailable: "Для этого браузера пока нет wrapper ключа. Оставьте доверенный браузер или приложение участника с доступом к Team Vault подключённым к Cloud.",
       team_vault_rotation_required: "Синхронизация заморожена до безопасной ротации ключа.",
       remote_revision_regressed: "Cloud вернул более старую ревизию; запись остановлена для защиты данных.",
       team_vault_generation_changed: "Поколение ключа изменилось. Повторно откройте Team Vault после синхронизации доверенного устройства.",
@@ -1571,7 +1622,7 @@ export function initializeTeamWorkspace({
 
   function startBackgroundSync() {
     stopBackgroundSync();
-    if (!controller || selectedVault?.rotationRequired
+    if (!identity || !selectedTeam || vaults.length === 0
       || !Number.isFinite(backgroundSyncIntervalMilliseconds)
       || backgroundSyncIntervalMilliseconds <= 0) {
       return;
@@ -1590,6 +1641,27 @@ export function initializeTeamWorkspace({
       return await pending;
     } finally {
       if (vaultOperation === pending) vaultOperation = null;
+    }
+  }
+
+  async function maintainSelectedTeamVaults() {
+    if (backgroundMaintenanceOperation || !identity || !selectedTeam || vaults.length === 0) {
+      return null;
+    }
+    const activeTeam = selectedTeam;
+    const availableVaults = vaults.filter((vault) => vault.id !== selectedVault?.id);
+    if (availableVaults.length === 0) return null;
+    const pending = maintainAccessibleTeamVaultWrappers({
+      client,
+      identity,
+      team: activeTeam,
+      vaults: availableVaults,
+    });
+    backgroundMaintenanceOperation = pending;
+    try {
+      return await pending;
+    } finally {
+      if (backgroundMaintenanceOperation === pending) backgroundMaintenanceOperation = null;
     }
   }
 
@@ -1675,32 +1747,31 @@ export function initializeTeamWorkspace({
   }
 
   async function runBackgroundTeamVaultSync() {
-    if (documentValue.visibilityState === "hidden" || activeConflicts || vaultOperation
-      || !controller || !selectedTeam || !selectedVault || selectedVault.rotationRequired) {
-      return;
-    }
-    try {
-      applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
-    } catch (error) {
-      const code = String(error?.message ?? "");
-      if (code === "team_vault_rotation_required") {
-        selectedVault = { ...selectedVault, rotationRequired: true };
-        vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
-        populateVaults();
-        vaultSelect.value = selectedVault.id;
-        rotateButton.hidden = !canManage();
-        rotateButton.disabled = rotateButton.hidden;
-        setRecoveryControls("none");
-        stopBackgroundSync();
-        setText(workspaceStatus, "Фоновая запись заморожена до безопасной ротации ключа.");
-      } else if (code === "team_vault_key_unavailable") {
-        setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
-        setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
-      } else {
-        setRecoveryControls(teamVaultRecoveryMode({ errorCode: code || "team_vault_sync_failed" }));
-        setText(workspaceStatus, teamVaultSynchronizationErrorMessage(code));
+    if (activeConflicts || vaultOperation || !identity || !selectedTeam) return;
+    if (controller && selectedVault && !selectedVault.rotationRequired) {
+      try {
+        applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
+      } catch (error) {
+        const code = String(error?.message ?? "");
+        if (code === "team_vault_rotation_required") {
+          selectedVault = { ...selectedVault, rotationRequired: true };
+          vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
+          populateVaults();
+          vaultSelect.value = selectedVault.id;
+          rotateButton.hidden = !canManage();
+          rotateButton.disabled = rotateButton.hidden;
+          setRecoveryControls("none");
+          setText(workspaceStatus, "Фоновая запись заморожена до безопасной ротации ключа.");
+        } else if (code === "team_vault_key_unavailable") {
+          setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
+          setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
+        } else {
+          setRecoveryControls(teamVaultRecoveryMode({ errorCode: code || "team_vault_sync_failed" }));
+          setText(workspaceStatus, teamVaultSynchronizationErrorMessage(code));
+        }
       }
     }
+    await maintainSelectedTeamVaults();
   }
 
   function lockCurrentVault() {
@@ -1848,7 +1919,12 @@ export function initializeTeamWorkspace({
     populateVaults();
     updateTeamMessage();
     if (activeView === "management" && selectedTeam.role === "owner") await loadOwnershipMembers();
-    if (activeView === "hosts" && vaults.length > 0) await openSelectedVault();
+    if (activeView === "hosts" && vaults.length > 0) {
+      await openSelectedVault();
+    } else {
+      startBackgroundSync();
+      void runBackgroundTeamVaultSync();
+    }
   }
 
   async function loadTeams(preferredID = null) {

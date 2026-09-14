@@ -10,6 +10,7 @@ import {
   localVaultRecordData,
   localVaultRecordFormValues,
   localVaultRecordSummary,
+  maintainAccessibleTeamVaultWrappers,
   parseTeamHostConnection,
   personalHostEditorValues,
   personalHostFolderName,
@@ -204,6 +205,48 @@ test("Team Vault routine automation exposes controls only for recoverable blocke
   assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_rotation_required" }), "none");
 });
 
+test("trusted browser maintains wrappers for accessible Team Vaults outside the active view", async () => {
+  const scopes = [];
+  const locked = [];
+  const result = await maintainAccessibleTeamVaultWrappers({
+    client: {},
+    identity: { deviceID: "trusted-browser" },
+    team: { id: "team-1", role: "owner" },
+    vaults: [
+      { id: "available", rotationRequired: false },
+      { id: "unavailable", rotationRequired: false },
+      { id: "rotating", rotationRequired: true },
+    ],
+    repositoryFactory(scope) {
+      scopes.push(scope);
+      return { scope };
+    },
+    controllerFactory({ scope }) {
+      return { scope, lock() { locked.push(scope.vaultID); } };
+    },
+    async synchronize({ controller }) {
+      if (controller.scope.vaultID === "unavailable") {
+        throw new Error("team_vault_key_unavailable");
+      }
+      return { status: "up_to_date" };
+    },
+    async provision({ controller }) {
+      assert.equal(controller.scope.vaultID, "available");
+      return { granted: 2 };
+    },
+  });
+
+  assert.deepEqual(result, {
+    attempted: 2,
+    synchronized: 1,
+    granted: 2,
+    unavailable: 1,
+    failed: 0,
+  });
+  assert.deepEqual(scopes.map(({ vaultID }) => vaultID), ["available", "unavailable"]);
+  assert.deepEqual(locked, ["available", "unavailable"]);
+});
+
 test("credential summaries never expose their secret", () => {
   const record = {
     type: "credential",
@@ -254,8 +297,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=143/u);
-  assert.match(html, /\/app\.js\?v=143/u);
+  assert.match(html, /\/styles\.css\?v=144/u);
+  assert.match(html, /\/app\.js\?v=144/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -460,11 +503,13 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
   assert.match(application, /provisionTeamVaultWrappers/u);
+  assert.match(application, /maintainAccessibleTeamVaultWrappers/u);
   assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
-  assert.match(application, /documentValue\.visibilityState === "hidden"/u);
+  assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
+  assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
   assert.match(application, /teamVaultSynchronizationErrorMessage/u);
-  assert.match(application, /Управление Cloud/u);
+  assert.match(application, /Оставьте доверенный браузер или приложение участника/u);
   assert.match(application, /teamVaultRecoveryMode/u);
   assert.match(application, /setRecoveryControls/u);
   assert.doesNotMatch(application, /Owner\/Admin может выдать недостающие wrappers/u);
