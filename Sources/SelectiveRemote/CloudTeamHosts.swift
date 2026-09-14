@@ -536,6 +536,24 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     }
 }
 
+private enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
+    case manual
+    case nameAscending
+    case nameDescending
+    case address
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .manual: UpdateLocalization.text(ru: "Вручную", en: "Manual")
+        case .nameAscending: UpdateLocalization.text(ru: "Название: А–Я", en: "Name: A–Z")
+        case .nameDescending: UpdateLocalization.text(ru: "Название: Я–А", en: "Name: Z–A")
+        case .address: UpdateLocalization.text(ru: "Адрес", en: "Address")
+        }
+    }
+}
+
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
@@ -557,6 +575,12 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var selectedFolder = ""
     @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
     private var hostNavigatorVisible = true
+    @AppStorage("SelectiveRemote.team-host.detail-visible.v1")
+    private var hostDetailVisible = true
+    @AppStorage("SelectiveRemote.team-host.display-mode.v1")
+    private var displayMode = ProfileCollectionDisplayMode.list
+    @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
+    private var sortMode = SelectiveRemoteTeamHostSortMode.manual
     @State private var expandedTeamIDs = Set(
         (UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.team-host.expanded-teams.v1"
@@ -608,7 +632,8 @@ struct SelectiveRemoteTeamHostsView: View {
     private func outlineItems(in teamID: UUID) -> [SelectiveRemoteTeamHostOutlineItem] {
         SelectiveRemoteTeamHostOutlineItem.roots(
             teamID: teamID,
-            hosts: visibleHosts.filter { $0.teamID == teamID }
+            hosts: visibleHosts.filter { $0.teamID == teamID },
+            areInIncreasingOrder: teamHostComesBefore
         )
     }
 
@@ -626,6 +651,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     host.profile.tags.joined(separator: " ")
                 ].contains { $0.localizedCaseInsensitiveContains(query) })
         }
+        .sorted(by: teamHostComesBefore)
     }
 
     var body: some View {
@@ -645,49 +671,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             ))
                         )
                     } else {
-                        List(selection: $selectedHostID) {
-                            ForEach(teamIDs, id: \.self) { teamID in
-                                DisclosureGroup(
-                                    isExpanded: expansionBinding(for: teamID)
-                                ) {
-                                    SelectiveRemotePersistentOutlineRows(
-                                        items: outlineItems(in: teamID),
-                                        children: \.children,
-                                        expandedIDs: $expandedFolderKeys
-                                    ) { item in
-                                        switch item.kind {
-                                        case let .folder(path, name):
-                                            Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                                                .dropDestination(for: String.self) { values, _ in
-                                                    moveTeamHost(values, toFolder: path)
-                                                }
-                                        case let .host(host):
-                                            hostRow(host)
-                                                .tag(host.id)
-                                                .draggable("team-host:\(host.id.uuidString)")
-                                                .dropDestination(for: String.self) { values, _ in
-                                                    moveTeamHost(
-                                                        values,
-                                                        toFolder: host.profile.group,
-                                                        before: host.id
-                                                    )
-                                                }
-                                        }
-                                    }
-                                } label: {
-                                    Label(teamName(teamID), systemImage: "person.3.fill")
-                                        .font(.headline)
-                                }
-                            }
-                        }
-                        .listStyle(.sidebar)
-                        .searchable(
-                            text: $searchText,
-                            prompt: UpdateLocalization.text(
-                                ru: "Host, адрес, папка или тег",
-                                en: "Host, address, folder, or tag"
-                            )
-                        )
+                        teamHostNavigatorCollection
                     }
 
                     Divider()
@@ -700,7 +684,50 @@ struct SelectiveRemoteTeamHostsView: View {
                             Text(lastUpdatedAt, style: .time)
                         }
                         Spacer()
+                        Menu {
+                            Picker(
+                                UpdateLocalization.text(ru: "Вид", en: "View"),
+                                selection: $displayMode
+                            ) {
+                                ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                                }
+                            }
+                            Divider()
+                            Picker(
+                                UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                                selection: $sortMode
+                            ) {
+                                ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
+                                    Text(mode.title).tag(mode)
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "slider.horizontal.3")
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help(UpdateLocalization.text(
+                            ru: "Вид и сортировка Team Hosts",
+                            en: "Team Host view and sorting"
+                        ))
                         Button {
+                            hostDetailVisible.toggle()
+                        } label: {
+                            Image(systemName: "sidebar.right")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(hostDetailVisible
+                            ? UpdateLocalization.text(
+                                ru: "Свернуть карточку Team Host",
+                                en: "Collapse Team Host details"
+                            )
+                            : UpdateLocalization.text(
+                                ru: "Показать карточку Team Host",
+                                en: "Show Team Host details"
+                            )
+                        )
+                        Button {
+                            hostDetailVisible = true
                             hostNavigatorVisible = false
                         } label: {
                             Image(systemName: "sidebar.left")
@@ -766,37 +793,43 @@ struct SelectiveRemoteTeamHostsView: View {
                     .foregroundStyle(.secondary)
                     .padding(10)
                 }
-                .frame(minWidth: 290, idealWidth: 350, maxWidth: 440)
+                .frame(
+                    minWidth: 290,
+                    idealWidth: 350,
+                    maxWidth: hostDetailVisible ? 440 : .infinity
+                )
             }
 
-            Group {
-                if let host = selectedHost {
-                    hostDetail(host)
-                } else {
-                    ContentUnavailableView(
-                        UpdateLocalization.text(ru: "Выберите Team Host", en: "Select a Team Host"),
-                        systemImage: "person.2"
-                    )
-                }
-            }
-            .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
-            .overlay(alignment: .topLeading) {
-                if !hostNavigatorVisible {
-                    Button {
-                        hostNavigatorVisible = true
-                    } label: {
-                        Label(
-                            UpdateLocalization.text(ru: "Team Hosts", en: "Team Hosts"),
-                            systemImage: "sidebar.left"
+            if hostDetailVisible {
+                Group {
+                    if let host = selectedHost {
+                        hostDetail(host)
+                    } else {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(ru: "Выберите Team Host", en: "Select a Team Host"),
+                            systemImage: "person.2"
                         )
                     }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    .padding(10)
-                    .help(UpdateLocalization.text(
-                        ru: "Показать список Team Hosts",
-                        en: "Show Team Host list"
-                    ))
+                }
+                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) {
+                    if !hostNavigatorVisible {
+                        Button {
+                            hostNavigatorVisible = true
+                        } label: {
+                            Label(
+                                UpdateLocalization.text(ru: "Team Hosts", en: "Team Hosts"),
+                                systemImage: "sidebar.left"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(10)
+                        .help(UpdateLocalization.text(
+                            ru: "Показать список Team Hosts",
+                            en: "Show Team Host list"
+                        ))
+                    }
                 }
             }
         }
@@ -887,6 +920,181 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
                 .ignoresSafeArea()
             }
+        }
+    }
+
+    @ViewBuilder
+    private var teamHostNavigatorCollection: some View {
+        if displayMode == .list {
+            List(selection: $selectedHostID) {
+                ForEach(teamIDs, id: \.self) { teamID in
+                    DisclosureGroup(isExpanded: expansionBinding(for: teamID)) {
+                        SelectiveRemotePersistentOutlineRows(
+                            items: outlineItems(in: teamID),
+                            children: \.children,
+                            expandedIDs: $expandedFolderKeys
+                        ) { item in
+                            switch item.kind {
+                            case let .folder(path, name):
+                                Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                    .dropDestination(for: String.self) { values, _ in
+                                        moveTeamHost(values, toFolder: path)
+                                    }
+                            case let .host(host):
+                                hostRow(host)
+                                    .tag(host.id)
+                                    .draggable("team-host:\(host.id.uuidString)")
+                                    .dropDestination(for: String.self) { values, _ in
+                                        moveTeamHost(
+                                            values,
+                                            toFolder: host.profile.group,
+                                            before: host.id
+                                        )
+                                    }
+                            }
+                        }
+                    } label: {
+                        Label(teamName(teamID), systemImage: "person.3.fill")
+                            .font(.headline)
+                    }
+                }
+            }
+            .listStyle(.sidebar)
+            .searchable(
+                text: $searchText,
+                prompt: UpdateLocalization.text(
+                    ru: "Host, адрес, папка или тег",
+                    en: "Host, address, folder, or tag"
+                )
+            )
+        } else {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(teamIDs, id: \.self) { teamID in
+                        Label(teamName(teamID), systemImage: "person.3.fill")
+                            .font(.headline)
+                        ForEach(folders(in: teamID), id: \.self) { folder in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Label(
+                                    folderTitle(folder),
+                                    systemImage: folder.isEmpty ? "tray" : "folder"
+                                )
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                                .dropDestination(for: String.self) { values, _ in
+                                    moveTeamHost(values, toFolder: folder)
+                                }
+
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 190), spacing: 10)],
+                                    spacing: 10
+                                ) {
+                                    ForEach(visibleHosts.filter {
+                                        $0.teamID == teamID && $0.profile.group == folder
+                                    }) { host in
+                                        Button {
+                                            selectedHostID = host.id
+                                        } label: {
+                                            teamHostGridCard(host)
+                                        }
+                                        .buttonStyle(.plain)
+                                        .draggable("team-host:\(host.id.uuidString)")
+                                        .dropDestination(for: String.self) { values, _ in
+                                            moveTeamHost(
+                                                values,
+                                                toFolder: host.profile.group,
+                                                before: host.id
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding(12)
+            }
+            .searchable(
+                text: $searchText,
+                prompt: UpdateLocalization.text(
+                    ru: "Host, адрес, папка или тег",
+                    en: "Host, address, folder, or tag"
+                )
+            )
+        }
+    }
+
+    private func teamHostGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top) {
+                Image(systemName: host.profile.connectionType.systemImage)
+                    .font(.title3)
+                    .foregroundStyle(Color.accentColor)
+                Spacer()
+                if selectedHostID == host.id {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+            Text(host.profile.friendlyName)
+                .font(.headline)
+                .lineLimit(2)
+            Text(host.address)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Text(host.vaultName)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
+        .padding(12)
+        .background(
+            selectedHostID == host.id
+                ? Color.accentColor.opacity(0.14)
+                : Color.primary.opacity(0.045),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    selectedHostID == host.id
+                        ? Color.accentColor.opacity(0.65)
+                        : Color.primary.opacity(0.08)
+                )
+        }
+        .contentShape(Rectangle())
+    }
+
+    private func teamHostComesBefore(
+        _ lhs: SelectiveRemoteTeamHost,
+        _ rhs: SelectiveRemoteTeamHost
+    ) -> Bool {
+        switch sortMode {
+        case .manual:
+            if lhs.profile.sortIndex != rhs.profile.sortIndex {
+                return lhs.profile.sortIndex < rhs.profile.sortIndex
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameAscending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameDescending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedDescending
+        case .address:
+            let addressOrder = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
+            if addressOrder != .orderedSame {
+                return addressOrder == .orderedAscending
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
         }
     }
 
