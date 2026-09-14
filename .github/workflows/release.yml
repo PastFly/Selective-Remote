@@ -26,6 +26,9 @@ jobs:
     name: Build and publish ARM64 DMG
     runs-on: macos-14
     timeout-minutes: 60
+    outputs:
+      release_tag: ${{ steps.release.outputs.tag }}
+      published: ${{ steps.release.outputs.publish }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
     steps:
@@ -204,3 +207,13 @@ jobs:
             --notes-file "$notes" \
             --fail-on-no-commits \
             --latest
+
+
+  announce-telegram:
+    name: Announce published Release in Telegram
+    needs: release
+    if: needs.release.outputs.published == 'true'
+    uses: ./.github/workflows/telegram-release.yml
+    with:
+      tag: ${{ needs.release.outputs.release_tag }}
+    secrets: inherit
