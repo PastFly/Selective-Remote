@@ -205,6 +205,27 @@ function normalizedAccountDevice(value) {
   };
 }
 
+function normalizedTeamMembershipDevice(value) {
+  exactKeys(value, [
+    "accountKeyApproved", "admitted", "appVersion", "id", "name", "platform",
+    "publicKey", "publicKeyAlgorithm",
+  ], "invalid_team_member_device");
+  if (value.publicKeyAlgorithm !== teamDevicePublicKeyAlgorithm
+    || typeof value.accountKeyApproved !== "boolean" || typeof value.admitted !== "boolean") {
+    throw new Error("invalid_team_member_device");
+  }
+  return {
+    id: normalizedUUID(value.id, "invalid_team_member_device"),
+    name: String(value.name ?? ""),
+    platform: String(value.platform ?? ""),
+    appVersion: String(value.appVersion ?? ""),
+    publicKeyAlgorithm: teamDevicePublicKeyAlgorithm,
+    publicKey: normalizeTeamDevicePublicKey(value.publicKey),
+    accountKeyApproved: value.accountKeyApproved,
+    admitted: value.admitted,
+  };
+}
+
 function normalizedTeam(value) {
   exactKeys(value, ["createdAt", "id", "membershipEpoch", "membershipID", "name", "role", "updatedAt"], "invalid_team");
   if (!["owner", "admin", "editor", "viewer"].includes(value.role)
@@ -911,6 +932,47 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         throw new Error("team_member_revoke_failed");
       }
       return { revoked: true, rotationRequiredVaults: result.rotationRequiredVaults };
+    },
+
+    async listTeamMembershipDevices({ teamID, membershipID }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedMembershipID = normalizedUUID(membershipID, "invalid_team_member");
+      const response = await authorizedRequest(
+        `/v1/teams/${normalizedTeamID}/members/${normalizedMembershipID}/devices`,
+      );
+      const result = await responseJSON(response, "team_member_devices_download_failed");
+      if (!response.ok || !Array.isArray(result.devices) || result.devices.length > 1_000) {
+        throw new Error("team_member_devices_download_failed");
+      }
+      const memberDevices = result.devices.map(normalizedTeamMembershipDevice);
+      if (new Set(memberDevices.map((device) => device.id)).size !== memberDevices.length) {
+        throw new Error("team_member_devices_download_failed");
+      }
+      return memberDevices;
+    },
+
+    async admitTeamMembershipDevice({
+      teamID, membershipID, deviceID, publicKey,
+      idempotencyKey = generatedIdempotencyKey("web:team:device:admit"),
+    }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const normalizedMembershipID = normalizedUUID(membershipID, "invalid_team_member");
+      const normalizedDeviceID = normalizedUUID(deviceID, "invalid_device");
+      const response = await authorizedRequest(
+        `/v1/teams/${normalizedTeamID}/members/${normalizedMembershipID}/devices/${normalizedDeviceID}`,
+        {
+          method: "POST",
+          headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+          body: JSON.stringify({ publicKey: normalizeTeamDevicePublicKey(publicKey) }),
+        },
+      );
+      const result = await responseJSON(response, "team_member_device_admission_failed");
+      if (!response.ok || result.admitted !== true
+        || normalizedUUID(result.membershipID, "team_member_device_admission_failed") !== normalizedMembershipID
+        || normalizedUUID(result.deviceID, "team_member_device_admission_failed") !== normalizedDeviceID) {
+        throw new Error("team_member_device_admission_failed");
+      }
+      return { admitted: true, membershipID: normalizedMembershipID, deviceID: normalizedDeviceID };
     },
 
     async listSharedVaults(teamID) {

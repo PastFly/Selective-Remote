@@ -124,6 +124,17 @@ pending-account lists expose only public handles and bounded Team metadata.
 Audit events contain actor, Team, target account ID, role and timestamps but no
 email, token or Vault data.
 
+An Owner may admit a registered device of any other active member, while an
+Admin may do so only for Editors and Viewers. The browser shows the device name,
+platform and SHA-256 public-key fingerprint before explicit confirmation. This
+creates only a membership-and-epoch-scoped admission; it does not approve the
+device account-wide or authorize it in another Team. The server locks the actor,
+membership and exact registered public key, records an audit event, and still
+requires an already authorized client holding each current Vault key to create
+that Vault's wrapper. A manager therefore can recover a member's new browser
+without weakening E2EE or requiring the member's macOS application to remain
+online.
+
 ## Device-bound key distribution
 
 Each authorized device owns a non-exportable P-256 ECDH private key when the

@@ -154,6 +154,48 @@ test("account device transport normalizes approval metadata and revokes without 
   assert.equal(revoke.options.credentials, "same-origin");
 });
 
+test("Team member device admission is membership-scoped and fingerprint-bound", async () => {
+  const { identity } = await fixture();
+  const calls = [];
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/v1/auth/login") return jsonResponse(200, {
+        token: "t".repeat(43), user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" }, deviceID,
+      });
+      const base = `/v1/teams/${teamID}/members/${otherMembershipID}/devices`;
+      if (path === base && !options.method) return jsonResponse(200, { devices: [{
+        id: otherDeviceID,
+        name: "Web browser",
+        platform: "web",
+        appVersion: "0.32.0",
+        publicKeyAlgorithm: "p256-ecdh-v1",
+        publicKey: identity.publicKey,
+        accountKeyApproved: false,
+        admitted: false,
+      }] });
+      if (path === `${base}/${otherDeviceID}` && options.method === "POST") {
+        return jsonResponse(200, { admitted: true, membershipID: otherMembershipID, deviceID: otherDeviceID });
+      }
+      throw new Error(`unexpected_request:${path}`);
+    },
+  });
+  await client.login({ email: "user@example.invalid", password: "synthetic-password", deviceID, publicKey: identity.publicKey });
+  const devices = await client.listTeamMembershipDevices({ teamID, membershipID: otherMembershipID });
+  assert.equal(devices[0].admitted, false);
+  assert.equal(devices[0].accountKeyApproved, false);
+  assert.deepEqual(await client.admitTeamMembershipDevice({
+    teamID,
+    membershipID: otherMembershipID,
+    deviceID: otherDeviceID,
+    publicKey: identity.publicKey,
+  }), { admitted: true, membershipID: otherMembershipID, deviceID: otherDeviceID });
+  const admission = calls.at(-1);
+  assert.equal(admission.options.method, "POST");
+  assert.deepEqual(JSON.parse(admission.options.body).publicKey, identity.publicKey);
+  assert.match(admission.options.headers["Idempotency-Key"], /^web:team:device:admit:/u);
+});
+
 test("Team writes carry idempotency and distinguish conflict from committed rotation", async () => {
   const { identity, wrapper } = await fixture();
   const calls = [];
