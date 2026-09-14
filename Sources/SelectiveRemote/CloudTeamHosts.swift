@@ -555,6 +555,8 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
     @State private var searchText = ""
     @State private var selectedFolder = ""
+    @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
+    private var hostNavigatorVisible = true
     @State private var expandedTeamIDs = Set(
         (UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.team-host.expanded-teams.v1"
@@ -628,132 +630,144 @@ struct SelectiveRemoteTeamHostsView: View {
 
     var body: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                if store.hosts.isEmpty {
-                    ContentUnavailableView(
-                        UpdateLocalization.text(
-                            ru: "Team Hosts пока не синхронизированы",
-                            en: "Team Hosts have not synchronized yet"
-                        ),
-                        systemImage: "person.2.slash",
-                        description: Text(UpdateLocalization.text(
-                            ru: "Разблокируйте приложение и дождитесь безопасного Team Vault sync.",
-                            en: "Unlock the app and wait for a safe Team Vault sync."
-                        ))
-                    )
-                } else {
-                    List(selection: $selectedHostID) {
-                        ForEach(teamIDs, id: \.self) { teamID in
-                            DisclosureGroup(
-                                isExpanded: expansionBinding(for: teamID)
-                            ) {
-                                SelectiveRemotePersistentOutlineRows(
-                                    items: outlineItems(in: teamID),
-                                    children: \.children,
-                                    expandedIDs: $expandedFolderKeys
-                                ) { item in
-                                    switch item.kind {
-                                    case let .folder(path, name):
-                                        Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                                            .dropDestination(for: String.self) { values, _ in
-                                                moveTeamHost(values, toFolder: path)
-                                            }
-                                    case let .host(host):
-                                        hostRow(host)
-                                            .tag(host.id)
-                                            .draggable("team-host:\(host.id.uuidString)")
-                                            .dropDestination(for: String.self) { values, _ in
-                                                moveTeamHost(
-                                                    values,
-                                                    toFolder: host.profile.group,
-                                                    before: host.id
-                                                )
-                                            }
+            if hostNavigatorVisible {
+                VStack(spacing: 0) {
+                    if store.hosts.isEmpty {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(
+                                ru: "Team Hosts пока не синхронизированы",
+                                en: "Team Hosts have not synchronized yet"
+                            ),
+                            systemImage: "person.2.slash",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Разблокируйте приложение и дождитесь безопасного Team Vault sync.",
+                                en: "Unlock the app and wait for a safe Team Vault sync."
+                            ))
+                        )
+                    } else {
+                        List(selection: $selectedHostID) {
+                            ForEach(teamIDs, id: \.self) { teamID in
+                                DisclosureGroup(
+                                    isExpanded: expansionBinding(for: teamID)
+                                ) {
+                                    SelectiveRemotePersistentOutlineRows(
+                                        items: outlineItems(in: teamID),
+                                        children: \.children,
+                                        expandedIDs: $expandedFolderKeys
+                                    ) { item in
+                                        switch item.kind {
+                                        case let .folder(path, name):
+                                            Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                                .dropDestination(for: String.self) { values, _ in
+                                                    moveTeamHost(values, toFolder: path)
+                                                }
+                                        case let .host(host):
+                                            hostRow(host)
+                                                .tag(host.id)
+                                                .draggable("team-host:\(host.id.uuidString)")
+                                                .dropDestination(for: String.self) { values, _ in
+                                                    moveTeamHost(
+                                                        values,
+                                                        toFolder: host.profile.group,
+                                                        before: host.id
+                                                    )
+                                                }
+                                        }
                                     }
+                                } label: {
+                                    Label(teamName(teamID), systemImage: "person.3.fill")
+                                        .font(.headline)
                                 }
-                            } label: {
-                                Label(teamName(teamID), systemImage: "person.3.fill")
-                                    .font(.headline)
                             }
                         }
-                    }
-                    .listStyle(.sidebar)
-                    .searchable(
-                        text: $searchText,
-                        prompt: UpdateLocalization.text(
-                            ru: "Host, адрес, папка или тег",
-                            en: "Host, address, folder, or tag"
-                        )
-                    )
-                }
-
-                Divider()
-                HStack(spacing: 8) {
-                    Label(
-                        "\(store.hosts.count)",
-                        systemImage: "externaldrive.connected.to.line.below"
-                    )
-                    if let lastUpdatedAt = store.lastUpdatedAt {
-                        Text(lastUpdatedAt, style: .time)
-                    }
-                    Spacer()
-                    Menu {
-                        Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
-                            selectedFolder = ""
-                        }
-                        Divider()
-                        ForEach(folderNames.filter { !$0.isEmpty }, id: \.self) { folder in
-                            Button(folder) { selectedFolder = folder }
-                        }
-                    } label: {
-                        Label(
-                            selectedFolder.isEmpty
-                                ? UpdateLocalization.text(ru: "Все папки", en: "All Folders")
-                                : selectedFolder,
-                            systemImage: "line.3.horizontal.decrease.circle"
+                        .listStyle(.sidebar)
+                        .searchable(
+                            text: $searchText,
+                            prompt: UpdateLocalization.text(
+                                ru: "Host, адрес, папка или тег",
+                                en: "Host, address, folder, or tag"
+                            )
                         )
                     }
 
-                    Menu {
-                        ForEach(writableVaults) { vault in
-                            Button("\(vault.teamName) / \(vault.vaultName)") {
-                                editorRequest = .init(context: vault, host: nil)
-                            }
+                    Divider()
+                    HStack(spacing: 8) {
+                        Label(
+                            "\(store.hosts.count)",
+                            systemImage: "externaldrive.connected.to.line.below"
+                        )
+                        if let lastUpdatedAt = store.lastUpdatedAt {
+                            Text(lastUpdatedAt, style: .time)
                         }
-                    } label: {
-                        Label(
-                            UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"),
-                            systemImage: "plus"
-                        )
-                    }
-                    .disabled(writableVaults.isEmpty || isMutating)
-                    .help(writableVaults.isEmpty
-                        ? UpdateLocalization.text(
-                            ru: "Нет синхронизированного Team Vault с правом записи",
-                            en: "No synchronized writable Team Vault"
-                        )
-                        : UpdateLocalization.text(
-                            ru: "Добавить Host в Team Vault",
-                            en: "Add a Host to a Team Vault"
-                        )
-                    )
-                    if store.invalidVaultCount > 0 {
-                        Label(
-                            "\(store.invalidVaultCount)",
-                            systemImage: "exclamationmark.triangle.fill"
-                        )
-                        .foregroundStyle(.orange)
+                        Spacer()
+                        Button {
+                            hostNavigatorVisible = false
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                        }
+                        .buttonStyle(.borderless)
                         .help(UpdateLocalization.text(
-                            ru: "Некорректные Team Vaults скрыты целиком",
-                            en: "Invalid Team Vaults are hidden in full"
+                            ru: "Свернуть список Team Hosts",
+                            en: "Collapse Team Host list"
                         ))
+                        Menu {
+                            Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
+                                selectedFolder = ""
+                            }
+                            Divider()
+                            ForEach(folderNames.filter { !$0.isEmpty }, id: \.self) { folder in
+                                Button(folder) { selectedFolder = folder }
+                            }
+                        } label: {
+                            Label(
+                                selectedFolder.isEmpty
+                                    ? UpdateLocalization.text(ru: "Все папки", en: "All Folders")
+                                    : selectedFolder,
+                                systemImage: "line.3.horizontal.decrease.circle"
+                            )
+                        }
+
+                        Menu {
+                            ForEach(writableVaults) { vault in
+                                Button("\(vault.teamName) / \(vault.vaultName)") {
+                                    editorRequest = .init(context: vault, host: nil)
+                                }
+                            }
+                        } label: {
+                            Label(
+                                UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"),
+                                systemImage: "plus"
+                            )
+                        }
+                        .disabled(writableVaults.isEmpty || isMutating)
+                        .help(writableVaults.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Нет синхронизированного Team Vault с правом записи",
+                                en: "No synchronized writable Team Vault"
+                            )
+                            : UpdateLocalization.text(
+                                ru: "Добавить Host в Team Vault",
+                                en: "Add a Host to a Team Vault"
+                            )
+                        )
+                        if store.invalidVaultCount > 0 {
+                            Label(
+                                "\(store.invalidVaultCount)",
+                                systemImage: "exclamationmark.triangle.fill"
+                            )
+                            .foregroundStyle(.orange)
+                            .help(UpdateLocalization.text(
+                                ru: "Некорректные Team Vaults скрыты целиком",
+                                en: "Invalid Team Vaults are hidden in full"
+                            ))
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(10)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(10)
+                .frame(minWidth: 290, idealWidth: 350, maxWidth: 440)
             }
-            .frame(minWidth: 290, idealWidth: 350, maxWidth: 440)
 
             Group {
                 if let host = selectedHost {
@@ -766,6 +780,25 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
             .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topLeading) {
+                if !hostNavigatorVisible {
+                    Button {
+                        hostNavigatorVisible = true
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Team Hosts", en: "Team Hosts"),
+                            systemImage: "sidebar.left"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .padding(10)
+                    .help(UpdateLocalization.text(
+                        ru: "Показать список Team Hosts",
+                        en: "Show Team Host list"
+                    ))
+                }
+            }
         }
         .onAppear {
             normalizeSelection()

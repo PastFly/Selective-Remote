@@ -291,6 +291,13 @@ private struct SFTPWorkspaceConnectionRequest: Identifiable {
     let path: String?
 }
 
+private enum SFTPWorkspaceCompactPane: String, CaseIterable, Identifiable {
+    case left
+    case right
+
+    var id: String { rawValue }
+}
+
 struct SFTPWorkspaceView: View {
     @EnvironmentObject private var appModel: AppModel
     @ObservedObject var workspace: SFTPWorkspaceModel
@@ -298,6 +305,7 @@ struct SFTPWorkspaceView: View {
     @State private var connectionRequest: SFTPWorkspaceConnectionRequest?
     @State private var transferError: String?
     @State private var showsTransfers = true
+    @State private var compactPane = SFTPWorkspaceCompactPane.left
 
     private var sshProfiles: [ConnectionProfile] {
         appModel.profiles
@@ -317,7 +325,7 @@ struct SFTPWorkspaceView: View {
             GeometryReader { proxy in
                 workspacePanes(
                     tab,
-                    stacked: AdaptiveWorkspaceLayout.usesStackedSFTPPanes(
+                    compact: AdaptiveWorkspaceLayout.usesSingleSFTPPane(
                         width: proxy.size.width
                     )
                 )
@@ -386,14 +394,33 @@ struct SFTPWorkspaceView: View {
     @ViewBuilder
     private func workspacePanes(
         _ tab: SFTPWorkspaceTab,
-        stacked: Bool
+        compact: Bool
     ) -> some View {
-        if stacked {
-            VSplitView {
-                workspacePane(tab.left, opposite: tab.right)
-                    .frame(minHeight: 280)
-                workspacePane(tab.right, opposite: tab.left)
-                    .frame(minHeight: 280)
+        if compact {
+            VStack(spacing: 8) {
+                Picker(
+                    UpdateLocalization.text(ru: "Панель SFTP", en: "SFTP Pane"),
+                    selection: $compactPane
+                ) {
+                    Label(tab.left.displayTitle, systemImage: tab.left.systemImage)
+                        .tag(SFTPWorkspaceCompactPane.left)
+                    Label(tab.right.displayTitle, systemImage: tab.right.systemImage)
+                        .tag(SFTPWorkspaceCompactPane.right)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .help(UpdateLocalization.text(
+                    ru: "Переключить файловую панель",
+                    en: "Switch file pane"
+                ))
+
+                if compactPane == .left {
+                    workspacePane(tab.left, opposite: tab.right)
+                        .frame(minHeight: 360)
+                } else {
+                    workspacePane(tab.right, opposite: tab.left)
+                        .frame(minHeight: 360)
+                }
             }
         } else {
             HSplitView {
@@ -1084,6 +1111,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
                 }
             }
             .listStyle(.inset)
+            .frame(minHeight: 160)
             .contextMenu {
                 Button("Новый файл…", systemImage: "doc.badge.plus") {
                     newFileName = ""
@@ -1587,6 +1615,7 @@ private struct SFTPWorkspaceRemotePaneView: View {
                     }
                 }
                 .listStyle(.inset)
+                .frame(minHeight: 160)
                 .contextMenu {
                     Button("Новый файл…", systemImage: "doc.badge.plus") {
                         newFileName = ""

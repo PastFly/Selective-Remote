@@ -139,6 +139,10 @@ struct ContentView: View {
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID: UUID?
+    @State private var personalHostsPresentationID = UUID()
+    @State private var personalHostDropTargetID: UUID?
+    @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
+    private var personalHostNavigatorVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -845,22 +849,34 @@ struct ContentView: View {
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
                                 activeTunnelCount: activeTunnelCount(for: item.id)
                             )
+                            .id("management-profile:\(item.id.uuidString)")
+                            .overlay(alignment: .top) {
+                                personalHostInsertionIndicator(for: item.id)
+                            }
                             .tag(item.id)
                             .contentShape(Rectangle())
                             .contextMenu { profileContextMenu(item) }
                             .draggable("personal-host:\(item.id.uuidString)")
                             .dropDestination(for: String.self) { values, _ in
-                                movePersonalProfile(
+                                setPersonalHostDropTarget(nil)
+                                return movePersonalProfile(
                                     values,
                                     toFolder: item.group,
                                     before: item.id
                                 )
+                            } isTargeted: { isTargeted in
+                                if isTargeted {
+                                    setPersonalHostDropTarget(item.id)
+                                } else if personalHostDropTargetID == item.id {
+                                    setPersonalHostDropTarget(nil)
+                                }
                             }
                     }
                 }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .id(personalHostsPresentationID)
             .onAppear { restoreOrInitializePersonalFolderExpansion() }
             .onChange(of: expandedPersonalFolderIDs) { _, value in
                 UserDefaults.standard.set(
@@ -1014,33 +1030,68 @@ struct ContentView: View {
 
     private var personalHostsManagementDetail: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
-                            .font(.headline)
-                        Text(UpdateLocalization.text(
-                            ru: "Папки, порядок и быстрый выбор",
-                            en: "Folders, ordering, and quick selection"
+            if personalHostNavigatorVisible {
+                VStack(spacing: 0) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
+                                .font(.headline)
+                            Text(UpdateLocalization.text(
+                                ru: "Папки, порядок и быстрый выбор",
+                                en: "Folders, ordering, and quick selection"
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
+                            .font(.caption.bold().monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Button {
+                            personalHostNavigatorVisible = false
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(UpdateLocalization.text(
+                            ru: "Свернуть список хостов",
+                            en: "Collapse Host list"
                         ))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
-                        .font(.caption.bold().monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    .padding(16)
+                    Divider()
+                    profileTagFilterBar
+                    profileCollection
                 }
-                .padding(16)
-                Divider()
-                profileTagFilterBar
-                profileCollection
+                .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
             }
-            .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
 
             profileDetail
                 .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) {
+                    if !personalHostNavigatorVisible {
+                        Button {
+                            personalHostNavigatorVisible = true
+                        } label: {
+                            Label(
+                                UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
+                                systemImage: "sidebar.left"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(10)
+                        .help(UpdateLocalization.text(
+                            ru: "Показать список хостов",
+                            en: "Show Host list"
+                        ))
+                    }
+                }
         }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.18),
+            value: personalHostNavigatorVisible
+        )
     }
 
     private func activeTunnelCount(for profileID: UUID) -> Int {
@@ -1081,6 +1132,26 @@ struct ContentView: View {
         else { return false }
         model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)
         return true
+    }
+
+    @ViewBuilder
+    private func personalHostInsertionIndicator(for profileID: UUID) -> some View {
+        if personalHostDropTargetID == profileID {
+            Capsule()
+                .fill(Color.accentColor)
+                .frame(height: 3)
+                .padding(.horizontal, 4)
+                .shadow(color: Color.accentColor.opacity(0.45), radius: 3)
+                .transition(.opacity.combined(with: .scale(scale: 0.82, anchor: .center)))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func setPersonalHostDropTarget(_ profileID: UUID?) {
+        guard personalHostDropTargetID != profileID else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+            personalHostDropTargetID = profileID
+        }
     }
 
     private var personalFolderPaths: [String] {
@@ -3087,6 +3158,9 @@ struct ContentView: View {
         if area != .ssh {
             setTerminalFocusMode(false)
         }
+        if area == .hosts, mainArea != .hosts {
+            personalHostsPresentationID = UUID()
+        }
         mainArea = area
     }
 
@@ -3122,6 +3196,9 @@ struct ContentView: View {
     private func setTerminalFocusMode(_ enabled: Bool) {
         terminalFocusMode = enabled
         columnVisibility = enabled ? .detailOnly : .all
+        if enabled, mainArea == .hosts, hostScope == .personal {
+            personalHostNavigatorVisible = false
+        }
     }
 
     private var generalSettings: some View {
@@ -4834,7 +4911,9 @@ private struct ProfileRow: View {
                 }
             }
         }
-        .padding(.vertical, 5)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 
