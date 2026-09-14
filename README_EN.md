@@ -7,6 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
 [![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
+[![Telegram](https://img.shields.io/badge/Telegram-@SelectiveRemoteApp-229ED9?logo=telegram&logoColor=white)](https://t.me/SelectiveRemoteApp)
 
 **Selective Remote** is a free, open-source RDP, SSH, Telnet, Serial, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, SSH credential management, and encrypted backups in one app.
 
@@ -14,7 +15,7 @@ The project targets Apple Silicon and macOS 14+. The interface is available in E
 
 **Built for:** sysadmins, DevOps, homelabs, and anyone looking for an RDP client for macOS, SSH client for macOS, or SFTP client for macOS without switching between several apps.
 
-[Download the latest release](https://github.com/PastFly/Selective-Remote/releases/latest) · [Project website](https://pastfly.github.io/Selective-Remote/) · [Русский README](README.md)
+[Download the latest release](https://github.com/PastFly/Selective-Remote/releases/latest) · [Telegram channel](https://t.me/SelectiveRemoteApp) · [Project website](https://pastfly.github.io/Selective-Remote/) · [Русский README](README.md)
 
 ## Main workspaces
 
@@ -255,6 +256,10 @@ Additional documentation:
 - [BUILD-RU.md](BUILD-RU.md)
 - [Publishing](docs/PUBLISHING-RU.md)
 - [Release preparation](docs/RELEASING-RU.md)
+
+## Project news
+
+New releases, concise update notes, and project news are published in the official [Selective Remote Telegram channel](https://t.me/SelectiveRemoteApp).
 
 ## Support the project
 
