@@ -139,6 +139,8 @@ struct ContentView: View {
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID: UUID?
+    @State private var personalHostsPresentationID = UUID()
+    @State private var personalHostDropTargetID: UUID?
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
     @State private var expandedPersonalFolderIDs = Set(
@@ -847,22 +849,34 @@ struct ContentView: View {
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
                                 activeTunnelCount: activeTunnelCount(for: item.id)
                             )
+                            .id("management-profile:\(item.id.uuidString)")
+                            .overlay(alignment: .top) {
+                                personalHostInsertionIndicator(for: item.id)
+                            }
                             .tag(item.id)
                             .contentShape(Rectangle())
                             .contextMenu { profileContextMenu(item) }
                             .draggable("personal-host:\(item.id.uuidString)")
                             .dropDestination(for: String.self) { values, _ in
+                                setPersonalHostDropTarget(nil)
                                 movePersonalProfile(
                                     values,
                                     toFolder: item.group,
                                     before: item.id
                                 )
+                            } isTargeted: { isTargeted in
+                                if isTargeted {
+                                    setPersonalHostDropTarget(item.id)
+                                } else if personalHostDropTargetID == item.id {
+                                    setPersonalHostDropTarget(nil)
+                                }
                             }
                     }
                 }
             }
             .listStyle(.sidebar)
             .scrollContentBackground(.hidden)
+            .id(personalHostsPresentationID)
             .onAppear { restoreOrInitializePersonalFolderExpansion() }
             .onChange(of: expandedPersonalFolderIDs) { _, value in
                 UserDefaults.standard.set(
@@ -1118,6 +1132,26 @@ struct ContentView: View {
         else { return false }
         model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)
         return true
+    }
+
+    @ViewBuilder
+    private func personalHostInsertionIndicator(for profileID: UUID) -> some View {
+        if personalHostDropTargetID == profileID {
+            Capsule()
+                .fill(Color.accentColor)
+                .frame(height: 3)
+                .padding(.horizontal, 4)
+                .shadow(color: Color.accentColor.opacity(0.45), radius: 3)
+                .transition(.opacity.combined(with: .scale(x: 0.82, y: 1)))
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func setPersonalHostDropTarget(_ profileID: UUID?) {
+        guard personalHostDropTargetID != profileID else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.14)) {
+            personalHostDropTargetID = profileID
+        }
     }
 
     private var personalFolderPaths: [String] {
@@ -3123,6 +3157,9 @@ struct ContentView: View {
     private func setMainArea(_ area: MainArea) {
         if area != .ssh {
             setTerminalFocusMode(false)
+        }
+        if area == .hosts, mainArea != .hosts {
+            personalHostsPresentationID = UUID()
         }
         mainArea = area
     }
