@@ -417,6 +417,34 @@ actor SelectiveRemoteCloudAPIClient {
         return result.user
     }
 
+    func registrationUsernameAvailable(endpoint: URL, username: String) async throws -> Bool {
+        let normalizedUsername = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedUsername.range(
+            of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#,
+            options: .regularExpression
+        ) != nil else { throw SelectiveRemoteCloudError.invalidRequest }
+        var components = URLComponents(
+            url: endpoint.appending(path: "v1/auth/username-availability"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "username", value: normalizedUsername)]
+        guard let url = components?.url else { throw SelectiveRemoteCloudError.invalidEndpoint }
+        let request = JSONRequest(url: url, method: "GET", body: nil).value
+        let (data, response) = try await dataLoader(request)
+        let http = try httpResponse(response)
+        guard http.statusCode == 200 else {
+            throw serviceError(status: http.statusCode, data: data)
+        }
+        guard Self.exactKeys(
+            try? JSONSerialization.jsonObject(with: data),
+            expected: ["username", "available"]
+        ),
+        let result = try? decoder.decode(UsernameAvailabilityResponse.self, from: data),
+        result.username == normalizedUsername
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        return result.available
+    }
+
     func register(
         endpoint: URL,
         displayName: String,
@@ -1420,6 +1448,11 @@ private struct RegistrationRequest: Encodable {
 
 private struct RegistrationResponse: Decodable {
     var verificationRequired: Bool
+}
+
+private struct UsernameAvailabilityResponse: Decodable {
+    var username: String
+    var available: Bool
 }
 
 private struct LoginResponse: Decodable {

@@ -450,3 +450,26 @@ test("recovery responses do not wait for SMTP and enforce a common minimum delay
   await service.waitForBackgroundTasks();
   assert.equal(service.backgroundTasks.size, 0);
 });
+
+test("username availability works before registration and preserves account self-exclusion", async () => {
+  const service = new CloudService(new MemoryStore(), config);
+  assert.deepEqual(
+    await service.usernameAvailability(null, { username: "Fresh.User" }),
+    { username: "fresh.user", available: true },
+  );
+  assert.deepEqual(
+    await service.usernameAvailability(null, { username: "taken" }),
+    { username: "taken", available: false },
+  );
+  const store = new MemoryStore();
+  store.identity = { id: "owner-user", username: "taken" };
+  const ownerService = new CloudService(store, config);
+  assert.deepEqual(
+    await ownerService.usernameAvailability({ user_id: "owner-user" }, { username: "taken" }),
+    { username: "taken", available: true },
+  );
+  await assert.rejects(
+    service.usernameAvailability(null, { username: "bad username" }),
+    /invalid_username/,
+  );
+});

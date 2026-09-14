@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 
 struct SelectiveRemoteCloudSignInView: View {
@@ -153,12 +154,64 @@ struct SelectiveRemoteCloudSignInView: View {
     }
 }
 
+private enum SelectiveRemoteCloudUsernameAvailability: Equatable {
+    case idle
+    case checking
+    case available
+    case taken
+    case failed
+}
+
+private enum SelectiveRemoteCloudPasswordStrength {
+    case weak
+    case medium
+    case strong
+
+    static func evaluate(_ password: String) -> Self {
+        var score = password.count >= 12 ? 1 : 0
+        if password.count >= 16 { score += 1 }
+        if password.range(of: #"[a-z]"#, options: .regularExpression) != nil { score += 1 }
+        if password.range(of: #"[A-Z]"#, options: .regularExpression) != nil { score += 1 }
+        if password.range(of: #"[0-9]"#, options: .regularExpression) != nil { score += 1 }
+        if password.range(of: #"[^A-Za-z0-9]"#, options: .regularExpression) != nil { score += 1 }
+        if Set(password).count >= 8 { score += 1 }
+        if score >= 6 { return .strong }
+        if score >= 4 { return .medium }
+        return .weak
+    }
+
+    var title: String {
+        switch self {
+        case .weak: UpdateLocalization.text(ru: "Слабый", en: "Weak")
+        case .medium: UpdateLocalization.text(ru: "Средний", en: "Medium")
+        case .strong: UpdateLocalization.text(ru: "Сильный", en: "Strong")
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .weak: .red
+        case .medium: .orange
+        case .strong: .green
+        }
+    }
+
+    var progress: Double {
+        switch self {
+        case .weak: 0.33
+        case .medium: 0.66
+        case .strong: 1
+        }
+    }
+}
+
 struct SelectiveRemoteCloudRegistrationView: View {
     let endpoint: URL
     let isRegistering: Bool
     let errorMessage: String?
     let onBack: () -> Void
     let onCancel: () -> Void
+    let onCheckUsername: (String) async throws -> Bool
     let onRegister: (String, String, String, String) -> Void
 
     @State private var displayName = ""
@@ -166,6 +219,7 @@ struct SelectiveRemoteCloudRegistrationView: View {
     @State private var email = ""
     @State private var password = ""
     @State private var confirmation = ""
+    @State private var usernameAvailability = SelectiveRemoteCloudUsernameAvailability.idle
 
     var body: some View {
         NavigationStack {
@@ -177,12 +231,27 @@ struct SelectiveRemoteCloudRegistrationView: View {
                     TextField(UpdateLocalization.text(ru: "Логин", en: "Username"), text: $username)
                         .textContentType(.username)
                         .disabled(isRegistering)
+                    usernameAvailabilityView
                     TextField(UpdateLocalization.text(ru: "Электронная почта", en: "Email"), text: $email)
                         .textContentType(.emailAddress)
                         .disabled(isRegistering)
                     SecureField(UpdateLocalization.text(ru: "Новый пароль", en: "New Password"), text: $password)
                         .textContentType(.newPassword)
                         .disabled(isRegistering)
+                    if !password.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack {
+                                Text(UpdateLocalization.text(ru: "Надёжность пароля", en: "Password strength"))
+                                Spacer()
+                                Text(passwordStrength.title)
+                                    .foregroundStyle(passwordStrength.color)
+                                    .fontWeight(.semibold)
+                            }
+                            ProgressView(value: passwordStrength.progress)
+                                .tint(passwordStrength.color)
+                        }
+                        .font(.caption)
+                    }
                     SecureField(UpdateLocalization.text(ru: "Повторите пароль", en: "Confirm Password"), text: $confirmation)
                         .textContentType(.newPassword)
                         .disabled(isRegistering)
@@ -242,15 +311,97 @@ struct SelectiveRemoteCloudRegistrationView: View {
                 }
             }
         }
-        .frame(width: 540, height: 520)
+        .frame(width: 540, height: 570)
+        .task(id: normalizedUsername) {
+            guard usernameIsValid else {
+                usernameAvailability = .idle
+                return
+            }
+            usernameAvailability = .checking
+            do {
+                try await Task.sleep(for: .milliseconds(450))
+                let available = try await onCheckUsername(normalizedUsername)
+                guard !Task.isCancelled else { return }
+                usernameAvailability = available ? .available : .taken
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                usernameAvailability = .failed
+            }
+        }
+    }
+
+    private var normalizedUsername: String {
+        username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private var passwordStrength: SelectiveRemoteCloudPasswordStrength {
+        SelectiveRemoteCloudPasswordStrength.evaluate(password)
+    }
+
+    private var usernameIsValid: Bool {
+        normalizedUsername.range(
+            of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#,
+            options: .regularExpression
+        ) != nil
+    }
+
+    @ViewBuilder
+    private var usernameAvailabilityView: some View {
+        switch usernameAvailability {
+        case .idle:
+            if !username.isEmpty, !usernameIsValid {
+                Label(
+                    UpdateLocalization.text(
+                        ru: "От 3 до 32 символов: латиница, цифры, точка, дефис или подчёркивание.",
+                        en: "Use 3–32 characters: Latin letters, digits, dot, hyphen, or underscore."
+                    ),
+                    systemImage: "info.circle"
+                )
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            }
+        case .checking:
+            HStack(spacing: 7) {
+                ProgressView().controlSize(.small)
+                Text(UpdateLocalization.text(ru: "Проверяем логин…", en: "Checking username…"))
+            }
+            .foregroundStyle(.secondary)
+            .font(.caption)
+        case .available:
+            Label(
+                UpdateLocalization.text(ru: "Логин свободен", en: "Username is available"),
+                systemImage: "checkmark.circle.fill"
+            )
+            .foregroundStyle(.green)
+            .font(.caption)
+        case .taken:
+            Label(
+                UpdateLocalization.text(ru: "Этот логин уже занят", en: "This username is already taken"),
+                systemImage: "xmark.circle.fill"
+            )
+            .foregroundStyle(.red)
+            .font(.caption)
+        case .failed:
+            Label(
+                UpdateLocalization.text(
+                    ru: "Не удалось проверить логин. Измените его или повторите позже.",
+                    en: "Could not check the username. Change it or try again later."
+                ),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .foregroundStyle(.orange)
+            .font(.caption)
+        }
     }
 
     private var canSubmit: Bool {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         let mail = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let handle = username.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return !name.isEmpty && name.count <= 120
-            && handle.range(of: #"^[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]$"#, options: .regularExpression) != nil
+            && usernameIsValid
+            && usernameAvailability == .available
             && !mail.isEmpty && mail.count <= 254
             && (12...1_024).contains(password.count)
             && password == confirmation

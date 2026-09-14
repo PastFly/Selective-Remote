@@ -519,6 +519,12 @@ struct CloudSettingsView: View {
                             accountSheetMode = .signIn
                         },
                         onCancel: closeAccountSheet,
+                        onCheckUsername: { username in
+                            try await client.registrationUsernameAvailable(
+                                endpoint: url,
+                                username: username
+                            )
+                        },
                         onRegister: { displayName, username, email, password in
                             register(
                                 displayName: displayName,

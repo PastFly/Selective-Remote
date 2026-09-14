@@ -152,9 +152,9 @@ export class PostgresStore {
   }
 
 
-  async usernameAvailable(username, excludingUserID) {
+  async usernameAvailable(username, excludingUserID = null) {
     const result = await this.pool.query(
-      "SELECT NOT EXISTS (SELECT 1 FROM users WHERE username = $1 AND id <> $2) AS available",
+      "SELECT NOT EXISTS (SELECT 1 FROM users WHERE username = $1 AND ($2::uuid IS NULL OR id <> $2)) AS available",
       [username, excludingUserID],
     );
     return result.rows[0]?.available === true;
