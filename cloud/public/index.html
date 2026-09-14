@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=128">
+  <link rel="stylesheet" href="/styles.css?v=143">
 </head>
 <body>
   <main class="shell">
@@ -555,6 +555,23 @@
           </div>
         </div>
 
+        <section class="team-policy-card" id="team-device-admission-policy" hidden aria-labelledby="team-device-admission-title">
+          <div class="team-policy-copy">
+            <p class="eyebrow">ДОВЕРИЕ К УСТРОЙСТВАМ</p>
+            <h3 id="team-device-admission-title">Автоматический допуск</h3>
+            <p>Новые устройства активных участников автоматически получают доступ к текущему членству в Team. Первый доверенный клиент с открытым Vault безопасно выдаст им wrapper — ключ хранилища не передаётся серверу.</p>
+          </div>
+          <label class="setting-switch" for="team-device-admission-toggle">
+            <span class="setting-switch-copy">
+              <strong>Допускать новые устройства автоматически</strong>
+              <small>Включено по умолчанию. Owner принимает риск входа участника с нового устройства.</small>
+            </span>
+            <input id="team-device-admission-toggle" type="checkbox" role="switch" checked>
+            <span class="setting-switch-control" aria-hidden="true"></span>
+          </label>
+          <p class="team-policy-status" id="team-device-admission-status" aria-live="polite"></p>
+        </section>
+
         <section class="team-lifecycle" id="team-lifecycle" hidden>
           <h3>Управление Team</h3>
           <p>Только Owner может переименовать Team, передать владение или архивировать её.</p>
@@ -669,6 +686,21 @@
       <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
     </section>
   </main>
-  <script type="module" src="/app.js?v=128"></script>
+  <dialog class="app-confirmation" id="app-confirmation-dialog" aria-labelledby="app-confirmation-title" aria-describedby="app-confirmation-message">
+    <form method="dialog" class="app-confirmation-card">
+      <div class="app-confirmation-icon" aria-hidden="true">✓</div>
+      <div>
+        <p class="eyebrow" id="app-confirmation-eyebrow">ПРОВЕРКА ДЕЙСТВИЯ</p>
+        <h3 id="app-confirmation-title">Подтвердите действие</h3>
+      </div>
+      <p id="app-confirmation-message"></p>
+      <code id="app-confirmation-detail" hidden></code>
+      <div class="app-confirmation-actions">
+        <button type="submit" class="secondary" value="cancel">Отмена</button>
+        <button type="submit" value="confirm" id="app-confirmation-submit">Подтвердить</button>
+      </div>
+    </form>
+  </dialog>
+  <script type="module" src="/app.js?v=143"></script>
 </body>
 </html>

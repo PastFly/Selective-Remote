@@ -341,6 +341,26 @@ export class CloudService {
     }) };
   }
 
+  async getTeamDeviceAdmissionPolicy(session, teamID) {
+    const policy = await this.store.getTeamDeviceAdmissionPolicy(teamID, session.user_id);
+    return {
+      automaticDeviceAdmission: policy.automatic_device_admission === true,
+      editable: policy.role === "owner",
+    };
+  }
+
+  async updateTeamDeviceAdmissionPolicy(session, teamID, input, idempotencyKey) {
+    if (typeof input?.automaticDeviceAdmission !== "boolean") {
+      throw new Error("invalid_team_device_admission_policy");
+    }
+    return this.store.updateTeamDeviceAdmissionPolicy({
+      actorUserID: session.user_id,
+      teamID,
+      automaticDeviceAdmission: input.automaticDeviceAdmission,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
   async transferTeamOwnership(session, teamID, input, idempotencyKey) {
     await this.requirePasswordReauthentication(session, input?.password);
     if (!isUUID(input?.membershipID)) throw new Error("team_not_found");

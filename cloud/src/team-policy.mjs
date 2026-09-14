@@ -11,6 +11,7 @@ const permissions = Object.freeze({
   invite_member: new Set(["owner", "admin"]),
   invite_admin: new Set(["owner"]),
   manage_member: new Set(["owner", "admin"]),
+  manage_device_admission_policy: new Set(["owner"]),
   rename_team: new Set(["owner"]),
   transfer_ownership: new Set(["owner"]),
   archive_team: new Set(["owner"]),

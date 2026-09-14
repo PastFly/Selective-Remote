@@ -15,6 +15,10 @@ test("known operation errors map to stable public responses", () => {
     status: 409,
     code: "team_name_mismatch",
   });
+  assert.deepEqual(publicOperationError(new Error("invalid_team_device_admission_policy")), {
+    status: 400,
+    code: "invalid_team_device_admission_policy",
+  });
   assert.equal(publicOperationError(new Error("email_exists")), null);
 });
 

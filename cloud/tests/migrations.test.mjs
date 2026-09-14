@@ -18,8 +18,22 @@ test("numbered migrations have stable checksums", async () => {
     { version: 8, name: "008_usernames.sql" },
     { version: 9, name: "009_team_invitation_modes.sql" },
     { version: 10, name: "010_team_membership_device_admissions.sql" },
+    { version: 11, name: "011_team_device_admission_policy.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("Team device admission policy defaults on and backfills only registered P-256 devices", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const policy = migrations.find(({ version }) => version === 11);
+
+  assert.match(policy.sql, /ADD COLUMN automatic_device_admission boolean NOT NULL DEFAULT true/u);
+  assert.match(policy.sql, /INSERT INTO team_membership_device_admissions/u);
+  assert.match(policy.sql, /device\.public_key_algorithm = 'p256-ecdh-v1'/u);
+  assert.match(policy.sql, /membership\.revoked_at IS NULL/u);
+  assert.match(policy.sql, /team\.automatic_device_admission = true/u);
+  assert.match(policy.sql, /team\.device_auto_admission_backfilled/u);
+  assert.doesNotMatch(policy.sql, /private_key|vault_key|key_approved_at/u);
 });
 
 test("usernames are unique public handles and existing accounts receive a stable fallback", async () => {

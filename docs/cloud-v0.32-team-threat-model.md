@@ -76,6 +76,7 @@ Cloud 0.32 uses four roles. A custom-role system is out of scope for 0.32.
 | Remove/demote Admin | Yes | No | No | No |
 | Assign/remove Owner | Yes | No | No | No |
 | Transfer ownership/delete Team | Yes | No | No | No |
+| Change automatic device-admission policy | Yes | No | No | No |
 | Provision a missing current-generation wrapper while holding that key | Yes | Yes | Yes | Yes |
 | Start/complete key rotation | Yes | Yes | No | No |
 
@@ -135,6 +136,15 @@ that Vault's wrapper. A manager therefore can recover a member's new browser
 without weakening E2EE or requiring the member's macOS application to remain
 online.
 
+Each Team also has an Owner-controlled automatic device-admission policy. It is
+enabled by default so a successful sign-in on a registered P-256 device admits
+that device to each active membership epoch in that Team. Existing Teams are
+backfilled during migration; enabling the policy later backfills only active,
+non-revoked P-256 devices. The setting is authorization metadata, is audited,
+and never creates a wrapper or exposes a Vault key to the server. Turning it off
+restores the manual fingerprint-confirmed workflow for future devices. The UI
+states this risk boundary before an Owner enables the policy.
+
 ## Device-bound key distribution
 
 Each authorized device owns a non-exportable P-256 ECDH private key when the
@@ -166,17 +176,21 @@ the ciphertext, public metadata and wrappers but never the Vault key or ECDH
 shared secret. A wrapper for one Team/Vault/generation/device must fail when
 replayed in any other context.
 
-Outside Team invitation acceptance, a newly registered device requires
-approval from an existing authorized account device. A legacy account with zero
-approved devices may bootstrap only its current registered key after password
+Account-wide device trust still requires approval from an existing authorized
+account device. A legacy account with zero approved devices may bootstrap only
+its current registered key after password
 re-verification, user/IP rate limiting and an account-row lock that permits
 exactly one winner. Invitation acceptance is the narrow admission exception:
 the accepting session device must already have a registered P-256 public key,
 and a row keyed by membership ID, membership epoch and device ID commits
 atomically with the membership. It does not set `devices.key_approved_at`.
+When a Team's automatic admission policy is enabled, a successful session also
+creates the same membership-ID/epoch/device-scoped admission for that Team only.
 Consequently, possession of an arbitrary Team link cannot turn a stolen session
 into an account-wide trusted device or authorize another Team. Password login
-alone still cannot approve a device or grant old shared-Vault keys. Device
+alone still cannot approve a device account-wide, decrypt a Team Vault or grant
+old shared-Vault keys: an active client that already holds the current key must
+publish the wrapper. Device
 revocation invalidates its sessions; a scoped device that held any wrapper also
 forces rotation and is excluded from all later wrapper sets.
 

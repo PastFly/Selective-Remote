@@ -951,6 +951,50 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return memberDevices;
     },
 
+    async getTeamDeviceAdmissionPolicy(teamID) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      const response = await authorizedRequest(
+        `/v1/teams/${normalizedTeamID}/device-admission-policy`,
+      );
+      const result = await responseJSON(response, "team_device_admission_policy_download_failed");
+      if (!response.ok || typeof result.automaticDeviceAdmission !== "boolean"
+        || typeof result.editable !== "boolean") {
+        throw new Error("team_device_admission_policy_download_failed");
+      }
+      return {
+        automaticDeviceAdmission: result.automaticDeviceAdmission,
+        editable: result.editable,
+      };
+    },
+
+    async updateTeamDeviceAdmissionPolicy({
+      teamID,
+      automaticDeviceAdmission,
+      idempotencyKey = generatedIdempotencyKey("web:team:device:policy"),
+    }) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      if (typeof automaticDeviceAdmission !== "boolean") {
+        throw new Error("invalid_team_device_admission_policy");
+      }
+      const response = await authorizedRequest(
+        `/v1/teams/${normalizedTeamID}/device-admission-policy`,
+        {
+          method: "PUT",
+          headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+          body: JSON.stringify({ automaticDeviceAdmission }),
+        },
+      );
+      const result = await responseJSON(response, "team_device_admission_policy_update_failed");
+      if (!response.ok || result.automaticDeviceAdmission !== automaticDeviceAdmission
+        || !Number.isSafeInteger(result.admittedDevices) || result.admittedDevices < 0) {
+        throw new Error("team_device_admission_policy_update_failed");
+      }
+      return {
+        automaticDeviceAdmission: result.automaticDeviceAdmission,
+        admittedDevices: result.admittedDevices,
+      };
+    },
+
     async admitTeamMembershipDevice({
       teamID, membershipID, deviceID, publicKey,
       idempotencyKey = generatedIdempotencyKey("web:team:device:admit"),

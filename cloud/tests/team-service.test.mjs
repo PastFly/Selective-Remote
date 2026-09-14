@@ -207,6 +207,19 @@ class TeamStore {
     return { admitted: true, membershipID: input.membershipID, deviceID: input.deviceID };
   }
 
+  async getTeamDeviceAdmissionPolicy(team, actor) {
+    this.calls.push(["getTeamDeviceAdmissionPolicy", team, actor]);
+    return { automatic_device_admission: true, role: "owner" };
+  }
+
+  async updateTeamDeviceAdmissionPolicy(input) {
+    this.calls.push(["updateTeamDeviceAdmissionPolicy", input]);
+    return {
+      automaticDeviceAdmission: input.automaticDeviceAdmission,
+      admittedDevices: input.automaticDeviceAdmission ? 2 : 0,
+    };
+  }
+
   async passwordIdentity(email) {
     this.calls.push(["passwordIdentity", email]);
     return { id: "user-1", password_hash: "synthetic-hash", disabled_at: null };
@@ -652,6 +665,39 @@ test("Team managers can inspect and admit a member device without account-wide a
     expectedPublicKey: JSON.stringify({ ...publicKey, ext: true, key_ops: [] }),
     idempotencyKey: "request:team-member-device-admit-01",
   });
+});
+
+test("Team device admission policy is readable by members and mutable only with a strict boolean", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+
+  assert.deepEqual(await service.getTeamDeviceAdmissionPolicy(session, teamID), {
+    automaticDeviceAdmission: true,
+    editable: true,
+  });
+  assert.deepEqual(store.calls[0], ["getTeamDeviceAdmissionPolicy", teamID, session.user_id]);
+
+  assert.deepEqual(await service.updateTeamDeviceAdmissionPolicy(
+    session,
+    teamID,
+    { automaticDeviceAdmission: false },
+    "request:team-device-policy-off-01",
+  ), { automaticDeviceAdmission: false, admittedDevices: 0 });
+  assert.deepEqual(store.calls[1][1], {
+    actorUserID: session.user_id,
+    teamID,
+    automaticDeviceAdmission: false,
+    idempotencyKey: "request:team-device-policy-off-01",
+  });
+  await assert.rejects(
+    service.updateTeamDeviceAdmissionPolicy(
+      session,
+      teamID,
+      { automaticDeviceAdmission: "true" },
+      "request:team-device-policy-bad-01",
+    ),
+    /invalid_team_device_admission_policy/u,
+  );
 });
 
 test("first Team device bootstrap requires password verification and stays bound to the session device", async () => {
