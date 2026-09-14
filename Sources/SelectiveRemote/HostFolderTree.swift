@@ -123,10 +123,18 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
     let kind: Kind
     let children: [SelectiveRemoteTeamHostOutlineItem]?
 
+    static func roots(teamID: UUID, hosts: [SelectiveRemoteTeamHost]) -> [Self] {
+        roots(
+            teamID: teamID,
+            hosts: hosts,
+            areInIncreasingOrder: defaultHostOrder
+        )
+    }
+
     static func roots(
         teamID: UUID,
         hosts: [SelectiveRemoteTeamHost],
-        areInIncreasingOrder: (SelectiveRemoteTeamHost, SelectiveRemoteTeamHost) -> Bool = defaultHostOrder
+        areInIncreasingOrder: (SelectiveRemoteTeamHost, SelectiveRemoteTeamHost) -> Bool
     ) -> [Self] {
         let entries = hosts.map {
             (SelectiveRemoteHostFolderPath.normalize($0.profile.group), $0)
