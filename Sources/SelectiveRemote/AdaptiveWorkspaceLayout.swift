@@ -14,6 +14,10 @@ enum AdaptiveWorkspaceLayout {
         width < stackedSFTPPanesWidth
     }
 
+    static func usesSingleSFTPPane(width: CGFloat) -> Bool {
+        width < stackedSFTPPanesWidth
+    }
+
     static func usesDetailNavigation(width: CGFloat) -> Bool {
         width < detailNavigationWidth
     }

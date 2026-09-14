@@ -125,7 +125,40 @@ func adaptiveWorkspaceBreakpoints() {
     #expect(!AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(width: 1_200))
     #expect(AdaptiveWorkspaceLayout.usesStackedSFTPPanes(width: 900))
     #expect(!AdaptiveWorkspaceLayout.usesStackedSFTPPanes(width: 1_400))
+    #expect(AdaptiveWorkspaceLayout.usesSingleSFTPPane(width: 900))
+    #expect(!AdaptiveWorkspaceLayout.usesSingleSFTPPane(width: 1_400))
     #expect(AdaptiveWorkspaceLayout.usesDetailNavigation(width: 900))
     #expect(!AdaptiveWorkspaceLayout.usesDetailNavigation(width: 1_400))
     #expect(AdaptiveWorkspaceLayout.showsProfileInspector(width: 7_680))
+}
+
+@Test("Hosts navigator collapses and compact SFTP preserves the file list")
+func hostsAndSFTPUseSpaceEfficientLayouts() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let content = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+    let teamHosts = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamHosts.swift"),
+        encoding: .utf8
+    )
+    let sftp = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SFTPWorkspace.swift"),
+        encoding: .utf8
+    )
+
+    #expect(content.contains("personal-host.navigator-visible.v1"))
+    #expect(content.contains("Свернуть список хостов"))
+    #expect(content.contains("profile.tags.isEmpty ? 48 : 64"))
+    #expect(teamHosts.contains("team-host.navigator-visible.v1"))
+    #expect(teamHosts.contains("Свернуть список Team Hosts"))
+    #expect(sftp.contains("AdaptiveWorkspaceLayout.usesSingleSFTPPane"))
+    #expect(sftp.contains("SFTPWorkspaceCompactPane"))
+    #expect(sftp.contains("Переключить файловую панель"))
+    #expect(sftp.contains(".frame(minHeight: 160)"))
+    #expect(!sftp.contains("VSplitView"))
 }

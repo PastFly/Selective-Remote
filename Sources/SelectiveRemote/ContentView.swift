@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 55018)
+Total output lines: 5013
+
 import SwiftUI
 
 private enum ProfileTab: String, CaseIterable, Identifiable {
@@ -139,6 +142,8 @@ struct ContentView: View {
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID: UUID?
+    @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
+    private var personalHostNavigatorVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -1014,33 +1019,68 @@ struct ContentView: View {
 
     private var personalHostsManagementDetail: some View {
         HSplitView {
-            VStack(spacing: 0) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
-                            .font(.headline)
-                        Text(UpdateLocalization.text(
-                            ru: "Папки, порядок и быстрый выбор",
-                            en: "Folders, ordering, and quick selection"
+            if personalHostNavigatorVisible {
+                VStack(spacing: 0) {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
+                                .font(.headline)
+                            Text(UpdateLocalization.text(
+                                ru: "Папки, порядок и быстрый выбор",
+                                en: "Folders, ordering, and quick selection"
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
+                            .font(.caption.bold().monospacedDigit())
+                            .foregroundStyle(.secondary)
+                        Button {
+                            personalHostNavigatorVisible = false
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(UpdateLocalization.text(
+                            ru: "Свернуть список хостов",
+                            en: "Collapse Host list"
                         ))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                     }
-                    Spacer()
-                    Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
-                        .font(.caption.bold().monospacedDigit())
-                        .foregroundStyle(.secondary)
+                    .padding(16)
+                    Divider()
+                    profileTagFilterBar
+                    profileCollection
                 }
-                .padding(16)
-                Divider()
-                profileTagFilterBar
-                profileCollection
+                .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
             }
-            .frame(minWidth: 300, idealWidth: 380, maxWidth: 500)
 
             profileDetail
                 .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                .overlay(alignment: .topLeading) {
+                    if !personalHostNavigatorVisible {
+                        Button {
+                            personalHostNavigatorVisible = true
+                        } label: {
+                            Label(
+                                UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
+                                systemImage: "sidebar.left"
+                            )
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .padding(10)
+                        .help(UpdateLocalization.text(
+                            ru: "Показать список хостов",
+                            en: "Show Host list"
+                        ))
+                    }
+                }
         }
+        .animation(
+            reduceMotion ? nil : .easeInOut(duration: 0.18),
+            value: personalHostNavigatorVisible
+        )
     }
 
     private func activeTunnelCount(for profileID: UUID) -> Int {
@@ -2371,531 +2411,7 @@ struct ContentView: View {
 
                 rdpRouteNode(
                     title: "Windows",
-                    subtitle: profile.host.isEmpty ? "—" : profile.host,
-                    systemImage: "desktopcomputer"
-                )
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity)
-            .background(
-                Color.primary.opacity(0.03),
-                in: RoundedRectangle(cornerRadius: 13)
-            )
-
-            Divider()
-
-            rdpSummaryLine(
-                UpdateLocalization.text(ru: "Режим окна", en: "Window mode"),
-                value: profile.rdpWindowMode.title
-            )
-            rdpSummaryLine(
-                UpdateLocalization.text(ru: "Масштаб", en: "Scale"),
-                value: profile.windowsScale.title
-            )
-            rdpSummaryLine(
-                UpdateLocalization.text(ru: "Качество", en: "Quality"),
-                value: profile.rdpQuality.title
-            )
-            rdpSummaryLine(
-                UpdateLocalization.text(ru: "Мониторы", en: "Displays"),
-                value: "\(model.effectiveSelectedDisplayIDs.count)"
-            )
-
-            Divider()
-
-            Text(UpdateLocalization.text(ru: "Перенаправления", en: "Redirection"))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            rdpFeatureRow(
-                UpdateLocalization.text(ru: "Микрофон", en: "Microphone"),
-                enabled: profile.redirectMicrophone,
-                systemImage: "mic"
-            )
-            rdpFeatureRow(
-                UpdateLocalization.text(ru: "Камера", en: "Camera"),
-                enabled: profile.redirectCamera,
-                systemImage: "video"
-            )
-            rdpFeatureRow(
-                UpdateLocalization.text(ru: "Принтеры", en: "Printers"),
-                enabled: profile.redirectPrinters,
-                systemImage: "printer"
-            )
-
-            Spacer(minLength: 0)
-        }
-        .padding(15)
-        .frame(maxHeight: .infinity, alignment: .top)
-        .background(
-            .regularMaterial,
-            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.065))
-        }
-    }
-
-    private func rdpRouteNode(
-        title: String,
-        subtitle: String,
-        systemImage: String
-    ) -> some View {
-        HStack(spacing: 9) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 9)
-                    .fill(Color.accentColor.opacity(0.10))
-                Image(systemName: systemImage)
-                    .foregroundStyle(Color.accentColor)
-            }
-            .frame(width: 34, height: 34)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.caption.weight(.semibold))
-                Text(subtitle)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-
-            Spacer(minLength: 0)
-        }
-    }
-
-    private func rdpSummaryLine(_ title: String, value: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text(value)
-                .font(.caption.weight(.semibold))
-                .multilineTextAlignment(.trailing)
-                .lineLimit(2)
-        }
-    }
-
-    private func rdpFeatureRow(
-        _ title: String,
-        enabled: Bool,
-        systemImage: String
-    ) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: systemImage)
-                .frame(width: 18)
-                .foregroundStyle(enabled ? Color.green : Color.secondary)
-            Text(title)
-                .font(.caption)
-            Spacer()
-            Text(
-                enabled
-                    ? UpdateLocalization.text(ru: "Вкл.", en: "On")
-                    : UpdateLocalization.text(ru: "Выкл.", en: "Off")
-            )
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(enabled ? Color.green : Color.secondary)
-        }
-    }
-
-    private func rdpTabTitle(_ tab: ProfileTab) -> String {
-        switch tab {
-        case .general:
-            UpdateLocalization.text(ru: "Основное", en: "General")
-        case .authentication:
-            UpdateLocalization.text(ru: "Аутентификация", en: "Authentication")
-        case .route:
-            UpdateLocalization.text(ru: "Маршрут", en: "Route")
-        case .display:
-            UpdateLocalization.text(ru: "Экран", en: "Display")
-        case .devices:
-            UpdateLocalization.text(ru: "Устройства", en: "Devices")
-        case .folders:
-            UpdateLocalization.text(ru: "Папки", en: "Folders")
-        case .security:
-            UpdateLocalization.text(ru: "Безопасность", en: "Security")
-        case .terminal:
-            UpdateLocalization.text(ru: "Терминал", en: "Terminal")
-        case .automation:
-            UpdateLocalization.text(ru: "Автоматизация", en: "Automation")
-        case .sftp:
-            "SFTP"
-        case .forwarding:
-            UpdateLocalization.text(ru: "Туннели", en: "Forwarding")
-        }
-    }
-
-    private func rdpTabSubtitle(_ tab: ProfileTab) -> String {
-        switch tab {
-        case .general:
-            UpdateLocalization.text(
-                ru: "Адрес и учётная запись",
-                en: "Address and account"
-            )
-        case .authentication:
-            UpdateLocalization.text(
-                ru: "Пароль, ключ или Touch ID",
-                en: "Password, key, or Touch ID"
-            )
-        case .route:
-            UpdateLocalization.text(
-                ru: "Jump Host, proxy, OpenSSH",
-                en: "Jump Host, proxy, OpenSSH"
-            )
-        case .display:
-            UpdateLocalization.text(
-                ru: "Мониторы и качество",
-                en: "Displays and quality"
-            )
-        case .devices:
-            UpdateLocalization.text(
-                ru: "Звук, камера, клавиатура",
-                en: "Audio, camera, keyboard"
-            )
-        case .folders:
-            UpdateLocalization.text(
-                ru: "Локальные ресурсы",
-                en: "Local resources"
-            )
-        case .security:
-            UpdateLocalization.text(
-                ru: "Доверие и хранение",
-                en: "Trust and storage"
-            )
-        case .terminal:
-            UpdateLocalization.text(ru: "Командная строка", en: "Command line")
-        case .automation:
-            UpdateLocalization.text(ru: "Startup Snippets и группы", en: "Startup Snippets & groups")
-        case .sftp:
-            UpdateLocalization.text(ru: "Файлы и серверы", en: "Files & servers")
-        case .forwarding:
-            UpdateLocalization.text(ru: "Проброс портов", en: "Port forwarding")
-        }
-    }
-
-    private func rdpTabDescription(_ tab: ProfileTab) -> String {
-        switch tab {
-        case .general:
-            profile.connectionType == .ssh
-                ? UpdateLocalization.text(
-                    ru: "Название, адрес SSH-сервера, пользователь и порт.",
-                    en: "Name, SSH server address, user, and port."
-                )
-                : UpdateLocalization.text(
-                    ru: "Компьютер, пользователь, Keychain и RD Gateway.",
-                    en: "Computer, user, Keychain, and RD Gateway."
-                )
-        case .authentication:
-            UpdateLocalization.text(
-                ru: "Выберите способ входа, пароль, SSH ID или ключ с Touch ID.",
-                en: "Choose a sign-in method, password, SSH ID, or Touch ID key."
-            )
-        case .route:
-            UpdateLocalization.text(
-                ru: "Настройте Jump Host, HTTP/SOCKS proxy и параметры OpenSSH.",
-                en: "Configure Jump Host, HTTP/SOCKS proxy, and OpenSSH options."
-            )
-        case .display:
-            UpdateLocalization.text(
-                ru: "Мониторы Mac, виртуальная схема Windows, масштаб и качество изображения.",
-                en: "Mac displays, Windows virtual layout, scale, and image quality."
-            )
-        case .devices:
-            UpdateLocalization.text(
-                ru: "Звук, буфер обмена, клавиатура, микрофон, камера и принтеры.",
-                en: "Audio, clipboard, keyboard, microphone, camera, and printers."
-            )
-        case .folders:
-            UpdateLocalization.text(
-                ru: "Папки Mac, которые будут доступны внутри Windows.",
-                en: "Mac folders that will be available inside Windows."
-            )
-        case .security:
-            UpdateLocalization.text(
-                ru: "Доверие, Keychain, импорт и экспорт профиля.",
-                en: "Trust, Keychain, profile import, and export."
-            )
-        case .terminal:
-            UpdateLocalization.text(
-                ru: "Полноразмерный Terminal Workspace этого SSH-профиля.",
-                en: "Full-size Terminal Workspace for this SSH profile."
-            )
-        case .automation:
-            UpdateLocalization.text(
-                ru: "Startup Snippet, переменные и наследование настроек SSH-группы.",
-                en: "Startup Snippet, variables, and SSH group inheritance."
-            )
-        case .sftp:
-            UpdateLocalization.text(
-                ru: "SFTP Workspace этого SSH-профиля: соседняя панель может быть этим Mac или другим сервером.",
-                en: "SFTP Workspace for this SSH profile; the opposite pane can be this Mac or another server."
-            )
-        case .forwarding:
-            UpdateLocalization.text(
-                ru: "Локальные, удалённые и динамические SSH-туннели.",
-                en: "Local, remote, and dynamic SSH tunnels."
-            )
-        }
-    }
-
-
-    private var globalTerminalDetail: some View {
-        VStack(spacing: 0) {
-            if !terminalFocusMode {
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("SSH")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("SSH, Mosh, Telnet и Serial · вкладки и разделённые панели")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 28)
-                .padding(.bottom, 16)
-            }
-
-            globalTerminalPanel
-                .padding(.horizontal, terminalFocusMode ? 10 : 28)
-                .padding(.bottom, terminalFocusMode ? 10 : 20)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .groupBoxStyle(ModernGroupBoxStyle())
-        .controlSize(.large)
-    }
-
-    private var localTerminalDetail: some View {
-        VStack(spacing: 0) {
-            if !terminalFocusMode {
-                HStack {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Терминал")
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                        Text("Локальный shell этого Mac · вкладки, история и сниппеты")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                }
-                .padding(.horizontal, 28)
-                .padding(.top, 28)
-                .padding(.bottom, 10)
-            }
-
-            LocalTerminalView(
-                workspace: model.localTerminalWorkspace(),
-                appearance: terminalAppearance,
-                appAppearance: appAppearance,
-                sshProfiles: sortedSSHProfiles,
-                isFocusMode: terminalFocusMode,
-                connect: { tab in
-                    model.connectLocalTerminal(
-                        connection: tab.connection,
-                        tabID: tab.id,
-                        session: tab.session
-                    )
-                },
-                toggleFocusMode: {
-                    setTerminalFocusMode(!terminalFocusMode)
-                },
-                executeSnippet: model.runTerminalSnippet
-            )
-            .padding(.horizontal, terminalFocusMode ? 0 : 10)
-            .padding(.bottom, 10)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .controlSize(.large)
-    }
-
-    private var globalSFTPDetail: some View {
-        VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP"))
-                        .font(.system(size: 30, weight: .bold, design: .rounded))
-                    Text("Несколько SFTP-вкладок · Local ↔ Server · Server ↔ Server")
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 28)
-            .padding(.bottom, 16)
-
-            SFTPWorkspaceView(workspace: model.sftpWorkspace)
-                .padding(.horizontal, 28)
-                .padding(.bottom, 20)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .groupBoxStyle(ModernGroupBoxStyle())
-        .controlSize(.large)
-    }
-
-    private var credentialVaultDetail: some View {
-        CredentialVaultView(presentation: .embedded) { profileID in
-            model.selectProfile(profileID)
-            openPersonalHosts()
-            selectedTab = .general
-        }
-        .environmentObject(model)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var sortedSSHProfiles: [ConnectionProfile] {
-        model.profiles
-            .filter { $0.connectionType == .ssh }
-            .sorted {
-                $0.friendlyName.localizedStandardCompare($1.friendlyName)
-                    == .orderedAscending
-            }
-    }
-
-    private var sortedRemoteTerminalProfiles: [ConnectionProfile] {
-        model.profiles
-            .filter { $0.connectionType != .rdp }
-            .sorted {
-                $0.friendlyName.localizedStandardCompare($1.friendlyName)
-                    == .orderedAscending
-            }
-    }
-
-    @ViewBuilder
-    private var selectedSettingsContent: some View {
-        switch selectedTab {
-        case .general: generalSettings
-        case .authentication: sshAuthenticationSettings
-        case .route: sshRouteSettings
-        case .display: displaySettings
-        case .devices: deviceSettings
-        case .folders: folderSettings
-        case .terminal: EmptyView()
-        case .automation:
-            SSHAutomationSettingsView(
-                profile: profileBinding,
-                sshProfiles: model.profiles.filter { $0.connectionType == .ssh }
-            )
-        case .sftp: EmptyView()
-        case .forwarding: EmptyView()
-        case .security: securitySettings
-        }
-    }
-
-    private var terminalPanel: some View {
-        SSHTerminalView(
-            workspace: model.terminalWorkspace(profileID: profile.id),
-            appearance: terminalAppearance,
-            appAppearance: appAppearance,
-            workspaceTitle: profile.friendlyName,
-            defaultProfileID: profile.id,
-            locksPrimaryConnection: true,
-            sshProfiles: sortedRemoteTerminalProfiles,
-            hasInstallableKey: profile.connectionType == .ssh
-                && model.selectedSSHKey?.publicKeyPath != nil,
-            isFocusMode: terminalFocusMode,
-            connect: { tab, temporaryPassword in
-                model.connectTerminal(
-                    connection: tab.connection,
-                    tabID: tab.id,
-                    session: tab.session,
-                    temporaryPassword: temporaryPassword
-                )
-            },
-            installKey: model.installSelectedSSHPublicKey,
-            toggleFocusMode: {
-                setTerminalFocusMode(!terminalFocusMode)
-            },
-            openSFTP: { tab in
-                model.sftpWorkspace.requestOpen(
-                    connection: tab.connection,
-                    path: nil
-                )
-                selectedTab = .sftp
-            },
-            openSFTPPath: { tab, path in
-                model.sftpWorkspace.requestOpen(
-                    connection: tab.connection,
-                    path: path
-                )
-                selectedTab = .sftp
-            },
-            openSnippetLibrary: {
-                setMainArea(.snippets)
-            },
-            executeSnippet: model.runTerminalSnippet,
-            discoverContext: { tab in
-                try await model.discoverTerminalContext(
-                    connection: tab.connection,
-                    tabID: tab.id
-                )
-            }
-        )
-    }
-
-    private var globalTerminalPanel: some View {
-        let profiles = sortedRemoteTerminalProfiles
-        return SSHTerminalView(
-            workspace: model.globalTerminalWorkspace(),
-            appearance: terminalAppearance,
-            appAppearance: appAppearance,
-            workspaceTitle: "SSH",
-            defaultProfileID: profiles.first?.id,
-            locksPrimaryConnection: false,
-            sshProfiles: profiles,
-            hasInstallableKey: false,
-            isFocusMode: terminalFocusMode,
-            connect: { tab, temporaryPassword in
-                model.connectTerminal(
-                    connection: tab.connection,
-                    tabID: tab.id,
-                    session: tab.session,
-                    temporaryPassword: temporaryPassword
-                )
-            },
-            installKey: {},
-            toggleFocusMode: {
-                setTerminalFocusMode(!terminalFocusMode)
-            },
-            openSFTP: { tab in
-                model.sftpWorkspace.requestOpen(
-                    connection: tab.connection,
-                    path: nil
-                )
-                setMainArea(.sftp)
-            },
-            openSFTPPath: { tab, path in
-                model.sftpWorkspace.requestOpen(
-                    connection: tab.connection,
-                    path: path
-                )
-                setMainArea(.sftp)
-            },
-            openSnippetLibrary: {
-                setMainArea(.snippets)
-            },
-            executeSnippet: model.runTerminalSnippet,
-            discoverContext: { tab in
-                try await model.discoverTerminalContext(
-                    connection: tab.connection,
-                    tabID: tab.id
-                )
-            }
-        )
-    }
-
-
-    private func profileTabStorageKey(profileID: UUID) -> String {
-        "SelectiveRemote.profile.lastTab.v1.\(profileID.uuidString)"
-    }
-
-    private func restoredProfileTab(for profileID: UUID) -> ProfileTab {
-        if let cached = profileTabs[profileID] {
-            return cached
-        }
-        guard let rawValue = UserDefaults.standard.string(
-            forKey: profileTabStorageKey(profileID: profileID)
-        ), let stored = ProfileTab(rawValue: rawValue) else {
-            return .general
+                    subtitle: profile.host.isEmpty ? "—"…5018 tokens truncated…   return .general
         }
         return stored
     }
@@ -3122,6 +2638,9 @@ struct ContentView: View {
     private func setTerminalFocusMode(_ enabled: Bool) {
         terminalFocusMode = enabled
         columnVisibility = enabled ? .detailOnly : .all
+        if enabled, mainArea == .hosts, hostScope == .personal {
+            personalHostNavigatorVisible = false
+        }
     }
 
     private var generalSettings: some View {
@@ -4834,7 +4353,9 @@ private struct ProfileRow: View {
                 }
             }
         }
-        .padding(.vertical, 5)
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
     }
 
