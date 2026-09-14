@@ -1,0 +1,77 @@
+name: Telegram Release Announcement
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to preview or announce
+        required: true
+        type: string
+      publish:
+        description: Send to the Telegram channel instead of previewing only
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-release-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  announce:
+    name: Build and send release announcement
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout trusted formatter
+        uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Resolve published GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$RUNNER_TEMP/release.json"
+          jq -e '.draft == false and .published_at != null' "$RUNNER_TEMP/release.json" >/dev/null
+
+      - name: Build Telegram message
+        shell: bash
+        env:
+          TELEGRAM_DONATION_URL: ${{ vars.TELEGRAM_DONATION_URL }}
+        run: |
+          set -euo pipefail
+          node scripts/telegram_release_message.mjs             "$RUNNER_TEMP/release.json" > "$RUNNER_TEMP/telegram-message.txt"
+          test -s "$RUNNER_TEMP/telegram-message.txt"
+          {
+            echo "## Telegram announcement preview"
+            echo
+            echo '~~~text'
+            cat "$RUNNER_TEMP/telegram-message.txt"
+            echo
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Send announcement to Telegram
+        if: github.event_name == 'release' || inputs.publish == true
+        shell: bash
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHANNEL_ID: ${{ secrets.TELEGRAM_CHANNEL_ID }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$TELEGRAM_BOT_TOKEN" || -z "$TELEGRAM_CHANNEL_ID" ]]; then
+            echo "TELEGRAM_BOT_TOKEN and TELEGRAM_CHANNEL_ID must be configured." >&2
+            exit 1
+          fi
+          response="$RUNNER_TEMP/telegram-response.json"
+          curl             --fail-with-body             --silent             --show-error             --retry 3             --request POST             "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage"             --data-urlencode "chat_id=${TELEGRAM_CHANNEL_ID}"             --data-urlencode "text@$RUNNER_TEMP/telegram-message.txt"             --data-urlencode "disable_web_page_preview=false"             > "$response"
+          jq -e '.ok == true' "$response" >/dev/null
