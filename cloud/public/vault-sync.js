@@ -885,7 +885,18 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         body: JSON.stringify(body),
       });
       const result = await responseJSON(response, "team_invitation_failed");
-      if (!response.ok || !result.invitation || "token" in result.invitation) {
+      if (!response.ok) {
+        const code = [
+          "team_vault_rotation_required",
+          "team_vault_key_unavailable",
+          "team_member_exists",
+          "team_access_denied",
+          "invalid_username",
+          "invalid_team_role",
+        ].includes(result.error) ? result.error : "team_invitation_failed";
+        throw new Error(code);
+      }
+      if (!result.invitation || "token" in result.invitation) {
         throw new Error("team_invitation_failed");
       }
       const invitation = normalizedTeamInvitation(result.invitation);

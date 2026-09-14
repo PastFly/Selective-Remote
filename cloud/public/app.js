@@ -781,13 +781,14 @@ export async function maintainAccessibleTeamVaultWrappers({
   controllerFactory = createTeamVaultController,
   synchronize = synchronizeTeamVault,
   provision = provisionTeamVaultWrappers,
+  rotate = rotateTeamVault,
 } = {}) {
   if (!client || !identity || !team?.id || !team?.role || !Array.isArray(vaults)) {
     throw new Error("invalid_team_vault_maintenance");
   }
-  const outcome = { attempted: 0, synchronized: 0, granted: 0, unavailable: 0, failed: 0 };
+  const outcome = { attempted: 0, synchronized: 0, rotated: 0, granted: 0, unavailable: 0, failed: 0 };
   for (const vault of vaults.slice(0, 256)) {
-    if (!vault?.id || vault.rotationRequired) continue;
+    if (!vault?.id) continue;
     outcome.attempted += 1;
     const scope = { type: "team", teamID: team.id, vaultID: vault.id };
     const maintenanceController = controllerFactory({
@@ -796,6 +797,16 @@ export async function maintainAccessibleTeamVaultWrappers({
       scope,
     });
     try {
+      if (vault.rotationRequired) {
+        if (!["owner", "admin"].includes(team.role)) {
+          outcome.unavailable += 1;
+          continue;
+        }
+        const rotation = await rotate({ client, controller: maintenanceController, role: team.role });
+        if (rotation.status === "rotated") outcome.rotated += 1;
+        else outcome.failed += 1;
+        continue;
+      }
       const synchronization = await synchronize({
         client,
         controller: maintenanceController,
@@ -875,6 +886,15 @@ export async function preprovisionTeamInvitationWrappers({
     invitationID: invitation.id,
     wrappers,
   });
+}
+
+function teamRoleLabel(role) {
+  return {
+    owner: "Владелец",
+    admin: "Администратор",
+    editor: "Редактор",
+    viewer: "Просмотр",
+  }[role] ?? String(role ?? "");
 }
 
 export function initializeTeamWorkspace({
@@ -1413,14 +1433,14 @@ export function initializeTeamWorkspace({
       detail.textContent = `@${member.username} · epoch ${member.epoch}`;
       identityBlock.append(name, detail);
       roleBadge.className = "team-member-role";
-      roleBadge.textContent = member.role;
+      roleBadge.textContent = teamRoleLabel(member.role);
       const editableByActor = selectedTeam.role === "owner"
         || (selectedTeam.role === "admin" && ["editor", "viewer"].includes(member.role));
       const self = member.id === selectedTeam.membershipID;
       for (const value of ["owner", "admin", "editor", "viewer"]) {
         const option = documentValue.createElement("option");
         option.value = value;
-        option.textContent = value;
+        option.textContent = teamRoleLabel(value);
         option.selected = member.role === value;
         option.disabled = selectedTeam.role !== "owner" && !["editor", "viewer"].includes(value);
         role.append(option);
@@ -1501,7 +1521,7 @@ export function initializeTeamWorkspace({
       revoke.addEventListener("click", async () => {
         if (!await requestConfirmation({
           title: "Отозвать доступ участника?",
-          message: `@${member.username} потеряет доступ, а Shared Vaults будут заморожены до ротации ключей.`,
+          message: `@${member.username} потеряет доступ. Ключи командных папок будут автоматически обновлены для оставшихся участников.`,
           confirmLabel: "Отозвать доступ",
           danger: true,
         })) return;
@@ -1510,8 +1530,16 @@ export function initializeTeamWorkspace({
           const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
           ownershipMembers = [];
           await loadSelectedTeam();
-          lockCurrentVault();
-          setText(message, `Доступ отозван. Vaults для обязательной ротации: ${result.rotationRequiredVaults}.`);
+          setText(message, result.rotationRequiredVaults > 0
+            ? `Доступ отозван. Автоматически обновляем ключи папок: ${result.rotationRequiredVaults}.`
+            : "Доступ отозван.");
+          const maintenance = await maintainSelectedTeamVaults();
+          vaults = await client.listSharedVaults(selectedTeam.id);
+          populateVaults();
+          const pendingRotations = vaults.filter((vault) => vault.rotationRequired).length;
+          setText(message, pendingRotations === 0
+            ? `Доступ отозван. Ключи обновлены автоматически: ${maintenance?.rotated ?? result.rotationRequiredVaults}.`
+            : `Доступ отозван. Обновление ключей продолжится автоматически; осталось папок: ${pendingRotations}.`);
         } catch {
           setText(message, "Доступ не отозван: проверьте полномочия и правило последнего Owner.");
           revoke.disabled = !editableByActor || self;
@@ -1534,7 +1562,7 @@ export function initializeTeamWorkspace({
     for (const member of values.filter((value) => value.id !== selectedTeam.membershipID)) {
       const option = documentValue.createElement("option");
       option.value = member.id;
-      option.textContent = `${member.displayName || `@${member.username}`} · ${member.role}`;
+      option.textContent = `${member.displayName || `@${member.username}`} · ${teamRoleLabel(member.role)}`;
       transferOwnershipMember.append(option);
     }
     transferOwnershipForm.querySelector("button").disabled = transferOwnershipMember.options.length === 0;
@@ -1585,7 +1613,7 @@ export function initializeTeamWorkspace({
       const detail = documentValue.createElement("small");
       const accept = documentValue.createElement("button");
       title.textContent = invitation.teamName || "Team";
-      detail.textContent = `Роль: ${invitation.role} · до ${invitation.expiresAt}`;
+      detail.textContent = `Роль: ${teamRoleLabel(invitation.role)} · до ${invitation.expiresAt}`;
       accept.type = "button";
       accept.textContent = "Принять";
       accept.addEventListener("click", async () => {
@@ -1619,7 +1647,7 @@ export function initializeTeamWorkspace({
       const detail = documentValue.createElement("small");
       const cancel = documentValue.createElement("button");
       title.textContent = invitationTarget(invitation);
-      detail.textContent = `Роль: ${invitation.role} · до ${invitation.expiresAt}`;
+      detail.textContent = `Роль: ${teamRoleLabel(invitation.role)} · до ${invitation.expiresAt}`;
       cancel.type = "button";
       cancel.className = "danger";
       cancel.textContent = "Отозвать";
@@ -1700,11 +1728,14 @@ export function initializeTeamWorkspace({
   }
 
   async function maintainSelectedTeamVaults() {
-    if (backgroundMaintenanceOperation || !identity || !selectedTeam || vaults.length === 0) {
+    if (backgroundMaintenanceOperation) return backgroundMaintenanceOperation;
+    if (!identity || !selectedTeam || vaults.length === 0) {
       return null;
     }
     const activeTeam = selectedTeam;
-    const availableVaults = vaults.filter((vault) => vault.id !== selectedVault?.id);
+    const availableVaults = vaults.filter((vault) => (
+      vault.id !== selectedVault?.id || vault.rotationRequired
+    ));
     if (availableVaults.length === 0) return null;
     const pending = maintainAccessibleTeamVaultWrappers({
       client,
@@ -1713,11 +1744,24 @@ export function initializeTeamWorkspace({
       vaults: availableVaults,
     });
     backgroundMaintenanceOperation = pending;
+    let outcome;
     try {
-      return await pending;
+      outcome = await pending;
     } finally {
       if (backgroundMaintenanceOperation === pending) backgroundMaintenanceOperation = null;
     }
+    if ((outcome?.rotated ?? 0) > 0 && selectedTeam?.id === activeTeam.id) {
+      const refreshedVaults = await client.listSharedVaults(activeTeam.id);
+      if (selectedTeam?.id === activeTeam.id) {
+        vaults = refreshedVaults;
+        if (selectedVault) {
+          selectedVault = vaults.find((vault) => vault.id === selectedVault.id) ?? null;
+        }
+        populateVaults();
+        if (selectedVault) vaultSelect.value = selectedVault.id;
+      }
+    }
+    return outcome;
   }
 
   async function synchronizeAndProvision(
@@ -1931,7 +1975,7 @@ export function initializeTeamWorkspace({
       return;
     }
     selectedPanel.hidden = false;
-    teamRole.textContent = `${selectedTeam.name} · ${selectedTeam.role}`;
+    teamRole.textContent = `${selectedTeam.name} · ${teamRoleLabel(selectedTeam.role)}`;
     inviteForm.hidden = !canManage();
     const adminInviteOption = [...inviteForm.elements.role.options]
       .find((option) => option.value === "admin");
@@ -1989,7 +2033,7 @@ export function initializeTeamWorkspace({
     for (const team of teams) {
       const option = documentValue.createElement("option");
       option.value = team.id;
-      option.textContent = `${team.name} · ${team.role}`;
+      option.textContent = `${team.name} · ${teamRoleLabel(team.role)}`;
       teamSelect.append(option);
     }
     if (preferredID && teams.some((team) => team.id === preferredID)) teamSelect.value = preferredID;
@@ -2087,12 +2131,25 @@ export function initializeTeamWorkspace({
     const button = inviteForm.querySelector("button");
     button.disabled = true;
     try {
-      const invitation = await client.inviteTeamMember({
-        teamID: selectedTeam.id,
-        username: inviteForm.elements.username.value,
-        type: "username",
-        role: inviteForm.elements.role.value,
-      });
+      let invitation;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          invitation = await client.inviteTeamMember({
+            teamID: selectedTeam.id,
+            username: inviteForm.elements.username.value,
+            type: "username",
+            role: inviteForm.elements.role.value,
+          });
+          break;
+        } catch (error) {
+          if (attempt > 0 || String(error?.message ?? "") !== "team_vault_rotation_required") throw error;
+          setText(message, "Автоматически обновляем ключи командных папок перед приглашением…");
+          await maintainSelectedTeamVaults();
+          vaults = await client.listSharedVaults(selectedTeam.id);
+          populateVaults();
+        }
+      }
+      if (!invitation) throw new Error("team_invitation_failed");
       if (invitation.preprovisioning) {
         try {
           const prepared = await exclusiveVaultOperation(() => preprovisionTeamInvitationWrappers({
@@ -2119,13 +2176,13 @@ export function initializeTeamWorkspace({
         : "Приглашение по @username создано на 48 часов.");
     } catch (error) {
       const code = String(error?.message ?? "");
-      setText(message, [
-        "team_invitation_wrapper_preprovision_failed",
-        "team_vault_key_unavailable",
-        "team_vault_rotation_required",
-      ].includes(code)
-        ? "Приглашение отменено: не удалось заранее подготовить доступ ко всем Team Vault. Синхронизируйте или завершите ротацию и повторите."
-        : "Приглашение не создано. Проверьте @username, роль и полномочия.");
+      setText(message, code === "team_vault_rotation_required"
+        ? "Ключи командных папок ещё обновляются. Приглашение будет доступно автоматически после завершения; повторите через несколько секунд."
+        : ["team_invitation_wrapper_preprovision_failed", "team_vault_key_unavailable"].includes(code)
+          ? "Приглашение отменено: не удалось заранее подготовить доступ ко всем папкам команды. Синхронизируйте их и повторите."
+          : code === "team_member_exists"
+            ? "Этот пользователь уже состоит в команде."
+            : "Приглашение не создано. Проверьте @username, роль и полномочия.");
     } finally {
       button.disabled = false;
     }

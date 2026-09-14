@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=145">
+  <link rel="stylesheet" href="/styles.css?v=146">
 </head>
 <body>
   <main class="shell">
@@ -501,10 +501,10 @@
                   <label for="team-member-role-filter"><span>Роль</span>
                     <select id="team-member-role-filter">
                       <option value="">Все роли</option>
-                      <option value="owner">Owner</option>
-                      <option value="admin">Admin</option>
-                      <option value="editor">Editor</option>
-                      <option value="viewer">Viewer</option>
+                      <option value="owner">Владелец</option>
+                      <option value="admin">Администратор</option>
+                      <option value="editor">Редактор</option>
+                      <option value="viewer">Просмотр</option>
                     </select>
                   </label>
                 </div>
@@ -513,27 +513,39 @@
               </section>
               <aside class="team-member-invitations" aria-labelledby="team-invitations-title">
                 <form id="team-invite-form">
-                  <h4 id="team-invitations-title">Пригласить на 48 часов</h4>
-                  <label for="team-invite-username">Публичный @username</label>
-                  <input id="team-invite-username" name="username" minlength="3" maxlength="32" autocomplete="off" placeholder="username" required>
-                  <label for="team-invite-role">Роль</label>
-                  <select id="team-invite-role" name="role">
-                    <option value="viewer">Viewer</option>
-                    <option value="editor">Editor</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                  <button type="submit">Пригласить по @username</button>
-                  <label for="team-invite-email">Email</label>
-                  <input id="team-invite-email" name="email" type="email" maxlength="320" autocomplete="off" placeholder="user@example.com">
-                  <button type="button" class="secondary" id="team-invite-email-submit">Отправить приглашение по email</button>
-                  <button type="button" class="secondary" id="team-invite-link-create">Создать одноразовую ссылку</button>
+                  <div class="team-invite-intro">
+                    <h4 id="team-invitations-title">Добавить участника</h4>
+                    <p>Приглашение можно принять в течение 48 часов. Затем оно автоматически истечёт.</p>
+                  </div>
+                  <div class="team-invite-method team-invite-method-primary">
+                    <h5>По @username</h5>
+                    <label for="team-invite-username">Публичный @username</label>
+                    <input id="team-invite-username" name="username" minlength="3" maxlength="32" autocomplete="off" placeholder="username" required>
+                    <label for="team-invite-role">Роль в команде</label>
+                    <select id="team-invite-role" name="role">
+                      <option value="viewer">Просмотр</option>
+                      <option value="editor">Редактор</option>
+                      <option value="admin">Администратор</option>
+                    </select>
+                    <button type="submit">Пригласить по @username</button>
+                  </div>
+                  <div class="team-invite-method">
+                    <h5>Другие способы</h5>
+                    <label for="team-invite-email">Email</label>
+                    <input id="team-invite-email" name="email" type="email" maxlength="320" autocomplete="off" placeholder="user@example.com">
+                    <button type="button" class="secondary" id="team-invite-email-submit">Отправить по email</button>
+                    <div class="team-invite-link-action">
+                      <button type="button" class="secondary" id="team-invite-link-create">Создать одноразовую ссылку</button>
+                      <small>Подойдёт, если вы хотите передать ссылку самостоятельно.</small>
+                    </div>
+                  </div>
                   <div id="team-invite-link-result" hidden>
                     <label for="team-invite-link-value">Одноразовая ссылка</label>
                     <input id="team-invite-link-value" type="text" readonly>
                     <button type="button" class="secondary" id="team-invite-link-copy">Скопировать ссылку</button>
                   </div>
                 </form>
-                <section aria-labelledby="team-active-invitations-title">
+                <section class="team-active-invitations-panel" aria-labelledby="team-active-invitations-title">
                   <h4 id="team-active-invitations-title">Активные приглашения</h4>
                   <div class="team-invitations" id="team-active-invitations"></div>
                 </section>
@@ -701,6 +713,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=145"></script>
+  <script type="module" src="/app.js?v=146"></script>
 </body>
 </html>

@@ -206,7 +206,7 @@ test("Team Vault routine automation exposes controls only for recoverable blocke
   assert.equal(teamVaultRecoveryMode({ errorCode: "team_vault_rotation_required" }), "none");
 });
 
-test("trusted browser maintains wrappers for accessible Team Vaults outside the active view", async () => {
+test("trusted browser automatically rotates and maintains accessible Team Vaults outside the active view", async () => {
   const scopes = [];
   const locked = [];
   const result = await maintainAccessibleTeamVaultWrappers({
@@ -235,17 +235,22 @@ test("trusted browser maintains wrappers for accessible Team Vaults outside the 
       assert.equal(controller.scope.vaultID, "available");
       return { granted: 2 };
     },
+    async rotate({ controller }) {
+      assert.equal(controller.scope.vaultID, "rotating");
+      return { status: "rotated", revision: 3, keyGeneration: 2 };
+    },
   });
 
   assert.deepEqual(result, {
-    attempted: 2,
+    attempted: 3,
     synchronized: 1,
+    rotated: 1,
     granted: 2,
     unavailable: 1,
     failed: 0,
   });
-  assert.deepEqual(scopes.map(({ vaultID }) => vaultID), ["available", "unavailable"]);
-  assert.deepEqual(locked, ["available", "unavailable"]);
+  assert.deepEqual(scopes.map(({ vaultID }) => vaultID), ["available", "unavailable", "rotating"]);
+  assert.deepEqual(locked, ["available", "unavailable", "rotating"]);
 });
 
 test("username invitation preprovisioning wraps every snapshotted Vault and device locally", async () => {
@@ -351,8 +356,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=145/u);
-  assert.match(html, /\/app\.js\?v=145/u);
+  assert.match(html, /\/styles\.css\?v=146/u);
+  assert.match(html, /\/app\.js\?v=146/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -461,6 +466,13 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /@keyframes reveal-up/u);
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:36px minmax\(0,1fr\) auto auto/u);
+  assert.match(styles, /\.team-member-directory,\.team-member-invitations \{ min-width:0; \}/u);
+  assert.match(styles, /\.team-member-toolbar \{[^}]*grid-template-columns:minmax\(0,1fr\) minmax\(128px,168px\)/u);
+  assert.match(styles, /\.team-active-invitations-panel \{ margin-top:28px; padding-top:22px/u);
+  assert.match(styles, /@keyframes team-panel-enter/u);
+  assert.match(html, /Добавить участника/u);
+  assert.match(html, /Приглашение можно принять в течение 48 часов/u);
+  assert.doesNotMatch(html, /Пригласить на 48 часов/u);
   assert.match(styles, /\.team-member-actions/u);
   assert.match(styles, /\.team-policy-card/u);
   assert.match(styles, /\.setting-switch/u);
@@ -558,6 +570,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /synchronizeTeamVault/u);
   assert.match(application, /provisionTeamVaultWrappers/u);
   assert.match(application, /maintainAccessibleTeamVaultWrappers/u);
+  assert.match(application, /rotationRequired[\s\S]*rotate\(\{ client, controller: maintenanceController, role: team\.role \}\)/u);
+  assert.match(application, /Автоматически обновляем ключи командных папок перед приглашением/u);
   assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
