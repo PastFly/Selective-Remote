@@ -1691,7 +1691,7 @@ export function initializeTeamWorkspace({
     for (const vault of vaults) {
       const option = documentValue.createElement("option");
       option.value = vault.id;
-      option.textContent = `${vault.name}${vault.rotationRequired ? " · требуется ротация" : ""}`;
+      option.textContent = `${vault.name}${vault.rotationRequired ? " · обновляем ключи" : ""}`;
       vaultSelect.append(option);
     }
     vaultOpen.disabled = vaults.length === 0;
@@ -1857,10 +1857,10 @@ export function initializeTeamWorkspace({
           vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
           populateVaults();
           vaultSelect.value = selectedVault.id;
-          rotateButton.hidden = !canManage();
-          rotateButton.disabled = rotateButton.hidden;
+          rotateButton.hidden = true;
+          rotateButton.disabled = true;
           setRecoveryControls("none");
-          setText(workspaceStatus, "Фоновая запись заморожена до безопасной ротации ключа.");
+          setText(workspaceStatus, "Автоматически обновляем ключ и доступы оставшихся участников…");
         } else if (code === "team_vault_key_unavailable") {
           setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
           setText(workspaceStatus, "Ожидаем, пока устройство с текущим Team Vault key автоматически выдаст wrapper этому браузеру.");
@@ -1932,8 +1932,8 @@ export function initializeTeamWorkspace({
       scope,
     });
     workspace.hidden = activeView !== "hosts";
-    rotateButton.hidden = !vault.rotationRequired || !canManage();
-    rotateButton.disabled = !vault.rotationRequired || !canManage();
+    rotateButton.hidden = true;
+    rotateButton.disabled = true;
     setRecoveryControls("none");
     workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
     setText(workspaceStatus, "Загружаем зашифрованную Team-ревизию…");
@@ -1943,16 +1943,17 @@ export function initializeTeamWorkspace({
     } catch (error) {
       const code = String(error?.message ?? "");
       setWorkspaceControls(true);
-      rotateButton.hidden = code !== "team_vault_rotation_required" || !canManage();
-      rotateButton.disabled = rotateButton.hidden;
+      rotateButton.hidden = true;
+      rotateButton.disabled = true;
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
-        ? "Запись заморожена: после отзыва участника или устройства требуется полная ротация ключа."
+        ? "Запись временно приостановлена. Ключ и доступы оставшихся участников обновляются автоматически…"
         : code === "team_vault_key_unavailable"
           ? "Для этого устройства пока нет wrapper ключа. Ожидаем автоматическую выдачу от любого активного участника с текущим ключом."
           : teamVaultSynchronizationErrorMessage(code));
     } finally {
       startBackgroundSync();
+      if (selectedVault?.rotationRequired) void runBackgroundTeamVaultSync();
     }
   }
 
@@ -2529,7 +2530,7 @@ export function initializeTeamWorkspace({
       const code = String(error?.message ?? "");
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
-        ? "Синхронизация заморожена до безопасной ротации ключа."
+        ? "Синхронизация временно приостановлена: ключ обновляется автоматически."
         : code === "team_vault_key_unavailable"
           ? "Wrapper ещё недоступен. Любой активный участник с текущим ключом выдаст его автоматически."
           : teamVaultSynchronizationErrorMessage(code));
