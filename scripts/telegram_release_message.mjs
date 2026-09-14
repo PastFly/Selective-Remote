@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 
 const TELEGRAM_MESSAGE_LIMIT = 4096;
 const DEFAULT_SAFE_LIMIT = 3900;
+export const DEFAULT_SUPPORT_URL = "https://github.com/PastFly/Selective-Remote/blob/main/SUPPORT.md";
 
 function collapseBlankLines(value) {
   return value.replace(/\n{3,}/gu, "\n\n").trim();
@@ -64,7 +65,7 @@ export function compactReleaseBody(
 
 export function buildTelegramReleaseMessage(
   release,
-  { donationURL = "", maximumLength = DEFAULT_SAFE_LIMIT } = {},
+  { donationURL = DEFAULT_SUPPORT_URL, maximumLength = DEFAULT_SAFE_LIMIT } = {},
 ) {
   if (!release || typeof release !== "object") {
     throw new TypeError("release must be an object");
@@ -123,7 +124,7 @@ async function main() {
   }
   const release = JSON.parse(await readFile(releasePath, "utf8"));
   process.stdout.write(buildTelegramReleaseMessage(release, {
-    donationURL: process.env.TELEGRAM_DONATION_URL ?? "",
+    donationURL: process.env.TELEGRAM_DONATION_URL?.trim() || DEFAULT_SUPPORT_URL,
   }));
 }
 
