@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   buildTelegramReleaseMessage,
   compactReleaseBody,
+  DEFAULT_SUPPORT_URL,
   releaseBodyToPlainText,
 } from "../../scripts/telegram_release_message.mjs";
 
@@ -64,7 +65,18 @@ test("builds a stable release announcement with download and donation links", ()
   assert.ok(Array.from(message).length <= 3900);
 });
 
+test("includes the canonical support page when no donation override is provided", () => {
+  const message = buildTelegramReleaseMessage({
+    tag_name: "v0.32.0",
+    name: "Selective Remote 0.32.0",
+    body: "- Улучшена синхронизация",
+    html_url: "https://example.invalid/release",
+    prerelease: false,
+  });
 
+  assert.match(message, /❤️ Поддержать разработку/u);
+  assert.ok(message.includes(DEFAULT_SUPPORT_URL));
+});
 
 test("removes a release-owned summary heading after the fixed introduction", () => {
   const message = buildTelegramReleaseMessage({
