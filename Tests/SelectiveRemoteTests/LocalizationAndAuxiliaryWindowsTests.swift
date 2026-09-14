@@ -40,6 +40,8 @@ func aboutWindowHasProductInformation() throws {
     #expect(about.contains("macOS Keychain"))
     #expect(about.contains("ProjectSupport.githubURL"))
     #expect(about.contains("ProjectSupport.websiteURL"))
+    #expect(about.contains("ProjectSupport.telegramURL"))
+    #expect(about.contains("aboutTelegramChannelButton"))
     #expect(about.contains("MIT"))
 }
 
