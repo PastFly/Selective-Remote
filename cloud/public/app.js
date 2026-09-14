@@ -299,13 +299,42 @@ function setText(element, value) {
   if (element) element.textContent = value;
 }
 
+export function createConfirmationRequester({ documentValue = document, confirmValue = null } = {}) {
+  return async (options) => {
+    const configuration = typeof options === "string" ? { message: options } : (options ?? {});
+    const message = String(configuration.message ?? "Подтвердите действие.");
+    const detail = String(configuration.detail ?? "");
+    if (typeof confirmValue === "function") {
+      return Boolean(await confirmValue(detail ? `${message}\n\n${detail}` : message));
+    }
+    const dialog = documentValue.querySelector("#app-confirmation-dialog");
+    if (!dialog?.showModal) return Boolean(globalThis.confirm(detail ? `${message}\n\n${detail}` : message));
+    if (dialog.open) dialog.close("cancel");
+    setText(dialog.querySelector("#app-confirmation-eyebrow"), configuration.eyebrow ?? "ПРОВЕРКА ДЕЙСТВИЯ");
+    setText(dialog.querySelector("#app-confirmation-title"), configuration.title ?? "Подтвердите действие");
+    setText(dialog.querySelector("#app-confirmation-message"), message);
+    const detailElement = dialog.querySelector("#app-confirmation-detail");
+    setText(detailElement, detail);
+    detailElement.hidden = !detail;
+    const submit = dialog.querySelector("#app-confirmation-submit");
+    setText(submit, configuration.confirmLabel ?? "Подтвердить");
+    submit.classList.toggle("danger", configuration.danger === true);
+    dialog.returnValue = "cancel";
+    dialog.showModal();
+    return new Promise((resolve) => {
+      dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true });
+    });
+  };
+}
+
 export async function initializeLocalVault({
   documentValue = document,
   repository = createIndexedDBVaultRepository(),
-  confirmValue = (message) => globalThis.confirm(message),
+  confirmValue = null,
 } = {}) {
   const section = documentValue.querySelector("#local-vault");
   if (!section) return null;
+  const requestConfirmation = createConfirmationRequester({ documentValue, confirmValue });
   const waiting = documentValue.querySelector("#local-vault-waiting");
   const workspace = documentValue.querySelector("#local-vault-workspace");
   const actions = documentValue.querySelector("#local-vault-actions");
@@ -559,7 +588,12 @@ export async function initializeLocalVault({
       remove.className = "danger";
       remove.textContent = "Удалить";
       remove.addEventListener("click", async () => {
-        if (!confirmValue(`Удалить «${heading.textContent}»?`)) return;
+        if (!await requestConfirmation({
+          title: "Удалить запись?",
+          message: `«${heading.textContent}» будет удалена из Vault на всех устройствах.`,
+          confirmLabel: "Удалить",
+          danger: true,
+        })) return;
         remove.disabled = true;
         try {
           await controller.delete(record.id);
@@ -741,7 +775,7 @@ export async function initializeLocalVault({
 export function initializeTeamWorkspace({
   documentValue = document,
   client,
-  confirmValue = (message) => globalThis.confirm(message),
+  confirmValue = null,
   initialInvitationToken = null,
   setIntervalValue = globalThis.setInterval,
   clearIntervalValue = globalThis.clearInterval,
@@ -749,6 +783,7 @@ export function initializeTeamWorkspace({
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
+  const requestConfirmation = createConfirmationRequester({ documentValue, confirmValue });
   const sectionTitle = documentValue.querySelector("#team-vault-title");
   const message = documentValue.querySelector("#team-vault-message");
   const devices = documentValue.querySelector("#team-devices");
@@ -774,6 +809,9 @@ export function initializeTeamWorkspace({
   const inviteLinkValue = documentValue.querySelector("#team-invite-link-value");
   const inviteLinkCopy = documentValue.querySelector("#team-invite-link-copy");
   const activeInvitations = documentValue.querySelector("#team-active-invitations");
+  const deviceAdmissionPolicyPanel = documentValue.querySelector("#team-device-admission-policy");
+  const deviceAdmissionToggle = documentValue.querySelector("#team-device-admission-toggle");
+  const deviceAdmissionStatus = documentValue.querySelector("#team-device-admission-status");
   const lifecyclePanel = documentValue.querySelector("#team-lifecycle");
   const renameTeamForm = documentValue.querySelector("#team-rename-form");
   const transferOwnershipForm = documentValue.querySelector("#team-ownership-transfer-form");
@@ -847,6 +885,7 @@ export function initializeTeamWorkspace({
   let memberRequestGeneration = 0;
   let teamInvitations = [];
   let accountInvitations = [];
+  let deviceAdmissionPolicy = null;
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
@@ -877,6 +916,22 @@ export function initializeTeamWorkspace({
 
   function canEdit() {
     return ["owner", "admin", "editor"].includes(selectedTeam?.role);
+  }
+
+  function renderDeviceAdmissionPolicy() {
+    if (!deviceAdmissionToggle) return;
+    const available = Boolean(selectedTeam && deviceAdmissionPolicy);
+    deviceAdmissionToggle.checked = deviceAdmissionPolicy?.automaticDeviceAdmission !== false;
+    deviceAdmissionToggle.disabled = !available || deviceAdmissionPolicy?.editable !== true;
+    setText(deviceAdmissionStatus, !available
+      ? ""
+      : deviceAdmissionPolicy.editable
+        ? deviceAdmissionToggle.checked
+          ? "Автоматический режим активен. Ручная проверка остаётся доступна в меню участника."
+          : "Ручной режим активен. Новые устройства допускает Owner или Admin."
+        : deviceAdmissionToggle.checked
+          ? "Автоматический режим включён владельцем Team."
+          : "Владелец Team выбрал ручной допуск устройств.");
   }
 
   function setRecoveryControls(mode = "none") {
@@ -1171,7 +1226,13 @@ export function initializeTeamWorkspace({
       approve.textContent = "Одобрить ключ";
       approve.disabled = current || Boolean(device.revokedAt) || approved || !device.publicKey;
       approve.addEventListener("click", async () => {
-        if (!confirmValue(`Сравните отпечаток на новом устройстве:\n${fingerprint.textContent}\n\nОдобрить этот ключ?`)) return;
+        if (!await requestConfirmation({
+          eyebrow: "НОВОЕ УСТРОЙСТВО",
+          title: "Одобрить ключ устройства?",
+          message: "Сравните SHA-256 отпечаток с новым устройством. После подтверждения оно сможет получать ключи аккаунта.",
+          detail: fingerprint.textContent,
+          confirmLabel: "Одобрить устройство",
+        })) return;
         approve.disabled = true;
         try {
           await client.approveDeviceKey({
@@ -1191,7 +1252,12 @@ export function initializeTeamWorkspace({
       revoke.textContent = "Отозвать";
       revoke.disabled = current || Boolean(device.revokedAt);
       revoke.addEventListener("click", async () => {
-        if (!confirmValue(`Отозвать устройство «${device.name || device.id}»? Его сессии завершатся, а затронутые Shared Vaults будут заморожены до ротации.`)) return;
+        if (!await requestConfirmation({
+          title: "Отозвать устройство?",
+          message: `«${device.name || device.id}»: сессии завершатся, а затронутые Shared Vaults будут заморожены до ротации.`,
+          confirmLabel: "Отозвать",
+          danger: true,
+        })) return;
         revoke.disabled = true;
         try {
           await client.revokeDevice(device.id);
@@ -1286,12 +1352,13 @@ export function initializeTeamWorkspace({
           let wrappersGranted = 0;
           for (const device of pending) {
             const fingerprint = await teamDevicePublicKeyFingerprint(device.publicKey);
-            const approved = confirmValue(
-              `Устройство участника @${member.username}:\n`
-              + `${device.name || "Без названия"} · ${device.platform || "unknown"}\n`
-              + `SHA-256: ${fingerprint}\n\n`
-              + "Допустить этот ключ только к текущему членству в команде?",
-            );
+            const approved = await requestConfirmation({
+              eyebrow: "РУЧНОЙ РЕЖИМ",
+              title: "Допустить устройство участника?",
+              message: `@${member.username} · ${device.name || "Без названия"} · ${device.platform || "unknown"}\nДоступ будет ограничен текущим членством в этой Team.`,
+              detail: `SHA-256\n${fingerprint}`,
+              confirmLabel: "Допустить устройство",
+            });
             if (!approved) continue;
             await client.admitTeamMembershipDevice({
               teamID: activeTeam.id,
@@ -1326,7 +1393,12 @@ export function initializeTeamWorkspace({
       revoke.textContent = "Отозвать доступ";
       revoke.disabled = !editableByActor || self;
       revoke.addEventListener("click", async () => {
-        if (!confirmValue(`Отозвать доступ для @${member.username}? Все Shared Vaults будут заморожены до ротации ключей.`)) return;
+        if (!await requestConfirmation({
+          title: "Отозвать доступ участника?",
+          message: `@${member.username} потеряет доступ, а Shared Vaults будут заморожены до ротации ключей.`,
+          confirmLabel: "Отозвать доступ",
+          danger: true,
+        })) return;
         revoke.disabled = true;
         try {
           const result = await client.revokeTeamMember({ teamID: selectedTeam.id, membershipID: member.id });
@@ -1446,7 +1518,12 @@ export function initializeTeamWorkspace({
       cancel.className = "danger";
       cancel.textContent = "Отозвать";
       cancel.addEventListener("click", async () => {
-        if (!confirmValue(`Отозвать приглашение «${invitationTarget(invitation)}»?`)) return;
+        if (!await requestConfirmation({
+          title: "Отозвать приглашение?",
+          message: `«${invitationTarget(invitation)}» больше нельзя будет использовать.`,
+          confirmLabel: "Отозвать",
+          danger: true,
+        })) return;
         cancel.disabled = true;
         try {
           await client.cancelTeamInvitation({
@@ -1652,6 +1729,7 @@ export function initializeTeamWorkspace({
     onboarding.hidden = activeView !== "teams";
     membersView.hidden = activeView !== "members";
     vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
+    deviceAdmissionPolicyPanel.hidden = activeView !== "members" || !selectedTeam;
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
     if (activeView === "management" && selectedTeam?.role === "owner") {
       void loadOwnershipMembers().catch(() => {
@@ -1721,6 +1799,9 @@ export function initializeTeamWorkspace({
       teamInvitations = [];
       renderTeamInvitations();
       selectedPanel.hidden = true;
+      deviceAdmissionPolicy = null;
+      renderDeviceAdmissionPolicy();
+      deviceAdmissionPolicyPanel.hidden = true;
       return;
     }
     selectedPanel.hidden = false;
@@ -1741,7 +1822,7 @@ export function initializeTeamWorkspace({
     ownershipMembers = [];
     transferOwnershipMember.replaceChildren();
     transferOwnershipForm.querySelector("button").disabled = true;
-    const [loadedMemberPage, sharedVaults, loadedInvitations] = await Promise.all([
+    const [loadedMemberPage, sharedVaults, loadedInvitations, loadedDeviceAdmissionPolicy] = await Promise.all([
       client.listTeamMembersPage(selectedTeam.id, {
         search: memberSearch.value,
         role: memberRoleFilter.value,
@@ -1749,6 +1830,7 @@ export function initializeTeamWorkspace({
       }),
       client.listSharedVaults(selectedTeam.id),
       canManage() ? client.listTeamInvitations(selectedTeam.id) : Promise.resolve([]),
+      client.getTeamDeviceAdmissionPolicy(selectedTeam.id),
     ]);
     if (selectedTeam?.id !== loadedTeamID) return;
     if (memberGeneration === memberRequestGeneration) {
@@ -1759,6 +1841,9 @@ export function initializeTeamWorkspace({
     }
     vaults = sharedVaults;
     teamInvitations = loadedInvitations;
+    deviceAdmissionPolicy = loadedDeviceAdmissionPolicy;
+    renderDeviceAdmissionPolicy();
+    deviceAdmissionPolicyPanel.hidden = activeView !== "members";
     renderTeamInvitations();
     populateVaults();
     updateTeamMessage();
@@ -1800,6 +1885,51 @@ export function initializeTeamWorkspace({
       setText(message, "Team не создан. Проверьте название и повторите попытку.");
     } finally {
       button.disabled = false;
+    }
+  });
+
+  deviceAdmissionToggle?.addEventListener("change", async () => {
+    if (!selectedTeam || !deviceAdmissionPolicy?.editable) {
+      renderDeviceAdmissionPolicy();
+      return;
+    }
+    const teamID = selectedTeam.id;
+    const enabled = deviceAdmissionToggle.checked;
+    if (enabled) {
+      const accepted = await requestConfirmation({
+        eyebrow: "ПОЛИТИКА TEAM",
+        title: "Включить автоматический допуск?",
+        message: "Новые зарегистрированные устройства активных участников будут допускаться к текущему членству автоматически. Вход участника на новом устройстве считается достаточным сигналом доверия.",
+        detail: "Wrapper создаёт только доверенный клиент с Team Vault key. Сервер не получает и не расшифровывает ключ хранилища.",
+        confirmLabel: "Включить",
+      });
+      if (!accepted) {
+        deviceAdmissionToggle.checked = false;
+        return;
+      }
+    }
+    deviceAdmissionToggle.disabled = true;
+    setText(deviceAdmissionStatus, "Сохраняем политику Team…");
+    try {
+      const result = await client.updateTeamDeviceAdmissionPolicy({
+        teamID,
+        automaticDeviceAdmission: enabled,
+      });
+      if (selectedTeam?.id !== teamID) return;
+      deviceAdmissionPolicy = { ...deviceAdmissionPolicy, automaticDeviceAdmission: enabled };
+      renderDeviceAdmissionPolicy();
+      if (enabled && controller && selectedVault) {
+        const outcome = await synchronizeAndProvision();
+        applySynchronizationOutcome(outcome);
+      }
+      setText(deviceAdmissionStatus, enabled
+        ? `Автоматический режим включён. Уже допущено новых устройств: ${result.admittedDevices}.`
+        : "Автоматический режим выключен. Новые устройства потребуют ручного допуска.");
+    } catch {
+      deviceAdmissionToggle.checked = !enabled;
+      setText(deviceAdmissionStatus, "Политика не изменена. Обновите страницу и повторите попытку.");
+    } finally {
+      deviceAdmissionToggle.disabled = deviceAdmissionPolicy?.editable !== true;
     }
   });
 
@@ -1916,7 +2046,11 @@ export function initializeTeamWorkspace({
     const button = transferOwnershipForm.querySelector("button");
     button.disabled = true;
     try {
-      if (!confirmValue("Передать роль Owner выбранному участнику и продолжить как Admin?")) return;
+      if (!await requestConfirmation({
+        title: "Передать владение Team?",
+        message: "Выбранный участник станет Owner, а ваша роль изменится на Admin.",
+        confirmLabel: "Передать владение",
+      })) return;
       await client.transferTeamOwnership({
         teamID: currentTeamID,
         membershipID: transferOwnershipForm.elements.membershipID.value,
@@ -1942,7 +2076,12 @@ export function initializeTeamWorkspace({
     let remotelyArchived = false;
     button.disabled = true;
     try {
-      if (!confirmValue(`Архивировать Team «${archivedTeam.name}» и немедленно закрыть к ней доступ?`)) return;
+      if (!await requestConfirmation({
+        title: "Архивировать Team?",
+        message: `«${archivedTeam.name}» будет закрыта для всех участников.`,
+        confirmLabel: "Архивировать",
+        danger: true,
+      })) return;
       await client.archiveTeam({
         teamID: archivedTeam.id,
         expectedName: archiveTeamForm.elements.expectedName.value,
@@ -2016,7 +2155,11 @@ export function initializeTeamWorkspace({
   });
   rotateButton.addEventListener("click", async () => {
     if (!controller || !selectedVault || !canManage() || vaultOperation) return;
-    if (!confirmValue("Зашифровать полную текущую Team-ревизию новым ключом и выдать wrappers всем актуальным авторизованным устройствам?")) return;
+    if (!await requestConfirmation({
+      title: "Завершить ротацию ключа?",
+      message: "Полная текущая Team-ревизия будет зашифрована новым ключом, а wrappers получат только актуальные авторизованные устройства.",
+      confirmLabel: "Завершить ротацию",
+    })) return;
     stopBackgroundSync();
     rotateButton.disabled = true;
     lockButton.disabled = true;
@@ -2303,6 +2446,7 @@ export async function initializeCloudAccount({
   const conflictList = documentValue.querySelector("#local-vault-conflicts-list");
   const conflictApply = documentValue.querySelector("#local-vault-conflicts-apply");
   const client = createAuthenticatedVaultClient({ fetchValue });
+  const requestConfirmation = createConfirmationRequester({ documentValue });
   const teamWorkspace = initializeTeamWorkspace({ documentValue, client, initialInvitationToken: initialTeamInvitationToken });
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
   let activeConflicts = null;
@@ -2753,7 +2897,13 @@ export async function initializeCloudAccount({
       setText(deleteAccountMessage, "Email должен точно совпадать с адресом текущего аккаунта.");
       return;
     }
-    if (!globalThis.confirm(`Безвозвратно удалить аккаунт ${currentUser.email}?`)) return;
+    if (!await requestConfirmation({
+      eyebrow: "НЕОБРАТИМОЕ ДЕЙСТВИЕ",
+      title: "Удалить аккаунт?",
+      message: `${currentUser.email} и Personal Vault будут удалены без возможности восстановления.`,
+      confirmLabel: "Удалить аккаунт",
+      danger: true,
+    })) return;
     button.disabled = true;
     try {
       await client.deleteAccount({ email, password: deleteAccountForm.elements.password.value });

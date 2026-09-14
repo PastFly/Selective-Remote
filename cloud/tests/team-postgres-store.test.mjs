@@ -290,6 +290,61 @@ test("Team creation atomically creates its first Owner and audit receipt", async
   assert.equal(f.queries.at(-1).sql, "RELEASE");
 });
 
+test("Team device admission policy is member-readable and Owner-controlled with backfill", async () => {
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("SELECT team.automatic_device_admission")) {
+      return { rows: [{ automatic_device_admission: true, role: "owner" }] };
+    }
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1 }] };
+    }
+    if (sql.includes("UPDATE teams") && sql.includes("automatic_device_admission")) {
+      return { rows: [{ automatic_device_admission: true }] };
+    }
+    if (sql.includes("INSERT INTO team_membership_device_admissions")) {
+      return { rows: [], rowCount: 3 };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.getTeamDeviceAdmissionPolicy(teamID, actorUserID), {
+    automatic_device_admission: true,
+    role: "owner",
+  });
+  assert.deepEqual(await f.store.updateTeamDeviceAdmissionPolicy({
+    actorUserID,
+    teamID,
+    automaticDeviceAdmission: true,
+    idempotencyKey: "request:team-device-policy-on-01",
+  }), { automaticDeviceAdmission: true, admittedDevices: 3 });
+  const backfill = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions"));
+  assert.match(backfill.sql, /membership\.revoked_at IS NULL/u);
+  assert.match(backfill.sql, /device\.public_key_algorithm = 'p256-ecdh-v1'/u);
+  const audit = f.queries.find(({ parameters }) => parameters.includes("team.device_admission_policy_updated"));
+  assert.match(audit.parameters.at(-1), /"admittedDevices":3/u);
+});
+
+test("an Admin cannot change the Team device admission policy", async () => {
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "admin", epoch: 1 }] };
+    }
+    return { rows: [], rowCount: 0 };
+  });
+  await assert.rejects(f.store.updateTeamDeviceAdmissionPolicy({
+    actorUserID,
+    teamID,
+    automaticDeviceAdmission: false,
+    idempotencyKey: "request:team-device-policy-denied-01",
+  }), /team_access_denied/u);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE teams")
+    && sql.includes("automatic_device_admission")), false);
+});
+
 test("a repeated idempotency key replays the committed response without another mutation", async () => {
   const response = { team: { id: teamID, name: "Operations" }, membership: { id: membershipID, role: "owner", epoch: 1 } };
   const f = fixture((sql) => {
@@ -1083,6 +1138,31 @@ test("login cannot revive a revoked device or replace an approved device key", a
   assert.match(upsert.sql, /devices\.public_key = EXCLUDED\.public_key/);
   assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO sessions")), false);
   assert.equal(f.queries.at(-2).sql, "ROLLBACK");
+});
+
+test("login auto-admits a registered P-256 device only through enabled Team policies", async () => {
+  const f = fixture((sql) => {
+    if (sql.includes("INSERT INTO devices")) return { rows: [{ id: deviceID }], rowCount: 1 };
+    return { rows: [], rowCount: 1 };
+  });
+  await f.store.createSession({
+    userID: actorUserID,
+    device: {
+      id: deviceID,
+      name: "Browser",
+      platform: "web",
+      appVersion: "0.32.0",
+      publicKey: JSON.stringify({ kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) }),
+    },
+    sessionHash: "session-hash",
+    expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+  });
+  const admission = f.queries.find(({ sql }) => sql.includes("team.member_device_auto_admitted"));
+  assert.deepEqual(admission.parameters, [actorUserID, deviceID]);
+  assert.match(admission.sql, /team\.automatic_device_admission = true/u);
+  assert.match(admission.sql, /membership\.revoked_at IS NULL/u);
+  assert.match(admission.sql, /ON CONFLICT \(membership_id, membership_epoch, device_id\) DO NOTHING/u);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("INSERT INTO sessions")));
 });
 
 test("only an already-approved account device can approve another public key", async () => {

@@ -438,6 +438,38 @@ export class PostgresStore {
       );
       if (!deviceResult.rows[0]) throw new Error("invalid_device");
       await client.query(
+        `WITH admitted AS (
+           INSERT INTO team_membership_device_admissions
+             (membership_id, membership_epoch, device_id)
+           SELECT membership.id, membership.epoch, device.id
+           FROM team_memberships AS membership
+           JOIN teams AS team
+             ON team.id = membership.team_id AND team.archived_at IS NULL
+            AND team.automatic_device_admission = true
+           JOIN devices AS device
+             ON device.id = $2 AND device.user_id = $1 AND device.revoked_at IS NULL
+            AND device.public_key IS NOT NULL
+            AND device.public_key_algorithm = 'p256-ecdh-v1'
+           WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+           ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING
+           RETURNING membership_id, membership_epoch, device_id
+         )
+         INSERT INTO team_audit_events
+           (team_id, actor_user_id, action, target_user_id, target_membership_id, metadata)
+         SELECT membership.team_id, $1, 'team.member_device_auto_admitted',
+           $1, membership.id,
+           jsonb_build_object(
+             'membershipEpoch', admitted.membership_epoch,
+             'deviceID', admitted.device_id,
+             'source', 'session'
+           )
+         FROM admitted
+         JOIN team_memberships AS membership
+           ON membership.id = admitted.membership_id
+          AND membership.epoch = admitted.membership_epoch`,
+        [userID, device.id],
+      );
+      await client.query(
         "INSERT INTO sessions (user_id, device_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)",
         [userID, device.id, sessionHash, expiresAt],
       );
@@ -693,6 +725,65 @@ export class PostgresStore {
       });
       return { team, membership };
     });
+  }
+
+  async getTeamDeviceAdmissionPolicy(teamID, actorUserID) {
+    const result = await this.pool.query(
+      `SELECT team.automatic_device_admission, actor.role
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL`,
+      [teamID, actorUserID],
+    );
+    if (!result.rows[0]) throw new Error("team_not_found");
+    return result.rows[0];
+  }
+
+  async updateTeamDeviceAdmissionPolicy({
+    actorUserID, teamID, automaticDeviceAdmission, idempotencyKey,
+  }) {
+    return this.withTeamMutation(
+      actorUserID,
+      "team.device.admission.policy.update",
+      idempotencyKey,
+      async (client) => {
+        const actor = await lockTeamActor(client, teamID, actorUserID);
+        if (!actor) throw new Error("team_not_found");
+        requireTeamPermission(actor.role, "manage_device_admission_policy");
+        const updated = await client.query(
+          `UPDATE teams
+           SET automatic_device_admission = $2, updated_at = now()
+           WHERE id = $1 AND archived_at IS NULL
+           RETURNING automatic_device_admission`,
+          [teamID, automaticDeviceAdmission],
+        );
+        if (!updated.rows[0]) throw new Error("team_not_found");
+        let admittedDevices = 0;
+        if (automaticDeviceAdmission) {
+          const admitted = await client.query(
+            `INSERT INTO team_membership_device_admissions
+              (membership_id, membership_epoch, device_id)
+             SELECT membership.id, membership.epoch, device.id
+             FROM team_memberships AS membership
+             JOIN devices AS device
+               ON device.user_id = membership.user_id AND device.revoked_at IS NULL
+              AND device.public_key IS NOT NULL
+              AND device.public_key_algorithm = 'p256-ecdh-v1'
+             WHERE membership.team_id = $1 AND membership.revoked_at IS NULL
+             ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING`,
+            [teamID],
+          );
+          admittedDevices = admitted.rowCount;
+        }
+        await writeTeamAudit(client, {
+          teamID,
+          actorUserID,
+          action: "team.device_admission_policy_updated",
+          metadata: { automaticDeviceAdmission, admittedDevices },
+        });
+        return { automaticDeviceAdmission, admittedDevices };
+      },
+    );
   }
 
   async renameTeam({ actorUserID, teamID, name, idempotencyKey }) {

@@ -196,6 +196,50 @@ test("Team member device admission is membership-scoped and fingerprint-bound", 
   assert.match(admission.options.headers["Idempotency-Key"], /^web:team:device:admit:/u);
 });
 
+test("Team device admission policy transport is explicit, typed and idempotent", async () => {
+  const { identity } = await fixture();
+  const calls = [];
+  const policyPath = `/v1/teams/${teamID}/device-admission-policy`;
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path, options = {}) => {
+      calls.push({ path, options });
+      if (path === "/v1/auth/login") return jsonResponse(200, {
+        token: "t".repeat(43),
+        user: { id: userID, email: "user@example.invalid", username: "user", displayName: "User" },
+        deviceID,
+      });
+      if (path === policyPath && !options.method) {
+        return jsonResponse(200, { automaticDeviceAdmission: true, editable: true });
+      }
+      if (path === policyPath && options.method === "PUT") {
+        return jsonResponse(200, { automaticDeviceAdmission: false, admittedDevices: 0 });
+      }
+      throw new Error(`unexpected_request:${path}`);
+    },
+  });
+  await client.login({
+    email: "user@example.invalid", password: "synthetic-password", deviceID, publicKey: identity.publicKey,
+  });
+
+  assert.deepEqual(await client.getTeamDeviceAdmissionPolicy(teamID), {
+    automaticDeviceAdmission: true,
+    editable: true,
+  });
+  assert.deepEqual(await client.updateTeamDeviceAdmissionPolicy({
+    teamID,
+    automaticDeviceAdmission: false,
+    idempotencyKey: "request:team-device-policy-off-01",
+  }), { automaticDeviceAdmission: false, admittedDevices: 0 });
+  const update = calls.at(-1);
+  assert.equal(update.options.method, "PUT");
+  assert.deepEqual(JSON.parse(update.options.body), { automaticDeviceAdmission: false });
+  assert.equal(update.options.headers["Idempotency-Key"], "request:team-device-policy-off-01");
+  await assert.rejects(
+    client.updateTeamDeviceAdmissionPolicy({ teamID, automaticDeviceAdmission: "false" }),
+    /invalid_team_device_admission_policy/u,
+  );
+});
+
 test("Team writes carry idempotency and distinguish conflict from committed rotation", async () => {
   const { identity, wrapper } = await fixture();
   const calls = [];

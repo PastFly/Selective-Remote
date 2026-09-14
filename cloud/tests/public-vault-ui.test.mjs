@@ -254,8 +254,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=128/u);
-  assert.match(html, /\/app\.js\?v=128/u);
+  assert.match(html, /\/styles\.css\?v=143/u);
+  assert.match(html, /\/app\.js\?v=143/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -336,6 +336,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="account-delete-form"/u);
   assert.match(html, /id="account-username-form"/u);
   assert.match(html, /id="account-password-form"/u);
+  assert.match(html, /id="team-device-admission-policy"/u);
+  assert.match(html, /id="team-device-admission-toggle"[^>]*role="switch"[^>]*checked/u);
+  assert.match(html, /id="app-confirmation-dialog"/u);
   assert.match(html, /autocomplete="current-password"/u);
   assert.match(html, /data-record-filter="host"/u);
   assert.match(html, /data-record-filter="credential"/u);
@@ -362,6 +365,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
   assert.match(styles, /\.team-members article\s*\{[^}]*grid-template-columns:36px minmax\(0,1fr\) auto auto/u);
   assert.match(styles, /\.team-member-actions/u);
+  assert.match(styles, /\.team-policy-card/u);
+  assert.match(styles, /\.setting-switch/u);
+  assert.match(styles, /\.app-confirmation::backdrop/u);
+  assert.match(styles, /:focus-visible/u);
   assert.match(application, /initializePortalNavigation/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
@@ -467,7 +474,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /client\.approveDeviceKey/u);
   assert.match(application, /client\.listTeamMembershipDevices/u);
   assert.match(application, /client\.admitTeamMembershipDevice/u);
-  assert.match(application, /Допустить этот ключ только к текущему членству в команде/u);
+  assert.match(application, /client\.getTeamDeviceAdmissionPolicy/u);
+  assert.match(application, /client\.updateTeamDeviceAdmissionPolicy/u);
+  assert.match(application, /createConfirmationRequester/u);
+  assert.match(application, /Доступ будет ограничен текущим членством в этой Team/u);
   assert.match(application, /client\.revokeDevice/u);
   assert.match(application, /client\.renameTeam/u);
   assert.match(application, /client\.transferTeamOwnership/u);

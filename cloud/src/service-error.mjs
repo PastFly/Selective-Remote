@@ -10,6 +10,7 @@ const operationStatuses = Object.freeze({
   invalid_password: 400,
   invalid_device: 400,
   invalid_device_public_key: 400,
+  invalid_team_device_admission_policy: 400,
   device_public_key_mismatch: 409,
   device_not_found: 404,
   device_approval_required: 403,

@@ -199,6 +199,32 @@ async function route(request, response) {
         201,
       );
     }
+    const teamDeviceAdmissionPolicyMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/device-admission-policy$/i,
+    );
+    if (teamDeviceAdmissionPolicyMatch) {
+      if (!isUUID(teamDeviceAdmissionPolicyMatch[1])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      if (method === "GET") {
+        return handleOperation(
+          response,
+          () => service.getTeamDeviceAdmissionPolicy(session, teamDeviceAdmissionPolicyMatch[1]),
+        );
+      }
+      if (method === "PUT") {
+        return handleOperation(
+          response,
+          async () => service.updateTeamDeviceAdmissionPolicy(
+            session,
+            teamDeviceAdmissionPolicyMatch[1],
+            await readJSON(request, maxTeamBodyBytes),
+            idempotencyKey(request),
+          ),
+        );
+      }
+      return sendError(response, 404, "not_found");
+    }
     const teamMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)$/i);
     if (teamMatch) {
       if (!isUUID(teamMatch[1])) return sendError(response, 404, "team_not_found");
