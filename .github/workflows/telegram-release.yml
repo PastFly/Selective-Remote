@@ -1,8 +1,12 @@
 name: Telegram Release Announcement
 
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag:
+        description: Published GitHub Release tag to announce
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
@@ -19,7 +23,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: telegram-release-${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+  group: telegram-release-${{ inputs.tag }}
   cancel-in-progress: false
 
 jobs:
@@ -37,7 +41,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
+          TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" > "$RUNNER_TEMP/release.json"
@@ -61,7 +65,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Send announcement to Telegram
-        if: github.event_name == 'release' || inputs.publish == true
+        if: github.event_name == 'workflow_call' || inputs.publish == true
         shell: bash
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
