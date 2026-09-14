@@ -641,3 +641,19 @@ test("macOS Hosts workspace falls back to Personal and persists layout controls"
   assert.match(teamHosts, /handleRequestedAction/);
   assert.doesNotMatch(teamHosts, /\.searchable\([\s\S]{0,160}text: \$searchText/);
 });
+
+
+test("macOS Team Host second column exposes actions and visible drag-and-drop targets", async () => {
+  const hosts = await readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8");
+  assert.match(hosts, /\.contextMenu \{ teamHostContextMenu\(host\) \}/u);
+  assert.match(hosts, /Открыть карточку/u);
+  assert.match(hosts, /Подключить RDP/u);
+  assert.match(hosts, /Открыть терминал/u);
+  assert.match(hosts, /Открыть SFTP/u);
+  assert.match(hosts, /Мои настройки/u);
+  assert.match(hosts, /teamHostTeamDropTargetID/u);
+  assert.match(hosts, /teamHostFolderDropTargetID/u);
+  assert.match(hosts, /teamHostInsertionIndicator/u);
+  assert.match(hosts, /isTargeted: \{ isTargeted in/u);
+  assert.match(hosts, /if targetID != nil \{[\s\S]*sortMode = \.manual/u);
+});
