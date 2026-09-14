@@ -633,7 +633,7 @@ struct SelectiveRemoteTeamHostsView: View {
         SelectiveRemoteTeamHostOutlineItem.roots(
             teamID: teamID,
             hosts: visibleHosts.filter { $0.teamID == teamID },
-            areInIncreasingOrder: teamHostComesBefore
+            areInIncreasingOrder: { lhs, rhs in teamHostComesBefore(lhs, rhs) }
         )
     }
 
@@ -651,7 +651,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     host.profile.tags.joined(separator: " ")
                 ].contains { $0.localizedCaseInsensitiveContains(query) })
         }
-        .sorted(by: teamHostComesBefore)
+        .sorted { lhs, rhs in teamHostComesBefore(lhs, rhs) }
     }
 
     var body: some View {
