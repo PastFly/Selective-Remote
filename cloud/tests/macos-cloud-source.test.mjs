@@ -612,3 +612,23 @@ test("macOS registration checks username availability and explains password stre
   assert.match(accountViews, /usernameAvailability == \.available/u);
   assert.match(settings, /registrationUsernameAvailable/u);
 });
+
+
+test("macOS Hosts workspace falls back to Personal and persists layout controls", async () => {
+  const [content, teamHosts, folderTree] = await Promise.all([
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+    readFile(new URL("HostFolderTree.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(content, /hostScope = teamHosts\.vaults\.isEmpty \? \.personal : \.team/);
+  assert.match(content, /SelectiveRemote\.personal-host\.detail-visible\.v1/);
+  assert.match(content, /selection: \$model\.profileCollectionDisplayMode/);
+  assert.match(content, /selection: \$model\.profileSortMode/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.detail-visible\.v1/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.display-mode\.v1/);
+  assert.match(teamHosts, /SelectiveRemote\.team-host\.sort-mode\.v1/);
+  assert.match(teamHosts, /teamHostNavigatorCollection/);
+  assert.match(teamHosts, /GridItem\(\.adaptive\(minimum: 190\)/);
+  assert.match(teamHosts, /areInIncreasingOrder: teamHostComesBefore/);
+  assert.match(folderTree, /sorted\(by: areInIncreasingOrder\)/);
+});
