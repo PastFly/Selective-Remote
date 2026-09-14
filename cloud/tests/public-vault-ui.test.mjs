@@ -11,6 +11,7 @@ import {
   localVaultRecordFormValues,
   localVaultRecordSummary,
   maintainAccessibleTeamVaultWrappers,
+  preprovisionTeamInvitationWrappers,
   parseTeamHostConnection,
   personalHostEditorValues,
   personalHostFolderName,
@@ -247,6 +248,59 @@ test("trusted browser maintains wrappers for accessible Team Vaults outside the 
   assert.deepEqual(locked, ["available", "unavailable"]);
 });
 
+test("username invitation preprovisioning wraps every snapshotted Vault and device locally", async () => {
+  const locked = [];
+  let uploaded;
+  const invitation = {
+    id: "invite-1",
+    preprovisioning: {
+      membershipID: "membership-2",
+      membershipEpoch: 4,
+      devices: [{ deviceID: "device-2", publicKey: { kty: "EC" } }],
+      vaults: [
+        { vaultID: "vault-1", keyGeneration: 2 },
+        { vaultID: "vault-2", keyGeneration: 7 },
+      ],
+    },
+  };
+  const result = await preprovisionTeamInvitationWrappers({
+    client: {
+      async preprovisionTeamInvitationWrappers(value) { uploaded = value; return { ready: true, wrappers: 2 }; },
+    },
+    identity: { deviceID: "device-1" },
+    team: { id: "team-1", role: "owner" },
+    invitation,
+    repositoryFactory: (scope) => ({ scope }),
+    controllerFactory({ scope }) {
+      return {
+        scope,
+        async syncState() {
+          return { keyGeneration: scope.vaultID === "vault-1" ? 2 : 7 };
+        },
+        async prepareWrapper(recipient) {
+          return { recipient, vaultID: scope.vaultID };
+        },
+        lock() { locked.push(scope.vaultID); },
+      };
+    },
+    async synchronize() { return { status: "up_to_date" }; },
+  });
+
+  assert.deepEqual(result, { ready: true, wrappers: 2 });
+  assert.equal(uploaded.teamID, "team-1");
+  assert.equal(uploaded.invitationID, "invite-1");
+  assert.deepEqual(uploaded.wrappers.map(({ vaultID, wrapper }) => ({
+    vaultID,
+    membershipID: wrapper.recipient.membershipID,
+    membershipEpoch: wrapper.recipient.membershipEpoch,
+    deviceID: wrapper.recipient.deviceID,
+  })), [
+    { vaultID: "vault-1", membershipID: "membership-2", membershipEpoch: 4, deviceID: "device-2" },
+    { vaultID: "vault-2", membershipID: "membership-2", membershipEpoch: 4, deviceID: "device-2" },
+  ]);
+  assert.deepEqual(locked, ["vault-1", "vault-2"]);
+});
+
 test("credential summaries never expose their secret", () => {
   const record = {
     type: "credential",
@@ -297,8 +351,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=144/u);
-  assert.match(html, /\/app\.js\?v=144/u);
+  assert.match(html, /\/styles\.css\?v=145/u);
+  assert.match(html, /\/app\.js\?v=145/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);

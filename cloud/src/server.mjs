@@ -19,6 +19,7 @@ const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
 const maxTeamBodyBytes = 16 * 1024;
+const maxInvitationWrapperBodyBytes = 1024 * 1024;
 const browserSessionCookie = "sr_session";
 
 const server = createServer(async (request, response) => {
@@ -327,6 +328,24 @@ async function route(request, response) {
       );
     }
     const teamInvitationMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations\/([^/]+)$/i);
+    const teamInvitationWrappersMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/invitations\/([^/]+)\/wrappers$/i,
+    );
+    if (method === "POST" && teamInvitationWrappersMatch) {
+      if (!teamInvitationWrappersMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(
+        response,
+        async () => service.preprovisionTeamInvitationWrappers(
+          session,
+          teamInvitationWrappersMatch[1],
+          teamInvitationWrappersMatch[2],
+          await readJSON(request, maxInvitationWrapperBodyBytes),
+          idempotencyKey(request),
+        ),
+      );
+    }
     if (method === "DELETE" && teamInvitationMatch) {
       if (!isUUID(teamInvitationMatch[1]) || !isUUID(teamInvitationMatch[2])) {
         return sendError(response, 404, "team_not_found");

@@ -423,6 +423,11 @@ export class CloudService {
       throw new Error("invalid_team_invitation");
     }
     if (invitationType === "email" && !this.mailer) throw new Error("smtp_not_configured");
+    const preprovisionWrappers = input?.preprovisionWrappers === true;
+    if (input?.preprovisionWrappers !== undefined
+      && (typeof input.preprovisionWrappers !== "boolean" || invitationType !== "username")) {
+      throw new Error("invalid_team_invitation");
+    }
     const email = invitationType === "email" ? normalizeEmail(input.email) : null;
     const username = invitationType === "username" ? normalizeUsername(input.username) : null;
     const role = validateTeamRole(input?.role, { invitation: true });
@@ -459,6 +464,7 @@ export class CloudService {
       invitationType,
       email,
       username,
+      preprovisionWrappers,
       role,
       tokenHash: hashTeamInvitationToken(token, this.config.teamInvitationTokenPepper),
       expiresAt,
@@ -479,7 +485,10 @@ export class CloudService {
       }
       acceptanceURL = teamInvitationURL(this.config.publicOrigin, linkSecret.token);
     }
-    return { invitation: publicTeamInvitation(result.invitation, acceptanceURL) };
+    return {
+      invitation: publicTeamInvitation(result.invitation, acceptanceURL),
+      preprovisioning: publicTeamInvitationPreprovisioning(result.preprovisioning),
+    };
   }
 
   async acceptTeamInvitation(session, input, idempotencyKey) {
@@ -501,6 +510,38 @@ export class CloudService {
       idempotencyKey: validateIdempotencyKey(idempotencyKey),
     });
     return { membership: publicTeamMember(result.membership) };
+  }
+
+  async preprovisionTeamInvitationWrappers(session, teamID, invitationID, input, idempotencyKey) {
+    if (!isUUID(invitationID)) throw new Error("invalid_team_invitation");
+    const values = Array.isArray(input?.wrappers) ? input.wrappers : null;
+    if (!values || values.length < 1 || values.length > 1_024) {
+      throw new Error("invalid_team_vault_wrappers");
+    }
+    const wrappers = values.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)
+        || !isUUID(entry.vaultID)
+        || !Number.isSafeInteger(entry.keyGeneration) || entry.keyGeneration < 1) {
+        throw new Error("invalid_team_vault_wrappers");
+      }
+      return {
+        vaultID: entry.vaultID.toLowerCase(),
+        keyGeneration: entry.keyGeneration,
+        wrapper: validateTeamVaultWrapper(entry.wrapper),
+      };
+    });
+    if (new Set(wrappers.map((entry) => `${entry.vaultID}:${entry.wrapper.deviceID}`)).size
+      !== wrappers.length) {
+      throw new Error("invalid_team_vault_wrappers");
+    }
+    return this.store.preprovisionTeamInvitationWrappers({
+      actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
+      teamID,
+      invitationID: invitationID.toLowerCase(),
+      wrappers,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
   }
 
   async cancelTeamInvitation(session, teamID, invitationID, idempotencyKey) {
@@ -744,6 +785,23 @@ function publicTeamInvitation(row, acceptanceURL = null) {
     createdAt: row.created_at,
     expiresAt: row.expires_at,
     acceptanceURL,
+  };
+}
+
+function publicTeamInvitationPreprovisioning(value) {
+  if (!value) return null;
+  return {
+    membershipID: value.membershipID,
+    membershipEpoch: value.membershipEpoch,
+    devices: value.devices.map((device) => ({
+      deviceID: device.device_id,
+      publicKeyAlgorithm: device.public_key_algorithm,
+      publicKey: JSON.parse(device.public_key),
+    })),
+    vaults: value.vaults.map((vault) => ({
+      vaultID: vault.vault_id,
+      keyGeneration: Number(vault.key_generation),
+    })),
   };
 }
 

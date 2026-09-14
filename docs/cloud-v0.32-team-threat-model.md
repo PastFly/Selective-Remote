@@ -194,6 +194,19 @@ publish the wrapper. Device
 revocation invalidates its sessions; a scoped device that held any wrapper also
 forces rotation and is excluded from all later wrapper sets.
 
+For an existing-account `@username` invitation under automatic admission, the
+server reserves a new random membership ID and the next membership epoch, then
+snapshots only registered P-256 target devices and initialized non-rotating
+Vault generations. The inviting Owner/Admin browser derives a wrapper for every
+snapshotted Vault/device pair locally. The server checks the complete Cartesian
+set and every context hash, stores only opaque pending wrappers, and withholds
+the invitation from the target until the package is ready. Acceptance requires
+the accepting device to be in that snapshot and atomically activates the
+reserved membership, scoped admissions and wrappers. A changed epoch, rotated
+generation or incomplete package fails closed. Email/link invitations and
+accounts without a registered target key retain background provisioning because
+there is no recipient public key that can safely be wrapped in advance.
+
 After a Vault is initialized, wrapper provisioning is capability-gated rather
 than manager-presence-gated. Any active member's authorized current session
 device may list eligible public keys and publish a wrapper only when the server

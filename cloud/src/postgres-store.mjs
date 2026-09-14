@@ -1097,6 +1097,8 @@ export class PostgresStore {
        WHERE invitation.invitation_type = 'username'
          AND invitation.target_user_id = $1
          AND invitation.accepted_at IS NULL AND invitation.cancelled_at IS NULL
+         AND (invitation.wrapper_preprovision_required = false
+           OR invitation.wrappers_ready_at IS NOT NULL)
          AND invitation.expires_at > now()
        ORDER BY invitation.created_at, invitation.id`,
       [actorUserID],
@@ -1110,6 +1112,7 @@ export class PostgresStore {
     invitationType,
     email,
     username,
+    preprovisionWrappers = false,
     role,
     tokenHash,
     expiresAt,
@@ -1127,6 +1130,7 @@ export class PostgresStore {
       }
 
       let targetUser = null;
+      let reservedMembershipEpoch = null;
       if (invitationType === "username") {
         const targetResult = await client.query(
           `SELECT id, username FROM users
@@ -1136,9 +1140,22 @@ export class PostgresStore {
         );
         targetUser = targetResult.rows[0] ?? null;
         if (!targetUser) throw new Error("account_not_found");
+        const priorMemberships = await client.query(
+          `SELECT id, epoch, revoked_at FROM team_memberships
+           WHERE team_id = $1 AND user_id = $2
+           ORDER BY epoch DESC FOR UPDATE`,
+          [teamID, targetUser.id],
+        );
+        if (priorMemberships.rows.some((row) => row.revoked_at === null)) {
+          throw new Error("team_member_exists");
+        }
+        reservedMembershipEpoch = priorMemberships.rows.reduce(
+          (maximum, row) => Math.max(maximum, Number(row.epoch)),
+          0,
+        ) + 1;
       }
 
-      if (invitationType !== "link") {
+      if (invitationType === "email") {
         const existingMember = await client.query(
           `SELECT membership.id FROM team_memberships AS membership
            JOIN users AS account ON account.id = membership.user_id
@@ -1174,10 +1191,13 @@ export class PostgresStore {
       const invitationResult = await client.query(
         `INSERT INTO team_invitations
           (team_id, invitation_type, email, target_user_id, role, token_hash,
-           invited_by_user_id, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         RETURNING id, team_id, invitation_type, role, created_at, expires_at`,
-        [teamID, invitationType, email, targetUser?.id ?? null, role, tokenHash, actorUserID, expiresAt],
+           invited_by_user_id, expires_at, reserved_membership_id, reserved_membership_epoch)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+           CASE WHEN $2 = 'username' THEN gen_random_uuid() END, $9)
+         RETURNING id, team_id, invitation_type, role, created_at, expires_at,
+           reserved_membership_id, reserved_membership_epoch`,
+        [teamID, invitationType, email, targetUser?.id ?? null, role, tokenHash,
+          actorUserID, expiresAt, reservedMembershipEpoch],
       );
       const invitation = {
         ...invitationResult.rows[0],
@@ -1201,6 +1221,59 @@ export class PostgresStore {
             linkSecretEnvelope.nonce, linkSecretEnvelope.authTag],
         );
       }
+      let preprovisioning = null;
+      if (invitationType === "username" && preprovisionWrappers
+        && actor.automatic_device_admission === true) {
+        const devices = await client.query(
+          `SELECT id AS device_id, public_key_algorithm, public_key
+           FROM devices
+           WHERE user_id = $1 AND revoked_at IS NULL
+             AND public_key IS NOT NULL AND public_key_algorithm = 'p256-ecdh-v1'
+           ORDER BY id FOR UPDATE`,
+          [targetUser.id],
+        );
+        const vaults = await client.query(
+          `SELECT id AS vault_id, key_generation, rotation_required
+           FROM shared_vaults
+           WHERE team_id = $1 AND archived_at IS NULL AND revision > 0
+           ORDER BY id FOR UPDATE`,
+          [teamID],
+        );
+        if (vaults.rows.some((vault) => vault.rotation_required === true)) {
+          throw new Error("team_vault_rotation_required");
+        }
+        if (devices.rows.length * vaults.rows.length > 1_024) {
+          throw new Error("invalid_team_vault_wrappers");
+        }
+        if (devices.rows.length > 0 && vaults.rows.length > 0) {
+          for (const device of devices.rows) {
+            await client.query(
+              `INSERT INTO team_invitation_wrapper_devices (invitation_id, device_id)
+               VALUES ($1, $2)`,
+              [invitation.id, device.device_id],
+            );
+          }
+          for (const vault of vaults.rows) {
+            await client.query(
+              `INSERT INTO team_invitation_wrapper_vaults
+                (invitation_id, vault_id, key_generation)
+               VALUES ($1, $2, $3)`,
+              [invitation.id, vault.vault_id, vault.key_generation],
+            );
+          }
+          await client.query(
+            `UPDATE team_invitations SET wrapper_preprovision_required = true
+             WHERE id = $1`,
+            [invitation.id],
+          );
+          preprovisioning = {
+            membershipID: invitation.reserved_membership_id,
+            membershipEpoch: Number(invitation.reserved_membership_epoch),
+            devices: devices.rows,
+            vaults: vaults.rows,
+          };
+        }
+      }
       await writeTeamAudit(client, {
         teamID,
         actorUserID,
@@ -1208,8 +1281,119 @@ export class PostgresStore {
         targetUserID: targetUser?.id ?? null,
         metadata: { role, invitationType },
       });
-      return { invitation, linkSecretEnvelope: invitationType === "link" ? linkSecretEnvelope : null };
+      return {
+        invitation,
+        linkSecretEnvelope: invitationType === "link" ? linkSecretEnvelope : null,
+        preprovisioning,
+      };
     });
+  }
+
+  async preprovisionTeamInvitationWrappers({
+    actorUserID,
+    actorDeviceID,
+    teamID,
+    invitationID,
+    wrappers,
+    idempotencyKey,
+  }) {
+    return this.withTeamMutation(
+      actorUserID,
+      "team.invitation.wrappers.preprovision",
+      idempotencyKey,
+      async (client) => {
+        const actor = await lockTeamActor(client, teamID, actorUserID);
+        if (!actor) throw new Error("team_not_found");
+        requireTeamPermission(actor.role, "manage_vault_keys");
+        const invitationResult = await client.query(
+          `SELECT id, reserved_membership_id, reserved_membership_epoch
+           FROM team_invitations
+           WHERE id = $1 AND team_id = $2 AND invitation_type = 'username'
+             AND wrapper_preprovision_required = true
+             AND accepted_at IS NULL AND cancelled_at IS NULL AND expires_at > now()
+           FOR UPDATE`,
+          [invitationID, teamID],
+        );
+        const invitation = invitationResult.rows[0];
+        if (!invitation) throw new Error("invalid_team_invitation");
+        const expectedResult = await client.query(
+          `SELECT invitation_vault.vault_id, invitation_vault.key_generation,
+             invitation_device.device_id,
+             vault.key_generation AS current_key_generation, vault.rotation_required,
+             actor_wrapper.device_id IS NOT NULL AS actor_has_wrapper
+           FROM team_invitation_wrapper_vaults AS invitation_vault
+           JOIN team_invitation_wrapper_devices AS invitation_device
+             ON invitation_device.invitation_id = invitation_vault.invitation_id
+           JOIN shared_vaults AS vault
+             ON vault.id = invitation_vault.vault_id AND vault.team_id = $2
+              AND vault.archived_at IS NULL
+           JOIN team_memberships AS actor_membership
+             ON actor_membership.team_id = $2 AND actor_membership.user_id = $3
+              AND actor_membership.revoked_at IS NULL
+           LEFT JOIN shared_vault_key_wrappers AS actor_wrapper
+             ON actor_wrapper.vault_id = vault.id
+              AND actor_wrapper.key_generation = vault.key_generation
+              AND actor_wrapper.membership_id = actor_membership.id
+              AND actor_wrapper.membership_epoch = actor_membership.epoch
+              AND actor_wrapper.device_id = $4
+           WHERE invitation_vault.invitation_id = $1
+           ORDER BY invitation_vault.vault_id, invitation_device.device_id
+           FOR UPDATE OF vault, actor_membership`,
+          [invitationID, teamID, actorUserID, actorDeviceID],
+        );
+        if (expectedResult.rows.length === 0 || expectedResult.rows.length !== wrappers.length) {
+          throw new Error("incomplete_team_vault_wrappers");
+        }
+        const supplied = new Map(wrappers.map((entry) => [
+          `${entry.vaultID}:${entry.wrapper.deviceID}`,
+          entry,
+        ]));
+        for (const row of expectedResult.rows) {
+          if (row.actor_has_wrapper !== true
+            || row.rotation_required === true
+            || Number(row.current_key_generation) !== Number(row.key_generation)) {
+            throw new Error("team_vault_key_unavailable");
+          }
+          const entry = supplied.get(`${row.vault_id}:${row.device_id}`);
+          if (!entry || entry.keyGeneration !== Number(row.key_generation)
+            || entry.wrapper.membershipID !== invitation.reserved_membership_id
+            || entry.wrapper.membershipEpoch !== Number(invitation.reserved_membership_epoch)
+            || entry.wrapper.deviceID !== row.device_id) {
+            throw new Error("incomplete_team_vault_wrappers");
+          }
+          requireWrapperContextHashes(teamID, row.vault_id, entry.keyGeneration, [entry.wrapper]);
+        }
+        await client.query(
+          "DELETE FROM team_invitation_vault_wrappers WHERE invitation_id = $1",
+          [invitationID],
+        );
+        for (const entry of wrappers) {
+          const wrapper = entry.wrapper;
+          await client.query(
+            `INSERT INTO team_invitation_vault_wrappers
+              (invitation_id, vault_id, key_generation, membership_id, membership_epoch,
+               device_id, wrapper_version, ephemeral_public_key, ciphertext, nonce,
+               auth_tag, context_hash, created_by_device_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11,$12,$13)`,
+            [invitationID, entry.vaultID, entry.keyGeneration, wrapper.membershipID,
+              wrapper.membershipEpoch, wrapper.deviceID, wrapper.wrapperVersion,
+              JSON.stringify(wrapper.ephemeralPublicKey), wrapper.ciphertext, wrapper.nonce,
+              wrapper.authTag, wrapper.contextHash, actorDeviceID],
+          );
+        }
+        await client.query(
+          "UPDATE team_invitations SET wrappers_ready_at = now() WHERE id = $1",
+          [invitationID],
+        );
+        await writeTeamAudit(client, {
+          teamID,
+          actorUserID,
+          action: "team.invitation_wrappers_preprovisioned",
+          metadata: { invitationID, wrappers: wrappers.length },
+        });
+        return { ready: true, wrappers: wrappers.length };
+      },
+    );
   }
 
   async acceptTeamInvitation({
@@ -1223,6 +1407,8 @@ export class PostgresStore {
     return this.withTeamMutation(actorUserID, "team.invitation.accept", idempotencyKey, async (client) => {
       const invitationResult = await client.query(
         `SELECT invitation.id, invitation.team_id, invitation.invitation_type, invitation.role,
+           invitation.reserved_membership_id, invitation.reserved_membership_epoch,
+           invitation.wrapper_preprovision_required, invitation.wrappers_ready_at,
            account.username, account.display_name
          FROM team_invitations AS invitation
          JOIN teams AS team ON team.id = invitation.team_id
@@ -1244,6 +1430,9 @@ export class PostgresStore {
       );
       const invitation = invitationResult.rows[0];
       if (!invitation) throw new Error("invalid_team_invitation");
+      if (invitation.wrapper_preprovision_required === true && !invitation.wrappers_ready_at) {
+        throw new Error("team_invitation_not_ready");
+      }
 
       const deviceResult = await client.query(
         `SELECT id FROM devices
@@ -1264,11 +1453,17 @@ export class PostgresStore {
         throw new Error("invalid_team_invitation");
       }
       const nextEpoch = priorResult.rows.reduce((maximum, row) => Math.max(maximum, Number(row.epoch)), 0) + 1;
+      if (invitation.invitation_type === "username"
+        && (invitation.reserved_membership_id === null
+          || Number(invitation.reserved_membership_epoch) !== nextEpoch)) {
+        throw new Error("invalid_team_invitation");
+      }
       const membershipResult = await client.query(
-        `INSERT INTO team_memberships (team_id, user_id, role, epoch)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO team_memberships (id, team_id, user_id, role, epoch)
+         VALUES (COALESCE($5, gen_random_uuid()), $1, $2, $3, $4)
          RETURNING id, team_id, user_id, role, epoch, joined_at`,
-        [invitation.team_id, actorUserID, invitation.role, nextEpoch],
+        [invitation.team_id, actorUserID, invitation.role, nextEpoch,
+          invitation.invitation_type === "username" ? invitation.reserved_membership_id : null],
       );
       const membership = {
         ...membershipResult.rows[0],
@@ -1281,6 +1476,54 @@ export class PostgresStore {
          VALUES ($1, $2, $3, $4)`,
         [membership.id, nextEpoch, actorDeviceID, invitation.id],
       );
+      if (invitation.wrapper_preprovision_required === true) {
+        const acceptingDeviceReady = await client.query(
+          `SELECT count(*)::integer AS count
+           FROM team_invitation_wrapper_vaults AS vault
+           JOIN team_invitation_vault_wrappers AS wrapper
+             ON wrapper.invitation_id = vault.invitation_id
+              AND wrapper.vault_id = vault.vault_id
+              AND wrapper.key_generation = vault.key_generation
+              AND wrapper.device_id = $2
+           JOIN shared_vaults AS current
+             ON current.id = vault.vault_id AND current.key_generation = vault.key_generation
+              AND current.archived_at IS NULL AND current.rotation_required = false
+           WHERE vault.invitation_id = $1`,
+          [invitation.id, actorDeviceID],
+        );
+        const vaultCount = await client.query(
+          "SELECT count(*)::integer AS count FROM team_invitation_wrapper_vaults WHERE invitation_id = $1",
+          [invitation.id],
+        );
+        if (Number(acceptingDeviceReady.rows[0]?.count) !== Number(vaultCount.rows[0]?.count)) {
+          throw new Error("team_invitation_not_ready");
+        }
+        await client.query(
+          `INSERT INTO team_membership_device_admissions
+            (membership_id, membership_epoch, device_id, invitation_id)
+           SELECT $2, $3, device_id, $1
+           FROM team_invitation_wrapper_devices
+           WHERE invitation_id = $1
+           ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING`,
+          [invitation.id, membership.id, nextEpoch],
+        );
+        await client.query(
+          `INSERT INTO shared_vault_key_wrappers
+            (vault_id, key_generation, membership_id, membership_epoch, device_id,
+             wrapper_version, ephemeral_public_key, ciphertext, nonce, auth_tag,
+             context_hash, created_by_device_id, created_at)
+           SELECT vault_id, key_generation, $2, $3, device_id, wrapper_version,
+             ephemeral_public_key, ciphertext, nonce, auth_tag, context_hash,
+             created_by_device_id, created_at
+           FROM team_invitation_vault_wrappers
+           WHERE invitation_id = $1`,
+          [invitation.id, membership.id, nextEpoch],
+        );
+        await client.query(
+          "DELETE FROM team_invitation_vault_wrappers WHERE invitation_id = $1",
+          [invitation.id],
+        );
+      }
       const accepted = await client.query(
         `UPDATE team_invitations SET accepted_at = now(), accepted_by_user_id = $2
          WHERE id = $1 AND accepted_at IS NULL AND cancelled_at IS NULL
@@ -1809,7 +2052,7 @@ export class PostgresStore {
 async function lockTeamActor(client, teamID, actorUserID) {
   const result = await client.query(
     `SELECT membership.id, membership.user_id, membership.role, membership.epoch,
-       team.name AS team_name
+       team.name AS team_name, team.automatic_device_admission
      FROM team_memberships AS membership
      JOIN teams AS team ON team.id = membership.team_id
      WHERE membership.team_id = $1 AND membership.user_id = $2

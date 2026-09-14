@@ -33,6 +33,7 @@ test("Team routes are authenticated, explicitly scoped and idempotent", () => {
   assert.match(serverSource, /search: url\.searchParams\.get\("search"\)/);
   assert.match(serverSource, /cursor: url\.searchParams\.get\("cursor"\)/);
   assert.match(serverSource, /service\.listPendingTeamInvitations/);
+  assert.match(serverSource, /service\.preprovisionTeamInvitationWrappers/);
   assert.match(serverSource, /service\.putSharedVault/);
   assert.match(serverSource, /service\.renameSharedVault/);
   assert.match(serverSource, /service\.approveDeviceKey/);

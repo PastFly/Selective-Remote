@@ -130,9 +130,18 @@ the database stores and replays the committed response atomically.
   current session device must itself be authorized, active in the exact
   membership epoch and already hold this Vault generation's wrapper. Vault
   initialization and rotation remain Owner/Admin-only.
+- `POST /v1/teams/{teamID}/invitations/{invitationID}/wrappers` commits the
+  complete client-created wrapper package for a reserved `@username`
+  membership. The server verifies snapshotted devices, Vault generations,
+  membership ID/epoch and context hashes without receiving a Vault key.
 
 The invitation table stores only an HMAC token hash plus the public target
-account ID for `@username` invitations. A link's recoverable token is held only
+account ID for `@username` invitations. With automatic admission enabled, an
+inviting browser that already holds each current Team Vault key reserves the
+future membership ID/epoch and pre-wraps those keys for the target account's
+registered devices. Acceptance activates the membership, scoped admissions and
+opaque wrappers in one transaction, so the inviter need not remain online. A
+link's recoverable token is held only
 in a domain-separated AES-256-GCM envelope so an idempotent create retry can
 return the same URL; cancellation or acceptance makes its hash unusable and
 deletes the dedicated envelope. Legacy email delivery keeps the opaque token

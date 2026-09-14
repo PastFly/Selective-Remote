@@ -574,18 +574,32 @@ test("username invitation resolves one verified account without storing its priv
     team_id: teamID,
     invitation_type: "username",
     role: "viewer",
+    reserved_membership_id: "83224fca-9f1e-4501-a249-260ad09c68f0",
+    reserved_membership_epoch: 1,
   };
   const f = fixture((sql) => {
     const reservation = mutationReservation(sql);
     if (reservation) return reservation;
     if (sql.includes("FROM team_memberships AS membership") && sql.includes("JOIN teams AS team")) {
-      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1, team_name: "Operations" }] };
+      return { rows: [{
+        id: membershipID, user_id: actorUserID, role: "owner", epoch: 1,
+        team_name: "Operations", automatic_device_admission: true,
+      }] };
     }
     if (sql.includes("SELECT id, username FROM users")) {
       return { rows: [{ id: targetUserID, username: "member" }] };
     }
+    if (sql.includes("ORDER BY epoch DESC FOR UPDATE")) return { rows: [] };
     if (sql.includes("JOIN users AS account")) return { rows: [] };
     if (sql.includes("INSERT INTO team_invitations")) return { rows: [invitation] };
+    if (sql.includes("SELECT id AS device_id")) return { rows: [{
+      device_id: deviceID,
+      public_key_algorithm: "p256-ecdh-v1",
+      public_key: JSON.stringify({ kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43) }),
+    }] };
+    if (sql.includes("SELECT id AS vault_id")) return { rows: [{
+      vault_id: vaultID, key_generation: 2, rotation_required: false,
+    }] };
     return { rows: [], rowCount: 0 };
   });
 
@@ -595,6 +609,7 @@ test("username invitation resolves one verified account without storing its priv
     invitationType: "username",
     email: null,
     username: "member",
+    preprovisionWrappers: true,
     role: "viewer",
     tokenHash: "d".repeat(64),
     expiresAt: new Date("2030-01-03T00:00:00.000Z"),
@@ -605,11 +620,16 @@ test("username invitation resolves one verified account without storing its priv
 
   assert.equal(result.invitation.target_username, "member");
   assert.equal(result.invitation.team_name, "Operations");
+  assert.equal(result.preprovisioning.membershipEpoch, 1);
+  assert.equal(result.preprovisioning.devices[0].device_id, deviceID);
+  assert.equal(result.preprovisioning.vaults[0].vault_id, vaultID);
   const insert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_invitations"));
   assert.deepEqual(insert.parameters.slice(1, 5), ["username", null, targetUserID, "viewer"]);
   assert.ok(f.queries.some(({ sql }) => sql.includes("target_user_id = $2")));
   assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_outbox_jobs")), false);
   assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_invitation_link_secrets")), false);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("team_invitation_wrapper_devices")));
+  assert.ok(f.queries.some(({ sql }) => sql.includes("wrapper_preprovision_required = true")));
 });
 
 test("link invitation stores only its hash and domain-separated encrypted recovery envelope", async () => {
@@ -703,6 +723,58 @@ test("cancelling an invitation also retires its pending durable delivery", async
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
 
+test("client-created invitation wrappers are complete, context-bound and never decrypted by storage", async () => {
+  const invitationID = "471c3424-b6aa-41a0-959f-aeaa1e3ef79d";
+  const reservedMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
+  const targetDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
+  const wrapper = teamWrapper({
+    membershipID: reservedMembershipID,
+    membershipEpoch: 2,
+    deviceID: targetDeviceID,
+    keyGeneration: 3,
+  });
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FOR UPDATE OF membership, team")) {
+      return { rows: [{ id: membershipID, user_id: actorUserID, role: "owner", epoch: 1 }] };
+    }
+    if (sql.includes("wrapper_preprovision_required = true") && sql.includes("FROM team_invitations")) {
+      return { rows: [{
+        id: invitationID,
+        reserved_membership_id: reservedMembershipID,
+        reserved_membership_epoch: 2,
+      }] };
+    }
+    if (sql.includes("FROM team_invitation_wrapper_vaults AS invitation_vault")) {
+      return { rows: [{
+        vault_id: vaultID,
+        key_generation: 3,
+        device_id: targetDeviceID,
+        current_key_generation: 3,
+        rotation_required: false,
+        actor_has_wrapper: true,
+      }] };
+    }
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.preprovisionTeamInvitationWrappers({
+    actorUserID,
+    actorDeviceID: deviceID,
+    teamID,
+    invitationID,
+    wrappers: [{ vaultID, keyGeneration: 3, wrapper }],
+    idempotencyKey: "request:team-invite-wrapper-01",
+  }), { ready: true, wrappers: 1 });
+  const insert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_invitation_vault_wrappers"));
+  assert.deepEqual(insert.parameters.slice(0, 7), [
+    invitationID, vaultID, 3, reservedMembershipID, 2, targetDeviceID, 1,
+  ]);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("wrappers_ready_at = now()")));
+  assert.equal(f.queries.some(({ sql }) => /decrypt|private_key|plaintext/iu.test(sql)), false);
+});
+
 test("invitation acceptance locks one token and advances a revoked membership epoch", async () => {
   const acceptedMembership = {
     id: membershipID,
@@ -776,6 +848,8 @@ test("username invitation acceptance is bound to the authenticated target user I
       return { rows: [{
         id: invitationID, team_id: teamID, invitation_type: "username", role: "editor",
         username: "member", display_name: "Member",
+        reserved_membership_id: membershipID, reserved_membership_epoch: 1,
+        wrapper_preprovision_required: false, wrappers_ready_at: null,
       }] };
     }
     if (sql.includes("SELECT id FROM devices")) {
@@ -802,6 +876,56 @@ test("username invitation acceptance is bound to the authenticated target user I
   const admission = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions"));
   assert.deepEqual(admission.parameters, [membershipID, 1, deviceID, invitationID]);
   assert.equal(f.queries.some(({ sql }) => sql.includes("UPDATE devices SET key_approved_at")), false);
+});
+
+test("ready username invitation activates reserved wrappers and admissions in the membership transaction", async () => {
+  const invitationID = "471c3424-b6aa-41a0-959f-aeaa1e3ef79d";
+  const reservedMembershipID = "83224fca-9f1e-4501-a249-260ad09c68f0";
+  const acceptedMembership = {
+    id: reservedMembershipID,
+    team_id: teamID,
+    user_id: actorUserID,
+    username: "member",
+    display_name: "Member",
+    role: "editor",
+    epoch: 3,
+  };
+  const f = fixture((sql) => {
+    const reservation = mutationReservation(sql);
+    if (reservation) return reservation;
+    if (sql.includes("FROM team_invitations AS invitation")) return { rows: [{
+      id: invitationID, team_id: teamID, invitation_type: "username", role: "editor",
+      username: "member", display_name: "Member",
+      reserved_membership_id: reservedMembershipID, reserved_membership_epoch: 3,
+      wrapper_preprovision_required: true, wrappers_ready_at: new Date(),
+    }] };
+    if (sql.includes("SELECT id FROM devices")) return { rows: [{ id: deviceID }] };
+    if (sql.includes("ORDER BY epoch DESC")) return { rows: [{ id: "old", epoch: 2, revoked_at: new Date() }] };
+    if (sql.includes("INSERT INTO team_memberships")) return { rows: [acceptedMembership] };
+    if (sql.includes("AS count") && sql.includes("JOIN team_invitation_vault_wrappers")) {
+      return { rows: [{ count: 2 }] };
+    }
+    if (sql.includes("AS count") && sql.includes("FROM team_invitation_wrapper_vaults")) {
+      return { rows: [{ count: 2 }] };
+    }
+    if (sql.includes("UPDATE team_invitations SET accepted_at")) return { rows: [{ id: invitationID }] };
+    return { rows: [], rowCount: 1 };
+  });
+
+  assert.deepEqual(await f.store.acceptTeamInvitation({
+    actorUserID,
+    actorDeviceID: deviceID,
+    actorEmail: "private@example.invalid",
+    invitationID,
+    tokenHash: null,
+    idempotencyKey: "request:team-username-prewrapped-accept-01",
+  }), { membership: acceptedMembership });
+  const membershipInsert = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_memberships"));
+  assert.equal(membershipInsert.parameters[4], reservedMembershipID);
+  assert.ok(f.queries.some(({ sql }) => sql.includes("SELECT $2, $3, device_id, $1")));
+  assert.ok(f.queries.some(({ sql }) => sql.includes("INSERT INTO shared_vault_key_wrappers")));
+  assert.ok(f.queries.some(({ sql }) => sql.includes("DELETE FROM team_invitation_vault_wrappers")));
+  assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
 
 test("invitation acceptance refuses a session device without a registered Team key", async () => {
