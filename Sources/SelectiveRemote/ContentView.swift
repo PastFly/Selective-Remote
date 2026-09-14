@@ -1780,6 +1780,7 @@ struct ContentView: View {
                         model: model,
                         selectedHostID: $selectedTeamHostID,
                         requestedAction: $requestedTeamHostAction,
+                        searchText: $teamHostSearchText,
                         onOpenTerminal: openTeamTerminal,
                         onOpenSFTP: openTeamSFTP
                     )
