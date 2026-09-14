@@ -570,6 +570,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var model: AppModel
     @Binding var selectedHostID: UUID?
     @Binding var requestedAction: SelectiveRemoteTeamHostActionRequest?
+    @Binding var searchText: String
     @ObservedObject private var personalSettingsStore =
         SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
@@ -583,7 +584,6 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var hostPendingDeletion: SelectiveRemoteTeamHost?
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
-    @State private var searchText = ""
     @State private var selectedFolder = ""
     @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
     private var hostNavigatorVisible = true
@@ -769,7 +769,6 @@ struct SelectiveRemoteTeamHostsView: View {
                             } icon: {
                                 Image(systemName: "arrow.triangle.2.circlepath")
                             }
-                            Text(lastUpdatedAt, style: .time)
                         }
                         Spacer()
                         Menu {
@@ -1000,13 +999,6 @@ struct SelectiveRemoteTeamHostsView: View {
             }
             .listStyle(.sidebar)
             .id("team-host-list-\(displayMode.rawValue)-\(hostDetailVisible)")
-            .searchable(
-                text: $searchText,
-                prompt: UpdateLocalization.text(
-                    ru: "Host, адрес, папка или тег",
-                    en: "Host, address, folder, or tag"
-                )
-            )
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -1054,13 +1046,6 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
                 .padding(12)
             }
-            .searchable(
-                text: $searchText,
-                prompt: UpdateLocalization.text(
-                    ru: "Host, адрес, папка или тег",
-                    en: "Host, address, folder, or tag"
-                )
-            )
         }
     }
 
