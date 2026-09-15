@@ -356,8 +356,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   ]);
 
   assert.match(html, /id="cloud-account"[^>]*hidden/u);
-  assert.match(html, /\/styles\.css\?v=146/u);
-  assert.match(html, /\/app\.js\?v=146/u);
+  assert.match(html, /\/styles\.css\?v=147/u);
+  assert.match(html, /\/app\.js\?v=147/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
   assert.match(html, /data-open-auth="registration"/u);
@@ -573,6 +573,14 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /rotationRequired[\s\S]*rotate\(\{ client, controller: maintenanceController, role: team\.role \}\)/u);
   assert.match(application, /Автоматически обновляем ключи командных папок перед приглашением/u);
   assert.match(application, /backgroundSyncIntervalMilliseconds = 15_000/u);
+  assert.match(application, /workspaceRefreshIntervalMilliseconds = 10_000/u);
+  assert.match(application, /refreshWorkspaceActivity/u);
+  assert.match(application, /client\.listPendingTeamInvitations\(\)/u);
+  assert.match(application, /client\.listTeamMembersPage\(activeTeam\.id/u);
+  assert.match(application, /Данные команды обновлены/u);
+  assert.match(application, /Синхронизация продолжится автоматически/u);
+  assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
+  assert.match(html, /app\.js\?v=147/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

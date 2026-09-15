@@ -905,6 +905,7 @@ export function initializeTeamWorkspace({
   setIntervalValue = globalThis.setInterval,
   clearIntervalValue = globalThis.clearInterval,
   backgroundSyncIntervalMilliseconds = 15_000,
+  workspaceRefreshIntervalMilliseconds = 10_000,
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
@@ -1017,6 +1018,8 @@ export function initializeTeamWorkspace({
   let activeConflicts = null;
   let activeView = "teams";
   let backgroundSyncTimer = null;
+  let workspaceRefreshTimer = null;
+  let workspaceRefreshOperation = null;
   let backgroundMaintenanceOperation = null;
   let vaultOperation = null;
   let editingHostID = null;
@@ -1084,7 +1087,7 @@ export function initializeTeamWorkspace({
       team_vault_storage_failed: "Браузер не смог сохранить локальную зашифрованную копию.",
     };
     return messages[code]
-      ?? "Синхронизация не выполнена; локальная зашифрованная копия сохранена.";
+      ?? "Локальная зашифрованная копия сохранена. Синхронизация продолжится автоматически.";
   }
 
   function updateTeamMessage() {
@@ -1684,6 +1687,63 @@ export function initializeTeamWorkspace({
     accountInvitations = await client.listPendingTeamInvitations();
     renderPendingInvitations();
     renderOverviewSummary();
+  }
+
+  async function refreshWorkspaceActivity({ full = false } = {}) {
+    if (!identity) return null;
+    if (workspaceRefreshOperation) return workspaceRefreshOperation;
+    const activeIdentity = identity;
+    const activeTeam = selectedTeam;
+    const pending = (async () => {
+      if (full) {
+        await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams(activeTeam?.id)]);
+        return;
+      }
+      const requests = [client.listPendingTeamInvitations()];
+      if (activeTeam) {
+        requests.push(client.listTeamMembersPage(activeTeam.id, {
+          search: memberSearch.value,
+          role: memberRoleFilter.value,
+          limit: 50,
+        }));
+        requests.push(canManage() ? client.listTeamInvitations(activeTeam.id) : Promise.resolve([]));
+      }
+      const [pendingForAccount, memberPage, invitationsForTeam] = await Promise.all(requests);
+      if (identity !== activeIdentity) return;
+      accountInvitations = pendingForAccount;
+      renderPendingInvitations();
+      renderOverviewSummary();
+      if (!activeTeam || selectedTeam?.id !== activeTeam.id) return;
+      teamMembers = memberPage.members;
+      memberNextCursor = memberPage.nextCursor;
+      memberTotal = memberPage.total;
+      teamInvitations = invitationsForTeam;
+      renderMembers(teamMembers);
+      renderTeamInvitations();
+      updateTeamMessage();
+    })();
+    workspaceRefreshOperation = pending;
+    try {
+      return await pending;
+    } finally {
+      if (workspaceRefreshOperation === pending) workspaceRefreshOperation = null;
+    }
+  }
+
+  function stopWorkspaceRefresh() {
+    if (workspaceRefreshTimer === null) return;
+    clearIntervalValue(workspaceRefreshTimer);
+    workspaceRefreshTimer = null;
+  }
+
+  function startWorkspaceRefresh() {
+    stopWorkspaceRefresh();
+    if (!identity || !Number.isFinite(workspaceRefreshIntervalMilliseconds)
+      || workspaceRefreshIntervalMilliseconds <= 0) return;
+    workspaceRefreshTimer = setIntervalValue(() => {
+      void refreshWorkspaceActivity().catch(() => {});
+    }, workspaceRefreshIntervalMilliseconds);
+    workspaceRefreshTimer?.unref?.();
   }
 
   function populateVaults() {
@@ -2344,7 +2404,23 @@ export function initializeTeamWorkspace({
     inviteLinkValue.value = "";
     loadSelectedTeam().catch(() => setText(message, "Не удалось загрузить Team."));
   });
-  teamRefresh.addEventListener("click", () => loadTeams(selectedTeam?.id).catch(() => setText(message, "Не удалось обновить Teams.")));
+  teamRefresh.addEventListener("click", async () => {
+    if (teamRefresh.disabled) return;
+    const label = teamRefresh.textContent;
+    teamRefresh.disabled = true;
+    teamRefresh.setAttribute("aria-busy", "true");
+    teamRefresh.textContent = "Обновляем…";
+    try {
+      await refreshWorkspaceActivity({ full: true });
+      setText(message, "Данные команды обновлены.");
+    } catch {
+      setText(message, "Не удалось обновить данные команды. Повторим автоматически.");
+    } finally {
+      teamRefresh.disabled = false;
+      teamRefresh.removeAttribute("aria-busy");
+      teamRefresh.textContent = label;
+    }
+  });
   memberSearch.addEventListener("input", () => {
     clearTimeout(memberSearchTimer);
     memberSearchTimer = setTimeout(() => {
@@ -2580,15 +2656,23 @@ export function initializeTeamWorkspace({
   updateRecordLabels();
   renderOverviewSummary();
   setView("teams");
+  documentValue.addEventListener?.("visibilitychange", () => {
+    if (!documentValue.hidden) void refreshWorkspaceActivity().catch(() => {});
+  });
+  globalThis.addEventListener?.("online", () => {
+    void refreshWorkspaceActivity().catch(() => {});
+  });
   return {
     setView,
     async activate(nextIdentity) {
       identity = nextIdentity;
       renderOverviewSummary();
       await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams()]);
+      startWorkspaceRefresh();
     },
     deactivate() {
       identity = null;
+      stopWorkspaceRefresh();
       teams = [];
       vaults = [];
       teamMembers = [];
@@ -2600,6 +2684,7 @@ export function initializeTeamWorkspace({
       teamInvitations = [];
       accountInvitations = [];
       selectedTeam = null;
+      workspaceRefreshOperation = null;
       lockCurrentVault();
       teamSelect.replaceChildren();
       devices.replaceChildren();
@@ -3174,7 +3259,7 @@ export async function initializeCloudAccount({
         vaultUI.mode("waiting");
         setText(vaultMessage, "Personal Vault пока недоступен. Войдите в аккаунт ещё раз.");
       } else {
-        setText(vaultMessage, "Синхронизация не выполнена; локальные данные не потеряны.");
+        setText(vaultMessage, "Локальные данные сохранены. Синхронизация продолжится автоматически.");
       }
     } finally {
       syncButton.disabled = !client.session();
