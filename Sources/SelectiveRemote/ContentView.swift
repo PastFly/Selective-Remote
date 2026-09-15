@@ -124,6 +124,7 @@ struct ContentView: View {
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
     @StateObject private var teamHosts = SelectiveRemoteTeamHostStore.shared
+    @StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore.shared
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.connectionCenter
@@ -1931,6 +1932,7 @@ struct ContentView: View {
             case .snippets:
                 TerminalSnippetsLibraryView(
                     store: snippets,
+                    teamStore: teamSnippets,
                     model: model
                 )
             case .activity:
