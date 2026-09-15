@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <script src="/appearance-bootstrap.js?v=157"></script>
-  <link rel="stylesheet" href="/styles.css?v=157">
+  <script src="/appearance-bootstrap.js?v=158"></script>
+  <link rel="stylesheet" href="/styles.css?v=158">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -250,9 +250,9 @@
       </div>
 
       <div class="vault-workspace" id="local-vault-workspace" hidden>
-        <nav class="host-scope-switcher" aria-label="Область Hosts">
+        <nav class="host-scope-switcher" aria-label="Область ресурсов">
           <button type="button" class="active" data-workspace-target="local-vault" data-record-filter="host">Личные</button>
-          <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Командные</button>
+          <button type="button" data-workspace-target="team-vault" data-team-view="hosts" data-preserve-record-filter>Командные</button>
         </nav>
         <nav class="record-filters" id="personal-vault-filters" aria-label="Типы записей">
           <button type="button" class="active" data-record-filter="all">Все</button>
@@ -470,7 +470,7 @@
         <button type="button" class="active" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Vaults</button>
-        <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Хосты</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Ресурсы</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление</button>
       </nav>
 
@@ -632,9 +632,9 @@
         </section>
 
         <div class="vault-workspace" id="team-vault-workspace" hidden>
-          <nav class="host-scope-switcher" aria-label="Область Hosts">
-            <button type="button" data-workspace-target="local-vault" data-record-filter="host">Личные</button>
-            <button type="button" class="active" data-workspace-target="team-vault" data-team-view="hosts">Командные</button>
+          <nav class="host-scope-switcher" aria-label="Область ресурсов">
+            <button type="button" data-workspace-target="local-vault" data-preserve-record-filter>Личные</button>
+            <button type="button" class="active" data-workspace-target="team-vault" data-team-view="hosts" data-preserve-record-filter>Командные</button>
           </nav>
           <div class="vault-toolbar">
             <div>
@@ -731,6 +731,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=157"></script>
+  <script type="module" src="/app.js?v=158"></script>
 </body>
 </html>

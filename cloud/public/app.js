@@ -1,7 +1,7 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
-import { initializeModernSelects } from "./modern-select.js?v=157";
+import { initializeModernSelects } from "./modern-select.js?v=158";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -1018,6 +1018,7 @@ export function initializeTeamWorkspace({
   let controller = null;
   let activeConflicts = null;
   let activeView = "teams";
+  let activeRecordFilter = "host";
   let backgroundSyncTimer = null;
   let workspaceRefreshTimer = null;
   let workspaceRefreshOperation = null;
@@ -1102,9 +1103,10 @@ export function initializeTeamWorkspace({
     } else if (activeView === "vaults") {
       setText(message, `Команда «${selectedTeam.name}» · папок: ${vaults.length}.`);
     } else {
+      const resourceNames = { host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
       setText(message, selectedVault
         ? `Команда «${selectedTeam.name}» · папка «${selectedVault.name}».`
-        : `Команда «${selectedTeam.name}» · выберите папку для просмотра хостов.`);
+        : `Команда «${selectedTeam.name}» · выберите папку для просмотра ${resourceNames[activeRecordFilter]}.`);
     }
   }
 
@@ -1138,8 +1140,9 @@ export function initializeTeamWorkspace({
     recordTarget.required = recordType.value !== "snippet";
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
-    hostBrowser.hidden = activeView !== "hosts";
-    setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? "Добавить Host" : "Добавить запись");
+    hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
+    const createLabels = { host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
+    setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
   }
 
   function beginHostEdit(record) {
@@ -1212,7 +1215,9 @@ export function initializeTeamWorkspace({
     const folder = hostFolderFilter.value;
     const visibleRecords = current.records.filter((value) => {
       if (activeView !== "hosts") return true;
-      if (value.type !== "host" || (folder !== "all" && hostFolderName(value) !== folder)) return false;
+      if (value.type !== activeRecordFilter) return false;
+      if (activeRecordFilter !== "host") return true;
+      if (folder !== "all" && hostFolderName(value) !== folder) return false;
       const data = value.data ?? {};
       return !query || [data.title, data.address, data.folder, data.description, ...(Array.isArray(data.tags) ? data.tags : [])]
         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
@@ -1220,16 +1225,17 @@ export function initializeTeamWorkspace({
     if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
+      const emptyLabels = { host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
       empty.textContent = activeView === "hosts"
-        ? "В выбранном Team Vault пока нет хостов."
+        ? `В выбранном Team Vault пока нет ${emptyLabels[activeRecordFilter]}.`
         : "Папка команды пока пуста.";
       records.append(empty);
       return;
     }
     let renderedFolder = null;
-    for (const record of visibleRecords.sort((a, b) => activeView === "hosts" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
+    for (const record of visibleRecords.sort((a, b) => activeView === "hosts" && activeRecordFilter === "host" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
       const folderName = hostFolderName(record);
-      if (activeView === "hosts" && folderName !== renderedFolder) {
+      if (activeView === "hosts" && activeRecordFilter === "host" && folderName !== renderedFolder) {
         const folderHeading = documentValue.createElement("h3");
         folderHeading.className = "team-host-folder-heading";
         folderHeading.textContent = folderName;
@@ -1964,15 +1970,21 @@ export function initializeTeamWorkspace({
     clearConflicts();
   }
 
-  function setView(view) {
+  function setView(view, recordFilter = null) {
     activeView = ["teams", "members", "vaults", "hosts", "management"].includes(view) ? view : "teams";
+    if (activeView === "hosts") {
+      activeRecordFilter = ["host", "credential", "snippet", "forwarding"].includes(recordFilter)
+        ? recordFilter
+        : "host";
+    }
     section.dataset.teamView = activeView;
     for (const button of documentValue.querySelectorAll("#team-view-tabs [data-team-view]")) {
       button.classList.toggle("active", button.dataset.teamView === activeView);
     }
+    const resourceTitles = { host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
-      hosts: "Хосты команд", management: "Управление командой",
+      hosts: resourceTitles[activeRecordFilter], management: "Управление командой",
     }[activeView]);
     onboarding.hidden = activeView !== "teams";
     membersView.hidden = activeView !== "members";
@@ -1986,7 +1998,7 @@ export function initializeTeamWorkspace({
     }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     workspace.hidden = activeView !== "hosts" || !controller;
-    if (activeView === "hosts") recordType.value = "host";
+    if (activeView === "hosts") recordType.value = activeRecordFilter;
     updateRecordLabels();
     if (controller) {
       clearConflicts();
@@ -2598,6 +2610,7 @@ export function initializeTeamWorkspace({
       }
       recordForm.reset();
       editingHostID = null;
+      if (activeView === "hosts") recordType.value = activeRecordFilter;
       recordTitle.disabled = false;
       recordTarget.disabled = false;
       hostProtocol.disabled = false;
@@ -3380,24 +3393,33 @@ export function initializePortalNavigation({
     teams: "Команды", members: "Участники команд", vaults: "Папки команд",
     hosts: "Хосты команд", management: "Управление командой",
   };
+  const teamResourceTitles = {
+    host: "Хосты команд", snippet: "Сниппеты команд",
+    credential: "Учётные данные команд", forwarding: "Forwarding команд",
+  };
   const workspaceRoutes = {
-    "/app": ["workspace-overview", null, null],
-    "/app/hosts": ["local-vault", "host", null],
-    "/app/snippets": ["local-vault", "snippet", null],
-    "/app/credentials": ["local-vault", "credential", null],
-    "/app/forwarding": ["local-vault", "forwarding", null],
-    "/app/personal-vault": ["local-vault", "all", null],
-    "/app/teams": ["team-vault", null, "teams"],
-    "/app/team-members": ["team-vault", null, "members"],
-    "/app/team-folders": ["team-vault", null, "vaults"],
-    "/app/team-hosts": ["team-vault", null, "hosts"],
-    "/app/team-management": ["team-vault", null, "management"],
-    "/app/devices": ["workspace-devices", null, null],
-    "/app/settings": ["workspace-settings", null, null],
-    "/app/about": ["workspace-about", null, null],
+    "/app": ["workspace-overview", null, null, null],
+    "/app/hosts": ["local-vault", "host", null, null],
+    "/app/snippets": ["local-vault", "snippet", null, null],
+    "/app/credentials": ["local-vault", "credential", null, null],
+    "/app/forwarding": ["local-vault", "forwarding", null, null],
+    "/app/personal-vault": ["local-vault", "all", null, null],
+    "/app/teams": ["team-vault", null, "teams", null],
+    "/app/team-members": ["team-vault", null, "members", null],
+    "/app/team-folders": ["team-vault", null, "vaults", null],
+    "/app/team-hosts": ["team-vault", null, "hosts", "host"],
+    "/app/team-snippets": ["team-vault", null, "hosts", "snippet"],
+    "/app/team-credentials": ["team-vault", null, "hosts", "credential"],
+    "/app/team-forwarding": ["team-vault", null, "hosts", "forwarding"],
+    "/app/team-management": ["team-vault", null, "management", null],
+    "/app/devices": ["workspace-devices", null, null, null],
+    "/app/settings": ["workspace-settings", null, null, null],
+    "/app/about": ["workspace-about", null, null, null],
   };
   let sessionActive = false;
   let requestedWorkspaceRoute = "/app";
+  let activePersonalRecordFilter = "host";
+  let activeTeamRecordFilter = "host";
 
   const workspaceHeader = documentValue.querySelector(".workspace-header");
   if (workspaceHeader) workspaceHeader.hidden = true;
@@ -3408,8 +3430,10 @@ export function initializePortalNavigation({
     historyValue[method]?.({}, "", path);
   }
 
-  function selectWorkspacePanel(target, recordFilter = null, teamView = null) {
+  function selectWorkspacePanel(target, recordFilter = null, teamView = null, teamRecordFilter = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
+    if (panelID === "local-vault" && recordFilter && recordFilter !== "all") activePersonalRecordFilter = recordFilter;
+    if (panelID === "team-vault" && teamView === "hosts") activeTeamRecordFilter = teamRecordFilter || "host";
     if (panelID !== "local-vault") vaultUI?.closeEditor();
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
     for (const button of sidebarButtons) {
@@ -3423,21 +3447,27 @@ export function initializePortalNavigation({
     }
     setText(workspaceTitle, panelID === "local-vault"
       ? resourceTitles[recordFilter || "all"]
-      : panelID === "team-vault" ? teamTitles[teamView || "teams"] : titles[panelID]);
+      : panelID === "team-vault"
+        ? teamView === "hosts" ? teamResourceTitles[activeTeamRecordFilter] : teamTitles[teamView || "teams"]
+        : titles[panelID]);
     if (panelID === "local-vault") vaultUI?.setFilter(recordFilter || "all");
-    if (panelID === "team-vault") teamUI?.setView(teamView || "teams");
+    if (panelID === "team-vault") teamUI?.setView(teamView || "teams", activeTeamRecordFilter);
   }
 
-  function routeForWorkspace(target, recordFilter = null, teamView = null) {
+  function routeForWorkspace(target, recordFilter = null, teamView = null, teamRecordFilter = null) {
     const normalizedFilter = target === "local-vault" ? recordFilter || "all" : null;
     const normalizedTeamView = target === "team-vault" ? teamView || "teams" : null;
+    const normalizedTeamFilter = target === "team-vault" && normalizedTeamView === "hosts"
+      ? teamRecordFilter || "host"
+      : null;
     return Object.entries(workspaceRoutes).find(([, value]) => value[0] === target
-      && value[1] === normalizedFilter && value[2] === normalizedTeamView)?.[0] ?? "/app";
+      && value[1] === normalizedFilter && value[2] === normalizedTeamView
+      && value[3] === normalizedTeamFilter)?.[0] ?? "/app";
   }
 
   function selectWorkspaceRoute(pathname) {
-    const [target, recordFilter, teamView] = workspaceRoutes[pathname] ?? workspaceRoutes["/app"];
-    selectWorkspacePanel(target, recordFilter, teamView);
+    const [target, recordFilter, teamView, teamRecordFilter] = workspaceRoutes[pathname] ?? workspaceRoutes["/app"];
+    selectWorkspacePanel(target, recordFilter, teamView, teamRecordFilter);
   }
 
   vaultUI?.setFilterChangeListener((recordFilter) => {
@@ -3499,10 +3529,14 @@ export function initializePortalNavigation({
   for (const button of workspaceButtons) {
     button.addEventListener("click", () => {
       const target = button.dataset.workspaceTarget;
-      const recordFilter = button.dataset.recordFilter || null;
+      const preserveRecordFilter = button.hasAttribute("data-preserve-record-filter");
+      const recordFilter = button.dataset.recordFilter || (preserveRecordFilter && target === "local-vault" ? activeTeamRecordFilter : null);
       const teamView = button.dataset.teamView || null;
-      selectWorkspacePanel(target, recordFilter, teamView);
-      requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView);
+      const teamRecordFilter = preserveRecordFilter && target === "team-vault"
+        ? button.closest("#local-vault") ? activePersonalRecordFilter : activeTeamRecordFilter
+        : null;
+      selectWorkspacePanel(target, recordFilter, teamView, teamRecordFilter);
+      requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, teamRecordFilter);
       setPath(requestedWorkspaceRoute);
       workspace.scrollIntoView?.({ block: "start" });
     });
