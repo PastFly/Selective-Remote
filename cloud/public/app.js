@@ -1018,7 +1018,7 @@ export function initializeTeamWorkspace({
   let controller = null;
   let activeConflicts = null;
   let activeView = "teams";
-  let activeRecordFilter = "host";
+  let activeRecordFilter = "all";
   let backgroundSyncTimer = null;
   let workspaceRefreshTimer = null;
   let workspaceRefreshOperation = null;
@@ -1103,7 +1103,7 @@ export function initializeTeamWorkspace({
     } else if (activeView === "vaults") {
       setText(message, `Команда «${selectedTeam.name}» · папок: ${vaults.length}.`);
     } else {
-      const resourceNames = { host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
+      const resourceNames = { all: "ресурсов", host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
       setText(message, selectedVault
         ? `Команда «${selectedTeam.name}» · папка «${selectedVault.name}».`
         : `Команда «${selectedTeam.name}» · выберите папку для просмотра ${resourceNames[activeRecordFilter]}.`);
@@ -1115,7 +1115,7 @@ export function initializeTeamWorkspace({
       control.disabled = disabled || !canEdit();
     }
     for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
-    recordType.disabled = disabled || !canEdit() || activeView === "hosts";
+    recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
   }
 
   function clearConflicts() {
@@ -1141,7 +1141,7 @@ export function initializeTeamWorkspace({
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
     hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
-    const createLabels = { host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
+    const createLabels = { all: "Добавить запись", host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
     setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
   }
 
@@ -1215,7 +1215,7 @@ export function initializeTeamWorkspace({
     const folder = hostFolderFilter.value;
     const visibleRecords = current.records.filter((value) => {
       if (activeView !== "hosts") return true;
-      if (value.type !== activeRecordFilter) return false;
+      if (activeRecordFilter !== "all" && value.type !== activeRecordFilter) return false;
       if (activeRecordFilter !== "host") return true;
       if (folder !== "all" && hostFolderName(value) !== folder) return false;
       const data = value.data ?? {};
@@ -1225,7 +1225,7 @@ export function initializeTeamWorkspace({
     if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
-      const emptyLabels = { host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
+      const emptyLabels = { all: "записей", host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
       empty.textContent = activeView === "hosts"
         ? `В выбранном Team Vault пока нет ${emptyLabels[activeRecordFilter]}.`
         : "Папка команды пока пуста.";
@@ -1973,9 +1973,9 @@ export function initializeTeamWorkspace({
   function setView(view, recordFilter = null) {
     activeView = ["teams", "members", "vaults", "hosts", "management"].includes(view) ? view : "teams";
     if (activeView === "hosts") {
-      activeRecordFilter = ["host", "credential", "snippet", "forwarding"].includes(recordFilter)
+      activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(recordFilter)
         ? recordFilter
-        : "host";
+        : "all";
     }
     section.dataset.teamView = activeView;
     for (const button of documentValue.querySelectorAll("#team-view-tabs [data-team-view]")) {
@@ -1986,7 +1986,7 @@ export function initializeTeamWorkspace({
       button.classList.toggle("active", selected);
       button.setAttribute("aria-current", selected ? "page" : "false");
     }
-    const resourceTitles = { host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
+    const resourceTitles = { all: "Командный Vault", host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
       hosts: resourceTitles[activeRecordFilter], management: "Управление командой",
@@ -2003,7 +2003,7 @@ export function initializeTeamWorkspace({
     }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     workspace.hidden = activeView !== "hosts" || !controller;
-    if (activeView === "hosts") recordType.value = activeRecordFilter;
+    if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
     if (controller) {
       clearConflicts();
@@ -2615,7 +2615,7 @@ export function initializeTeamWorkspace({
       }
       recordForm.reset();
       editingHostID = null;
-      if (activeView === "hosts") recordType.value = activeRecordFilter;
+      if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
       recordTitle.disabled = false;
       recordTarget.disabled = false;
       hostProtocol.disabled = false;
@@ -3399,6 +3399,7 @@ export function initializePortalNavigation({
     hosts: "Хосты команд", management: "Управление командой",
   };
   const teamResourceTitles = {
+    all: "Командный Vault",
     host: "Хосты команд", snippet: "Сниппеты команд",
     credential: "Учётные данные команд", forwarding: "Forwarding команд",
   };
@@ -3412,6 +3413,7 @@ export function initializePortalNavigation({
     "/app/teams": ["team-vault", null, "teams", null],
     "/app/team-members": ["team-vault", null, "members", null],
     "/app/team-folders": ["team-vault", null, "vaults", null],
+    "/app/team-vault": ["team-vault", null, "hosts", "all"],
     "/app/team-hosts": ["team-vault", null, "hosts", "host"],
     "/app/team-snippets": ["team-vault", null, "hosts", "snippet"],
     "/app/team-credentials": ["team-vault", null, "hosts", "credential"],
@@ -3423,8 +3425,8 @@ export function initializePortalNavigation({
   };
   let sessionActive = false;
   let requestedWorkspaceRoute = "/app";
-  let activePersonalRecordFilter = "host";
-  let activeTeamRecordFilter = "host";
+  let activePersonalRecordFilter = "all";
+  let activeTeamRecordFilter = "all";
 
   const workspaceHeader = documentValue.querySelector(".workspace-header");
   if (workspaceHeader) workspaceHeader.hidden = true;
@@ -3437,8 +3439,8 @@ export function initializePortalNavigation({
 
   function selectWorkspacePanel(target, recordFilter = null, teamView = null, teamRecordFilter = null) {
     const panelID = Object.hasOwn(titles, target) ? target : "workspace-overview";
-    if (panelID === "local-vault" && recordFilter && recordFilter !== "all") activePersonalRecordFilter = recordFilter;
-    if (panelID === "team-vault" && teamView === "hosts") activeTeamRecordFilter = teamRecordFilter || "host";
+    if (panelID === "local-vault" && recordFilter) activePersonalRecordFilter = recordFilter;
+    if (panelID === "team-vault" && teamView === "hosts") activeTeamRecordFilter = teamRecordFilter || "all";
     if (panelID !== "local-vault") vaultUI?.closeEditor();
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
     const teamResourceContext = panelID === "team-vault" && teamView === "hosts";
@@ -3468,7 +3470,7 @@ export function initializePortalNavigation({
     const normalizedFilter = target === "local-vault" ? recordFilter || "all" : null;
     const normalizedTeamView = target === "team-vault" ? teamView || "teams" : null;
     const normalizedTeamFilter = target === "team-vault" && normalizedTeamView === "hosts"
-      ? teamRecordFilter || "host"
+      ? teamRecordFilter || "all"
       : null;
     return Object.entries(workspaceRoutes).find(([, value]) => value[0] === target
       && value[1] === normalizedFilter && value[2] === normalizedTeamView
