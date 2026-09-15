@@ -18,6 +18,7 @@ import {
   personalHostEditorValues,
   personalHostFolderName,
   personalHostRecordData,
+  teamHostOrganizationValues,
   sortLocalVaultRecords,
   teamHostConnectionData,
   teamHostRecordData,
@@ -194,6 +195,15 @@ test("Team Host organization stays inside the encrypted record", () => {
   assert.throws(() => teamHostRecordData({
     title: "Changed", target: "rdp.invalid", folder: "", tags: "", description: "", baseData: advanced,
   }), /advanced_team_host_requires_native_editor/u);
+  const nativeProfile = Buffer.from(JSON.stringify({
+    group: "ssh", tags: ["legacy"], profileDescription: "Created on macOS",
+  })).toString("base64url");
+  assert.deepEqual(teamHostOrganizationValues({ data: { profile: nativeProfile } }), {
+    folder: "ssh", tags: ["legacy"], description: "Created on macOS",
+  });
+  assert.deepEqual(teamHostOrganizationValues({ data: {
+    profile: nativeProfile, folder: "Browser", tags: ["new"], description: "Edited in browser",
+  } }), { folder: "Browser", tags: ["new"], description: "Edited in browser" });
 });
 
 test("Team Host connection fields produce password-free interoperable URLs", () => {
@@ -380,7 +390,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
   assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=162">/u);
-  assert.match(html, /\/app\.js\?v=162/u);
+  assert.match(html, /\/app\.js\?v=164/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -669,7 +679,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=162/u);
+  assert.match(html, /app\.js\?v=164/u);
   assert.match(html, /styles\.css\?v=162/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);

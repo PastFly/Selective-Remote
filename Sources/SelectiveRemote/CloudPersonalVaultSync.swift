@@ -181,6 +181,9 @@ enum SelectiveRemotePersonalVaultExporter {
                     "address": .string(address),
                     "username": .string(profile.username),
                     "connectionType": .string(profile.connectionType.rawValue),
+                    "folder": .string(profile.group),
+                    "tags": .array(profile.tags.map(SelectiveRemoteJSONValue.string)),
+                    "description": .string(profile.profileDescription),
                     "profile": .string(try encoded(profile))
                 ])
             )

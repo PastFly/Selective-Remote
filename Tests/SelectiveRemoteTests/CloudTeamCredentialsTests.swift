@@ -34,12 +34,15 @@ struct CloudTeamCredentialsTests {
     }
 
     @MainActor
-    @Test("Team Host credential envelopes remain private to Team Hosts")
-    func skipsHostCredentialEnvelope() throws {
+    @Test("Team Host credentials remain visible with their Host relationship")
+    func materializesHostCredentialEnvelope() throws {
         let store = SelectiveRemoteTeamCredentialStore()
-        store.replace(with: [try Self.snapshot(records: [Self.hostCredentialRecord()])])
+        store.replace(with: [try Self.snapshot(records: [Self.hostRecord(), Self.hostCredentialRecord()])])
 
-        #expect(store.credentials.isEmpty)
+        let credential = try #require(store.credentials.first)
+        #expect(credential.sourceHostID == Self.hostID)
+        #expect(credential.sourceHostTitle == "Cloud")
+        #expect(credential.kind == .ssh)
         #expect(store.synchronizedVaultCount == 1)
         #expect(store.invalidVaultCount == 0)
     }
@@ -95,6 +98,8 @@ struct CloudTeamCredentialsTests {
         #expect(source.contains("CredentialDisclosurePolicy.clipboardNanoseconds"))
         #expect(source.contains("NSApplication.didResignActiveNotification"))
         #expect(source.contains("ru: \"Только в памяти\""))
+        #expect(source.contains("credential.sourceHostTitle"))
+        #expect(source.contains("credentialKindTitle"))
         #expect(!source.contains("UserDefaults"))
         #expect(!source.contains("FileManager"))
         #expect(!source.contains("KeychainService"))
@@ -126,6 +131,19 @@ struct CloudTeamCredentialsTests {
                 "secret": .string("host-only-secret"),
                 "kind": .string(KeychainCredentialKind.ssh.rawValue),
                 "sourceID": .string(hostID.uuidString.lowercased())
+            ])
+        )
+    }
+
+    private static func hostRecord() throws -> SelectiveRemoteVaultRecord {
+        try SelectiveRemoteVaultRecord(
+            id: hostID,
+            type: .host,
+            version: try SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-15T00:00:00.000Z",
+            data: .object([
+                "title": .string("Cloud"),
+                "address": .string("cloud.example.invalid")
             ])
         )
     }

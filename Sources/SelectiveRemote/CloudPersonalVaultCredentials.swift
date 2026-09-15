@@ -2,19 +2,15 @@ import Foundation
 
 actor SelectiveRemotePersonalVaultCredentialCollector {
     static let shared = SelectiveRemotePersonalVaultCredentialCollector()
-    private var authorizedForSession = false
 
     func collect(
         profiles: [ConnectionProfile],
         forwarding: [IndependentPortForward]
     ) async throws -> [SelectiveRemotePersonalVaultCredentialInput] {
-        if !authorizedForSession {
-            try await KeychainService.authenticateDeviceOwner(reason: UpdateLocalization.text(
-                ru: "Разрешить Selective Remote синхронизировать сохранённые пароли через зашифрованный Personal Vault",
-                en: "Allow Selective Remote to sync saved passwords through the encrypted Personal Vault"
-            ))
-            authorizedForSession = true
-        }
+        // Personal Vault synchronization only runs while the app is unlocked.
+        // The unified device-only Keychain item does not require a separate
+        // LocalAuthentication request; one here can be hidden behind the app
+        // and abort the entire Host/folder upload.
         var result: [SelectiveRemotePersonalVaultCredentialInput] = []
         for profile in profiles {
             switch profile.connectionType {
@@ -41,13 +37,6 @@ actor SelectiveRemotePersonalVaultCredentialCollector {
     func collectSSHKeys(_ records: [SSHKeyRecord]) async throws
         -> [SelectiveRemotePersonalVaultSSHKeyInput]
     {
-        if !authorizedForSession {
-            try await KeychainService.authenticateDeviceOwner(reason: UpdateLocalization.text(
-                ru: "Разрешить Selective Remote синхронизировать приватные SSH-ключи через зашифрованный Personal Vault",
-                en: "Allow Selective Remote to sync private SSH keys through the encrypted Personal Vault"
-            ))
-            authorizedForSession = true
-        }
         let fileManager = FileManager.default
         return try records.map { record in
             let privateURL = URL(fileURLWithPath: record.privateKeyPath).standardizedFileURL

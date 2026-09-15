@@ -18,6 +18,9 @@ struct SelectiveRemoteTeamCredential: Identifiable, Equatable, Sendable {
     let title: String
     let username: String
     let secret: String
+    let sourceHostID: UUID?
+    let sourceHostTitle: String?
+    let kind: KeychainCredentialKind?
 }
 
 enum SelectiveRemoteTeamCredentialMaterializationError: Error, Equatable {
@@ -49,13 +52,44 @@ enum SelectiveRemoteTeamCredentialMaterializer {
             throw SelectiveRemoteTeamCredentialMaterializationError.invalidSnapshot
         }
 
+        let hostTitles = try Dictionary(uniqueKeysWithValues: document.records.compactMap { record
+            -> (UUID, String)? in
+            guard record.type == .host, case let .object(data) = record.data,
+                  let title = string(data["title"]), validName(title)
+            else { return nil }
+            return (record.id, title)
+        })
+
         return try document.records.compactMap { record in
             guard record.type == .credential else { return nil }
             guard case let .object(data) = record.data else {
                 throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
             }
-            if Set(data.keys) == hostCredentialKeys { return nil }
-            guard Set(data.keys) == credentialKeys,
+            let keys = Set(data.keys)
+            let sourceHostID: UUID?
+            let sourceHostTitle: String?
+            let kind: KeychainCredentialKind?
+            if keys == hostCredentialKeys {
+                guard let sourceText = string(data["sourceID"]),
+                      let resolvedSourceID = UUID(uuidString: sourceText),
+                      let resolvedHostTitle = hostTitles[resolvedSourceID],
+                      let kindText = string(data["kind"]),
+                      let resolvedKind = KeychainCredentialKind(rawValue: kindText),
+                      resolvedKind != .sshKeyAuthorization
+                else {
+                    throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
+                }
+                sourceHostID = resolvedSourceID
+                sourceHostTitle = resolvedHostTitle
+                kind = resolvedKind
+            } else if keys == credentialKeys {
+                sourceHostID = nil
+                sourceHostTitle = nil
+                kind = nil
+            } else {
+                throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
+            }
+            guard
                   let title = string(data["title"]),
                   let username = string(data["username"]),
                   let secret = string(data["secret"]),
@@ -83,7 +117,10 @@ enum SelectiveRemoteTeamCredentialMaterializer {
                 modifiedDate: modifiedDate,
                 title: title,
                 username: username,
-                secret: secret
+                secret: secret,
+                sourceHostID: sourceHostID,
+                sourceHostTitle: sourceHostTitle,
+                kind: kind
             )
         }
     }
@@ -195,7 +232,8 @@ struct SelectiveRemoteTeamCredentialsView: View {
             (selectedVaultKey.isEmpty || vaultKey(credential) == selectedVaultKey)
                 && (normalized.isEmpty || [
                     credential.title, credential.username,
-                    credential.teamName, credential.vaultName
+                    credential.teamName, credential.vaultName,
+                    credential.sourceHostTitle ?? "", credentialKindTitle(credential.kind)
                 ].contains { $0.localizedCaseInsensitiveContains(normalized) })
         }
     }
@@ -320,6 +358,15 @@ struct SelectiveRemoteTeamCredentialsView: View {
                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
             Text(credential.username)
                 .font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+            if let sourceHostTitle = credential.sourceHostTitle {
+                Label(
+                    "\(UpdateLocalization.text(ru: "Хост", en: "Host")): \(sourceHostTitle) · \(credentialKindTitle(credential.kind))",
+                    systemImage: "display"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
         }
         .padding(.vertical, 6)
     }
@@ -351,6 +398,12 @@ struct SelectiveRemoteTeamCredentialsView: View {
 
             HStack(spacing: 18) {
                 Label(roleTitle(credential.role), systemImage: "person.badge.shield.checkmark")
+                if let sourceHostTitle = credential.sourceHostTitle {
+                    Label(
+                        "\(UpdateLocalization.text(ru: "Хост", en: "Host")): \(sourceHostTitle) · \(credentialKindTitle(credential.kind))",
+                        systemImage: "display"
+                    )
+                }
                 Label(
                     "r\(credential.revision) · k\(credential.keyGeneration)",
                     systemImage: "lock.shield"
@@ -528,6 +581,18 @@ struct SelectiveRemoteTeamCredentialsView: View {
         case .admin: UpdateLocalization.text(ru: "Администратор", en: "Admin")
         case .editor: UpdateLocalization.text(ru: "Редактор", en: "Editor")
         case .viewer: UpdateLocalization.text(ru: "Просмотр", en: "Viewer")
+        }
+    }
+
+    private func credentialKindTitle(_ kind: KeychainCredentialKind?) -> String {
+        switch kind {
+        case .rdp: "RDP"
+        case .gateway: UpdateLocalization.text(ru: "Шлюз", en: "Gateway")
+        case .ssh: "SSH"
+        case .forwarding: "Forwarding"
+        case .proxy: "Proxy"
+        case .sshKeyAuthorization: "SSH Key"
+        case nil: UpdateLocalization.text(ru: "Самостоятельная", en: "Standalone")
         }
     }
 
