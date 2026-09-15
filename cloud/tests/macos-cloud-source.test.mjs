@@ -725,6 +725,10 @@ test("macOS Team Credentials use the shared sync lifecycle and a separate memory
   assert.match(credentials, /CredentialDisclosurePolicy\.clipboardNanoseconds/u);
   assert.match(credentials, /sourceHostTitle/u);
   assert.match(credentials, /credentialKindTitle/u);
+  assert.match(credentials, /DisclosureGroup/u);
+  assert.match(credentials, /expandedVaultKeysStorage/u);
+  assert.match(credentials, /expandedFolderKeysStorage/u);
+  assert.match(credentials, /credential\.tags\.joined/u);
   assert.match(credentials, /NSApplication\.didResignActiveNotification/u);
   assert.match(credentials, /Только в памяти/u);
   assert.doesNotMatch(credentials, /UserDefaults|FileManager|KeychainService/u);

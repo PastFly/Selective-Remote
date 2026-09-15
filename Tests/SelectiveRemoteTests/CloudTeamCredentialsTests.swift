@@ -34,6 +34,20 @@ struct CloudTeamCredentialsTests {
     }
 
     @MainActor
+    @Test("large Team Credential collections remain complete before grouped rendering")
+    func materializesLargeCredentialCollection() throws {
+        let records = try (0..<125).map { index in
+            try Self.credentialRecord(id: UUID(), index: index)
+        }
+        let store = SelectiveRemoteTeamCredentialStore()
+        store.replace(with: [try Self.snapshot(records: records)])
+
+        #expect(store.credentials.count == 125)
+        #expect(store.invalidVaultCount == 0)
+        #expect(Set(store.credentials.map(\.recordID)).count == 125)
+    }
+
+    @MainActor
     @Test("Team Host credentials remain visible with their Host relationship")
     func materializesHostCredentialEnvelope() throws {
         let store = SelectiveRemoteTeamCredentialStore()
@@ -43,6 +57,8 @@ struct CloudTeamCredentialsTests {
         #expect(credential.sourceHostID == Self.hostID)
         #expect(credential.sourceHostTitle == "Cloud")
         #expect(credential.kind == .ssh)
+        #expect(credential.folder == "Production/SSH")
+        #expect(credential.tags == ["linux", "prod"])
         #expect(store.synchronizedVaultCount == 1)
         #expect(store.invalidVaultCount == 0)
     }
@@ -102,19 +118,30 @@ struct CloudTeamCredentialsTests {
         #expect(source.contains("ru: \"Только в памяти\""))
         #expect(source.contains("credential.sourceHostTitle"))
         #expect(source.contains("credentialKindTitle"))
+        #expect(source.contains("DisclosureGroup"))
+        #expect(source.contains("expandedVaultKeysStorage"))
+        #expect(source.contains("expandedFolderKeysStorage"))
+        #expect(source.contains("credential.tags.joined"))
         #expect(!source.contains("UserDefaults"))
         #expect(!source.contains("FileManager"))
         #expect(!source.contains("KeychainService"))
     }
 
     private static func credentialRecord() throws -> SelectiveRemoteVaultRecord {
+        try credentialRecord(id: credentialID, index: nil)
+    }
+
+    private static func credentialRecord(
+        id: UUID,
+        index: Int?
+    ) throws -> SelectiveRemoteVaultRecord {
         try SelectiveRemoteVaultRecord(
-            id: credentialID,
+            id: id,
             type: .credential,
             version: try SelectiveRemoteVaultVersion([deviceID: 1]),
             modifiedAt: "2026-09-15T00:00:00.000Z",
             data: .object([
-                "title": .string("Deploy account"),
+                "title": .string(index.map { "Deploy account \($0)" } ?? "Deploy account"),
                 "username": .string("deployer"),
                 "secret": .string("correct horse battery staple")
             ])
@@ -145,7 +172,10 @@ struct CloudTeamCredentialsTests {
             modifiedAt: "2026-09-15T00:00:00.000Z",
             data: .object([
                 "title": .string("Cloud"),
-                "address": .string("cloud.example.invalid")
+                "address": .string("cloud.example.invalid"),
+                "folder": .string("Production/SSH"),
+                "tags": .array([.string("linux"), .string("prod")]),
+                "description": .string("Shared SSH entry")
             ])
         )
     }
