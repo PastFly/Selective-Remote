@@ -24,6 +24,35 @@ function jsonResponse(status, value) {
   });
 }
 
+test("username invitation preserves a safe rotation-required response", async () => {
+  const { identity } = await fixture();
+  const client = createAuthenticatedVaultClient({
+    async fetchValue(path) {
+      if (path === "/v1/auth/login") {
+        return jsonResponse(200, {
+          token: "t".repeat(43),
+          user: { id: userID, email: "owner@example.invalid", username: "owner", displayName: "Owner" },
+          deviceID,
+        });
+      }
+      if (path === `/v1/teams/${teamID}/invitations`) {
+        return jsonResponse(409, { error: "team_vault_rotation_required" });
+      }
+      throw new Error(`unexpected_request:${path}`);
+    },
+  });
+  await client.login({
+    email: "owner@example.invalid",
+    password: "synthetic-password",
+    deviceID,
+    publicKey: identity.publicKey,
+  });
+  await assert.rejects(
+    client.inviteTeamMember({ teamID, username: "member", role: "viewer" }),
+    /team_vault_rotation_required/u,
+  );
+});
+
 async function fixture() {
   const identity = await generateTeamDeviceIdentity(webcrypto);
   const vaultKey = await generateVaultKey(webcrypto);
