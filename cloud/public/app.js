@@ -1699,27 +1699,42 @@ export function initializeTeamWorkspace({
         await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams(activeTeam?.id)]);
         return;
       }
-      const requests = [client.listPendingTeamInvitations()];
-      if (activeTeam) {
-        requests.push(client.listTeamMembersPage(activeTeam.id, {
+      const pendingForAccount = await client.listPendingTeamInvitations().catch(() => null);
+      if (identity !== activeIdentity) return;
+      if (pendingForAccount) {
+        accountInvitations = pendingForAccount;
+        renderPendingInvitations();
+        renderOverviewSummary();
+      }
+      const latestTeams = await client.listTeams();
+      if (identity !== activeIdentity) return;
+      const teamSignature = (values) => JSON.stringify(values.map((team) => [
+        team.id, team.name, team.role, team.membershipID,
+      ]));
+      if (teamSignature(latestTeams) !== teamSignature(teams)) {
+        await loadTeams(activeTeam?.id);
+        return;
+      }
+      if (!activeTeam || selectedTeam?.id !== activeTeam.id) return;
+      const [memberResult, invitationResult] = await Promise.allSettled([
+        client.listTeamMembersPage(activeTeam.id, {
           search: memberSearch.value,
           role: memberRoleFilter.value,
           limit: 50,
-        }));
-        requests.push(canManage() ? client.listTeamInvitations(activeTeam.id) : Promise.resolve([]));
+        }),
+        canManage() ? client.listTeamInvitations(activeTeam.id) : Promise.resolve([]),
+      ]);
+      if (identity !== activeIdentity || selectedTeam?.id !== activeTeam.id) return;
+      if (memberResult.status === "fulfilled") {
+        teamMembers = memberResult.value.members;
+        memberNextCursor = memberResult.value.nextCursor;
+        memberTotal = memberResult.value.total;
+        renderMembers(teamMembers);
       }
-      const [pendingForAccount, memberPage, invitationsForTeam] = await Promise.all(requests);
-      if (identity !== activeIdentity) return;
-      accountInvitations = pendingForAccount;
-      renderPendingInvitations();
-      renderOverviewSummary();
-      if (!activeTeam || selectedTeam?.id !== activeTeam.id) return;
-      teamMembers = memberPage.members;
-      memberNextCursor = memberPage.nextCursor;
-      memberTotal = memberPage.total;
-      teamInvitations = invitationsForTeam;
-      renderMembers(teamMembers);
-      renderTeamInvitations();
+      if (invitationResult.status === "fulfilled") {
+        teamInvitations = invitationResult.value;
+        renderTeamInvitations();
+      }
       updateTeamMessage();
     })();
     workspaceRefreshOperation = pending;
