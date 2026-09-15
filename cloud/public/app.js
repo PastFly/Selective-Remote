@@ -1981,6 +1981,11 @@ export function initializeTeamWorkspace({
     for (const button of documentValue.querySelectorAll("#team-view-tabs [data-team-view]")) {
       button.classList.toggle("active", button.dataset.teamView === activeView);
     }
+    for (const button of documentValue.querySelectorAll("#team-resource-filters [data-team-record-filter]")) {
+      const selected = button.dataset.teamRecordFilter === activeRecordFilter;
+      button.classList.toggle("active", selected);
+      button.setAttribute("aria-current", selected ? "page" : "false");
+    }
     const resourceTitles = { host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
@@ -3436,10 +3441,15 @@ export function initializePortalNavigation({
     if (panelID === "team-vault" && teamView === "hosts") activeTeamRecordFilter = teamRecordFilter || "host";
     if (panelID !== "local-vault") vaultUI?.closeEditor();
     for (const panel of workspacePanels) panel.hidden = panel.id !== panelID;
+    const teamResourceContext = panelID === "team-vault" && teamView === "hosts";
     for (const button of sidebarButtons) {
-      const matchesPanel = button.dataset.workspaceTarget === panelID;
-      const matchesFilter = panelID !== "local-vault"
-        || (button.dataset.recordFilter || "all") === (recordFilter || "all");
+      const matchesPanel = button.dataset.workspaceTarget === panelID
+        || (teamResourceContext && button.dataset.workspaceTarget === "local-vault");
+      const matchesFilter = panelID === "local-vault"
+        ? (button.dataset.recordFilter || "all") === (recordFilter || "all")
+        : teamResourceContext && button.dataset.workspaceTarget === "local-vault"
+          ? button.dataset.recordFilter === activeTeamRecordFilter
+          : true;
       const matchesTeamView = panelID !== "team-vault"
         || !button.dataset.teamView
         || button.dataset.teamView === (teamView || "teams");
@@ -3532,13 +3542,13 @@ export function initializePortalNavigation({
       const preserveRecordFilter = button.hasAttribute("data-preserve-record-filter");
       const recordFilter = button.dataset.recordFilter || (preserveRecordFilter && target === "local-vault" ? activeTeamRecordFilter : null);
       const teamView = button.dataset.teamView || null;
-      const teamRecordFilter = preserveRecordFilter && target === "team-vault"
+      const teamRecordFilter = button.dataset.teamRecordFilter || (preserveRecordFilter && target === "team-vault"
         ? button.closest("#local-vault") ? activePersonalRecordFilter : activeTeamRecordFilter
-        : null;
+        : null);
       selectWorkspacePanel(target, recordFilter, teamView, teamRecordFilter);
       requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, teamRecordFilter);
       setPath(requestedWorkspaceRoute);
-      workspace.scrollIntoView?.({ block: "start" });
+      if (!button.hasAttribute("data-preserve-scroll")) workspace.scrollIntoView?.({ block: "start" });
     });
   }
 
