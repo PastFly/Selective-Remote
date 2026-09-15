@@ -491,13 +491,16 @@ export async function initializeLocalVault({
     const labels = {
       host: ["Адрес", "Дополнительные данные не требуются"],
       credential: ["Имя пользователя", "Секрет"],
-      snippet: ["Не используется", "Текст Snippet"],
+      snippet: ["", "Текст Snippet"],
       forwarding: ["Назначение", "Параметры"],
     };
     const [targetText, secretText] = labels[type.value] ?? labels.host;
     setText(targetLabel, targetText);
     setText(secretLabel, secretText);
-    target.required = type.value !== "snippet";
+    const isSnippet = type.value === "snippet";
+    targetLabel.hidden = isSnippet;
+    target.hidden = isSnippet;
+    target.required = !isSnippet;
     secret.required = type.value === "credential" || type.value === "snippet";
     const isHost = type.value === "host";
     hostFields.hidden = !isHost;
@@ -1131,13 +1134,16 @@ export function initializeTeamWorkspace({
     const labels = {
       host: ["Адрес", "Дополнительные данные не требуются"],
       credential: ["Имя пользователя", "Секрет"],
-      snippet: ["Не используется", "Текст Snippet"],
+      snippet: ["", "Текст Snippet"],
       forwarding: ["Назначение", "Параметры"],
     };
     const [targetText, secretText] = labels[recordType.value] ?? labels.host;
     setText(recordTargetLabel, targetText);
     setText(recordSecretLabel, secretText);
-    recordTarget.required = recordType.value !== "snippet";
+    const isSnippet = recordType.value === "snippet";
+    recordTargetLabel.hidden = isSnippet;
+    recordTarget.hidden = isSnippet;
+    recordTarget.required = !isSnippet;
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
     hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";

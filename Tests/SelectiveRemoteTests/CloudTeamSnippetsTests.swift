@@ -5,6 +5,60 @@ import Testing
 @Suite("macOS Team Snippet materialization")
 struct CloudTeamSnippetsTests {
     @MainActor
+    @Test("Team Snippet Targets are personal persistent assignments")
+    func targetAssignmentsPersistLocally() throws {
+        let suiteName = "CloudTeamSnippetTargetsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let key = "targets"
+        let first = UUID()
+        let second = UUID()
+
+        let store = SelectiveRemoteTeamSnippetTargetStore(defaults: defaults, defaultsKey: key)
+        store.setTargets([second, first, second], for: Self.snippetID)
+
+        #expect(Set(store.targets(for: Self.snippetID)) == Set([first, second]))
+        let restored = SelectiveRemoteTeamSnippetTargetStore(defaults: defaults, defaultsKey: key)
+        #expect(Set(restored.targets(for: Self.snippetID)) == Set([first, second]))
+        restored.setTargets([], for: Self.snippetID)
+        #expect(restored.targets(for: Self.snippetID).isEmpty)
+    }
+
+    @Test("Team Snippet UI exposes explicit run, target assignment, and context menu")
+    func teamSnippetActionsAreAvailable() throws {
+        let root = Self.packageRoot()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamSnippets.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains(".contextMenu { snippetActions(snippet) }"))
+        #expect(source.contains("ru: \"Настроить хосты…\""))
+        #expect(source.contains("model.runTerminalSnippet(executable)"))
+        #expect(source.contains("ru: \"Выбор хранится только на этом Mac"))
+        #expect(source.contains("TimelineView(.periodic(from: .now, by: 60))"))
+        #expect(source.contains("ru: \"Изменён "))
+        #expect(!source.contains("Text(snippet.modifiedDate, style: .relative)"))
+    }
+
+    @Test("App startup and Cloud session changes refresh Team Snippets immediately")
+    func applicationLifecycleTriggersImmediateRefresh() throws {
+        let root = Self.packageRoot()
+        let app = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SelectiveRemoteApp.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudSettingsView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(app.contains("await teamVaultAutoSync.start()\n                _ = try? await teamVaultAutoSync.synchronizeConfiguredAccountNow()"))
+        #expect(app.contains("for: .selectiveRemoteTeamVaultSyncNow"))
+        #expect(settings.components(separatedBy: "name: .selectiveRemoteTeamVaultSyncNow").count - 1 == 4)
+    }
+
+    @MainActor
     @Test("Team Snippets materialize into a separate memory-only projection")
     func materializesTeamSnippets() throws {
         let store = SelectiveRemoteTeamSnippetStore()
@@ -131,4 +185,11 @@ struct CloudTeamSnippetsTests {
     private static let snippetID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
     private static let hostID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
     private static let deviceID = UUID(uuidString: "66666666-6666-4666-8666-666666666666")!
+
+    private static func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }

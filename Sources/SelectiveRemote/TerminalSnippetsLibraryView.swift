@@ -124,7 +124,7 @@ struct TerminalSnippetsLibraryView: View {
                 }
             } else {
                 Divider()
-                SelectiveRemoteTeamSnippetsView(store: teamStore)
+                SelectiveRemoteTeamSnippetsView(store: teamStore, model: model)
             }
         }
         .sheet(item: $editorRequest) { request in

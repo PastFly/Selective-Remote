@@ -226,13 +226,28 @@ final class SelectiveRemoteTeamSnippetStore: ObservableObject {
     }
 }
 
+@MainActor
 struct SelectiveRemoteTeamSnippetsView: View {
     @ObservedObject var store: SelectiveRemoteTeamSnippetStore
+    @ObservedObject var targetStore: SelectiveRemoteTeamSnippetTargetStore
+    @ObservedObject var model: AppModel
 
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
     @State private var selectedVaultKey = ""
     @State private var copiedSnippetID: UUID?
+    @State private var targetEditorSnippet: SelectiveRemoteTeamSnippet?
+    @State private var actionMessage = ""
+
+    init(
+        store: SelectiveRemoteTeamSnippetStore,
+        model: AppModel,
+        targetStore: SelectiveRemoteTeamSnippetTargetStore = .shared
+    ) {
+        self.store = store
+        self.model = model
+        self.targetStore = targetStore
+    }
 
     private var visibleSnippets: [SelectiveRemoteTeamSnippet] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -272,6 +287,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         List(visibleSnippets, selection: $selectedSnippetID) { snippet in
                             snippetRow(snippet)
                                 .tag(snippet.id)
+                                .contextMenu { snippetActions(snippet) }
                         }
                         .listStyle(.inset)
                     }
@@ -296,6 +312,20 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .onAppear { normalizeSelection() }
         .onChange(of: store.snippets.map(\.id)) { _, _ in normalizeSelection() }
         .onChange(of: selectedVaultKey) { _, _ in normalizeSelection() }
+        .onChange(of: selectedSnippetID) { _, _ in actionMessage = "" }
+        .sheet(item: $targetEditorSnippet) { snippet in
+            SelectiveRemoteTeamSnippetTargetsEditor(
+                snippet: snippet,
+                profiles: availableProfiles,
+                selectedProfileIDs: targetStore.targets(for: snippet.id)
+            ) { profileIDs in
+                targetStore.setTargets(profileIDs, for: snippet.id)
+                actionMessage = UpdateLocalization.text(
+                    ru: "Назначения сохранены только на этом Mac",
+                    en: "Targets saved on this Mac only"
+                )
+            }
+        }
     }
 
     private var controls: some View {
@@ -365,6 +395,9 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 .font(.caption.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
+            Label(targetCountTitle(for: snippet), systemImage: "server.rack")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
     }
@@ -385,6 +418,15 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 }
                 Spacer()
                 Button {
+                    targetEditorSnippet = snippet
+                } label: {
+                    Label(
+                        UpdateLocalization.text(ru: "Хосты", en: "Targets"),
+                        systemImage: "server.rack"
+                    )
+                }
+                .buttonStyle(.bordered)
+                Button {
                     copy(snippet)
                 } label: {
                     Label(
@@ -399,15 +441,71 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
             HStack(spacing: 18) {
                 Label(snippet.role.localizedTitle, systemImage: "person.badge.shield.checkmark")
-                Label {
-                    Text(snippet.modifiedDate, style: .relative)
-                } icon: {
-                    Image(systemName: "clock")
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Label(
+                        modifiedRelativeTitle(snippet.modifiedDate, now: context.date),
+                        systemImage: "clock"
+                    )
+                    .help(snippet.modifiedDate.formatted(date: .abbreviated, time: .standard))
                 }
                 Label("r\(snippet.revision) · k\(snippet.keyGeneration)", systemImage: "lock.shield")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            GroupBox(UpdateLocalization.text(ru: "Назначенные хосты", en: "Assigned Targets")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    let profiles = targetProfiles(for: snippet)
+                    if profiles.isEmpty {
+                        Text(UpdateLocalization.text(
+                            ru: "Хосты ещё не выбраны. Назначение является личной настройкой на этом Mac.",
+                            en: "No targets selected. Assignment is a personal setting on this Mac."
+                        ))
+                        .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(profiles) { profile in
+                            Label {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
+                                    Text(profile.host)
+                                        .font(.caption.monospaced())
+                                        .foregroundStyle(.secondary)
+                                }
+                            } icon: {
+                                Image(systemName: "server.rack")
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+            }
+
+            if !actionMessage.isEmpty {
+                Text(actionMessage)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            if let summary = model.latestSnippetRun, summary.snippetID == snippet.id {
+                GroupBox(UpdateLocalization.text(ru: "Последний запуск", en: "Latest Run")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(summary.targets) { target in
+                            HStack {
+                                Image(systemName: runStateIcon(target.state))
+                                    .foregroundStyle(runStateColor(target.state))
+                                Text(target.name)
+                                Spacer()
+                                Text(runStateTitle(target.state))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                }
+            }
 
             ScrollView {
                 Text(snippet.body)
@@ -420,13 +518,29 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
             Label(
                 UpdateLocalization.text(
-                    ru: "Команда показывается только в памяти после расшифровки Team Vault. Она не запускается автоматически; копирование выполняется только по вашему нажатию.",
-                    en: "The command exists only in memory after Team Vault decryption. It never runs automatically; copying requires your explicit action."
+                    ru: "Команда показывается только в памяти после расшифровки Team Vault. Она не запускается автоматически: копирование и запуск выполняются только по вашему нажатию.",
+                    en: "The command exists only in memory after Team Vault decryption. It never runs automatically; copying and running require your explicit action."
                 ),
                 systemImage: "lock.shield"
             )
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            Button {
+                run(snippet)
+            } label: {
+                Label(
+                    UpdateLocalization.text(
+                        ru: "Запустить на \(targetProfiles(for: snippet).count) хостах",
+                        en: "Run on \(targetProfiles(for: snippet).count) Targets"
+                    ),
+                    systemImage: "play.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(targetProfiles(for: snippet).isEmpty)
         }
         .padding(24)
     }
@@ -486,6 +600,242 @@ struct SelectiveRemoteTeamSnippetsView: View {
         pasteboard.clearContents()
         pasteboard.setString(snippet.body, forType: .string)
         copiedSnippetID = snippet.id
+    }
+
+    @ViewBuilder
+    private func snippetActions(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
+        Button(UpdateLocalization.text(ru: "Запустить", en: "Run"), systemImage: "play.fill") {
+            run(snippet)
+        }
+        .disabled(targetProfiles(for: snippet).isEmpty)
+        Button(
+            UpdateLocalization.text(ru: "Настроить хосты…", en: "Configure Targets…"),
+            systemImage: "server.rack"
+        ) {
+            targetEditorSnippet = snippet
+        }
+        Divider()
+        Button(
+            UpdateLocalization.text(ru: "Скопировать команду", en: "Copy Command"),
+            systemImage: "doc.on.doc"
+        ) {
+            copy(snippet)
+        }
+    }
+
+    private var availableProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType == .ssh }
+            .sorted {
+                let left = $0.friendlyName.isEmpty ? $0.host : $0.friendlyName
+                let right = $1.friendlyName.isEmpty ? $1.host : $1.friendlyName
+                return left.localizedStandardCompare(right) == .orderedAscending
+            }
+    }
+
+    private func targetProfiles(for snippet: SelectiveRemoteTeamSnippet) -> [ConnectionProfile] {
+        let ids = Set(targetStore.targets(for: snippet.id))
+        return availableProfiles.filter { ids.contains($0.id) }
+    }
+
+    private func targetCountTitle(for snippet: SelectiveRemoteTeamSnippet) -> String {
+        UpdateLocalization.text(
+            ru: "Хостов: \(targetProfiles(for: snippet).count)",
+            en: "Targets: \(targetProfiles(for: snippet).count)"
+        )
+    }
+
+    private func run(_ snippet: SelectiveRemoteTeamSnippet) {
+        let profiles = targetProfiles(for: snippet)
+        guard let first = profiles.first else {
+            actionMessage = UpdateLocalization.text(
+                ru: "Сначала выберите хосты для запуска",
+                en: "Select targets before running"
+            )
+            targetEditorSnippet = snippet
+            return
+        }
+        let executable = TerminalCommandTemplate(
+            id: snippet.id,
+            profileID: first.id,
+            title: snippet.title,
+            command: snippet.body,
+            category: "\(snippet.teamName) / \(snippet.vaultName)",
+            targets: profiles.map { .sshProfile($0.id) },
+            updatedAt: snippet.modifiedDate
+        )
+        switch model.runTerminalSnippet(executable) {
+        case .success:
+            actionMessage = UpdateLocalization.text(ru: "Команда отправлена", en: "Command sent")
+        case .connecting:
+            actionMessage = UpdateLocalization.text(
+                ru: "Подключение к хостам и запуск команды…",
+                en: "Connecting to targets and running command…"
+            )
+        case .noTargets:
+            actionMessage = UpdateLocalization.text(ru: "Доступные хосты не найдены", en: "No targets available")
+        case .inactiveSession:
+            actionMessage = UpdateLocalization.text(ru: "SSH-сессия недоступна", en: "SSH session unavailable")
+        case .invalidSnippet:
+            actionMessage = UpdateLocalization.text(ru: "Команда некорректна", en: "Invalid command")
+        }
+    }
+
+    private func runStateTitle(_ state: TerminalSnippetTargetRunState) -> String {
+        switch state {
+        case .connecting: UpdateLocalization.text(ru: "Подключение", en: "Connecting")
+        case .sent: UpdateLocalization.text(ru: "Отправлено", en: "Sent")
+        case .failed(let message): message
+        }
+    }
+
+    private func runStateIcon(_ state: TerminalSnippetTargetRunState) -> String {
+        switch state {
+        case .connecting: "clock.arrow.circlepath"
+        case .sent: "checkmark.circle.fill"
+        case .failed: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private func runStateColor(_ state: TerminalSnippetTargetRunState) -> Color {
+        switch state {
+        case .connecting: .orange
+        case .sent: .green
+        case .failed: .red
+        }
+    }
+
+    private func modifiedRelativeTitle(_ date: Date, now: Date) -> String {
+        let elapsed = max(0, Int(now.timeIntervalSince(date)))
+        if elapsed < 60 {
+            return UpdateLocalization.text(ru: "Изменён только что", en: "Modified just now")
+        }
+        if elapsed < 3_600 {
+            let minutes = max(1, elapsed / 60)
+            let russian = russianUnit(minutes, one: "минуту", few: "минуты", many: "минут")
+            let english = minutes == 1 ? "minute" : "minutes"
+            return UpdateLocalization.text(
+                ru: "Изменён \(minutes) \(russian) назад",
+                en: "Modified \(minutes) \(english) ago"
+            )
+        }
+        if elapsed < 86_400 {
+            let hours = max(1, elapsed / 3_600)
+            let russian = russianUnit(hours, one: "час", few: "часа", many: "часов")
+            let english = hours == 1 ? "hour" : "hours"
+            return UpdateLocalization.text(
+                ru: "Изменён \(hours) \(russian) назад",
+                en: "Modified \(hours) \(english) ago"
+            )
+        }
+        let days = max(1, elapsed / 86_400)
+        let russian = russianUnit(days, one: "день", few: "дня", many: "дней")
+        let english = days == 1 ? "day" : "days"
+        return UpdateLocalization.text(
+            ru: "Изменён \(days) \(russian) назад",
+            en: "Modified \(days) \(english) ago"
+        )
+    }
+
+    private func russianUnit(_ value: Int, one: String, few: String, many: String) -> String {
+        let lastTwo = value % 100
+        if (11 ... 14).contains(lastTwo) { return many }
+        switch value % 10 {
+        case 1: return one
+        case 2 ... 4: return few
+        default: return many
+        }
+    }
+}
+
+private struct SelectiveRemoteTeamSnippetTargetsEditor: View {
+    let snippet: SelectiveRemoteTeamSnippet
+    let profiles: [ConnectionProfile]
+    let onSave: ([UUID]) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedProfileIDs: Set<UUID>
+
+    init(
+        snippet: SelectiveRemoteTeamSnippet,
+        profiles: [ConnectionProfile],
+        selectedProfileIDs: [UUID],
+        onSave: @escaping ([UUID]) -> Void
+    ) {
+        self.snippet = snippet
+        self.profiles = profiles
+        self.onSave = onSave
+        _selectedProfileIDs = State(initialValue: Set(selectedProfileIDs))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(UpdateLocalization.text(ru: "Хосты для Team Snippet", en: "Team Snippet Targets"))
+                    .font(.title2.bold())
+                Text(snippet.title)
+                    .foregroundStyle(.secondary)
+                Text(UpdateLocalization.text(
+                    ru: "Выбор хранится только на этом Mac и не изменяет общий Team Vault.",
+                    en: "This selection is stored only on this Mac and does not change the shared Team Vault."
+                ))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            if profiles.isEmpty {
+                ContentUnavailableView(
+                    UpdateLocalization.text(ru: "Нет личных SSH-хостов", en: "No Personal SSH Hosts"),
+                    systemImage: "server.rack",
+                    description: Text(UpdateLocalization.text(
+                        ru: "Добавьте SSH-хост, чтобы назначить его для запуска.",
+                        en: "Add an SSH host before assigning a target."
+                    ))
+                )
+            } else {
+                List(profiles) { profile in
+                    Toggle(isOn: targetBinding(profile.id)) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
+                            Text(profile.host)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.checkbox)
+                }
+                .listStyle(.inset)
+            }
+
+            HStack {
+                Button(UpdateLocalization.text(ru: "Снять выбор", en: "Clear")) {
+                    selectedProfileIDs.removeAll()
+                }
+                .disabled(selectedProfileIDs.isEmpty)
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
+                    onSave(Array(selectedProfileIDs))
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 560, minHeight: 520)
+    }
+
+    private func targetBinding(_ profileID: UUID) -> Binding<Bool> {
+        Binding(
+            get: { selectedProfileIDs.contains(profileID) },
+            set: { selected in
+                if selected {
+                    selectedProfileIDs.insert(profileID)
+                } else {
+                    selectedProfileIDs.remove(profileID)
+                }
+            }
+        )
     }
 }
 

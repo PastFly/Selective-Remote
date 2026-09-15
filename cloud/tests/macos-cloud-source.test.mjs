@@ -671,8 +671,9 @@ test("macOS Team Host second column exposes actions and visible drag-and-drop ta
 });
 
 test("macOS Team Snippets use a separate fail-closed memory-only projection", async () => {
-  const [snippets, autoSync, library, content, terminal] = await Promise.all([
+  const [snippets, targets, autoSync, library, content, terminal] = await Promise.all([
     readFile(new URL("CloudTeamSnippets.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamSnippetTargets.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
     readFile(new URL("TerminalSnippetsLibraryView.swift", sourceRoot), "utf8"),
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
@@ -689,7 +690,9 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(autoSync, /SelectiveRemoteTeamSnippetStore\.shared\.replace\(with: snapshots\)/u);
   assert.match(library, /SelectiveRemote\.snippets\.scope\.v1/u);
   assert.match(library, /Picker\([\s\S]*SelectiveRemoteSnippetScope\.allCases/u);
-  assert.match(library, /SelectiveRemoteTeamSnippetsView\(store: teamStore\)/u);
+  assert.match(targets, /Persists only the user's local mapping/u);
+  assert.doesNotMatch(targets, /\.body|\.command|vaultName|teamName/u);
+  assert.match(library, /SelectiveRemoteTeamSnippetsView\(store: teamStore, model: model\)/u);
   assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
   assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);
 });

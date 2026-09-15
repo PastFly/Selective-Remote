@@ -564,6 +564,10 @@ struct CloudSettingsView: View {
             accountUser = try await client.currentUser(endpoint: url)
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
+            NotificationCenter.default.post(
+                name: .selectiveRemoteTeamVaultSyncNow,
+                object: nil
+            )
         } catch {
             resetAccountPresentation(endpoint: url)
             accountErrorMessage = error.localizedDescription
@@ -616,6 +620,10 @@ struct CloudSettingsView: View {
                 accountPhase = .signedIn
                 showsAccountSheet = false
                 await loadInventory(endpoint: url)
+                NotificationCenter.default.post(
+                    name: .selectiveRemoteTeamVaultSyncNow,
+                    object: nil
+                )
                 if enrollmentError == nil {
                     do {
                         try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID)
@@ -745,8 +753,16 @@ struct CloudSettingsView: View {
             do {
                 try await client.logout(endpoint: url)
                 resetAccountPresentation(endpoint: url)
+                NotificationCenter.default.post(
+                    name: .selectiveRemoteTeamVaultSyncNow,
+                    object: nil
+                )
             } catch {
                 resetAccountPresentation(endpoint: url)
+                NotificationCenter.default.post(
+                    name: .selectiveRemoteTeamVaultSyncNow,
+                    object: nil
+                )
                 accountErrorMessage = error.localizedDescription
             }
         }
