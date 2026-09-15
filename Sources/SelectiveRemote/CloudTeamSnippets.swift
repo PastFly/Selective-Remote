@@ -441,10 +441,12 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
             HStack(spacing: 18) {
                 Label(snippet.role.localizedTitle, systemImage: "person.badge.shield.checkmark")
-                Label {
-                    Text(snippet.modifiedDate, style: .relative)
-                } icon: {
-                    Image(systemName: "clock")
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    Label(
+                        modifiedRelativeTitle(snippet.modifiedDate, now: context.date),
+                        systemImage: "clock"
+                    )
+                    .help(snippet.modifiedDate.formatted(date: .abbreviated, time: .standard))
                 }
                 Label("r\(snippet.revision) · k\(snippet.keyGeneration)", systemImage: "lock.shield")
             }
@@ -700,6 +702,42 @@ struct SelectiveRemoteTeamSnippetsView: View {
         case .connecting: .orange
         case .sent: .green
         case .failed: .red
+        }
+    }
+
+    private func modifiedRelativeTitle(_ date: Date, now: Date) -> String {
+        let elapsed = max(0, Int(now.timeIntervalSince(date)))
+        if elapsed < 60 {
+            return UpdateLocalization.text(ru: "Изменён только что", en: "Modified just now")
+        }
+        if elapsed < 3_600 {
+            let minutes = max(1, elapsed / 60)
+            return UpdateLocalization.text(
+                ru: "Изменён \(minutes) \(russianUnit(minutes, one: \"минуту\", few: \"минуты\", many: \"минут\")) назад",
+                en: "Modified \(minutes) \(minutes == 1 ? \"minute\" : \"minutes\") ago"
+            )
+        }
+        if elapsed < 86_400 {
+            let hours = max(1, elapsed / 3_600)
+            return UpdateLocalization.text(
+                ru: "Изменён \(hours) \(russianUnit(hours, one: \"час\", few: \"часа\", many: \"часов\")) назад",
+                en: "Modified \(hours) \(hours == 1 ? \"hour\" : \"hours\") ago"
+            )
+        }
+        let days = max(1, elapsed / 86_400)
+        return UpdateLocalization.text(
+            ru: "Изменён \(days) \(russianUnit(days, one: \"день\", few: \"дня\", many: \"дней\")) назад",
+            en: "Modified \(days) \(days == 1 ? \"day\" : \"days\") ago"
+        )
+    }
+
+    private func russianUnit(_ value: Int, one: String, few: String, many: String) -> String {
+        let lastTwo = value % 100
+        if (11 ... 14).contains(lastTwo) { return many }
+        switch value % 10 {
+        case 1: return one
+        case 2 ... 4: return few
+        default: return many
         }
     }
 }

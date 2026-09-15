@@ -36,6 +36,9 @@ struct CloudTeamSnippetsTests {
         #expect(source.contains("ru: \"Настроить хосты…\""))
         #expect(source.contains("model.runTerminalSnippet(executable)"))
         #expect(source.contains("ru: \"Выбор хранится только на этом Mac"))
+        #expect(source.contains("TimelineView(.periodic(from: .now, by: 60))"))
+        #expect(source.contains("ru: \"Изменён "))
+        #expect(!source.contains("Text(snippet.modifiedDate, style: .relative)"))
     }
 
     @Test("App startup and Cloud session changes refresh Team Snippets immediately")
