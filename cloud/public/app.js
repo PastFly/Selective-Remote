@@ -1,6 +1,7 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
+import { initializeModernSelects } from "./modern-select.js?v=151";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -3680,6 +3681,7 @@ export function finishPortalBootstrap({ documentValue = document } = {}) {
 if (typeof document !== "undefined") {
   try {
     initializeAppearance();
+    initializeModernSelects();
     await initializePortal();
   } finally {
     finishPortalBootstrap();
