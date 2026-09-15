@@ -1,7 +1,7 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
-import { initializeModernSelects } from "./modern-select.js?v=151";
+import { initializeModernSelects } from "./modern-select.js?v=152";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -3658,14 +3658,21 @@ export async function initializePortal({
   }
 }
 
+export function appearancePreference(cookieValue = "") {
+  const match = String(cookieValue).match(/(?:^|;\s*)sr_theme=(graphite|emerald|light)(?:;|$)/u);
+  return match?.[1] ?? "graphite";
+}
+
 export function initializeAppearance({ documentValue = document } = {}) {
   const allowed = new Set(["graphite", "emerald", "light"]);
-  let selected = "graphite";
+  let selected = appearancePreference(documentValue.cookie);
   const controls = [...documentValue.querySelectorAll("[data-theme-select]")];
   const apply = (theme) => {
     selected = allowed.has(theme) ? theme : "graphite";
     documentValue.documentElement.dataset.theme = selected;
     for (const control of controls) control.value = selected;
+    const secure = documentValue.defaultView?.location?.protocol === "https:" ? "; Secure" : "";
+    documentValue.cookie = `sr_theme=${selected}; Max-Age=31536000; Path=/; SameSite=Lax${secure}`;
   };
   for (const control of controls) control.addEventListener("change", () => apply(control.value));
   apply(selected);
