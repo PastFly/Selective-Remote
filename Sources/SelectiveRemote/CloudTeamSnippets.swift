@@ -712,22 +712,28 @@ struct SelectiveRemoteTeamSnippetsView: View {
         }
         if elapsed < 3_600 {
             let minutes = max(1, elapsed / 60)
+            let russian = russianUnit(minutes, one: "минуту", few: "минуты", many: "минут")
+            let english = minutes == 1 ? "minute" : "minutes"
             return UpdateLocalization.text(
-                ru: "Изменён \(minutes) \(russianUnit(minutes, one: \"минуту\", few: \"минуты\", many: \"минут\")) назад",
-                en: "Modified \(minutes) \(minutes == 1 ? \"minute\" : \"minutes\") ago"
+                ru: "Изменён \(minutes) \(russian) назад",
+                en: "Modified \(minutes) \(english) ago"
             )
         }
         if elapsed < 86_400 {
             let hours = max(1, elapsed / 3_600)
+            let russian = russianUnit(hours, one: "час", few: "часа", many: "часов")
+            let english = hours == 1 ? "hour" : "hours"
             return UpdateLocalization.text(
-                ru: "Изменён \(hours) \(russianUnit(hours, one: \"час\", few: \"часа\", many: \"часов\")) назад",
-                en: "Modified \(hours) \(hours == 1 ? \"hour\" : \"hours\") ago"
+                ru: "Изменён \(hours) \(russian) назад",
+                en: "Modified \(hours) \(english) ago"
             )
         }
         let days = max(1, elapsed / 86_400)
+        let russian = russianUnit(days, one: "день", few: "дня", many: "дней")
+        let english = days == 1 ? "day" : "days"
         return UpdateLocalization.text(
-            ru: "Изменён \(days) \(russianUnit(days, one: \"день\", few: \"дня\", many: \"дней\")) назад",
-            en: "Modified \(days) \(days == 1 ? \"day\" : \"days\") ago"
+            ru: "Изменён \(days) \(russian) назад",
+            en: "Modified \(days) \(english) ago"
         )
     }
 
