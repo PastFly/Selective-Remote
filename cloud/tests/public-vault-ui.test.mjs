@@ -378,8 +378,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /\/styles\.css\?v=152/u);
-  assert.match(html, /\/app\.js\?v=152/u);
+  assert.match(html, /\/styles\.css\?v=153/u);
+  assert.match(html, /\/app\.js\?v=153/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
   assert.match(styles, /\.app-booting \.app-boot-screen \{ display:grid; \}/u);
   assert.match(styles, /select:not\(\[multiple\]\) \{[^}]*appearance:none[^}]*background-image:linear-gradient/u);
@@ -393,7 +393,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /@keyframes modern-select-in-light/u);
   assert.match(styles, /@keyframes preview-float-light/u);
   assert.match(application, /export function finishPortalBootstrap/u);
-  assert.match(application, /modern-select\.js\?v=152/u);
+  assert.match(application, /modern-select\.js\?v=153/u);
   assert.match(application, /try \{\s*initializeAppearance\(\);\s*initializeModernSelects\(\);\s*await initializePortal\(\);\s*\} finally \{\s*finishPortalBootstrap\(\);/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
@@ -584,6 +584,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.team-host-browser \{ display:grid; grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
   assert.match(styles, /\.record-form input\[type="checkbox"\] \{ width:auto/u);
   assert.match(styles, /\.team-section-tabs,\.host-scope-switcher/u);
+  assert.ok(styles.includes('.brand-actions button:not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
+  assert.ok(styles.includes(':not([data-team-view]):not([data-record-filter])'));
+  assert.ok(styles.includes(':root[data-theme="light"] :is(input:not([type="checkbox"]):not([type="radio"]),textarea,select)'));
+  assert.ok(styles.includes(':root[data-theme="light"] .team-section-tabs button:not(.active)'));
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
   assert.match(application, /synchronizeVault/u);
@@ -621,7 +625,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=152/u);
+  assert.match(html, /app\.js\?v=153/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
