@@ -330,7 +330,9 @@ struct SelectiveRemoteTeamCredentialsView: View {
     }
 
     private var groupedCredentials: [SelectiveRemoteTeamCredentialVaultGroup] {
-        Dictionary(grouping: visibleCredentials, by: vaultKey)
+        Dictionary(grouping: visibleCredentials) { credential in
+            vaultKey(credential)
+        }
             .compactMap { key, values in
                 guard let first = values.first else { return nil }
                 let folders = Dictionary(grouping: values) { normalizedFolder($0.folder) }
