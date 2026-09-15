@@ -1,5 +1,6 @@
 let modernSelectSequence = 0;
 const modernSelectControllers = new WeakMap();
+const modernSelectDocumentObservers = new WeakMap();
 
 export function modernSelectOptionSnapshot(select) {
   return Array.from(select?.options ?? []).map((option, index) => ({
@@ -337,8 +338,34 @@ export function enhanceModernSelect(select, {
   return controller;
 }
 
-export function initializeModernSelects({ documentValue = document } = {}) {
-  return [...documentValue.querySelectorAll("select")]
-    .map((select) => enhanceModernSelect(select, { documentValue }))
+function modernSelectCandidates(node) {
+  if (!node || node.nodeType !== 1) return [];
+  const candidates = node.matches?.("select") ? [node] : [];
+  candidates.push(...(node.querySelectorAll?.("select") ?? []));
+  return candidates;
+}
+
+export function initializeModernSelects({
+  documentValue = document,
+  MutationObserverValue = documentValue.defaultView?.MutationObserver ?? globalThis.MutationObserver,
+  enhance = enhanceModernSelect,
+} = {}) {
+  const enhanceSelect = (select) => enhance(select, { documentValue, MutationObserverValue });
+  const controllers = [...documentValue.querySelectorAll("select")]
+    .map(enhanceSelect)
     .filter(Boolean);
+
+  if (MutationObserverValue && !modernSelectDocumentObservers.has(documentValue)) {
+    const observer = new MutationObserverValue((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes ?? []) {
+          modernSelectCandidates(node).forEach(enhanceSelect);
+        }
+      }
+    });
+    observer.observe(documentValue.documentElement, { childList: true, subtree: true });
+    modernSelectDocumentObservers.set(documentValue, observer);
+  }
+
+  return controllers;
 }

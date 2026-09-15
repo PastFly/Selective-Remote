@@ -2,10 +2,55 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  initializeModernSelects,
   modernSelectMenuPlacement,
   modernSelectNextIndex,
   modernSelectOptionSnapshot,
 } from "../public/modern-select.js";
+
+test("modern selects enhance controls added after initial render", () => {
+  const initial = { nodeType: 1 };
+  const addedSelect = {
+    nodeType: 1,
+    matches: (selector) => selector === "select",
+    querySelectorAll: () => [],
+  };
+  const nestedSelect = { nodeType: 1 };
+  const addedPanel = {
+    nodeType: 1,
+    matches: () => false,
+    querySelectorAll: (selector) => selector === "select" ? [nestedSelect] : [],
+  };
+  let additions;
+  let observation;
+  class Observer {
+    constructor(callback) { additions = callback; }
+    observe(target, options) { observation = { target, options }; }
+  }
+  const root = {};
+  const documentValue = {
+    documentElement: root,
+    querySelectorAll: (selector) => selector === "select" ? [initial] : [],
+  };
+  const enhanced = [];
+
+  const controllers = initializeModernSelects({
+    documentValue,
+    MutationObserverValue: Observer,
+    enhance: (select) => {
+      enhanced.push(select);
+      return { select };
+    },
+  });
+  additions([{ addedNodes: [addedSelect, addedPanel, { nodeType: 3 }] }]);
+
+  assert.equal(controllers.length, 1);
+  assert.deepEqual(enhanced, [initial, addedSelect, nestedSelect]);
+  assert.deepEqual(observation, {
+    target: root,
+    options: { childList: true, subtree: true },
+  });
+});
 
 test("modern select menu stays inside the viewport and opens upward near the bottom", () => {
   assert.deepEqual(modernSelectMenuPlacement({
