@@ -22,6 +22,37 @@ export function modernSelectNextIndex(options, currentIndex, direction) {
   return -1;
 }
 
+export function modernSelectMenuPlacement({
+  triggerRect,
+  viewportWidth,
+  viewportHeight,
+  menuHeight,
+  contentWidth = 0,
+  gap = 8,
+  edge = 16,
+}) {
+  const availableWidth = Math.max(0, viewportWidth - edge * 2);
+  const width = Math.min(
+    Math.max(triggerRect.width, Math.min(contentWidth, 420), 170),
+    availableWidth,
+  );
+  const below = Math.max(0, viewportHeight - triggerRect.bottom - gap - edge);
+  const above = Math.max(0, triggerRect.top - gap - edge);
+  const preferredHeight = Math.min(menuHeight, 300);
+  const openUp = below < preferredHeight && above > below;
+  const maxHeight = Math.max(48, Math.min(300, openUp ? above : below));
+  const renderedHeight = Math.min(menuHeight, maxHeight);
+  const left = Math.min(
+    Math.max(edge, triggerRect.left),
+    Math.max(edge, viewportWidth - edge - width),
+  );
+  const top = openUp
+    ? Math.max(edge, triggerRect.top - gap - renderedHeight)
+    : Math.min(viewportHeight - edge, triggerRect.bottom + gap);
+
+  return { left, top, width, maxHeight, openUp };
+}
+
 function selectAccessibleName(select) {
   const explicit = select.getAttribute("aria-label");
   if (explicit) return explicit.trim();
@@ -87,12 +118,19 @@ export function enhanceModernSelect(select, {
 
   function positionMenu() {
     if (!open) return;
-    const rect = wrapper.getBoundingClientRect();
-    const viewportHeight = documentValue.defaultView?.innerHeight ?? 0;
-    const below = viewportHeight - rect.bottom;
-    const above = rect.top;
-    const menuHeight = Math.min(menu.scrollHeight, 300);
-    wrapper.classList.toggle("open-up", below < menuHeight + 12 && above > below);
+    const windowValue = documentValue.defaultView;
+    const placement = modernSelectMenuPlacement({
+      triggerRect: trigger.getBoundingClientRect(),
+      viewportWidth: windowValue?.innerWidth ?? documentValue.documentElement?.clientWidth ?? 0,
+      viewportHeight: windowValue?.innerHeight ?? documentValue.documentElement?.clientHeight ?? 0,
+      menuHeight: menu.scrollHeight,
+      contentWidth: menu.scrollWidth,
+    });
+    menu.classList.toggle("open-up", placement.openUp);
+    menu.style.left = `${placement.left}px`;
+    menu.style.top = `${placement.top}px`;
+    menu.style.width = `${placement.width}px`;
+    menu.style.maxHeight = `${placement.maxHeight}px`;
   }
 
   function focusOption(index) {
@@ -107,9 +145,12 @@ export function enhanceModernSelect(select, {
   function closeMenu({ restoreFocus = false } = {}) {
     if (!open) return;
     open = false;
-    wrapper.classList.remove("open", "open-up");
+    wrapper.classList.remove("open");
     trigger.setAttribute("aria-expanded", "false");
     menu.hidden = true;
+    menu.classList.remove("open-up");
+    menu.removeAttribute("style");
+    if (menu.parentNode !== wrapper) wrapper.append(menu);
     if (restoreFocus) trigger.focus({ preventScroll: true });
   }
 
@@ -206,6 +247,7 @@ export function enhanceModernSelect(select, {
     open = true;
     wrapper.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");
+    documentValue.body.append(menu);
     menu.hidden = false;
     schedule(documentValue, () => {
       positionMenu();
@@ -242,10 +284,12 @@ export function enhanceModernSelect(select, {
     trigger.focus({ preventScroll: true });
   });
   select.form?.addEventListener("reset", () => schedule(documentValue, sync));
-  documentValue.addEventListener("pointerdown", (event) => {
-    if (open && !wrapper.contains(event.target)) closeMenu();
-  });
+  const closeFromOutsidePointer = (event) => {
+    if (open && !wrapper.contains(event.target) && !menu.contains(event.target)) closeMenu();
+  };
+  documentValue.addEventListener("pointerdown", closeFromOutsidePointer);
   documentValue.defaultView?.addEventListener("resize", positionMenu);
+  documentValue.defaultView?.addEventListener("scroll", positionMenu, true);
 
   const observedProperties = ["value", "selectedIndex"].flatMap((property) => {
     let prototype = Object.getPrototypeOf(select);
@@ -280,7 +324,11 @@ export function enhanceModernSelect(select, {
     sync,
     close: closeMenu,
     destroy: () => {
+      closeMenu();
       observer?.disconnect();
+      documentValue.removeEventListener("pointerdown", closeFromOutsidePointer);
+      documentValue.defaultView?.removeEventListener("resize", positionMenu);
+      documentValue.defaultView?.removeEventListener("scroll", positionMenu, true);
       for (const property of observedProperties) delete select[property];
     },
   };

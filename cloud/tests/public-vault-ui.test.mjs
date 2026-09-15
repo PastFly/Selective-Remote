@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   accountVaultPassphrase,
+  appearancePreference,
   finishPortalBootstrap,
   formatVaultSynchronizationSummary,
   formatVaultTimestamp,
@@ -35,26 +36,30 @@ test("account password is domain-separated before it unlocks Personal Vault", ()
   );
 });
 
-test("appearance defaults to graphite and synchronizes every visible selector", () => {
+test("appearance persists the selected theme and restores it after a full reload", () => {
   const listeners = [];
   const controls = [{ value: "" }, { value: "" }].map((control) => ({
     ...control,
     addEventListener(_name, listener) { listeners.push([this, listener]); },
   }));
   const documentValue = {
+    cookie: "sr_theme=light",
     documentElement: { dataset: {} },
     querySelectorAll: () => controls,
   };
   const appearance = initializeAppearance({ documentValue });
-  assert.equal(appearance.theme(), "graphite");
-  assert.equal(documentValue.documentElement.dataset.theme, "graphite");
-  assert.deepEqual(controls.map(({ value }) => value), ["graphite", "graphite"]);
-  controls[1].value = "light";
-  listeners[1][1]();
   assert.equal(appearance.theme(), "light");
+  assert.equal(documentValue.documentElement.dataset.theme, "light");
   assert.deepEqual(controls.map(({ value }) => value), ["light", "light"]);
+  controls[1].value = "emerald";
+  listeners[1][1]();
+  assert.equal(appearance.theme(), "emerald");
+  assert.deepEqual(controls.map(({ value }) => value), ["emerald", "emerald"]);
+  assert.match(documentValue.cookie, /^sr_theme=emerald; Max-Age=31536000; Path=\/; SameSite=Lax$/u);
   appearance.apply("unknown");
   assert.equal(appearance.theme(), "graphite");
+  assert.equal(appearancePreference("unrelated=1; sr_theme=light; another=2"), "light");
+  assert.equal(appearancePreference("sr_theme=unknown"), "graphite");
 });
 
 test("portal bootstrap reveals the resolved view and retires its loading screen", () => {
@@ -373,8 +378,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /\/styles\.css\?v=151/u);
-  assert.match(html, /\/app\.js\?v=151/u);
+  assert.match(html, /\/styles\.css\?v=152/u);
+  assert.match(html, /\/app\.js\?v=152/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
   assert.match(styles, /\.app-booting \.app-boot-screen \{ display:grid; \}/u);
   assert.match(styles, /select:not\(\[multiple\]\) \{[^}]*appearance:none[^}]*background-image:linear-gradient/u);
@@ -385,8 +390,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /:root\[data-theme="light"\] \.modern-select-menu/u);
   assert.match(styles, /:root\[data-theme="light"\] \.workspace-main/u);
   assert.match(styles, /:root\[data-theme="light"\] \.account-settings-card input/u);
+  assert.match(styles, /@keyframes modern-select-in-light/u);
+  assert.match(styles, /@keyframes preview-float-light/u);
   assert.match(application, /export function finishPortalBootstrap/u);
-  assert.match(application, /modern-select\.js\?v=151/u);
+  assert.match(application, /modern-select\.js\?v=152/u);
   assert.match(application, /try \{\s*initializeAppearance\(\);\s*initializeModernSelects\(\);\s*await initializePortal\(\);\s*\} finally \{\s*finishPortalBootstrap\(\);/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
@@ -465,6 +472,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /https:\/\/yoomoney\.ru\/to\/4100119600001192/u);
   assert.match(html, /https:\/\/boosty\.to\/pastfly/u);
   assert.match(html, /https:\/\/github\.com\/PastFly\/Selective-Remote/u);
+  assert.match(html, /https:\/\/t\.me\/SelectiveRemoteApp/u);
+  assert.match(styles, /\.workspace-about>\.vault-heading \{ margin-bottom:26px; \}/u);
   assert.match(html, /id="account-delete-form"/u);
   assert.match(html, /id="account-username-form"/u);
   assert.match(html, /id="account-password-form"/u);
@@ -612,7 +621,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=151/u);
+  assert.match(html, /app\.js\?v=152/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
