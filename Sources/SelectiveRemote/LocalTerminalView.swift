@@ -64,7 +64,11 @@ struct LocalTerminalView: View {
             }
         }
         .sheet(isPresented: $showsSnippetLibrary) {
-            TerminalSnippetsLibraryView(store: snippetStore, model: model)
+            TerminalSnippetsLibraryView(
+                store: snippetStore,
+                teamStore: SelectiveRemoteTeamSnippetStore.shared,
+                model: model
+            )
                 .frame(minWidth: 980, minHeight: 680)
         }
     }

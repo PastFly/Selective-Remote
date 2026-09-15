@@ -669,3 +669,27 @@ test("macOS Team Host second column exposes actions and visible drag-and-drop ta
   assert.match(hosts, /isTargeted: \{ isTargeted in/u);
   assert.match(hosts, /if targetID != nil \{[\s\S]*sortMode = \.manual/u);
 });
+
+test("macOS Team Snippets use a separate fail-closed memory-only projection", async () => {
+  const [snippets, autoSync, library, content, terminal] = await Promise.all([
+    readFile(new URL("CloudTeamSnippets.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("TerminalSnippetsLibraryView.swift", sourceRoot), "utf8"),
+    readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("LocalTerminalView.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(snippets, /Set\(data\.keys\) == Set\(\["title", "body"\]\)/u);
+  assert.match(snippets, /value\.count <= 32_768/u);
+  assert.match(snippets, /selective-remote\/team-snippet\/v1/u);
+  assert.match(snippets, /private var snapshots: \[String: SelectiveRemoteTeamVaultMaterializedSnapshot\]/u);
+  assert.match(snippets, /NSPasteboard\.general/u);
+  assert.match(snippets, /Она не запускается автоматически/u);
+  assert.doesNotMatch(snippets, /UserDefaults|FileManager|KeychainService/u);
+  assert.match(autoSync, /SelectiveRemoteTeamHostStore\.shared\.replace\(with: snapshots\)/u);
+  assert.match(autoSync, /SelectiveRemoteTeamSnippetStore\.shared\.replace\(with: snapshots\)/u);
+  assert.match(library, /SelectiveRemote\.snippets\.scope\.v1/u);
+  assert.match(library, /Picker\([\s\S]*SelectiveRemoteSnippetScope\.allCases/u);
+  assert.match(library, /SelectiveRemoteTeamSnippetsView\(store: teamStore\)/u);
+  assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
+  assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);
+});

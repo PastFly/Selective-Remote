@@ -47,8 +47,11 @@ actor SelectiveRemoteTeamVaultAutoSync {
         snapshotStore: @escaping SelectiveRemoteTeamVaultSnapshotStoreFactory = {
             try SelectiveRemoteTeamVaultFileSnapshotStore()
         },
-        snapshotConsumer: @escaping SelectiveRemoteTeamVaultMaterializedSnapshotConsumer = {
-            SelectiveRemoteTeamHostStore.shared.replace(with: $0)
+        snapshotConsumer: @escaping SelectiveRemoteTeamVaultMaterializedSnapshotConsumer = { snapshots in
+            await MainActor.run {
+                SelectiveRemoteTeamHostStore.shared.replace(with: snapshots)
+                SelectiveRemoteTeamSnippetStore.shared.replace(with: snapshots)
+            }
         },
         pollInterval: Duration = .seconds(15)
     ) {

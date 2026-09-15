@@ -55,6 +55,7 @@ enum TerminalSnippetRootGroupSorter {
 
 struct TerminalSnippetsLibraryView: View {
     @ObservedObject var store: TerminalCommandHistoryStore
+    @ObservedObject var teamStore: SelectiveRemoteTeamSnippetStore
     @ObservedObject var model: AppModel
 
     @State private var query = ""
@@ -73,6 +74,12 @@ struct TerminalSnippetsLibraryView: View {
     private var persistedSnippetID = ""
     @AppStorage("SelectiveRemote.snippets.sort.v1") private var sortRaw = SnippetLibrarySort.name.rawValue
     @AppStorage("SelectiveRemote.snippets.sortAscending.v1") private var sortAscending = true
+    @AppStorage("SelectiveRemote.snippets.scope.v1") private var scopeRaw = SelectiveRemoteSnippetScope.personal.rawValue
+
+    private var scope: SelectiveRemoteSnippetScope {
+        get { SelectiveRemoteSnippetScope(rawValue: scopeRaw) ?? .personal }
+        nonmutating set { scopeRaw = newValue.rawValue }
+    }
 
     private var viewMode: SnippetLibraryViewMode {
         get { SnippetLibraryViewMode(rawValue: viewModeRaw) ?? .list }
@@ -101,18 +108,23 @@ struct TerminalSnippetsLibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let summary = model.latestSnippetRun {
-                runStatus(summary)
-            }
-            Divider()
-            GeometryReader { proxy in
-                HStack(spacing: 0) {
-                    libraryBrowser
-                        .frame(width: max(430, proxy.size.width * 0.56))
-                    Divider()
-                    inspector
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if scope == .personal {
+                if let summary = model.latestSnippetRun {
+                    runStatus(summary)
                 }
+                Divider()
+                GeometryReader { proxy in
+                    HStack(spacing: 0) {
+                        libraryBrowser
+                            .frame(width: max(430, proxy.size.width * 0.56))
+                        Divider()
+                        inspector
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+            } else {
+                Divider()
+                SelectiveRemoteTeamSnippetsView(store: teamStore)
             }
         }
         .sheet(item: $editorRequest) { request in
@@ -202,22 +214,45 @@ struct TerminalSnippetsLibraryView: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("Сниппеты")
                     .font(.system(size: 30, weight: .bold, design: .rounded))
-                Text("Общая библиотека команд · SSH и Локальный терминал используют одни Snippets")
+                Text(scope == .personal
+                    ? UpdateLocalization.text(
+                        ru: "Личная библиотека команд · SSH и Локальный терминал используют одни Snippets",
+                        en: "Personal command library shared by SSH and Local Terminal"
+                    )
+                    : UpdateLocalization.text(
+                        ru: "Зашифрованные Team Snippets · отдельно от личной библиотеки",
+                        en: "Encrypted Team Snippets, kept separate from your personal library"
+                    )
+                )
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button {
-                groupEditor = nil
-                groupEditorPresented = true
-            } label: {
-                Label("Новая группа", systemImage: "folder.badge.plus")
+            Picker(
+                UpdateLocalization.text(ru: "Область", en: "Scope"),
+                selection: Binding(get: { scope }, set: { scope = $0 })
+            ) {
+                ForEach(SelectiveRemoteSnippetScope.allCases) { option in
+                    Text(option.title).tag(option)
+                }
             }
-            Button {
-                presentEditor(nil, preferredGroupID: selectedGroupID)
-            } label: {
-                Label("Новый сниппет", systemImage: "plus")
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 220)
+
+            if scope == .personal {
+                Button {
+                    groupEditor = nil
+                    groupEditorPresented = true
+                } label: {
+                    Label("Новая группа", systemImage: "folder.badge.plus")
+                }
+                Button {
+                    presentEditor(nil, preferredGroupID: selectedGroupID)
+                } label: {
+                    Label("Новый сниппет", systemImage: "plus")
+                }
+                .buttonStyle(.borderedProminent)
             }
-            .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
