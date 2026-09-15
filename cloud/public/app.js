@@ -1,7 +1,7 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
-import { initializeModernSelects } from "./modern-select.js?v=152";
+import { initializeModernSelects } from "./modern-select.js?v=153";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
