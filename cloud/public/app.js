@@ -2617,9 +2617,13 @@ export function initializeTeamWorkspace({
               title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
-          : localVaultRecordData(recordType.value, {
-              title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value,
-            }),
+          : localVaultRecordData(
+              recordType.value,
+              { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
+              editingHostID
+                ? controller.document().records.find((value) => value.id === editingHostID)?.data
+                : null,
+            ),
       });
       if (recordType.value === "host") {
         const credentials = hostCredentials(hostID);

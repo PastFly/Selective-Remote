@@ -32,6 +32,9 @@ enum SelectiveRemoteTeamCredentialMaterializationError: Error, Equatable {
 
 enum SelectiveRemoteTeamCredentialMaterializer {
     private static let credentialKeys = Set(["title", "username", "secret"])
+    private static let organizedCredentialKeys = Set([
+        "title", "username", "secret", "folder", "tags"
+    ])
     private static let hostCredentialKeys = Set([
         "title", "username", "secret", "kind", "sourceID"
     ])
@@ -86,12 +89,26 @@ enum SelectiveRemoteTeamCredentialMaterializer {
                 kind = resolvedKind
                 folder = resolvedHost.folder
                 tags = resolvedHost.tags
-            } else if keys == credentialKeys {
+            } else if keys == credentialKeys || keys == organizedCredentialKeys {
                 sourceHostID = nil
                 sourceHostTitle = nil
                 kind = nil
-                folder = ""
-                tags = []
+                if keys == organizedCredentialKeys {
+                    guard let resolvedFolder = string(data["folder"]),
+                          validFolder(resolvedFolder),
+                          let resolvedTags = strings(data["tags"]),
+                          resolvedTags.count <= 32,
+                          resolvedTags.allSatisfy({ validTag($0) }),
+                          Set(resolvedTags).count == resolvedTags.count
+                    else {
+                        throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
+                    }
+                    folder = resolvedFolder
+                    tags = resolvedTags
+                } else {
+                    folder = ""
+                    tags = []
+                }
             } else {
                 throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
             }
@@ -156,6 +173,14 @@ enum SelectiveRemoteTeamCredentialMaterializer {
         return result
     }
 
+    private static func strings(_ value: SelectiveRemoteJSONValue?) -> [String]? {
+        guard case let .array(values) = value else { return nil }
+        return values.reduce(into: [String]?([])) { result, value in
+            guard let string = string(value) else { result = nil; return }
+            result?.append(string)
+        }
+    }
+
     private static func validName(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return value == trimmed && !value.isEmpty && value.count <= 120
@@ -164,6 +189,18 @@ enum SelectiveRemoteTeamCredentialMaterializer {
 
     private static func validUsername(_ value: String) -> Bool {
         !value.isEmpty && value.count <= 2_048
+            && !value.contains(where: { $0.isNewline })
+    }
+
+    private static func validFolder(_ value: String) -> Bool {
+        value.isEmpty || (value == SelectiveRemoteHostFolderPath.normalize(value)
+            && value.count <= 240
+            && value.split(separator: "/").allSatisfy { validName(String($0)) })
+    }
+
+    private static func validTag(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !value.isEmpty && value == trimmed && value.count <= 64
             && !value.contains(where: { $0.isNewline })
     }
 
@@ -181,6 +218,211 @@ enum SelectiveRemoteTeamCredentialMaterializer {
         let fractional = ISO8601DateFormatter()
         fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return fractional.date(from: value) ?? ISO8601DateFormatter().date(from: value)
+    }
+}
+
+enum SelectiveRemoteTeamCredentialMutationError: LocalizedError, Equatable {
+    case readOnlyRole
+    case credentialNotFound
+    case hostLinkedCredential
+    case invalidOrganization
+    case syncConflict
+
+    var errorDescription: String? {
+        switch self {
+        case .readOnlyRole:
+            UpdateLocalization.text(
+                ru: "Роль Viewer может только просматривать Team Credentials.",
+                en: "The Viewer role can only view Team Credentials."
+            )
+        case .credentialNotFound:
+            UpdateLocalization.text(
+                ru: "Team Credential больше не существует.",
+                en: "The Team Credential no longer exists."
+            )
+        case .hostLinkedCredential:
+            UpdateLocalization.text(
+                ru: "Папка этой записи наследуется от Team Host. Переместите сам Host.",
+                en: "This record inherits its folder from the Team Host. Move the Host instead."
+            )
+        case .invalidOrganization:
+            UpdateLocalization.text(
+                ru: "Проверьте папку и теги. Допустимо до 32 уникальных тегов.",
+                en: "Check the folder and tags. Up to 32 unique tags are allowed."
+            )
+        case .syncConflict:
+            UpdateLocalization.text(
+                ru: "Team Vault изменился параллельно. Синхронизируйте Vault и повторите.",
+                en: "The Team Vault changed concurrently. Synchronize it and try again."
+            )
+        }
+    }
+}
+
+enum SelectiveRemoteTeamCredentialDocumentMutation {
+    static func isWritable(role: SelectiveRemoteCloudTeamRole) -> Bool {
+        role == .owner || role == .admin || role == .editor
+    }
+
+    static func organize(
+        in document: SelectiveRemoteVaultDocument,
+        recordID: UUID,
+        folder rawFolder: String,
+        tags rawTags: [String],
+        role: SelectiveRemoteCloudTeamRole,
+        deviceID: UUID,
+        modifiedAt: String
+    ) throws -> SelectiveRemoteVaultDocument {
+        guard isWritable(role: role) else {
+            throw SelectiveRemoteTeamCredentialMutationError.readOnlyRole
+        }
+        guard let existing = document.records.first(where: { $0.id == recordID }) else {
+            throw SelectiveRemoteTeamCredentialMutationError.credentialNotFound
+        }
+        guard existing.type == .credential, case let .object(data) = existing.data else {
+            throw SelectiveRemoteTeamCredentialMutationError.credentialNotFound
+        }
+        guard data["sourceID"] == nil else {
+            throw SelectiveRemoteTeamCredentialMutationError.hostLinkedCredential
+        }
+        let allowedKeys = Set(["title", "username", "secret", "folder", "tags"])
+        guard Set(data.keys).isSubset(of: allowedKeys),
+              case let .string(title)? = data["title"],
+              case let .string(username)? = data["username"],
+              case let .string(secret)? = data["secret"]
+        else { throw SelectiveRemoteTeamCredentialMutationError.invalidOrganization }
+
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        let tags = normalizedTags(rawTags)
+        guard validFolder(folder), tags.count <= 32, tags.allSatisfy({ validTag($0) }) else {
+            throw SelectiveRemoteTeamCredentialMutationError.invalidOrganization
+        }
+        let record = try SelectiveRemoteVaultRecord(
+            id: existing.id,
+            type: .credential,
+            version: try existing.version.incrementing(deviceID),
+            modifiedAt: modifiedAt,
+            data: .object([
+                "title": .string(title),
+                "username": .string(username),
+                "secret": .string(secret),
+                "folder": .string(folder),
+                "tags": .array(tags.map { .string($0) })
+            ])
+        )
+        return try .init(
+            records: document.records.map { $0.id == recordID ? record : $0 },
+            tombstones: document.tombstones
+        )
+    }
+
+    private static func normalizedTags(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        return values.compactMap { value in
+            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            let key = normalized.localizedLowercase
+            guard !normalized.isEmpty, seen.insert(key).inserted else { return nil }
+            return normalized
+        }
+    }
+
+    private static func validFolder(_ value: String) -> Bool {
+        value.isEmpty || (value.count <= 240
+            && value.split(separator: "/").allSatisfy { validName(String($0)) })
+    }
+
+    private static func validName(_ value: String) -> Bool {
+        !value.isEmpty && value.count <= 120 && !value.contains(where: { $0.isNewline })
+    }
+
+    private static func validTag(_ value: String) -> Bool {
+        value.count <= 64 && !value.contains(where: { $0.isNewline })
+    }
+}
+
+@MainActor
+final class SelectiveRemoteTeamCredentialMutationService {
+    private let remote: any SelectiveRemoteTeamVaultRemote
+    private let snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+
+    init(
+        remote: any SelectiveRemoteTeamVaultRemote = SelectiveRemoteCloudAPIClient(),
+        snapshots: any SelectiveRemoteTeamVaultSnapshotStore
+    ) {
+        self.remote = remote
+        self.snapshots = snapshots
+    }
+
+    convenience init() throws {
+        try self.init(snapshots: SelectiveRemoteTeamVaultFileSnapshotStore())
+    }
+
+    func organize(
+        _ credential: SelectiveRemoteTeamCredential,
+        folder: String,
+        tags: [String],
+        endpoint: URL,
+        identity: SelectiveRemoteTeamDeviceIdentity,
+        now: Date = Date()
+    ) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot {
+        let coordinator = try SelectiveRemoteTeamVaultSyncCoordinator(
+            endpoint: endpoint,
+            remote: remote,
+            snapshots: snapshots
+        )
+        let refreshed = try await coordinator.refresh(
+            teamID: credential.teamID,
+            vaultID: credential.vaultID,
+            identity: identity
+        )
+        let snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot
+        switch refreshed {
+        case let .synchronized(value), let .localChanges(value):
+            snapshot = value
+        case .empty:
+            throw SelectiveRemoteTeamCredentialMutationError.credentialNotFound
+        case .conflict:
+            throw SelectiveRemoteTeamCredentialMutationError.syncConflict
+        }
+        let current = try SelectiveRemoteVaultDocument.decode(snapshot.payload)
+        let document = try SelectiveRemoteTeamCredentialDocumentMutation.organize(
+            in: current,
+            recordID: credential.recordID,
+            folder: folder,
+            tags: tags,
+            role: credential.role,
+            deviceID: identity.deviceID,
+            modifiedAt: Self.timestamp(now)
+        )
+        _ = try await coordinator.stage(
+            document.encoded(),
+            teamID: credential.teamID,
+            vaultID: credential.vaultID,
+            identity: identity
+        )
+        guard case let .uploaded(uploaded) = try await coordinator.push(
+            teamID: credential.teamID,
+            vaultID: credential.vaultID,
+            identity: identity
+        ) else {
+            throw SelectiveRemoteTeamCredentialMutationError.syncConflict
+        }
+        return .init(
+            teamID: credential.teamID,
+            teamName: credential.teamName,
+            role: credential.role,
+            vaultID: credential.vaultID,
+            vaultName: credential.vaultName,
+            revision: uploaded.snapshot.serverRevision,
+            keyGeneration: uploaded.snapshot.keyGeneration,
+            payload: uploaded.payload
+        )
+    }
+
+    private static func timestamp(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 }
 
@@ -314,6 +556,14 @@ struct SelectiveRemoteTeamCredentialsView: View {
     @State private var revealedCredentialIDs: Set<UUID> = []
     @State private var revealTasks: [UUID: Task<Void, Never>] = [:]
     @State private var feedback = ""
+    @State private var organizationEditorCredential: SelectiveRemoteTeamCredential?
+    @State private var isOrganizing = false
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1")
+    private var endpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1")
+    private var storedDeviceID = ""
+
+    private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
 
     private var visibleCredentials: [SelectiveRemoteTeamCredential] {
         let normalized = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -436,6 +686,11 @@ struct SelectiveRemoteTeamCredentialsView: View {
             concealAll()
         }
         .onDisappear { concealAll() }
+        .sheet(item: $organizationEditorCredential) { credential in
+            SelectiveRemoteTeamCredentialOrganizationEditor(credential: credential) { folder, tags in
+                organize(credential, folder: folder, tags: tags)
+            }
+        }
     }
 
     private var controls: some View {
@@ -551,6 +806,19 @@ struct SelectiveRemoteTeamCredentialsView: View {
                     Label(UpdateLocalization.text(ru: "Копировать пароль", en: "Copy Password"), systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
+                if credential.sourceHostID == nil,
+                   SelectiveRemoteTeamCredentialDocumentMutation.isWritable(role: credential.role) {
+                    Button {
+                        organizationEditorCredential = credential
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Организовать", en: "Organize"),
+                            systemImage: "folder.badge.gearshape"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isOrganizing)
+                }
             }
 
             HStack(spacing: 18) {
@@ -569,6 +837,28 @@ struct SelectiveRemoteTeamCredentialsView: View {
             }
             .font(.caption)
             .foregroundStyle(.secondary)
+
+            GroupBox(UpdateLocalization.text(ru: "Организация", en: "Organization")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(folderTitle(credential.folder), systemImage: "folder")
+                    Label(
+                        credential.tags.isEmpty
+                            ? UpdateLocalization.text(ru: "Без тегов", en: "No Tags")
+                            : credential.tags.joined(separator: ", "),
+                        systemImage: "tag"
+                    )
+                    if credential.sourceHostID != nil {
+                        Text(UpdateLocalization.text(
+                            ru: "Папка и теги наследуются от связанного Team Host.",
+                            en: "Folder and tags are inherited from the linked Team Host."
+                        ))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+            }
 
             GroupBox(UpdateLocalization.text(ru: "Имя пользователя", en: "Username")) {
                 HStack {
@@ -652,6 +942,17 @@ struct SelectiveRemoteTeamCredentialsView: View {
             systemImage: revealedCredentialIDs.contains(credential.id) ? "eye.slash" : "eye"
         ) {
             toggleReveal(credential.id)
+        }
+        if credential.sourceHostID == nil,
+           SelectiveRemoteTeamCredentialDocumentMutation.isWritable(role: credential.role) {
+            Divider()
+            Button(
+                UpdateLocalization.text(ru: "Изменить папку и теги…", en: "Edit Folder and Tags…"),
+                systemImage: "folder.badge.gearshape"
+            ) {
+                organizationEditorCredential = credential
+            }
+            .disabled(isOrganizing)
         }
     }
 
@@ -757,6 +1058,54 @@ struct SelectiveRemoteTeamCredentialsView: View {
         if selectedCredential == nil { selectedCredentialID = visibleCredentials.first?.id }
     }
 
+    private func organize(
+        _ credential: SelectiveRemoteTeamCredential,
+        folder: String,
+        tags: [String]
+    ) {
+        guard !isOrganizing else { return }
+        isOrganizing = true
+        Task { @MainActor in
+            defer { isOrganizing = false }
+            do {
+                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let identity = try await identityManager.identity(
+                    endpoint: url,
+                    deviceID: resolvedDeviceID()
+                )
+                let service = try SelectiveRemoteTeamCredentialMutationService()
+                let snapshot = try await service.organize(
+                    credential,
+                    folder: folder,
+                    tags: tags,
+                    endpoint: url,
+                    identity: identity
+                )
+                store.replaceVault(with: snapshot)
+                selectedCredentialID = SelectiveRemoteTeamCredentialMaterializer.scopedID(
+                    teamID: credential.teamID,
+                    vaultID: credential.vaultID,
+                    recordID: credential.recordID
+                )
+                feedback = UpdateLocalization.text(
+                    ru: "Папка и теги синхронизированы",
+                    en: "Folder and tags synchronized"
+                )
+            } catch {
+                feedback = error.localizedDescription
+            }
+        }
+    }
+
+    private func resolvedDeviceID() -> UUID {
+        if let value = UUID(uuidString: storedDeviceID), value.isSelectiveRemoteCloudUUID {
+            return value
+        }
+        let value = UUID()
+        storedDeviceID = value.canonicalCloudString
+        return value
+    }
+
     private func toggleReveal(_ id: UUID) {
         if revealedCredentialIDs.contains(id) {
             conceal(id)
@@ -849,5 +1198,73 @@ struct SelectiveRemoteTeamCredentialsView: View {
         .font(.caption)
         .foregroundStyle(.secondary)
         .padding(10)
+    }
+}
+
+private struct SelectiveRemoteTeamCredentialOrganizationEditor: View {
+    @Environment(\.dismiss) private var dismiss
+
+    let credential: SelectiveRemoteTeamCredential
+    let onSave: (String, [String]) -> Void
+
+    @State private var folder: String
+    @State private var tags: String
+
+    init(
+        credential: SelectiveRemoteTeamCredential,
+        onSave: @escaping (String, [String]) -> Void
+    ) {
+        self.credential = credential
+        self.onSave = onSave
+        _folder = State(initialValue: credential.folder)
+        _tags = State(initialValue: credential.tags.joined(separator: ", "))
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(UpdateLocalization.text(ru: "Организация Credential", en: "Organize Credential"))
+                        .font(.title2.bold())
+                    Text("\(credential.teamName) / \(credential.vaultName) · \(credential.title)")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            Form {
+                TextField(
+                    UpdateLocalization.text(ru: "Папка", en: "Folder"),
+                    text: $folder,
+                    prompt: Text("Production/SSH")
+                )
+                TextField(
+                    UpdateLocalization.text(ru: "Теги через запятую", en: "Comma-separated tags"),
+                    text: $tags,
+                    prompt: Text("linux, production")
+                )
+            }
+            .formStyle(.grouped)
+
+            Text(UpdateLocalization.text(
+                ru: "Папка и теги сохраняются внутри зашифрованной Team Vault записи. Права наследуются от роли Team.",
+                en: "Folder and tags stay inside the encrypted Team Vault record. Permissions inherit from the Team role."
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Сохранить", en: "Save")) {
+                    let values = tags.split(separator: ",", omittingEmptySubsequences: true).map(String.init)
+                    onSave(folder, values)
+                    dismiss()
+                }
+                .buttonStyle(.borderedProminent)
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
     }
 }

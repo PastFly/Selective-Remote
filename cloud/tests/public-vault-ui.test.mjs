@@ -120,6 +120,14 @@ test("Personal Vault editor preserves native fields and maps decrypted form valu
     type: "forwarding",
     data: { title: "DB", destination: "db.invalid:5432", configuration: "local 15432" },
   }), { title: "DB", target: "db.invalid:5432", secret: "local 15432" });
+  assert.deepEqual(
+    localVaultRecordData(
+      "credential",
+      { title: "Deploy", target: "root", secret: "new-secret" },
+      { title: "Old", username: "old", secret: "old-secret", folder: "Production", tags: ["linux"] },
+    ),
+    { title: "Deploy", username: "root", secret: "new-secret", folder: "Production", tags: ["linux"] },
+  );
 });
 
 test("Personal Host editor updates organization and the embedded native profile together", () => {

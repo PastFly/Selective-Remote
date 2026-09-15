@@ -156,7 +156,9 @@ enum SelectiveRemoteTeamHostMaterializer {
             }
             // Standalone Team Credentials belong to the credential projection. They are
             // intentionally independent from the credential envelopes linked to Team Hosts.
-            if Set(data.keys) == Set(["title", "username", "secret"]) { continue }
+            if Set(data.keys) == Set(["title", "username", "secret"])
+                || Set(data.keys) == Set(["title", "username", "secret", "folder", "tags"])
+            { continue }
             guard Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
                   let source = string(data["sourceID"]),
                   let sourceID = UUID(uuidString: source),

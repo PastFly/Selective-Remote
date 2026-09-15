@@ -48,6 +48,49 @@ struct CloudTeamCredentialsTests {
     }
 
     @MainActor
+    @Test("standalone Team Credentials persist folders and tags inside the encrypted document")
+    func organizesStandaloneCredential() throws {
+        let initial = try SelectiveRemoteVaultDocument(records: [Self.credentialRecord()])
+        let organized = try SelectiveRemoteTeamCredentialDocumentMutation.organize(
+            in: initial,
+            recordID: Self.credentialID,
+            folder: " Production / SSH ",
+            tags: [" linux ", "prod", "LINUX"],
+            role: .editor,
+            deviceID: Self.deviceID,
+            modifiedAt: "2026-09-15T01:00:00.000Z"
+        )
+        let store = SelectiveRemoteTeamCredentialStore()
+        store.replace(with: [try Self.snapshot(records: organized.records)])
+
+        let credential = try #require(store.credentials.first)
+        #expect(credential.folder == "Production/SSH")
+        #expect(credential.tags == ["linux", "prod"])
+        #expect(credential.modifiedDate > Date(timeIntervalSince1970: 0))
+
+        let hostStore = SelectiveRemoteTeamHostStore()
+        hostStore.replace(with: [try Self.snapshot(records: organized.records)])
+        #expect(hostStore.invalidVaultCount == 0)
+        #expect(hostStore.hosts.isEmpty)
+    }
+
+    @Test("Viewer cannot reorganize a standalone Team Credential")
+    func viewerCannotOrganizeCredential() throws {
+        let document = try SelectiveRemoteVaultDocument(records: [Self.credentialRecord()])
+        #expect(throws: SelectiveRemoteTeamCredentialMutationError.readOnlyRole) {
+            try SelectiveRemoteTeamCredentialDocumentMutation.organize(
+                in: document,
+                recordID: Self.credentialID,
+                folder: "Restricted",
+                tags: [],
+                role: .viewer,
+                deviceID: Self.deviceID,
+                modifiedAt: "2026-09-15T01:00:00.000Z"
+            )
+        }
+    }
+
+    @MainActor
     @Test("Team Host credentials remain visible with their Host relationship")
     func materializesHostCredentialEnvelope() throws {
         let store = SelectiveRemoteTeamCredentialStore()
@@ -122,6 +165,8 @@ struct CloudTeamCredentialsTests {
         #expect(source.contains("expandedVaultKeysStorage"))
         #expect(source.contains("expandedFolderKeysStorage"))
         #expect(source.contains("credential.tags.joined"))
+        #expect(source.contains("SelectiveRemoteTeamCredentialMutationService"))
+        #expect(source.contains("Изменить папку и теги"))
         #expect(!source.contains("UserDefaults"))
         #expect(!source.contains("FileManager"))
         #expect(!source.contains("KeychainService"))
