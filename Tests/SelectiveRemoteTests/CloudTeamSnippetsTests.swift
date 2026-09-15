@@ -4,6 +4,40 @@ import Testing
 
 @Suite("macOS Team Snippet materialization")
 struct CloudTeamSnippetsTests {
+    @MainActor
+    @Test("Team Snippet Targets are personal persistent assignments")
+    func targetAssignmentsPersistLocally() throws {
+        let suiteName = "CloudTeamSnippetTargetsTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let key = "targets"
+        let first = UUID()
+        let second = UUID()
+
+        let store = SelectiveRemoteTeamSnippetTargetStore(defaults: defaults, defaultsKey: key)
+        store.setTargets([second, first, second], for: Self.snippetID)
+
+        #expect(Set(store.targets(for: Self.snippetID)) == Set([first, second]))
+        let restored = SelectiveRemoteTeamSnippetTargetStore(defaults: defaults, defaultsKey: key)
+        #expect(Set(restored.targets(for: Self.snippetID)) == Set([first, second]))
+        restored.setTargets([], for: Self.snippetID)
+        #expect(restored.targets(for: Self.snippetID).isEmpty)
+    }
+
+    @Test("Team Snippet UI exposes explicit run, target assignment, and context menu")
+    func teamSnippetActionsAreAvailable() throws {
+        let root = Self.packageRoot()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamSnippets.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains(".contextMenu { snippetActions(snippet) }"))
+        #expect(source.contains("ru: \"Настроить хосты…\""))
+        #expect(source.contains("model.runTerminalSnippet(executable)"))
+        #expect(source.contains("ru: \"Выбор хранится только на этом Mac"))
+    }
+
     @Test("App startup and Cloud session changes refresh Team Snippets immediately")
     func applicationLifecycleTriggersImmediateRefresh() throws {
         let root = Self.packageRoot()
