@@ -79,6 +79,39 @@ extension View {
     func appTextSize(_ size: AppTextSize) -> some View {
         modifier(AppTextSizeModifier(size: size))
     }
+
+    func modernMenuPicker(minWidth: CGFloat? = nil) -> some View {
+        modifier(ModernMenuPickerModifier(minWidth: minWidth))
+    }
+}
+
+private struct ModernMenuPickerModifier: ViewModifier {
+    let minWidth: CGFloat?
+    @State private var isHovered = false
+
+    func body(content: Content) -> some View {
+        content
+            .pickerStyle(.menu)
+            .tint(.primary)
+            .padding(.horizontal, 10)
+            .frame(minWidth: minWidth, minHeight: 34)
+            .background(
+                isHovered ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(
+                        isHovered ? Color.accentColor.opacity(0.58) : Color.primary.opacity(0.13),
+                        lineWidth: 1
+                    )
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(isHovered ? 0.1 : 0.04), radius: isHovered ? 8 : 3, y: 2)
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.16), value: isHovered)
+    }
 }
 
 enum AppDensity: String, CaseIterable, Identifiable, Sendable {
@@ -232,16 +265,19 @@ struct AppAppearanceSettingsSection: View {
                         Text(LocalizedStringKey(item.title)).tag(item)
                     }
                 }
+                .modernMenuPicker()
                 Picker("Размер текста", selection: $store.textSize) {
                     ForEach(AppTextSize.allCases) { item in
                         Text(LocalizedStringKey(item.title)).tag(item)
                     }
                 }
+                .modernMenuPicker()
                 Picker("Плотность интерфейса", selection: $store.density) {
                     ForEach(AppDensity.allCases) { item in
                         Text(LocalizedStringKey(item.title)).tag(item)
                     }
                 }
+                .modernMenuPicker()
                 Text("Размер текста меняется нативно, без масштабирования всего окна. Retina/DPI macOS остаётся системным.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

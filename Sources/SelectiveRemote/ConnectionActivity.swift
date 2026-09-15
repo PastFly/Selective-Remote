@@ -299,6 +299,7 @@ struct ConnectionActivityView: View {
                     Text(kind.rawValue).tag(Optional(kind))
                 }
             }
+            .modernMenuPicker()
             .frame(width: 150)
             Picker("Результат", selection: $outcomeFilter) {
                 Text("Все результаты").tag(nil as ConnectionActivityOutcome?)
@@ -306,6 +307,7 @@ struct ConnectionActivityView: View {
                     Text(outcome.title).tag(Optional(outcome))
                 }
             }
+            .modernMenuPicker()
             .frame(width: 160)
         }
     }

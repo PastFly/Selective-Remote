@@ -111,6 +111,7 @@ struct SelectiveRemoteTeamHostEditorView: View {
                     Text("Telnet").tag(ConnectionType.telnet)
                     Text("Serial").tag(ConnectionType.serial)
                 }
+                .modernMenuPicker()
                 .disabled(request.host != nil)
                 .help(request.host == nil
                     ? ""

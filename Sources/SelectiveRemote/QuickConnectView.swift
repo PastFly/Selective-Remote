@@ -199,6 +199,7 @@ struct QuickConnectView: View {
                             }
                         }
                         .labelsHidden()
+                        .modernMenuPicker()
                         .frame(maxWidth: 300)
                     }
 
@@ -214,6 +215,7 @@ struct QuickConnectView: View {
                                 }
                             }
                             .labelsHidden()
+                            .modernMenuPicker()
                             .frame(maxWidth: 300)
                         }
                     }
@@ -239,6 +241,7 @@ struct QuickConnectView: View {
                             }
                         }
                         .labelsHidden()
+                        .modernMenuPicker()
                         .frame(maxWidth: 300)
                     }
                 }
