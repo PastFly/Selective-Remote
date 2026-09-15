@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <script src="/appearance-bootstrap.js?v=159"></script>
-  <link rel="stylesheet" href="/styles.css?v=159">
+  <script src="/appearance-bootstrap.js?v=160"></script>
+  <link rel="stylesheet" href="/styles.css?v=160">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -466,7 +466,15 @@
         <p id="team-vault-message" aria-live="polite">Загрузка Teams…</p>
       </div>
 
-      <div class="team-resource-navigation" id="team-resource-navigation">
+      <nav class="team-section-tabs" id="team-view-tabs" aria-label="Управление командами">
+        <button type="button" class="active" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Vaults</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Ресурсы</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление</button>
+      </nav>
+
+      <div class="team-resource-navigation" id="team-resource-navigation" aria-label="Навигация по ресурсам">
         <nav class="host-scope-switcher" aria-label="Область ресурсов">
           <button type="button" data-workspace-target="local-vault" data-preserve-record-filter data-preserve-scroll>Личные</button>
           <button type="button" class="active" data-workspace-target="team-vault" data-team-view="hosts" data-preserve-record-filter data-preserve-scroll>Командные</button>
@@ -478,14 +486,6 @@
           <button type="button" data-workspace-target="team-vault" data-team-view="hosts" data-team-record-filter="forwarding" data-preserve-scroll>Forwarding</button>
         </nav>
       </div>
-
-      <nav class="team-section-tabs" id="team-view-tabs" aria-label="Управление командами">
-        <button type="button" class="active" data-workspace-target="team-vault" data-team-view="teams">Команды</button>
-        <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники</button>
-        <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Vaults</button>
-        <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Ресурсы</button>
-        <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление</button>
-      </nav>
 
       <div class="team-onboarding" id="team-onboarding">
         <form id="team-create-form">
@@ -740,6 +740,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=159"></script>
+  <script type="module" src="/app.js?v=160"></script>
 </body>
 </html>
