@@ -52,7 +52,7 @@ enum SelectiveRemoteTeamCredentialMaterializer {
             throw SelectiveRemoteTeamCredentialMaterializationError.invalidSnapshot
         }
 
-        let hostTitles = try Dictionary(uniqueKeysWithValues: document.records.compactMap { record
+        let hostTitles = Dictionary(uniqueKeysWithValues: document.records.compactMap { record
             -> (UUID, String)? in
             guard record.type == .host, case let .object(data) = record.data,
                   let title = string(data["title"]), validName(title)
@@ -72,10 +72,11 @@ enum SelectiveRemoteTeamCredentialMaterializer {
             if keys == hostCredentialKeys {
                 guard let sourceText = string(data["sourceID"]),
                       let resolvedSourceID = UUID(uuidString: sourceText),
+                      resolvedSourceID.isSelectiveRemoteCloudUUID,
                       let resolvedHostTitle = hostTitles[resolvedSourceID],
                       let kindText = string(data["kind"]),
                       let resolvedKind = KeychainCredentialKind(rawValue: kindText),
-                      resolvedKind != .sshKeyAuthorization
+                      resolvedKind == .rdp || resolvedKind == .ssh || resolvedKind == .gateway
                 else {
                     throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
                 }

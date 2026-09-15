@@ -91,7 +91,9 @@ struct CloudTeamCredentialsTests {
         )
 
         #expect(source.contains("selective-remote/team-credential/v1"))
-        #expect(source.contains("Set(data.keys) == credentialKeys"))
+        #expect(source.contains("let keys = Set(data.keys)"))
+        #expect(source.contains("keys == hostCredentialKeys"))
+        #expect(source.contains("keys == credentialKeys"))
         #expect(source.contains("NSPasteboard.general"))
         #expect(source.contains("revealedCredentialIDs"))
         #expect(source.contains("CredentialDisclosurePolicy.visibleNanoseconds"))
