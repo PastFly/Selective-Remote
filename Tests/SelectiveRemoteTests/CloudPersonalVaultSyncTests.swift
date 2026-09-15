@@ -26,6 +26,9 @@ struct CloudPersonalVaultSyncTests {
         profile.friendlyName = "Production Host"
         profile.host = "host.example.invalid"
         profile.username = "operator"
+        profile.group = "Work/Production"
+        profile.tags = ["linux", "production"]
+        profile.profileDescription = "Primary endpoint"
         let snippet = TerminalCommandTemplate(
             id: snippetID,
             profileID: profileID,
@@ -52,6 +55,14 @@ struct CloudPersonalVaultSyncTests {
         #expect(exported.document.records.map(\.type).sorted(by: { $0.rawValue < $1.rawValue }) == [
             .credential, .host, .snippet
         ])
+        let hostRecord = try #require(exported.document.records.first { $0.type == .host })
+        guard case let .object(hostData) = hostRecord.data else {
+            Issue.record("Expected host object")
+            return
+        }
+        #expect(hostData["folder"] == .string("Work/Production"))
+        #expect(hostData["tags"] == .array([.string("linux"), .string("production")]))
+        #expect(hostData["description"] == .string("Primary endpoint"))
 
         let document = exported.document
         let envelope = try await Task.detached {

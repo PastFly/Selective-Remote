@@ -84,7 +84,9 @@ enum SelectiveRemotePersonalVaultImporter {
             case .host:
                 profiles.append(try profile(record: record, data: data))
             case .credential:
-                credentials.append(try credential(record: record, data: data))
+                if let credential = try credential(record: record, data: data) {
+                    credentials.append(credential)
+                }
             case .snippet:
                 snippets.append(try snippet(record: record, data: data))
             case .forwarding:
@@ -190,9 +192,20 @@ enum SelectiveRemotePersonalVaultImporter {
     private static func credential(
         record: SelectiveRemoteVaultRecord,
         data: [String: SelectiveRemoteJSONValue]
-    ) throws -> SelectiveRemotePersonalVaultCredentialInput {
-        guard let source = string(data["sourceID"]), let sourceID = UUID(uuidString: source),
-              let kindText = string(data["kind"]), let kind = KeychainCredentialKind(rawValue: kindText),
+    ) throws -> SelectiveRemotePersonalVaultCredentialInput? {
+        let source = string(data["sourceID"])
+        let kindText = string(data["kind"])
+        if source == nil, kindText == nil {
+            // Browser-created standalone credentials have no ConnectionProfile
+            // destination in the native app. Keep them in the encrypted
+            // document, but do not materialize an unreachable Keychain entry.
+            guard let secret = string(data["secret"]), !secret.isEmpty else {
+                throw SelectiveRemotePersonalVaultImportError.invalidRecord(record.id)
+            }
+            return nil
+        }
+        guard let source, let sourceID = UUID(uuidString: source),
+              let kindText, let kind = KeychainCredentialKind(rawValue: kindText),
               kind != .sshKeyAuthorization,
               let secret = string(data["secret"]), !secret.isEmpty
         else { throw SelectiveRemotePersonalVaultImportError.invalidRecord(record.id) }

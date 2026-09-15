@@ -217,8 +217,25 @@ export function teamHostRecordData({ title, target, folder, tags, description, b
       throw new Error("advanced_team_host_requires_native_editor");
     }
     for (const key of ["username", "connectionType", "profile"]) data[key] = baseData[key];
+    data.folder = normalizedFolder;
+    data.tags = normalizedTags;
+    data.description = normalizedDescription;
   }
   return data;
+}
+
+export function teamHostOrganizationValues(record) {
+  const data = record?.data ?? {};
+  let profile = null;
+  try { if (data.profile) profile = decodePortableRecord(data.profile); } catch { /* outer fields remain usable */ }
+  const folder = Object.hasOwn(data, "folder") ? data.folder : profile?.group;
+  const tags = Object.hasOwn(data, "tags") ? data.tags : profile?.tags;
+  const description = Object.hasOwn(data, "description") ? data.description : profile?.profileDescription;
+  return {
+    folder: String(folder ?? ""),
+    tags: Array.isArray(tags) ? tags.map(String) : [],
+    description: String(description ?? ""),
+  };
 }
 
 export function teamHostConnectionData({ protocol, host, port, username }) {
@@ -1153,6 +1170,7 @@ export function initializeTeamWorkspace({
 
   function beginHostEdit(record) {
     const connection = parseTeamHostConnection(record.data);
+    const organization = teamHostOrganizationValues(record);
     editingHostID = record.id;
     recordType.value = "host";
     recordTitle.value = String(record.data.title ?? "");
@@ -1162,9 +1180,9 @@ export function initializeTeamWorkspace({
     hostUsername.value = connection.username;
     hostPassword.value = "";
     hostRemovePassword.checked = false;
-    hostFolder.value = String(record.data.folder ?? "");
-    hostTags.value = Array.isArray(record.data.tags) ? record.data.tags.join(", ") : "";
-    hostDescription.value = String(record.data.description ?? "");
+    hostFolder.value = organization.folder;
+    hostTags.value = organization.tags.join(", ");
+    hostDescription.value = organization.description;
     const advanced = Boolean(record.data.profile);
     recordTitle.disabled = advanced;
     recordTarget.disabled = advanced;
@@ -1192,7 +1210,7 @@ export function initializeTeamWorkspace({
   }
 
   function hostFolderName(record) {
-    return String(record?.data?.folder ?? "Без папки").trim() || "Без папки";
+    return teamHostOrganizationValues(record).folder.trim() || "Без папки";
   }
 
   function updateHostFolders(hosts) {
@@ -1225,7 +1243,8 @@ export function initializeTeamWorkspace({
       if (activeRecordFilter !== "host") return true;
       if (folder !== "all" && hostFolderName(value) !== folder) return false;
       const data = value.data ?? {};
-      return !query || [data.title, data.address, data.folder, data.description, ...(Array.isArray(data.tags) ? data.tags : [])]
+      const organization = teamHostOrganizationValues(value);
+      return !query || [data.title, data.address, organization.folder, organization.description, ...organization.tags]
         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
     });
     if (visibleRecords.length === 0) {
@@ -1286,6 +1305,7 @@ export function initializeTeamWorkspace({
         card.setAttribute("role", "button");
         const openHost = () => {
           const connection = parseTeamHostConnection(record.data);
+          const organization = teamHostOrganizationValues(record);
           const credentials = hostCredentials(record.id);
           detailedHostID = record.id;
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
@@ -1296,8 +1316,8 @@ export function initializeTeamWorkspace({
           setText(hostDetailUsername, connection.username || "—");
           setText(hostDetailPasswordState, credentials.length ? "Сохранён в E2EE Team Vault" : "Не сохранён");
           setText(hostDetailFolder, hostFolderName(record));
-          setText(hostDetailTags, Array.isArray(record.data.tags) && record.data.tags.length ? record.data.tags.join(", ") : "—");
-          setText(hostDetailDescription, String(record.data.description ?? "—"));
+          setText(hostDetailTags, organization.tags.length ? organization.tags.join(", ") : "—");
+          setText(hostDetailDescription, organization.description || "—");
           hostDetailCopy.hidden = false;
           hostDetailEdit.hidden = !canEdit();
           hostDetailCopyPassword.hidden = credentials.length === 0;
@@ -2597,9 +2617,13 @@ export function initializeTeamWorkspace({
               title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
-          : localVaultRecordData(recordType.value, {
-              title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value,
-            }),
+          : localVaultRecordData(
+              recordType.value,
+              { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
+              editingHostID
+                ? controller.document().records.find((value) => value.id === editingHostID)?.data
+                : null,
+            ),
       });
       if (recordType.value === "host") {
         const credentials = hostCredentials(hostID);
