@@ -1,7 +1,7 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
-import { initializeModernSelects } from "./modern-select.js?v=153";
+import { initializeModernSelects } from "./modern-select.js?v=154";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -1451,6 +1451,7 @@ export function initializeTeamWorkspace({
       }
       role.disabled = !editableByActor || self;
       save.type = "button";
+      save.className = "team-member-action-button";
       save.textContent = "Сохранить роль";
       save.disabled = !editableByActor || self;
       save.addEventListener("click", async () => {
@@ -1466,6 +1467,7 @@ export function initializeTeamWorkspace({
         }
       });
       admitDevices.type = "button";
+      admitDevices.className = "team-member-action-button";
       admitDevices.textContent = "Допустить устройства";
       admitDevices.disabled = !editableByActor || self;
       admitDevices.addEventListener("click", async () => {

@@ -365,10 +365,11 @@ test("conflict choices expose only bounded metadata and never record secrets or 
 });
 
 test("portal exposes separate public, authentication and workspace states", async () => {
-  const [html, styles, application, synchronization, teamSynchronization, server] = await Promise.all([
+  const [html, styles, application, appearanceBootstrap, synchronization, teamSynchronization, server] = await Promise.all([
     readFile(new URL("../public/index.html", import.meta.url), "utf8"),
     readFile(new URL("../public/styles.css", import.meta.url), "utf8"),
     readFile(new URL("../public/app.js", import.meta.url), "utf8"),
+    readFile(new URL("../public/appearance-bootstrap.js", import.meta.url), "utf8"),
     readFile(new URL("../public/vault-sync.js", import.meta.url), "utf8"),
     readFile(new URL("../public/team-vault-sync.js", import.meta.url), "utf8"),
     readFile(new URL("../src/server.mjs", import.meta.url), "utf8"),
@@ -378,8 +379,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /\/styles\.css\?v=153/u);
-  assert.match(html, /\/app\.js\?v=153/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=154"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=154">/u);
+  assert.match(html, /\/app\.js\?v=154/u);
+  assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
+  assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
   assert.match(styles, /\.app-booting \.app-boot-screen \{ display:grid; \}/u);
   assert.match(styles, /select:not\(\[multiple\]\) \{[^}]*appearance:none[^}]*background-image:linear-gradient/u);
@@ -393,7 +396,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /@keyframes modern-select-in-light/u);
   assert.match(styles, /@keyframes preview-float-light/u);
   assert.match(application, /export function finishPortalBootstrap/u);
-  assert.match(application, /modern-select\.js\?v=153/u);
+  assert.match(application, /modern-select\.js\?v=154/u);
+  assert.match(application, /save\.className = "team-member-action-button"/u);
+  assert.match(application, /admitDevices\.className = "team-member-action-button"/u);
   assert.match(application, /try \{\s*initializeAppearance\(\);\s*initializeModernSelects\(\);\s*await initializePortal\(\);\s*\} finally \{\s*finishPortalBootstrap\(\);/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
@@ -586,6 +591,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.team-section-tabs,\.host-scope-switcher/u);
   assert.ok(styles.includes('.brand-actions button:not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
   assert.ok(styles.includes(':not([data-team-view]):not([data-record-filter])'));
+  assert.ok(styles.includes(':not(.team-member-action-button)'));
+  assert.match(styles, /:root\[data-theme="light"\] \.team-member-action-button \{[^}]*color:var\(--ink\)/u);
   assert.ok(styles.includes(':root[data-theme="light"] :is(input:not([type="checkbox"]):not([type="radio"]),textarea,select)'));
   assert.ok(styles.includes(':root[data-theme="light"] .team-section-tabs button:not(.active)'));
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
@@ -625,7 +632,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=153/u);
+  assert.match(html, /app\.js\?v=154/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
