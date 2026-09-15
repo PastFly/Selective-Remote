@@ -1,13 +1,23 @@
 <!doctype html>
-<html lang="ru">
+<html lang="ru" class="app-booting">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Защищённая синхронизация Selective Remote">
   <title>Selective Remote Cloud</title>
-  <link rel="stylesheet" href="/styles.css?v=148">
+  <link rel="stylesheet" href="/styles.css?v=149">
 </head>
 <body>
+  <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
+    <div class="app-boot-card">
+      <span class="app-boot-mark" aria-hidden="true">SR</span>
+      <div>
+        <strong>Selective Remote Cloud</strong>
+        <span>Открываем защищённое пространство…</span>
+      </div>
+      <span class="app-boot-progress" aria-hidden="true"></span>
+    </div>
+  </div>
   <main class="shell">
     <header class="brand" id="site-brand">
       <div class="mark" aria-hidden="true">SR</div>
@@ -713,6 +723,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=148"></script>
+  <script type="module" src="/app.js?v=149"></script>
 </body>
 </html>

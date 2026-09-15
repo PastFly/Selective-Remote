@@ -3671,7 +3671,17 @@ export function initializeAppearance({ documentValue = document } = {}) {
   return { theme: () => selected, apply };
 }
 
+export function finishPortalBootstrap({ documentValue = document } = {}) {
+  documentValue.documentElement.classList.remove("app-booting");
+  const bootScreen = documentValue.querySelector("#app-boot-screen");
+  if (bootScreen) bootScreen.hidden = true;
+}
+
 if (typeof document !== "undefined") {
-  initializeAppearance();
-  await initializePortal();
+  try {
+    initializeAppearance();
+    await initializePortal();
+  } finally {
+    finishPortalBootstrap();
+  }
 }
