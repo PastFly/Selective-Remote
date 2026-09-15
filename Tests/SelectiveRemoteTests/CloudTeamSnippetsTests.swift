@@ -4,6 +4,23 @@ import Testing
 
 @Suite("macOS Team Snippet materialization")
 struct CloudTeamSnippetsTests {
+    @Test("App startup and Cloud session changes refresh Team Snippets immediately")
+    func applicationLifecycleTriggersImmediateRefresh() throws {
+        let root = Self.packageRoot()
+        let app = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/SelectiveRemoteApp.swift"),
+            encoding: .utf8
+        )
+        let settings = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudSettingsView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(app.contains("await teamVaultAutoSync.start()\n                _ = try? await teamVaultAutoSync.synchronizeConfiguredAccountNow()"))
+        #expect(app.contains("for: .selectiveRemoteTeamVaultSyncNow"))
+        #expect(settings.components(separatedBy: "name: .selectiveRemoteTeamVaultSyncNow").count - 1 == 4)
+    }
+
     @MainActor
     @Test("Team Snippets materialize into a separate memory-only projection")
     func materializesTeamSnippets() throws {
@@ -131,4 +148,11 @@ struct CloudTeamSnippetsTests {
     private static let snippetID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
     private static let hostID = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
     private static let deviceID = UUID(uuidString: "66666666-6666-4666-8666-666666666666")!
+
+    private static func packageRoot() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
 }
