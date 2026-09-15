@@ -518,6 +518,7 @@ struct TerminalSessionLogsView: View {
                     Text(kind.title).tag(Optional(kind))
                 }
             }
+            .modernMenuPicker()
             .frame(width: 130)
             Picker("Хранить", selection: Binding(
                 get: { store.retentionDays },
@@ -528,6 +529,7 @@ struct TerminalSessionLogsView: View {
                 Text("90 дней").tag(90)
                 Text("1 год").tag(365)
             }
+            .modernMenuPicker()
             .frame(width: 130)
             Spacer()
         }

@@ -39,3 +39,31 @@ func keychainSelectedIconContrastContract() throws {
     #expect(source.contains("selection == .authority(authority.id)"))
     #expect(source.contains("selection == .knownHost(entry.id)"))
 }
+
+@Test("Выпадающие списки используют единый современный нативный стиль")
+func menuPickersShareModernChrome() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let appearance = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppAppearance.swift"),
+        encoding: .utf8
+    )
+    #expect(appearance.contains("func modernMenuPicker"))
+    #expect(appearance.contains(".pickerStyle(.menu)"))
+    #expect(appearance.contains(".onHover"))
+    #expect(appearance.contains("Color.accentColor.opacity(0.58)"))
+
+    for path in [
+        "Sources/SelectiveRemote/CloudTeamManagementView.swift",
+        "Sources/SelectiveRemote/QuickConnectView.swift",
+        "Sources/SelectiveRemote/CloudProfileShareView.swift",
+        "Sources/SelectiveRemote/CloudTeamHostEditor.swift",
+        "Sources/SelectiveRemote/ConnectionCenter.swift",
+        "Sources/SelectiveRemote/ConnectionActivity.swift",
+        "Sources/SelectiveRemote/TerminalSessionLogs.swift",
+        "Sources/SelectiveRemote/ContentView.swift",
+    ] {
+        let source = try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
+        #expect(source.contains(".modernMenuPicker("), "Missing shared picker style in \(path)")
+    }
+}

@@ -4160,7 +4160,7 @@ struct ContentView: View {
                         }
                     }
                     .labelsHidden()
-                    .pickerStyle(.menu)
+                    .modernMenuPicker()
                     .frame(maxWidth: .infinity, alignment: .leading)
 
                     Text(authModeHint)
@@ -4353,7 +4353,7 @@ struct ContentView: View {
                             .tag(Optional(jump.id))
                     }
                 }
-                .pickerStyle(.menu)
+                .modernMenuPicker()
 
                 if let jumpID = profileBinding.wrappedValue.sshJumpHostProfileID,
                    let jump = model.profiles.first(where: { $0.id == jumpID }) {
@@ -4917,7 +4917,7 @@ struct ContentView: View {
                                 .tag(CameraSelectionToken.device(id))
                         }
                     }
-                    .pickerStyle(.menu)
+                    .modernMenuPicker()
                     .disabled(!profile.redirectCamera || !FreeRDPService.cameraRedirectionAvailable)
 
                     Label(

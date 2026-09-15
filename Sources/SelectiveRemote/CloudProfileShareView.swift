@@ -148,6 +148,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
                 Picker("Team Vault", selection: $selectedVaultID) {
                     ForEach(vaults) { vault in Text(vault.name).tag(Optional(vault.id)) }
                 }
+                .modernMenuPicker()
                 .disabled(selectedTeamID == nil)
             }
 

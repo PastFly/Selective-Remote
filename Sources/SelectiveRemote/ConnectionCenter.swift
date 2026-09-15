@@ -630,6 +630,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .labelsHidden()
+            .modernMenuPicker()
             .frame(width: 150)
 
             Picker("Тип", selection: $filter) {
@@ -638,6 +639,7 @@ struct ConnectionCenterView: View {
                 }
             }
             .labelsHidden()
+            .modernMenuPicker()
             .frame(width: 145)
 
             Menu("Столбцы", systemImage: "tablecells") {

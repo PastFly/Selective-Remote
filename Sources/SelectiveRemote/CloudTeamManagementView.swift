@@ -202,7 +202,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                         Text(roleTitle(.editor)).tag(SelectiveRemoteCloudTeamRole.editor.rawValue)
                         Text(roleTitle(.viewer)).tag(SelectiveRemoteCloudTeamRole.viewer.rawValue)
                     }
-                    .pickerStyle(.menu)
+                    .modernMenuPicker(minWidth: 138)
                     Spacer()
                     Text("\(members.count) / \(memberTotal)")
                         .font(.caption)
@@ -310,7 +310,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                         Text(roleTitle(.admin)).tag(SelectiveRemoteCloudTeamRole.admin)
                     }
                 }
-                .pickerStyle(.menu)
+                .modernMenuPicker()
                 Button(UpdateLocalization.text(ru: "Отправить приглашение", en: "Send Invitation")) {
                     invite(team)
                 }
