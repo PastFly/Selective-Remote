@@ -375,7 +375,7 @@ final class SelectiveRemoteTeamCredentialMutationService {
             vaultID: credential.vaultID,
             identity: identity
         )
-        let snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot
+        let snapshot: SelectiveRemoteTeamVaultDecryptedSnapshot
         switch refreshed {
         case let .synchronized(value), let .localChanges(value):
             snapshot = value
