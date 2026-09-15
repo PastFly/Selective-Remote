@@ -696,3 +696,26 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
   assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);
 });
+
+test("macOS Team Credentials use the shared sync lifecycle and a separate memory-only UI", async () => {
+  const [credentials, autoSync, vault, hosts] = await Promise.all([
+    readFile(new URL("CloudTeamCredentials.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CredentialVaultView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(credentials, /selective-remote\/team-credential\/v1/u);
+  assert.match(credentials, /Set\(data\.keys\) == credentialKeys/u);
+  assert.match(credentials, /NSPasteboard\.general/u);
+  assert.match(credentials, /revealedCredentialIDs/u);
+  assert.match(credentials, /CredentialDisclosurePolicy\.visibleNanoseconds/u);
+  assert.match(credentials, /CredentialDisclosurePolicy\.clipboardNanoseconds/u);
+  assert.match(credentials, /NSApplication\.didResignActiveNotification/u);
+  assert.match(credentials, /Только в памяти/u);
+  assert.doesNotMatch(credentials, /UserDefaults|FileManager|KeychainService/u);
+  assert.match(autoSync, /SelectiveRemoteTeamCredentialStore\.shared\.replace\(with: snapshots\)/u);
+  assert.match(vault, /SelectiveRemote\.credentials\.scope\.v1/u);
+  assert.match(vault, /Picker\([\s\S]*CredentialVaultScope\.allCases/u);
+  assert.match(vault, /SelectiveRemoteTeamCredentialsView\(store: teamCredentials\)/u);
+  assert.match(hosts, /Standalone Team Credentials belong to the credential projection/u);
+});

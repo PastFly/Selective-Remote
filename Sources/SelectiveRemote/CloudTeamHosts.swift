@@ -151,8 +151,13 @@ enum SelectiveRemoteTeamHostMaterializer {
     ) throws -> [UUID: SelectiveRemoteTeamHostCredentials] {
         var result: [UUID: SelectiveRemoteTeamHostCredentials] = [:]
         for record in records where record.type == .credential {
-            guard case let .object(data) = record.data,
-                  Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
+            guard case let .object(data) = record.data else {
+                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+            }
+            // Standalone Team Credentials belong to the credential projection. They are
+            // intentionally independent from the credential envelopes linked to Team Hosts.
+            if Set(data.keys) == Set(["title", "username", "secret"]) { continue }
+            guard Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
                   let source = string(data["sourceID"]),
                   let sourceID = UUID(uuidString: source),
                   sourceID.isSelectiveRemoteCloudUUID,

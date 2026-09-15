@@ -83,9 +83,24 @@ private enum VaultSelection: Hashable {
     case knownHost(String)
 }
 
+private enum CredentialVaultScope: String, CaseIterable, Identifiable {
+    case personal
+    case team
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .personal: UpdateLocalization.text(ru: "Личные", en: "Personal")
+        case .team: UpdateLocalization.text(ru: "Командные", en: "Team")
+        }
+    }
+}
+
 struct CredentialVaultView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
+    @StateObject private var teamCredentials = SelectiveRemoteTeamCredentialStore.shared
 
     let presentation: CredentialVaultPresentation
     let onOpenProfile: ((UUID) -> Void)?
@@ -95,6 +110,8 @@ struct CredentialVaultView: View {
     @State private var searchText = ""
     @AppStorage("SelectiveRemote.keychain.sort.v1")
     private var sortModeRaw = VaultSortMode.name.rawValue
+    @AppStorage("SelectiveRemote.credentials.scope.v1")
+    private var credentialScopeRaw = CredentialVaultScope.personal.rawValue
     @State private var showsKeyGenerator = false
     @State private var touchIDGenerator = false
     @State private var installTargetProfileID: UUID?
@@ -128,6 +145,11 @@ struct CredentialVaultView: View {
             .sorted {
                 $0.friendlyName.localizedStandardCompare($1.friendlyName) == .orderedAscending
             }
+    }
+
+    private var credentialScope: CredentialVaultScope {
+        get { CredentialVaultScope(rawValue: credentialScopeRaw) ?? .personal }
+        nonmutating set { credentialScopeRaw = newValue.rawValue }
     }
 
     private var savedCredentialProfiles: [ConnectionProfile] {
@@ -240,7 +262,9 @@ struct CredentialVaultView: View {
                 header(compact: compact)
                 Divider()
 
-                if compact {
+                if credentialScope == .team {
+                    SelectiveRemoteTeamCredentialsView(store: teamCredentials)
+                } else if compact {
                     if compactDetailPresented {
                         compactInspector
                     } else {
@@ -404,11 +428,21 @@ struct CredentialVaultView: View {
             .frame(width: compact ? 40 : 48, height: compact ? 40 : 48)
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("Связка ключей")
+                Text(credentialScope == .personal
+                    ? UpdateLocalization.text(ru: "Связка ключей", en: "Keychain")
+                    : UpdateLocalization.text(ru: "Учётные данные", en: "Credentials"))
                     .font(.system(size: compact ? 24 : (presentation == .embedded ? 30 : 24), weight: .bold, design: .rounded))
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
-                Text("SSH ID, Touch ID, OpenSSH-сертификаты и сохранённые реквизиты")
+                Text(credentialScope == .personal
+                    ? UpdateLocalization.text(
+                        ru: "SSH ID, Touch ID, OpenSSH-сертификаты и сохранённые реквизиты",
+                        en: "SSH identities, Touch ID, OpenSSH certificates, and saved credentials"
+                    )
+                    : UpdateLocalization.text(
+                        ru: "Зашифрованные Team Credentials · отдельно от личной Связки ключей",
+                        en: "Encrypted Team Credentials · separate from your Personal Keychain"
+                    ))
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .lineLimit(compact ? 2 : 1)
@@ -417,7 +451,19 @@ struct CredentialVaultView: View {
 
             Spacer()
 
-            if compact {
+            Picker("", selection: Binding(
+                get: { credentialScope },
+                set: { credentialScope = $0 }
+            )) {
+                ForEach(CredentialVaultScope.allCases) { scope in
+                    Text(scope.title).tag(scope)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: compact ? 170 : 210)
+
+            if compact && credentialScope == .personal {
                 Menu {
                     Button("Объединить пароли", systemImage: "lock.square.stack") {
                         migrateCredentialVault()
@@ -432,7 +478,7 @@ struct CredentialVaultView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .help("Действия Связки ключей")
-            } else {
+            } else if !compact && credentialScope == .personal {
                 VStack(alignment: .trailing, spacing: 3) {
                     Button {
                         migrateCredentialVault()
@@ -453,6 +499,9 @@ struct CredentialVaultView: View {
                     Button("Готово") { dismiss() }
                         .keyboardShortcut(.defaultAction)
                 }
+            } else if presentation == .sheet {
+                Button("Готово") { dismiss() }
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(.horizontal, compact ? 16 : 22)

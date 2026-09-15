@@ -51,6 +51,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
             await MainActor.run {
                 SelectiveRemoteTeamHostStore.shared.replace(with: snapshots)
                 SelectiveRemoteTeamSnippetStore.shared.replace(with: snapshots)
+                SelectiveRemoteTeamCredentialStore.shared.replace(with: snapshots)
             }
         },
         pollInterval: Duration = .seconds(15)
