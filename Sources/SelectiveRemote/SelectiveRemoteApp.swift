@@ -436,6 +436,7 @@ struct SelectiveRemoteApp: App {
         Task {
             if shouldRun {
                 await teamVaultAutoSync.start()
+                _ = try? await teamVaultAutoSync.synchronizeConfiguredAccountNow()
             } else {
                 await teamVaultAutoSync.stop()
             }
