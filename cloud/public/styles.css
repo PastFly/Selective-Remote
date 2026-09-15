@@ -308,7 +308,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 :root[data-theme="light"] .app-boot-card { background:linear-gradient(145deg,#f8fcfaee,#eef7f2f2); border-color:#bfd3c9; box-shadow:0 28px 80px #244b3924; }
 :root[data-theme="light"] .workspace-layout { background:#f3f8f5; border-color:#c5d6ce; box-shadow:0 28px 80px #244b3917; }
 :root[data-theme="light"] .workspace-sidebar { background:linear-gradient(180deg,#f9fcfa,#eef6f2); }
-:root[data-theme="light"] .workspace-main { background:linear-gradient(150deg,#f6faf8,#edf5f1 70%); }
+:root[data-theme="light"] .workspace-main { background:transparent; }
 :root[data-theme="light"] .workspace-sidebar nav button:hover,:root[data-theme="light"] .workspace-sidebar nav button.active { background:#dff3ea; }
 :root[data-theme="light"] .workspace-nav-label { color:#73877e; }
 :root[data-theme="light"] .workspace-welcome,:root[data-theme="light"] .workspace-team-overview,:root[data-theme="light"] .about-hero-card { background:linear-gradient(135deg,#f9fcfa,#eaf6f0); color:var(--ink); box-shadow:0 16px 45px #244b390d; }
