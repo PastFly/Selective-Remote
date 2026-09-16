@@ -44,6 +44,10 @@ struct CloudTeamSnippetsTests {
         #expect(!source.contains("Text(snippet.modifiedDate, style: .relative)"))
         #expect(source.contains("SelectiveRemote.team-snippet.display-mode.v1"))
         #expect(source.contains("SelectiveRemote.team-snippet.sort-mode.v1"))
+        #expect(source.contains("SelectiveRemote.team-snippet.collapsed-folders.v1"))
+        #expect(source.contains("folderExpansionBinding(for: group.folder)"))
+        #expect(source.contains("folderDisclosureLabel(group)"))
+        #expect(source.contains("DisclosureGroup("))
         #expect(source.contains("LazyVGrid("))
         #expect(source.contains("ru: \"Все папки\", en: \"All Folders\""))
     }
