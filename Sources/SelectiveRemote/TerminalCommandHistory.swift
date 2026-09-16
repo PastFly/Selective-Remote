@@ -464,19 +464,40 @@ final class TerminalCommandHistoryStore: ObservableObject {
               })
         else { return false }
 
-        guard !storedSnippetGroups.contains(where: {
-            $0.id != id
-                && $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive])
-                    == .orderedSame
-        }) else {
+        let oldName = storedSnippetGroups[index].name
+        let oldPrefix = "\(oldName)/"
+        let affected = storedSnippetGroups.indices.filter {
+            storedSnippetGroups[$0].id == id
+                || storedSnippetGroups[$0].name.hasPrefix(oldPrefix)
+        }
+        let replacements = Dictionary(uniqueKeysWithValues: affected.map { groupIndex in
+            let current = storedSnippetGroups[groupIndex].name
+            let suffix = current == oldName ? "" : String(current.dropFirst(oldName.count))
+            return (storedSnippetGroups[groupIndex].id, "\(name)\(suffix)")
+        })
+        guard replacements.values.allSatisfy({ normalizedSnippetGroupName($0) == $0 }) else {
             return false
         }
-        storedSnippetGroups[index].name = name
-        storedSnippetGroups[index].updatedAt = now
-        for templateIndex in storedTemplates.indices where
-            storedTemplates[templateIndex].groupID == id {
-            storedTemplates[templateIndex].category = name
-            storedTemplates[templateIndex].updatedAt = now
+        let unaffectedNames = storedSnippetGroups
+            .filter { replacements[$0.id] == nil }
+            .map(\.name)
+        guard !replacements.values.contains(where: { candidate in
+            unaffectedNames.contains {
+                $0.compare(candidate, options: [.caseInsensitive, .diacriticInsensitive])
+                    == .orderedSame
+            }
+        }) else { return false }
+
+        for groupIndex in affected {
+            let groupID = storedSnippetGroups[groupIndex].id
+            guard let replacement = replacements[groupID] else { continue }
+            storedSnippetGroups[groupIndex].name = replacement
+            storedSnippetGroups[groupIndex].updatedAt = now
+            for templateIndex in storedTemplates.indices where
+                storedTemplates[templateIndex].groupID == groupID {
+                storedTemplates[templateIndex].category = replacement
+                storedTemplates[templateIndex].updatedAt = now
+            }
         }
         persistSnippetGroups()
         persistTemplates()
@@ -489,6 +510,11 @@ final class TerminalCommandHistoryStore: ObservableObject {
     func removeSnippetGroup(id: UUID, profileID: UUID) -> Bool {
         guard let index = storedSnippetGroups.firstIndex(where: {
             $0.id == id
+        }) else { return false }
+
+        let prefix = "\(storedSnippetGroups[index].name)/"
+        guard !storedSnippetGroups.contains(where: {
+            $0.id != id && $0.name.hasPrefix(prefix)
         }) else { return false }
 
         storedSnippetGroups.remove(at: index)
@@ -527,7 +553,7 @@ final class TerminalCommandHistoryStore: ObservableObject {
         let category = rawCategory.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !title.isEmpty,
               title.count <= 80,
-              category.count <= 60,
+              category.count <= 120,
               let command = normalizedSnippetCommand(rawCommand),
               !isSensitive(command)
         else { return false }
@@ -776,8 +802,17 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
     private func normalizedSnippetGroupName(_ rawName: String) -> String? {
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !name.isEmpty, name.count <= 60 else { return nil }
-        return name
+        let components = name.split(separator: "/", omittingEmptySubsequences: false)
+        guard !name.isEmpty,
+              name.count <= 120,
+              !name.hasPrefix("/"),
+              !name.hasSuffix("/"),
+              components.allSatisfy({ component in
+                  let value = component.trimmingCharacters(in: .whitespacesAndNewlines)
+                  return !value.isEmpty && value == String(component)
+              })
+        else { return nil }
+        return components.map(String.init).joined(separator: "/")
     }
 
     private func hasSnippetGroup(named name: String) -> Bool {

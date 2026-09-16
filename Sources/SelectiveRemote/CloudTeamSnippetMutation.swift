@@ -205,6 +205,9 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return value == trimmed && value.count <= 120
             && !value.contains(where: { $0.isNewline })
+            && !value.hasPrefix("/")
+            && !value.hasSuffix("/")
+            && !value.contains("//")
     }
 }
 

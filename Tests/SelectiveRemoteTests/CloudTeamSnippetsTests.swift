@@ -45,8 +45,11 @@ struct CloudTeamSnippetsTests {
         #expect(source.contains("SelectiveRemote.team-snippet.display-mode.v1"))
         #expect(source.contains("SelectiveRemote.team-snippet.sort-mode.v1"))
         #expect(source.contains("SelectiveRemote.team-snippet.collapsed-folders.v1"))
-        #expect(source.contains("folderExpansionBinding(for: group.folder)"))
-        #expect(source.contains("folderDisclosureLabel(group)"))
+        #expect(source.contains("SelectiveRemoteTeamSnippetFolderNode"))
+        #expect(source.contains("folderExpansionBinding(for: node.path)"))
+        #expect(source.contains("teamSnippetListFolder(child)"))
+        #expect(source.contains("teamSnippetGridFolder(child)"))
+        #expect(source.contains("SelectiveRemoteTeamSnippetFolderEditor"))
         #expect(source.contains("DisclosureGroup("))
         #expect(source.contains("LazyVGrid("))
         #expect(source.contains("ru: \"Все папки\", en: \"All Folders\""))
@@ -61,9 +64,11 @@ struct CloudTeamSnippetsTests {
         )
 
         #expect(source.contains("@State private var teamCreateRequest = 0"))
+        #expect(source.contains("@State private var teamCreateFolderRequest = 0"))
         #expect(source.contains(".frame(width: 112)"))
         #expect(source.contains(".frame(width: 122)"))
         #expect(source.contains("teamCreateRequest += 1"))
+        #expect(source.contains("teamCreateFolderRequest += 1"))
         #expect(source.contains("name: .selectiveRemoteTeamVaultSyncNow"))
     }
 

@@ -63,10 +63,12 @@ struct TerminalSnippetsLibraryView: View {
     @State private var selectedGroupID: UUID?
     @State private var editorRequest: TerminalSnippetEditorRequest?
     @State private var groupEditor: TerminalSnippetGroup?
+    @State private var groupEditorSuggestedPath = ""
     @State private var groupEditorPresented = false
     @State private var deleteSnippet: TerminalCommandTemplate?
     @State private var showsDisconnectConfirmation = false
     @State private var teamCreateRequest = 0
+    @State private var teamCreateFolderRequest = 0
     @AppStorage("SelectiveRemote.snippets.libraryViewMode.v1")
     private var viewModeRaw = SnippetLibraryViewMode.list.rawValue
     @AppStorage("SelectiveRemote.snippets.selectedGroupID.v1")
@@ -128,6 +130,7 @@ struct TerminalSnippetsLibraryView: View {
                 SelectiveRemoteTeamSnippetsView(
                     store: teamStore,
                     model: model,
+                    createFolderRequest: teamCreateFolderRequest,
                     createRequest: teamCreateRequest
                 )
             }
@@ -158,7 +161,10 @@ struct TerminalSnippetsLibraryView: View {
             }
         }
         .sheet(isPresented: $groupEditorPresented) {
-            TerminalSnippetGroupEditorView(group: groupEditor) { name in
+            TerminalSnippetGroupEditorView(
+                group: groupEditor,
+                suggestedPath: groupEditorSuggestedPath
+            ) { name in
                 if let groupEditor {
                     _ = store.renameSnippetGroup(
                         id: groupEditor.id,
@@ -248,6 +254,9 @@ struct TerminalSnippetsLibraryView: View {
                 if scope == .personal {
                     Button {
                         groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map {
+                            "\($0.name)/"
+                        } ?? ""
                         groupEditorPresented = true
                     } label: {
                         Label("Новая группа", systemImage: "folder.badge.plus")
@@ -255,18 +264,24 @@ struct TerminalSnippetsLibraryView: View {
                     }
                 } else {
                     Button {
-                        NotificationCenter.default.post(
-                            name: .selectiveRemoteTeamVaultSyncNow,
-                            object: nil
-                        )
+                        teamCreateFolderRequest += 1
                     } label: {
-                        Label(
-                            UpdateLocalization.text(ru: "Обновить", en: "Refresh"),
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
+                        Label("Новая группа", systemImage: "folder.badge.plus")
                         .frame(width: 112)
                     }
                 }
+            }
+
+            if scope == .team {
+                Button {
+                    NotificationCenter.default.post(
+                        name: .selectiveRemoteTeamVaultSyncNow,
+                        object: nil
+                    )
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .help(UpdateLocalization.text(ru: "Обновить", en: "Refresh"))
             }
 
             Button {
@@ -355,34 +370,38 @@ struct TerminalSnippetsLibraryView: View {
             ScrollView {
                 if !normalizedQuery.isEmpty {
                     snippetCollection(searchResults, showsGroup: true)
-                } else if let selectedGroup {
-                    let snippets = sortedSnippets(store.templates(in: selectedGroup.id))
-                    if snippets.isEmpty {
+                } else {
+                    let snippets = selectedGroup.map {
+                        sortedSnippets(store.templates(in: $0.id))
+                    } ?? sortedSnippets(ungroupedSnippets)
+                    if visibleChildGroups.isEmpty && snippets.isEmpty {
                         VStack(spacing: 14) {
                             ContentUnavailableView(
-                                "Группа пуста",
+                                selectedGroup == nil ? "Сниппетов пока нет" : "Группа пуста",
                                 systemImage: "folder",
-                                description: Text("Добавьте первый сниппет в «\(selectedGroup.name)».")
+                                description: Text(selectedGroup.map {
+                                    "Добавьте вложенную группу или первый сниппет в «\($0.name)»."
+                                } ?? "Создайте группу или добавьте первый сниппет.")
                             )
-                            Button("Новый сниппет", systemImage: "plus") {
-                                presentEditor(nil, preferredGroupID: selectedGroup.id)
+                            HStack {
+                                Button("Новая группа", systemImage: "folder.badge.plus") {
+                                    groupEditor = nil
+                                    groupEditorSuggestedPath = selectedGroup.map {
+                                        "\($0.name)/"
+                                    } ?? ""
+                                    groupEditorPresented = true
+                                }
+                                Button("Новый сниппет", systemImage: "plus") {
+                                    presentEditor(nil, preferredGroupID: selectedGroup?.id)
+                                }
+                                .buttonStyle(.borderedProminent)
                             }
-                            .buttonStyle(.borderedProminent)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 70)
                     } else {
-                        snippetCollection(snippets, showsGroup: false)
+                        groupCollection
                     }
-                } else if store.snippetGroups().isEmpty && ungroupedSnippets.isEmpty {
-                    ContentUnavailableView(
-                        "Сниппетов пока нет",
-                        systemImage: "curlybraces",
-                        description: Text("Создайте общую команду и назначьте ей SSH или Локальный терминал.")
-                    )
-                    .padding(.top, 70)
-                } else {
-                    groupCollection
                 }
             }
             .background(Color.clear.contentShape(Rectangle()))
@@ -393,22 +412,22 @@ struct TerminalSnippetsLibraryView: View {
     private var groupCollection: some View {
         if viewMode == .grid {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12)], spacing: 12) {
-                ForEach(sortedGroups) { group in groupCard(group) }
-                ForEach(sortedSnippets(ungroupedSnippets)) { snippet in
+                ForEach(visibleChildGroups) { group in groupCard(group) }
+                ForEach(visibleGroupSnippets) { snippet in
                     snippetCard(snippet, showsGroup: false)
                 }
             }
             .padding(14)
         } else {
             LazyVStack(spacing: 8) {
-                ForEach(sortedGroups) { group in groupRow(group) }
-                if !ungroupedSnippets.isEmpty {
-                    Text("Без группы")
+                ForEach(visibleChildGroups) { group in groupRow(group) }
+                if !visibleGroupSnippets.isEmpty {
+                    Text(selectedGroup == nil ? "Без группы" : "Сниппеты")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.top, 8)
-                    ForEach(sortedSnippets(ungroupedSnippets)) { snippet in
+                    ForEach(visibleGroupSnippets) { snippet in
                         snippetListButton(snippet, showsGroup: false)
                     }
                 }
@@ -425,8 +444,8 @@ struct TerminalSnippetsLibraryView: View {
                     .foregroundStyle(Color.accentColor)
                     .frame(width: 38)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(group.name).font(.headline)
-                    Text("\(store.templates(in: group.id).count) сниппетов")
+                    Text(groupDisplayName(group.name)).font(.headline)
+                    Text("\(recursiveSnippetCount(in: group)) сниппетов")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -446,8 +465,8 @@ struct TerminalSnippetsLibraryView: View {
                     .font(.system(size: 32, weight: .semibold))
                     .foregroundStyle(Color.accentColor)
                 Spacer(minLength: 8)
-                Text(group.name).font(.headline).lineLimit(2)
-                Text("\(store.templates(in: group.id).count) сниппетов")
+                Text(groupDisplayName(group.name)).font(.headline).lineLimit(2)
+                Text("\(recursiveSnippetCount(in: group)) сниппетов")
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
@@ -464,9 +483,15 @@ struct TerminalSnippetsLibraryView: View {
         Button("Новый сниппет", systemImage: "plus") {
             presentEditor(nil, preferredGroupID: group.id)
         }
+        Button("Новая вложенная группа", systemImage: "folder.badge.plus") {
+            groupEditor = nil
+            groupEditorSuggestedPath = "\(group.name)/"
+            groupEditorPresented = true
+        }
         Divider()
         Button("Переименовать", systemImage: "pencil") {
             groupEditor = group
+            groupEditorSuggestedPath = group.name
             groupEditorPresented = true
         }
         Button("Удалить группу", systemImage: "trash", role: .destructive) {
@@ -714,6 +739,36 @@ struct TerminalSnippetsLibraryView: View {
             byModifiedDate: SnippetLibrarySort(rawValue: sortRaw) == .modified,
             ascending: sortAscending
         )
+    }
+
+    private var visibleChildGroups: [TerminalSnippetGroup] {
+        let parent = selectedGroup?.name ?? ""
+        return sortedGroups.filter { groupParentPath($0.name) == parent }
+    }
+
+    private var visibleGroupSnippets: [TerminalCommandTemplate] {
+        if let selectedGroup {
+            return sortedSnippets(store.templates(in: selectedGroup.id))
+        }
+        return sortedSnippets(ungroupedSnippets)
+    }
+
+    private func groupParentPath(_ path: String) -> String {
+        guard let separator = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<separator])
+    }
+
+    private func groupDisplayName(_ path: String) -> String {
+        path.split(separator: "/", omittingEmptySubsequences: true)
+            .last.map(String.init) ?? path
+    }
+
+    private func recursiveSnippetCount(in group: TerminalSnippetGroup) -> Int {
+        let prefix = "\(group.name)/"
+        let groupIDs = Set(store.snippetGroups().filter {
+            $0.id == group.id || $0.name.hasPrefix(prefix)
+        }.map(\.id))
+        return store.templates().filter { groupIDs.contains($0.groupID) }.count
     }
 
     private var ungroupedSnippets: [TerminalCommandTemplate] {
@@ -995,20 +1050,29 @@ private struct TerminalSnippetEditorView: View {
 private struct TerminalSnippetGroupEditorView: View {
     @Environment(\.dismiss) private var dismiss
     let group: TerminalSnippetGroup?
+    let suggestedPath: String
     let onSave: (String) -> Void
     @State private var name: String
 
-    init(group: TerminalSnippetGroup?, onSave: @escaping (String) -> Void) {
+    init(
+        group: TerminalSnippetGroup?,
+        suggestedPath: String,
+        onSave: @escaping (String) -> Void
+    ) {
         self.group = group
+        self.suggestedPath = suggestedPath
         self.onSave = onSave
-        _name = State(initialValue: group?.name ?? "")
+        _name = State(initialValue: group?.name ?? suggestedPath)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Text(group == nil ? "Новая группа" : "Переименовать группу")
                 .font(.title2.bold())
-            TextField("Название группы", text: $name)
+            TextField("Путь группы", text: $name)
+            Text("Используйте / для вложенности, например Production/Deploy.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             HStack {
                 Spacer()
                 Button("Отмена") { dismiss() }
@@ -1017,7 +1081,12 @@ private struct TerminalSnippetGroupEditorView: View {
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(
+                    name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || name.count > 120
+                        || name.hasSuffix("/")
+                        || name.contains("//")
+                )
             }
         }
         .padding(24)

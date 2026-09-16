@@ -68,6 +68,18 @@ enum SelectiveRemoteTeamSnippetMaterializationError: Error, Equatable {
     case invalidSnippetRecord
 }
 
+private struct SelectiveRemoteTeamSnippetFolderNode: Identifiable {
+    let path: String
+    let snippets: [SelectiveRemoteTeamSnippet]
+    let children: [SelectiveRemoteTeamSnippetFolderNode]
+
+    var id: String { path }
+    var title: String { path.split(separator: "/").last.map(String.init) ?? path }
+    var totalCount: Int {
+        snippets.count + children.reduce(0) { $0 + $1.totalCount }
+    }
+}
+
 enum SelectiveRemoteTeamSnippetMaterializer {
     static func materialize(
         _ snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot
@@ -184,6 +196,9 @@ enum SelectiveRemoteTeamSnippetMaterializer {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return value == trimmed && value.count <= 120
             && !value.contains(where: { $0.isNewline })
+            && !value.hasPrefix("/")
+            && !value.hasSuffix("/")
+            && !value.contains("//")
     }
 
     private static func timestamp(_ value: String) -> Date? {
@@ -281,6 +296,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @ObservedObject var store: SelectiveRemoteTeamSnippetStore
     @ObservedObject var targetStore: SelectiveRemoteTeamSnippetTargetStore
     @ObservedObject var model: AppModel
+    let createFolderRequest: Int
     let createRequest: Int
 
     @State private var query = ""
@@ -291,8 +307,10 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @State private var targetEditorSnippet: SelectiveRemoteTeamSnippet?
     @State private var actionMessage = ""
     @State private var editorRequest: SelectiveRemoteTeamSnippetEditorRequest?
+    @State private var folderEditorContext: SelectiveRemoteTeamSnippetVaultContext?
     @State private var snippetPendingDeletion: SelectiveRemoteTeamSnippet?
     @State private var showsVaultChooser = false
+    @State private var showsFolderVaultChooser = false
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamSnippetMutationMessage?
     @AppStorage("SelectiveRemote.team-snippet.display-mode.v1")
@@ -311,11 +329,13 @@ struct SelectiveRemoteTeamSnippetsView: View {
         store: SelectiveRemoteTeamSnippetStore,
         model: AppModel,
         targetStore: SelectiveRemoteTeamSnippetTargetStore = .shared,
+        createFolderRequest: Int = 0,
         createRequest: Int = 0
     ) {
         self.store = store
         self.model = model
         self.targetStore = targetStore
+        self.createFolderRequest = createFolderRequest
         self.createRequest = createRequest
     }
 
@@ -329,7 +349,9 @@ struct SelectiveRemoteTeamSnippetsView: View {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = store.snippets.filter { snippet in
             (selectedVaultKey.isEmpty || vaultKey(snippet) == selectedVaultKey)
-                && (selectedFolder.map { snippet.folder == $0 } ?? true)
+                && (selectedFolder.map {
+                    snippet.folder == $0 || snippet.folder.hasPrefix("\($0)/")
+                } ?? true)
                 && (normalizedQuery.isEmpty || [
                     snippet.title, snippet.body, snippet.folder, snippet.teamName, snippet.vaultName
                 ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) })
@@ -358,10 +380,33 @@ struct SelectiveRemoteTeamSnippetsView: View {
         }.map(\.folder))).sorted { folderTitle($0).localizedStandardCompare(folderTitle($1)) == .orderedAscending }
     }
 
-    private var groupedSnippets: [(folder: String, snippets: [SelectiveRemoteTeamSnippet])] {
-        Dictionary(grouping: visibleSnippets, by: \.folder)
-            .map { (folder: $0.key, snippets: $0.value) }
-            .sorted { folderTitle($0.folder).localizedStandardCompare(folderTitle($1.folder)) == .orderedAscending }
+    private var ungroupedVisibleSnippets: [SelectiveRemoteTeamSnippet] {
+        visibleSnippets.filter { $0.folder.isEmpty }
+    }
+
+    private var folderTree: [SelectiveRemoteTeamSnippetFolderNode] {
+        let grouped = Dictionary(grouping: visibleSnippets.filter { !$0.folder.isEmpty }, by: \.folder)
+        var paths = Set(grouped.keys)
+        for path in grouped.keys {
+            let components = path.split(separator: "/").map(String.init)
+            if components.count > 1 {
+                for depth in 1 ..< components.count {
+                    paths.insert(components.prefix(depth).joined(separator: "/"))
+                }
+            }
+        }
+        func children(of parent: String) -> [SelectiveRemoteTeamSnippetFolderNode] {
+            paths.filter { folderParentPath($0) == parent }
+                .sorted { folderLeafTitle($0).localizedStandardCompare(folderLeafTitle($1)) == .orderedAscending }
+                .map { path in
+                    SelectiveRemoteTeamSnippetFolderNode(
+                        path: path,
+                        snippets: grouped[path] ?? [],
+                        children: children(of: path)
+                    )
+                }
+        }
+        return children(of: "")
     }
 
     private var selectedSnippet: SelectiveRemoteTeamSnippet? {
@@ -391,43 +436,53 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     } else {
                         if displayMode == .list {
                             List(selection: $selectedSnippetID) {
-                                ForEach(groupedSnippets, id: \.folder) { group in
+                                if !ungroupedVisibleSnippets.isEmpty {
                                     DisclosureGroup(
-                                        isExpanded: folderExpansionBinding(for: group.folder)
+                                        isExpanded: folderExpansionBinding(for: "")
                                     ) {
-                                        ForEach(group.snippets) { snippet in
+                                        ForEach(ungroupedVisibleSnippets) { snippet in
                                             snippetRow(snippet)
                                                 .tag(snippet.id)
                                                 .contextMenu { snippetActions(snippet) }
                                         }
                                     } label: {
-                                        folderDisclosureLabel(group)
+                                        folderDisclosureLabel(
+                                            path: "",
+                                            title: folderTitle(""),
+                                            count: ungroupedVisibleSnippets.count
+                                        )
                                     }
                                 }
+                                ForEach(folderTree) { node in teamSnippetListFolder(node) }
                             }
                             .listStyle(.inset)
                         } else {
                             ScrollView {
                                 LazyVStack(alignment: .leading, spacing: 14) {
-                                    ForEach(groupedSnippets, id: \.folder) { group in
+                                    if !ungroupedVisibleSnippets.isEmpty {
                                         DisclosureGroup(
-                                            isExpanded: folderExpansionBinding(for: group.folder)
+                                            isExpanded: folderExpansionBinding(for: "")
                                         ) {
                                             LazyVGrid(
                                                 columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
                                                 alignment: .leading,
                                                 spacing: 12
                                             ) {
-                                                ForEach(group.snippets) { snippet in
+                                                ForEach(ungroupedVisibleSnippets) { snippet in
                                                     snippetGridCard(snippet)
                                                 }
                                             }
                                             .padding(.top, 10)
                                         } label: {
-                                            folderDisclosureLabel(group)
+                                            folderDisclosureLabel(
+                                                path: "",
+                                                title: folderTitle(""),
+                                                count: ungroupedVisibleSnippets.count
+                                            )
                                                 .padding(.vertical, 4)
                                         }
                                     }
+                                    ForEach(folderTree) { node in teamSnippetGridFolder(node) }
                                 }
                                 .padding(14)
                             }
@@ -457,6 +512,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .onChange(of: selectedFolder) { _, _ in normalizeSelection() }
         .onChange(of: selectedSnippetID) { _, _ in actionMessage = "" }
         .onChange(of: createRequest) { _, _ in presentCreateEditor() }
+        .onChange(of: createFolderRequest) { _, _ in presentCreateFolderEditor() }
         .sheet(item: $targetEditorSnippet) { snippet in
             SelectiveRemoteTeamSnippetTargetsEditor(
                 snippet: snippet,
@@ -481,6 +537,15 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 )
             }
         }
+        .sheet(item: $folderEditorContext) { context in
+            SelectiveRemoteTeamSnippetFolderEditor(context: context) { folder in
+                editorRequest = .init(
+                    context: context,
+                    snippet: nil,
+                    preferredFolder: folder
+                )
+            }
+        }
         .confirmationDialog(
             UpdateLocalization.text(ru: "Выберите Team Vault", en: "Choose a Team Vault"),
             isPresented: $showsVaultChooser
@@ -488,6 +553,17 @@ struct SelectiveRemoteTeamSnippetsView: View {
             ForEach(writableVaults) { vault in
                 Button("\(vault.teamName) / \(vault.vaultName)") {
                     editorRequest = .init(context: vault, snippet: nil)
+                }
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        }
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Выберите Team Vault для группы", en: "Choose a Team Vault for the Folder"),
+            isPresented: $showsFolderVaultChooser
+        ) {
+            ForEach(writableVaults) { vault in
+                Button("\(vault.teamName) / \(vault.vaultName)") {
+                    folderEditorContext = vault
                 }
             }
             Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
@@ -688,19 +764,69 @@ struct SelectiveRemoteTeamSnippetsView: View {
         )
     }
 
-    private func folderDisclosureLabel(
-        _ group: (folder: String, snippets: [SelectiveRemoteTeamSnippet])
-    ) -> some View {
+    private func folderDisclosureLabel(path: String, title: String, count: Int) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "folder.fill")
                 .foregroundStyle(Color.accentColor)
-            Text(folderTitle(group.folder))
+            Text(title)
                 .font(.headline)
             Spacer()
-            Text("\(group.snippets.count)")
+            Text("\(count)")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private func teamSnippetListFolder(
+        _ node: SelectiveRemoteTeamSnippetFolderNode
+    ) -> AnyView {
+        AnyView(
+            DisclosureGroup(isExpanded: folderExpansionBinding(for: node.path)) {
+                ForEach(node.children) { child in teamSnippetListFolder(child) }
+                ForEach(node.snippets) { snippet in
+                    snippetRow(snippet)
+                        .tag(snippet.id)
+                        .contextMenu { snippetActions(snippet) }
+                }
+            } label: {
+                folderDisclosureLabel(path: node.path, title: node.title, count: node.totalCount)
+            }
+        )
+    }
+
+    private func teamSnippetGridFolder(
+        _ node: SelectiveRemoteTeamSnippetFolderNode
+    ) -> AnyView {
+        AnyView(
+            DisclosureGroup(isExpanded: folderExpansionBinding(for: node.path)) {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(node.children) { child in teamSnippetGridFolder(child) }
+                    if !node.snippets.isEmpty {
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
+                            alignment: .leading,
+                            spacing: 12
+                        ) {
+                            ForEach(node.snippets) { snippet in snippetGridCard(snippet) }
+                        }
+                    }
+                }
+                .padding(.top, 10)
+                .padding(.leading, 12)
+            } label: {
+                folderDisclosureLabel(path: node.path, title: node.title, count: node.totalCount)
+                    .padding(.vertical, 4)
+            }
+        )
+    }
+
+    private func folderParentPath(_ path: String) -> String {
+        guard let separator = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<separator])
+    }
+
+    private func folderLeafTitle(_ path: String) -> String {
+        path.split(separator: "/").last.map(String.init) ?? path
     }
 
     private func snippetGridCard(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
@@ -1039,6 +1165,22 @@ struct SelectiveRemoteTeamSnippetsView: View {
         }
     }
 
+    private func presentCreateFolderEditor() {
+        if writableVaults.count == 1, let vault = writableVaults.first {
+            folderEditorContext = vault
+        } else if !writableVaults.isEmpty {
+            showsFolderVaultChooser = true
+        } else {
+            mutationMessage = .init(
+                text: UpdateLocalization.text(
+                    ru: "Нет доступного Team Vault с ролью Owner, Admin или Editor.",
+                    en: "No Team Vault is available with the Owner, Admin, or Editor role."
+                ),
+                isError: true
+            )
+        }
+    }
+
     private func context(
         for snippet: SelectiveRemoteTeamSnippet
     ) -> SelectiveRemoteTeamSnippetVaultContext? {
@@ -1223,6 +1365,63 @@ struct SelectiveRemoteTeamSnippetsView: View {
         case 2 ... 4: return few
         default: return many
         }
+    }
+}
+
+private struct SelectiveRemoteTeamSnippetFolderEditor: View {
+    let context: SelectiveRemoteTeamSnippetVaultContext
+    let onContinue: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var folder = ""
+
+    private var normalizedFolder: String {
+        folder.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isValid: Bool {
+        folder == normalizedFolder
+            && !folder.isEmpty
+            && folder.count <= 120
+            && !folder.hasPrefix("/")
+            && !folder.hasSuffix("/")
+            && !folder.contains("//")
+            && !folder.contains(where: { $0.isNewline })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text(UpdateLocalization.text(ru: "Новая группа", en: "New Folder"))
+                .font(.title2.bold())
+            Text("\(context.teamName) / \(context.vaultName)")
+                .foregroundStyle(.secondary)
+            TextField(
+                UpdateLocalization.text(
+                    ru: "Путь, например Production/Deploy",
+                    en: "Path, for example Production/Deploy"
+                ),
+                text: $folder
+            )
+            .textFieldStyle(.roundedBorder)
+            Text(UpdateLocalization.text(
+                ru: "После выбора пути откроется создание первого сниппета. Группа появится у всей команды после зашифрованной синхронизации.",
+                en: "After choosing the path, create its first snippet. The folder appears for the team after encrypted synchronization."
+            ))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { dismiss() }
+                Button(UpdateLocalization.text(ru: "Продолжить", en: "Continue")) {
+                    dismiss()
+                    DispatchQueue.main.async { onContinue(folder) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isValid)
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
     }
 }
 
