@@ -112,10 +112,18 @@ func managementWorkspaceCompositionContract() throws {
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamHosts.swift"),
         encoding: .utf8
     )
+    let controls = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppControlStyles.swift"),
+        encoding: .utf8
+    )
 
     #expect(content.contains("@State private var mainArea = MainArea.hosts"))
     #expect(content.contains("private var showsHostQuickAccess: Bool"))
+    #expect(content.contains("max: showsHostQuickAccess ? 520 : 280"))
     #expect(content.contains("personalHostNavigatorToolbar"))
+    #expect(content.contains("compact: surface == .sidebar"))
     #expect(teamHosts.contains("teamHostNavigatorToolbar"))
     #expect(teamHosts.contains("let onShowPersonal: () -> Void"))
+    #expect(controls.contains("ProfileCollectionDisplayModeMenuItems"))
+    #expect(controls.contains("SelectiveRemoteCompactAddMenuLabel"))
 }
