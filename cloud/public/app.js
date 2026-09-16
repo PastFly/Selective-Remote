@@ -3386,6 +3386,83 @@ export async function initializeCloudAccount({
   return { client, showAuth: setAuthMode, teamWorkspace };
 }
 
+export function initializeHeroPreview({ documentValue = document } = {}) {
+  const preview = documentValue.querySelector("#cloud-hero-preview");
+  const overview = documentValue.querySelector("#hero-preview-overview");
+  const stage = documentValue.querySelector("#hero-preview-stage");
+  const back = documentValue.querySelector("[data-hero-preview-back]");
+  if (!preview || !overview || !stage || !back) return null;
+
+  const sceneOrder = ["hosts", "credentials", "snippets", "devices"];
+  const sceneButtons = [...documentValue.querySelectorAll("[data-hero-preview-scene]")];
+  const scopeButtons = [...documentValue.querySelectorAll("[data-hero-preview-scope]")];
+  const scopeLabels = [...documentValue.querySelectorAll("[data-preview-scope-label]")];
+  const scenePanels = [...documentValue.querySelectorAll("[data-preview-scene-panel]")];
+  const sidebarItems = [...preview.querySelectorAll(".preview-sidebar span")];
+  let activeScene = null;
+  let activeScope = "personal";
+
+  function selectScope(scope) {
+    if (!["personal", "team"].includes(scope)) return;
+    activeScope = scope;
+    preview.dataset.scope = scope;
+    for (const button of scopeButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.heroPreviewScope === scope));
+    }
+    for (const label of scopeLabels) label.textContent = scope === "team" ? "Team Vault" : "Personal Vault";
+  }
+
+  function selectScene(scene) {
+    if (!sceneOrder.includes(scene)) return;
+    activeScene = scene;
+    preview.dataset.scene = scene;
+    preview.classList.add("preview-scene-active");
+    overview.hidden = true;
+    stage.hidden = false;
+    for (const button of sceneButtons) {
+      button.setAttribute("aria-selected", String(button.dataset.heroPreviewScene === scene));
+    }
+    for (const panel of scenePanels) panel.hidden = panel.dataset.previewScenePanel !== scene;
+    sidebarItems.forEach((item, index) => item.classList.toggle("active", index === sceneOrder.indexOf(scene)));
+  }
+
+  function showOverview({ focus = false } = {}) {
+    activeScene = null;
+    delete preview.dataset.scene;
+    preview.classList.remove("preview-scene-active");
+    stage.hidden = true;
+    overview.hidden = false;
+    for (const button of sceneButtons) button.setAttribute("aria-selected", "false");
+    for (const panel of scenePanels) panel.hidden = true;
+    sidebarItems.forEach((item, index) => item.classList.toggle("active", index === 0));
+    if (focus) documentValue.querySelector('[data-hero-preview-scene="hosts"]')?.focus();
+  }
+
+  for (const button of sceneButtons) {
+    button.addEventListener("click", () => selectScene(button.dataset.heroPreviewScene));
+  }
+  for (const button of scopeButtons) {
+    button.addEventListener("click", () => selectScope(button.dataset.heroPreviewScope));
+  }
+  back.addEventListener("click", () => showOverview({ focus: true }));
+
+  for (const tablist of documentValue.querySelectorAll(".hero-preview-grid, .preview-scene-tabs")) {
+    const buttons = [...tablist.querySelectorAll("[data-hero-preview-scene]")];
+    tablist.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const currentIndex = Math.max(0, buttons.indexOf(documentValue.activeElement));
+      const nextIndex = event.key === "Home" ? 0
+        : event.key === "End" ? buttons.length - 1
+          : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[nextIndex]?.focus();
+    });
+  }
+
+  selectScope(activeScope);
+  return { scene: () => activeScene, scope: () => activeScope, selectScene, selectScope, showOverview };
+}
+
 export function initializePortalNavigation({
   documentValue = document,
   locationValue = location,
@@ -3395,6 +3472,7 @@ export function initializePortalNavigation({
   showAuthMode = () => {},
 } = {}) {
   const brand = documentValue.querySelector("#site-brand");
+  const siteNav = documentValue.querySelector(".site-nav");
   const publicActions = documentValue.querySelector("#public-actions");
   const hero = documentValue.querySelector("#public-hero");
   const heroCopy = documentValue.querySelector("#public-hero-copy");
@@ -3521,6 +3599,7 @@ export function initializePortalNavigation({
   function showLanding({ replace = false } = {}) {
     vaultUI?.closeEditor();
     brand.hidden = false;
+    if (siteNav) siteNav.hidden = false;
     publicActions.hidden = false;
     hero.hidden = false;
     hero.classList.remove("auth-active");
@@ -3536,6 +3615,7 @@ export function initializePortalNavigation({
   function showAuthentication(mode = "login", { replace = false } = {}) {
     vaultUI?.closeEditor();
     brand.hidden = false;
+    if (siteNav) siteNav.hidden = true;
     publicActions.hidden = true;
     hero.hidden = false;
     hero.classList.add("auth-active");
@@ -3552,6 +3632,7 @@ export function initializePortalNavigation({
 
   function showWorkspace({ replace = false } = {}) {
     brand.hidden = true;
+    if (siteNav) siteNav.hidden = true;
     hero.hidden = true;
     publicGrid.hidden = true;
     publicAccess.hidden = true;
@@ -3622,6 +3703,7 @@ export function initializePortalNavigation({
 
 async function updateServiceStatus(documentValue, fetchValue) {
   const status = documentValue.querySelector("#service-status");
+  const label = status.querySelector?.("span") ?? status;
   try {
     const response = await fetchValue("/v1/meta", {
       headers: { Accept: "application/json" },
@@ -3629,11 +3711,16 @@ async function updateServiceStatus(documentValue, fetchValue) {
     });
     if (!response.ok) throw new Error("unavailable");
     const meta = await response.json();
-    status.textContent = `API v${meta.apiVersion} · сервис доступен`;
+    label.textContent = "Online";
+    status.title = `Cloud API v${meta.apiVersion} доступен`;
+    status.classList.remove("error");
     status.classList.add("ok");
     return meta;
   } catch {
-    status.textContent = "Сервис недоступен";
+    label.textContent = "Offline";
+    status.title = "Cloud недоступен";
+    status.classList.remove("ok");
+    status.classList.add("error");
     return null;
   }
 }
@@ -3644,6 +3731,7 @@ export async function initializePortal({
   historyValue = history,
   fetchValue = fetch,
 } = {}) {
+  initializeHeroPreview({ documentValue });
   const verification = consumeVerificationFragment(locationValue, historyValue);
   const passwordReset = consumePasswordResetFragment(locationValue, historyValue);
   const teamInvitation = consumeTeamInvitationFragment(locationValue, historyValue);

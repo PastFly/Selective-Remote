@@ -6,7 +6,7 @@
   <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=165">
+  <link rel="stylesheet" href="/styles.css?v=167">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -26,6 +26,12 @@
         <p class="eyebrow">SELECTIVE REMOTE</p>
         <h1>Cloud</h1>
       </div>
+      <nav class="site-nav" aria-label="Разделы страницы">
+        <a href="#public-grid">Возможности</a>
+        <a href="#public-security">Безопасность</a>
+        <a href="#public-team">Для команд</a>
+        <a href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">GitHub ↗</a>
+      </nav>
       <nav class="brand-actions" id="public-actions" aria-label="Аккаунт">
         <label class="theme-control">Тема
           <select data-theme-select aria-label="Тема оформления">
@@ -37,7 +43,7 @@
         <button type="button" class="secondary" data-open-auth="login">Войти</button>
         <button type="button" data-open-auth="registration">Создать аккаунт</button>
       </nav>
-      <span class="status" id="service-status">Проверка сервиса…</span>
+      <span class="status" id="service-status" role="status" title="Проверяем доступность Cloud"><i aria-hidden="true"></i><span>Проверка</span></span>
     </header>
 
     <section class="verification" id="email-verification" aria-live="polite" hidden>
@@ -72,6 +78,7 @@
         <h2>Удалённый доступ.<br><em>Без компромиссов.</em></h2>
         <p class="lead">Hosts, Credentials, Snippets и Team Vaults синхронизируются между вашими устройствами. Cloud хранит только зашифрованные ревизии и не видит содержимое.</p>
         <div class="hero-actions">
+          <a class="hero-download" href="https://github.com/PastFly/Selective-Remote/releases/latest" target="_blank" rel="noreferrer"><span aria-hidden="true">↓</span> Скачать для macOS</a>
           <button type="button" data-open-auth="registration">Начать работу</button>
           <button type="button" class="secondary" data-open-auth="login">У меня есть аккаунт</button>
         </div>
@@ -89,13 +96,75 @@
             <strong>SR</strong><span class="active"></span><span></span><span></span><span></span>
           </div>
           <div class="preview-content">
-            <p class="eyebrow">CLOUD WORKSPACE</p>
-            <h3>Всё нужное — в одном защищённом пространстве</h3>
-            <div class="hero-preview-grid">
-              <span><i>12</i><strong>Hosts</strong><small>RDP и SSH</small></span>
-              <span><i>8</i><strong>Credentials</strong><small>Личные и Team</small></span>
-              <span><i>24</i><strong>Snippets</strong><small>Команды</small></span>
-              <span><i>3</i><strong>Devices</strong><small>Под вашим контролем</small></span>
+            <div class="preview-overview" id="hero-preview-overview">
+              <p class="eyebrow">CLOUD WORKSPACE</p>
+              <h3>Всё нужное — в одном защищённом пространстве</h3>
+              <div class="hero-preview-grid" role="tablist" aria-label="Интерактивная демонстрация возможностей">
+                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="hosts"><i>12</i><strong>Hosts</strong><small>RDP и SSH</small><b>Открыть <span aria-hidden="true">→</span></b></button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="credentials"><i>8</i><strong>Credentials</strong><small>Личные и Team</small><b>Открыть <span aria-hidden="true">→</span></b></button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="snippets"><i>24</i><strong>Snippets</strong><small>Команды</small><b>Открыть <span aria-hidden="true">→</span></b></button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="devices"><i>3</i><strong>Devices</strong><small>Под вашим контролем</small><b>Открыть <span aria-hidden="true">→</span></b></button>
+              </div>
+            </div>
+
+            <div class="preview-stage" id="hero-preview-stage" aria-live="polite" hidden>
+              <div class="preview-stage-toolbar">
+                <button type="button" class="preview-stage-back" data-hero-preview-back>← Обзор</button>
+                <div class="preview-scope-switch" role="group" aria-label="Тип Vault в демонстрации">
+                  <button type="button" aria-pressed="true" data-hero-preview-scope="personal">Personal</button>
+                  <button type="button" aria-pressed="false" data-hero-preview-scope="team">Team</button>
+                </div>
+                <span><i></i> Интерактивная демонстрация</span>
+              </div>
+              <div class="preview-scene-tabs" role="tablist" aria-label="Разделы демонстрации">
+                <button type="button" role="tab" aria-selected="false" data-hero-preview-scene="hosts" aria-label="Hosts">H</button>
+                <button type="button" role="tab" aria-selected="false" data-hero-preview-scene="credentials" aria-label="Credentials">C</button>
+                <button type="button" role="tab" aria-selected="false" data-hero-preview-scene="snippets" aria-label="Snippets">S</button>
+                <button type="button" role="tab" aria-selected="false" data-hero-preview-scene="devices" aria-label="Devices">D</button>
+              </div>
+
+              <section class="preview-scene preview-scene-hosts" data-preview-scene-panel="hosts" aria-label="Демонстрация Hosts" hidden>
+                <header><p class="eyebrow">HOSTS</p><strong>Подключения готовы</strong><small><span data-preview-scope-label>Personal Vault</span> · зашифровано</small></header>
+                <div class="preview-host-browser">
+                  <div class="preview-folder-tree" aria-hidden="true"><span class="active">▾ Production</span><span>⌙ Web</span><span>⌙ Database</span><span>› Development</span></div>
+                  <div class="preview-host-list">
+                    <span><i class="online"></i><b>gateway-01</b><small>SSH · 10.20.0.8</small><em>22</em></span>
+                    <span><i class="online"></i><b>prod-web</b><small>SSH · 10.20.1.14</small><em>22</em></span>
+                    <span><i></i><b>office-rdp</b><small>RDP · 10.30.4.21</small><em>3389</em></span>
+                  </div>
+                </div>
+              </section>
+
+              <section class="preview-scene preview-scene-credentials" data-preview-scene-panel="credentials" aria-label="Демонстрация Credentials" hidden>
+                <header><p class="eyebrow">CREDENTIALS</p><strong>Секреты остаются секретами</strong><small><span data-preview-scope-label>Personal Vault</span> · расшифровка на устройстве</small></header>
+                <div class="preview-credential-folders" aria-hidden="true"><span class="active">Production</span><span>Network</span><span>Team</span></div>
+                <div class="preview-credential-list">
+                  <span><i>••••••••••••</i><b>Production SSH</b><small>root · обновлено сейчас</small><em>⌘C</em></span>
+                  <span><i>••••••••••••</i><b>Core switch</b><small>netadmin · Team Vault</small><em>⌘C</em></span>
+                  <span><i>••••••••••••</i><b>Database</b><small>postgres · только Personal</small><em>⌘C</em></span>
+                </div>
+              </section>
+
+              <section class="preview-scene preview-scene-snippets" data-preview-scene-panel="snippets" aria-label="Демонстрация Snippets" hidden>
+                <header><p class="eyebrow">SNIPPETS</p><strong>Команды всегда под рукой</strong><small><span data-preview-scope-label>Personal Vault</span> · параметры локальны</small></header>
+                <div class="preview-terminal" aria-hidden="true">
+                  <div><span></span><span></span><span></span><small>deploy-check.sh</small></div>
+                  <pre><i>$</i> ssh {{host}}
+<i>$</i> docker compose ps
+<b>cloud      running   healthy</b>
+<b>postgres   running   healthy</b>
+<i>$</i> <span class="preview-terminal-cursor"></span></pre>
+                  <small>✓ Выполнено локально · секреты не отправлены</small>
+                </div>
+              </section>
+
+              <section class="preview-scene preview-scene-devices" data-preview-scene-panel="devices" aria-label="Демонстрация Devices" hidden>
+                <header><p class="eyebrow">DEVICES</p><strong>Ваш Vault — ваши устройства</strong><small><span data-preview-scope-label>Personal Vault</span> · каждый ключ отзывается</small></header>
+                <div class="preview-device-map" aria-hidden="true">
+                  <div class="preview-device-orbit"><span class="device-core">SR<small>VAULT</small></span><i class="device-node device-mac">Mac</i><i class="device-node device-web">Web</i><i class="device-node device-laptop">Air</i></div>
+                  <div class="preview-device-status"><span><i></i><b>MacBook Pro</b><small>Сейчас · доверенное</small></span><span><i></i><b>Safari</b><small>Синхронизировано</small></span></div>
+                </div>
+              </section>
             </div>
           </div>
         </div>
@@ -169,10 +238,10 @@
       </div>
       <div class="grid">
         <article><span>01</span><h3>Personal Vault</h3><p>Hosts, пароли, SSH-настройки и Snippets синхронизируются между вашими устройствами.</p></article>
-        <article><span>02</span><h3>Team Workspace</h3><p>Общие Vaults, папки, роли и приглашения для безопасной совместной работы.</p></article>
+        <article id="public-team"><span>02</span><h3>Team Workspace</h3><p>Общие Vaults, папки, роли и приглашения для безопасной совместной работы.</p></article>
         <article><span>03</span><h3>Локальный режим</h3><p>Cloud остаётся дополнением: приложение продолжает полноценно работать автономно.</p></article>
       </div>
-      <div class="security-story">
+      <div class="security-story" id="public-security">
         <div class="security-story-copy">
           <p class="eyebrow">CLIENT-SIDE E2EE</p>
           <h2>Сначала шифрование.<br>Потом синхронизация.</h2>
@@ -184,6 +253,37 @@
           <li><span>3</span><div><strong>Другие устройства получают ревизию</strong><small>И расшифровывают локально</small></div></li>
         </ol>
       </div>
+
+      <section class="sync-journey" aria-labelledby="sync-journey-title">
+        <div class="sync-journey-heading">
+          <p class="eyebrow">ОДНО ДЕЙСТВИЕ · ДВА УСТРОЙСТВА</p>
+          <h2 id="sync-journey-title">Создали Host на Mac.<br>Продолжили в браузере.</h2>
+          <p>Открытый профиль не покидает ваше устройство: в Cloud отправляется только зашифрованная ревизия, которую второе доверенное устройство расшифровывает локально.</p>
+        </div>
+        <ol class="sync-journey-flow" aria-label="Сценарий синхронизации Host">
+          <li><span class="journey-icon">＋</span><div><small>ШАГ 01 · macOS</small><strong>Создаёте Host</strong><p>Адрес, папка и настройки подключения сохраняются в вашем Vault.</p></div></li>
+          <li><span class="journey-icon">◇</span><div><small>ШАГ 02 · E2EE</small><strong>Устройство шифрует</strong><p>Cloud получает новую версию ciphertext, но не Host и не его Credentials.</p></div></li>
+          <li><span class="journey-icon">✓</span><div><small>ШАГ 03 · Browser</small><strong>Host появляется рядом</strong><p>Доверенный браузер получает ревизию и открывает её своим локальным ключом.</p></div></li>
+        </ol>
+        <div class="sync-journey-line" aria-hidden="true"><span></span></div>
+      </section>
+
+      <section class="product-gallery" aria-labelledby="product-gallery-title">
+        <div class="landing-section-heading">
+          <div><p class="eyebrow">ОДИН VAULT · ДВА ИНТЕРФЕЙСА</p><h2 id="product-gallery-title">Настоящее приложение.<br>Настоящий Cloud.</h2></div>
+          <p>Нативная работа на Mac и доступ к зашифрованному рабочему пространству из браузера — с общей структурой Hosts, папок и Team Vaults.</p>
+        </div>
+        <div class="product-gallery-grid">
+          <figure class="product-shot product-shot-macos">
+            <div class="product-shot-label"><span>macOS</span><strong>Selective Remote</strong><small>Hosts и Team Credentials</small></div>
+            <div class="product-shot-frame"><img src="/images/selective-remote-macos.webp?v=167" alt="Настоящий интерфейс Selective Remote для macOS с Hosts и Team Credentials" loading="lazy" decoding="async"></div>
+          </figure>
+          <figure class="product-shot product-shot-browser">
+            <div class="product-shot-label"><span>Browser</span><strong>Selective Remote Cloud</strong><small>Team Hosts и папки</small></div>
+            <div class="product-shot-frame"><img src="/images/selective-remote-cloud-browser.webp?v=167" alt="Настоящий браузерный интерфейс Selective Remote Cloud с Team Hosts" loading="lazy" decoding="async"></div>
+          </figure>
+        </div>
+      </section>
     </section>
 
     <section class="workspace-layout" id="cloud-workspace" hidden>
@@ -778,6 +878,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=165"></script>
+  <script type="module" src="/app.js?v=167"></script>
 </body>
 </html>
