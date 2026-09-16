@@ -690,12 +690,16 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
     readFile(new URL("LocalTerminalView.swift", sourceRoot), "utf8"),
   ]);
-  assert.match(snippets, /Set\(data\.keys\) == Set\(\["title", "body"\]\)/u);
+  assert.match(snippets, /keys == Set\(\["title", "body"\]\)[\s\S]{0,100}keys == Set\(\["title", "body", "folder"\]\)/u);
   assert.match(snippets, /value\.count <= 32_768/u);
   assert.match(snippets, /selective-remote\/team-snippet\/v1/u);
   assert.match(snippets, /private var snapshots: \[String: SelectiveRemoteTeamVaultMaterializedSnapshot\]/u);
   assert.match(snippets, /NSPasteboard\.general/u);
   assert.match(snippets, /Она не запускается автоматически/u);
+  assert.match(snippets, /SelectiveRemote\.team-snippet\.display-mode\.v1/u);
+  assert.match(snippets, /SelectiveRemote\.team-snippet\.sort-mode\.v1/u);
+  assert.match(snippets, /LazyVGrid/u);
+  assert.match(snippets, /Все папки/u);
   assert.doesNotMatch(snippets, /UserDefaults|FileManager|KeychainService/u);
   assert.match(autoSync, /SelectiveRemoteTeamHostStore\.shared\.replace\(with: snapshots\)/u);
   assert.match(autoSync, /SelectiveRemoteTeamSnippetStore\.shared\.replace\(with: snapshots\)/u);

@@ -14,19 +14,21 @@ struct SelectiveRemoteTeamSnippetMutationMessage: Identifiable {
 
 struct SelectiveRemoteTeamSnippetEditorView: View {
     let request: SelectiveRemoteTeamSnippetEditorRequest
-    let onSave: (UUID, String, String) -> Void
+    let onSave: (UUID, String, String, String) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @State private var title: String
+    @State private var folder: String
     @State private var command: String
 
     init(
         request: SelectiveRemoteTeamSnippetEditorRequest,
-        onSave: @escaping (UUID, String, String) -> Void
+        onSave: @escaping (UUID, String, String, String) -> Void
     ) {
         self.request = request
         self.onSave = onSave
         _title = State(initialValue: request.snippet?.title ?? "")
+        _folder = State(initialValue: request.snippet?.folder ?? "")
         _command = State(initialValue: request.snippet?.body ?? "")
     }
 
@@ -36,6 +38,9 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
             && !title.isEmpty
             && title.count <= 120
             && !title.contains(where: { $0.isNewline })
+            && folder == folder.trimmingCharacters(in: .whitespacesAndNewlines)
+            && folder.count <= 120
+            && !folder.contains(where: { $0.isNewline })
             && !command.isEmpty
             && command.count <= 32_768
             && !command.unicodeScalars.contains(where: {
@@ -60,6 +65,15 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
 
             TextField(UpdateLocalization.text(ru: "Название", en: "Name"), text: $title)
                 .textFieldStyle(.roundedBorder)
+
+            TextField(
+                UpdateLocalization.text(
+                    ru: "Папка (например, Production/Deploy)",
+                    en: "Folder (for example, Production/Deploy)"
+                ),
+                text: $folder
+            )
+            .textFieldStyle(.roundedBorder)
 
             VStack(alignment: .leading, spacing: 8) {
                 Text(UpdateLocalization.text(ru: "Команда", en: "Command"))
@@ -93,7 +107,7 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
                     ? UpdateLocalization.text(ru: "Добавить", en: "Add")
                     : UpdateLocalization.text(ru: "Сохранить", en: "Save")
                 ) {
-                    onSave(request.snippet?.recordID ?? UUID(), title, command)
+                    onSave(request.snippet?.recordID ?? UUID(), title, command, folder)
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
@@ -101,6 +115,6 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
             }
         }
         .padding(24)
-        .frame(width: 560, height: 470)
+        .frame(width: 560, height: 520)
     }
 }

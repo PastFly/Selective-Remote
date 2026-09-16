@@ -42,6 +42,10 @@ struct CloudTeamSnippetsTests {
         #expect(source.contains("TimelineView(.periodic(from: .now, by: 60))"))
         #expect(source.contains("ru: \"Изменён "))
         #expect(!source.contains("Text(snippet.modifiedDate, style: .relative)"))
+        #expect(source.contains("SelectiveRemote.team-snippet.display-mode.v1"))
+        #expect(source.contains("SelectiveRemote.team-snippet.sort-mode.v1"))
+        #expect(source.contains("LazyVGrid("))
+        #expect(source.contains("ru: \"Все папки\", en: \"All Folders\""))
     }
 
     @Test("Snippet header keeps two fixed action slots in Personal and Team scopes")
@@ -92,6 +96,7 @@ struct CloudTeamSnippetsTests {
         #expect(snippet.id != snippet.recordID)
         #expect(snippet.title == "Deploy status")
         #expect(snippet.body == "systemctl --user status selective-remote\n")
+        #expect(snippet.folder.isEmpty)
         #expect(snippet.teamName == "Operations")
         #expect(snippet.vaultName == "Runbooks")
         #expect(snippet.role == .editor)
@@ -101,6 +106,27 @@ struct CloudTeamSnippetsTests {
         #expect(store.snippets.isEmpty)
         #expect(store.vaults.isEmpty)
         #expect(store.lastUpdatedAt == nil)
+    }
+
+    @MainActor
+    @Test("Team Snippet folders materialize without breaking legacy records")
+    func materializesFolderMetadata() throws {
+        let record = try SelectiveRemoteVaultRecord(
+            id: Self.snippetID,
+            type: .snippet,
+            version: try SelectiveRemoteVaultVersion([Self.deviceID: 1]),
+            modifiedAt: "2026-09-15T00:00:00.000Z",
+            data: .object([
+                "title": .string("Deploy status"),
+                "body": .string("systemctl status app"),
+                "folder": .string("Production/Deploy")
+            ])
+        )
+        let store = SelectiveRemoteTeamSnippetStore()
+        store.replace(with: [try Self.snapshot(records: [record])])
+
+        #expect(store.snippets.first?.folder == "Production/Deploy")
+        #expect(store.invalidVaultCount == 0)
     }
 
     @MainActor
@@ -180,6 +206,7 @@ struct CloudTeamSnippetsTests {
                 recordID: Self.snippetID,
                 title: "Deploy status",
                 body: "systemctl status app",
+                folder: "Production/Deploy",
                 role: role,
                 deviceID: Self.deviceID,
                 modifiedAt: "2026-09-16T12:00:00.000Z"
@@ -187,17 +214,25 @@ struct CloudTeamSnippetsTests {
             let createdRecord = try #require(created.records.first)
             #expect(createdRecord.type == .snippet)
             #expect(createdRecord.version.counters[Self.deviceID] == 1)
+            if case let .object(data) = createdRecord.data {
+                #expect(data["folder"] == .string("Production/Deploy"))
+            }
 
             let updated = try SelectiveRemoteTeamSnippetDocumentMutation.update(
                 in: created,
                 recordID: Self.snippetID,
                 title: "Restart service",
                 body: "systemctl restart app",
+                folder: "Production/Maintenance",
                 role: role,
                 deviceID: Self.deviceID,
                 modifiedAt: "2026-09-16T12:01:00.000Z"
             )
-            #expect(updated.records.first?.version.counters[Self.deviceID] == 2)
+            let updatedRecord = try #require(updated.records.first)
+            #expect(updatedRecord.version.counters[Self.deviceID] == 2)
+            if case let .object(data) = updatedRecord.data {
+                #expect(data["folder"] == .string("Production/Maintenance"))
+            }
 
             let deleted = try SelectiveRemoteTeamSnippetDocumentMutation.delete(
                 from: updated,

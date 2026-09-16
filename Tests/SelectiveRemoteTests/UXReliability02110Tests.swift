@@ -130,4 +130,16 @@ struct UXReliability02110Tests {
             + "                    model.runningSessionCount > 0 ||\n"
             + "                    model.runningSSHTunnelCount > 0"))
     }
+
+    @Test("Main sidebar fills its column and stays aligned to the top")
+    func sidebarStaysTopAligned() throws {
+        let content = try source("Sources/SelectiveRemote/ContentView.swift")
+
+        #expect(content.contains("private var sidebar: some View"))
+        #expect(content.contains(
+            ".frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)\n"
+                + "        .background {\n"
+                + "            LinearGradient("
+        ))
+    }
 }

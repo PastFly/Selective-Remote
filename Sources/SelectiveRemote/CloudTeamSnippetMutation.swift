@@ -53,6 +53,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         recordID: UUID,
         title: String,
         body: String,
+        folder: String = "",
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -62,6 +63,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             recordID: recordID,
             title: title,
             body: body,
+            folder: folder,
             role: role,
             deviceID: deviceID,
             modifiedAt: modifiedAt
@@ -73,6 +75,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         recordID: UUID,
         title: String,
         body: String,
+        folder: String = "",
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -86,6 +89,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             priorVersion: nil,
             title: title,
             body: body,
+            folder: folder,
             deviceID: deviceID,
             modifiedAt: modifiedAt
         )
@@ -97,6 +101,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         recordID: UUID,
         title: String,
         body: String,
+        folder: String = "",
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -113,6 +118,7 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             priorVersion: existing.version,
             title: title,
             body: body,
+            folder: folder,
             deviceID: deviceID,
             modifiedAt: modifiedAt
         )
@@ -152,10 +158,11 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         priorVersion: SelectiveRemoteVaultVersion?,
         title: String,
         body: String,
+        folder: String,
         deviceID: UUID,
         modifiedAt: String
     ) throws -> SelectiveRemoteVaultRecord {
-        guard validTitle(title), validBody(body) else {
+        guard validTitle(title), validBody(body), validFolder(folder) else {
             throw SelectiveRemoteTeamSnippetMutationError.invalidSnippet
         }
         return try .init(
@@ -166,7 +173,8 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             modifiedAt: modifiedAt,
             data: .object([
                 "title": .string(title),
-                "body": .string(body)
+                "body": .string(body),
+                "folder": .string(folder)
             ])
         )
     }
@@ -192,11 +200,17 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
                     && $0.value != 13
             })
     }
+
+    private static func validFolder(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value == trimmed && value.count <= 120
+            && !value.contains(where: { $0.isNewline })
+    }
 }
 
 enum SelectiveRemoteTeamSnippetMutationChange {
-    case create(recordID: UUID, title: String, body: String)
-    case update(recordID: UUID, title: String, body: String)
+    case create(recordID: UUID, title: String, body: String, folder: String)
+    case update(recordID: UUID, title: String, body: String, folder: String)
     case delete(recordID: UUID)
 }
 
@@ -262,12 +276,13 @@ final class SelectiveRemoteTeamSnippetMutationService {
             )
         case .empty:
             guard context.role == .owner || context.role == .admin,
-                  case let .create(recordID, title, body) = change
+                  case let .create(recordID, title, body, folder) = change
             else { throw SelectiveRemoteTeamSnippetMutationError.snippetNotFound }
             let document = try SelectiveRemoteTeamSnippetDocumentMutation.create(
                 recordID: recordID,
                 title: title,
                 body: body,
+                folder: folder,
                 role: context.role,
                 deviceID: identity.deviceID,
                 modifiedAt: timestamp
@@ -310,22 +325,24 @@ final class SelectiveRemoteTeamSnippetMutationService {
         timestamp: String
     ) throws -> SelectiveRemoteVaultDocument {
         switch change {
-        case let .create(recordID, title, body):
+        case let .create(recordID, title, body, folder):
             try SelectiveRemoteTeamSnippetDocumentMutation.create(
                 in: document,
                 recordID: recordID,
                 title: title,
                 body: body,
+                folder: folder,
                 role: role,
                 deviceID: deviceID,
                 modifiedAt: timestamp
             )
-        case let .update(recordID, title, body):
+        case let .update(recordID, title, body, folder):
             try SelectiveRemoteTeamSnippetDocumentMutation.update(
                 in: document,
                 recordID: recordID,
                 title: title,
                 body: body,
+                folder: folder,
                 role: role,
                 deviceID: deviceID,
                 modifiedAt: timestamp
