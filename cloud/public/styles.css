@@ -477,3 +477,277 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @media (max-width:880px) { .site-nav{order:3;width:100%;margin:4px 0 0;justify-content:center}.brand-actions{order:4;margin-left:0}.status{font-size:9px}.status::after{content:none}.sync-journey{grid-template-columns:1fr;gap:32px;padding:36px}.product-gallery-grid{grid-template-columns:1fr}.product-shot-browser{max-width:680px;width:100%;justify-self:center} }
 @media (max-width:560px) { .site-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:3px 14px}.site-nav a{text-align:center}.hero-actions .hero-download{width:100%}.preview-stage-toolbar>span{display:none}.preview-scope-switch button{padding:5px 7px}.sync-journey{margin-top:58px;padding:25px 20px}.sync-journey-flow li{grid-template-columns:40px minmax(0,1fr);padding:13px}.journey-icon{width:38px;height:38px}.product-gallery{padding-top:64px}.product-shot-label{padding:14px}.product-shot-frame{aspect-ratio:4 / 3}.product-mock-body{grid-template-columns:74px minmax(0,1fr)}.product-mock-tree{display:none}.product-mock-cloud{padding-inline:10px}.product-mock-cloud-head{grid-template-columns:minmax(0,1fr) 62px 38px}.product-mock-cloud article{grid-template-columns:7px minmax(0,1fr) 62px 38px}.product-mock-cloud-tools button{padding-inline:6px} }
 @media (prefers-reduced-motion:reduce) { *,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}.orbit{animation:none} }
+
+/* Cloud workspace v170: the product-gallery visual language, tuned for real data. */
+#cloud-workspace.workspace-layout {
+  grid-template-columns:256px minmax(0,1fr);
+  min-height:calc(100vh - 70px);
+  border-color:#75e0b42b;
+  border-radius:28px;
+  background:
+    radial-gradient(circle at 82% -12%,#75e0b412,transparent 34%),
+    linear-gradient(145deg,#0c1318 0%,#090f13 55%,#07110e 100%);
+  box-shadow:0 36px 110px #0009,0 1px 0 #ffffff0a inset;
+}
+#cloud-workspace .workspace-sidebar {
+  position:relative;
+  padding:26px 18px 20px;
+  border-color:#ffffff0d;
+  background:linear-gradient(180deg,#11171c 0%,#0c1216 56%,#08120f 100%);
+}
+#cloud-workspace .workspace-sidebar::after {
+  content:"";
+  position:absolute;
+  inset:0 0 auto;
+  height:1px;
+  background:linear-gradient(90deg,transparent,#75e0b45e,transparent);
+}
+#cloud-workspace .workspace-logo { padding:0 8px 28px; }
+#cloud-workspace .workspace-logo span {
+  width:42px;
+  height:42px;
+  border-color:#75e0b47a;
+  border-radius:13px;
+  background:linear-gradient(145deg,#75e0b421,#75e0b408);
+  box-shadow:0 12px 32px #75e0b414,0 1px 0 #ffffff16 inset;
+}
+#cloud-workspace .workspace-logo strong { font-size:18px; letter-spacing:-.02em; }
+#cloud-workspace .workspace-sidebar nav { gap:4px; }
+#cloud-workspace .workspace-sidebar nav button {
+  display:grid;
+  grid-template-columns:30px minmax(0,1fr) 6px;
+  align-items:center;
+  gap:9px;
+  min-height:43px;
+  padding:7px 10px;
+  border:1px solid transparent;
+  border-radius:12px;
+  color:#91a099;
+  font-size:13px;
+  font-weight:680;
+}
+#cloud-workspace .workspace-sidebar nav button::before {
+  content:attr(data-nav-icon);
+  display:grid;
+  place-items:center;
+  width:28px;
+  height:28px;
+  border:1px solid #ffffff0c;
+  border-radius:9px;
+  background:#ffffff05;
+  color:#7e9088;
+  font:700 13px/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+#cloud-workspace .workspace-sidebar nav button::after {
+  content:"";
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:transparent;
+  box-shadow:none;
+}
+#cloud-workspace .workspace-sidebar nav button:hover {
+  border-color:#ffffff0e;
+  background:#ffffff06;
+  color:#d8e0dc;
+}
+#cloud-workspace .workspace-sidebar nav button.active {
+  border-color:#75e0b42d;
+  background:linear-gradient(90deg,#75e0b419,#75e0b407);
+  color:#effbf6;
+  box-shadow:0 10px 30px #0003,0 1px 0 #ffffff0a inset;
+}
+#cloud-workspace .workspace-sidebar nav button.active::before {
+  border-color:#75e0b43c;
+  background:#75e0b419;
+  color:var(--accent);
+}
+#cloud-workspace .workspace-sidebar nav button.active::after {
+  background:var(--accent);
+  box-shadow:0 0 12px #75e0b4;
+}
+#cloud-workspace .workspace-nav-label { margin:18px 11px 6px; color:#62716b; font-size:9px; letter-spacing:.18em; }
+#cloud-workspace .workspace-main { padding:26px 30px 34px; background:linear-gradient(180deg,#ffffff02,transparent 180px); }
+#cloud-workspace .workspace-header { min-height:52px; margin-bottom:24px; padding-bottom:18px; border-color:#ffffff0c; }
+#cloud-workspace .workspace-header h2 { margin:5px 0 0; font-size:clamp(25px,3vw,34px); letter-spacing:-.045em; }
+#cloud-workspace .workspace-welcome {
+  position:relative;
+  overflow:hidden;
+  padding:30px;
+  border-color:#75e0b43b;
+  background:radial-gradient(circle at 78% 0%,#75e0b426,transparent 40%),linear-gradient(135deg,#13211d,#0b1412);
+  box-shadow:0 24px 65px #0004,0 1px 0 #ffffff0c inset;
+}
+#cloud-workspace .workspace-welcome::after {
+  content:"SR";
+  position:absolute;
+  right:24%;
+  bottom:-45px;
+  color:#75e0b409;
+  font-size:140px;
+  font-weight:900;
+  line-height:1;
+  pointer-events:none;
+}
+#cloud-workspace .workspace-welcome h2 { margin:6px 0 0; font-size:clamp(25px,3vw,38px); letter-spacing:-.045em; }
+#cloud-workspace .workspace-welcome button { position:relative; z-index:1; box-shadow:0 12px 34px #75e0b420; }
+#cloud-workspace .workspace-stats { grid-template-columns:repeat(4,minmax(0,1fr)); gap:11px; }
+#cloud-workspace .workspace-stats button {
+  position:relative;
+  min-height:142px;
+  overflow:hidden;
+  padding:20px;
+  border-color:#ffffff10;
+  border-radius:17px;
+  background:linear-gradient(145deg,#11191d,#0a1214);
+  box-shadow:0 16px 38px #0003,0 1px 0 #ffffff08 inset;
+}
+#cloud-workspace .workspace-stats button::after {
+  content:"";
+  position:absolute;
+  right:-18px;
+  top:-18px;
+  width:70px;
+  height:70px;
+  border:1px solid #75e0b421;
+  border-radius:50%;
+  box-shadow:0 0 36px #75e0b40b;
+}
+#cloud-workspace .workspace-stats button:hover { border-color:#75e0b45e; background:linear-gradient(145deg,#15221e,#0d1715); transform:translateY(-2px); }
+#cloud-workspace .workspace-stats span { font-size:31px; letter-spacing:-.04em; }
+#cloud-workspace .workspace-stats strong { font-size:15px; }
+#cloud-workspace .workspace-stats small { font-size:11px; line-height:1.35; }
+#cloud-workspace .workspace-notice,
+#cloud-workspace .workspace-team-overview { border-radius:18px; background:linear-gradient(145deg,#0d1618,#091210); box-shadow:0 16px 42px #0003; }
+#cloud-workspace :is(.local-vault,.team-vault).workspace-panel { margin-top:0; }
+#cloud-workspace :is(.local-vault,.team-vault)>.vault-heading {
+  min-height:82px;
+  padding:22px 24px;
+  border:1px solid #ffffff10;
+  border-radius:18px;
+  background:linear-gradient(145deg,#10191d,#0a1314);
+  box-shadow:0 16px 44px #0003,0 1px 0 #ffffff08 inset;
+}
+#cloud-workspace .vault-heading h2 { font-size:clamp(25px,3vw,34px); letter-spacing:-.04em; }
+#cloud-workspace .vault-workspace { margin-top:18px; padding-top:18px; border-color:#ffffff0d; }
+#cloud-workspace .host-scope-switcher {
+  width:max-content;
+  max-width:100%;
+  margin-bottom:12px;
+  padding:4px;
+  border-color:#ffffff11;
+  border-radius:13px;
+  background:#070d10;
+  box-shadow:0 10px 30px #0003 inset;
+}
+#cloud-workspace .host-scope-switcher button { min-width:124px; border-radius:9px; }
+#cloud-workspace .record-filters { gap:5px; margin-top:10px; padding-bottom:4px; overflow-x:auto; scrollbar-width:thin; }
+#cloud-workspace .record-filters button { min-height:34px; padding:7px 13px; border:1px solid transparent; background:#ffffff04; white-space:nowrap; }
+#cloud-workspace .record-filters button:hover { border-color:#ffffff12; background:#ffffff08; }
+#cloud-workspace .record-filters button.active { border-color:#75e0b43d; background:#75e0b416; color:var(--accent); }
+#cloud-workspace :is(.personal-vault-browser,.team-host-browser) {
+  gap:12px;
+  margin-top:16px;
+  padding:16px;
+  border-color:#ffffff10;
+  border-radius:16px;
+  background:linear-gradient(145deg,#0d1518,#081011);
+  box-shadow:0 16px 38px #0003 inset,0 1px 0 #ffffff08;
+}
+#cloud-workspace :is(.personal-vault-browser,.team-host-browser) label>span { color:#7f9189; font-size:10px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+#cloud-workspace :is(.personal-vault-browser,.team-host-browser) :is(input,select,.modern-select-trigger) { min-height:44px; border-color:#ffffff13; background:#050b0d; }
+#cloud-workspace .vault-records {
+  display:grid;
+  grid-template-columns:1fr;
+  gap:7px;
+  margin-top:18px;
+}
+#cloud-workspace .vault-records article {
+  position:relative;
+  grid-template-columns:minmax(160px,1.1fr) minmax(210px,1.35fr) minmax(160px,.9fr) auto;
+  gap:10px 18px;
+  min-height:66px;
+  padding:13px 15px;
+  border-color:#ffffff0e;
+  border-radius:13px;
+  background:linear-gradient(90deg,#0d1518,#091112);
+  box-shadow:0 8px 24px #0002,0 1px 0 #ffffff06 inset;
+}
+#cloud-workspace .vault-records article::before {
+  content:"";
+  width:7px;
+  height:7px;
+  position:absolute;
+  margin:6px 0 0 -4px;
+  border-radius:50%;
+  background:#75e0b4;
+  box-shadow:0 0 12px #75e0b477;
+  opacity:0;
+  transition:opacity .16s;
+}
+#cloud-workspace .vault-records article:hover::before,
+#cloud-workspace .vault-records article:focus-visible::before { opacity:1; }
+#cloud-workspace .vault-records h4 { padding-left:11px; font-size:14px; }
+#cloud-workspace .vault-records p { font-size:12px; line-height:1.4; }
+#cloud-workspace .vault-records small { font-size:10px; line-height:1.45; }
+#cloud-workspace .record-actions { grid-column:4; margin-top:0; flex-wrap:nowrap; }
+#cloud-workspace .vault-records .record-actions button { padding:8px 10px; font-size:11px; }
+#cloud-workspace :is(.personal-vault-folder-heading,.team-host-folder-heading) {
+  grid-column:1/-1;
+  margin:17px 0 3px;
+  padding:0 2px 9px;
+  border-color:#ffffff10;
+  color:#dfe8e4;
+  font-size:12px;
+  letter-spacing:.04em;
+}
+#cloud-workspace :is(.personal-vault-folder-heading,.team-host-folder-heading)::before { content:"▾"; margin-right:8px; color:var(--accent); }
+#cloud-workspace .vault-empty { padding:34px; border:1px dashed #ffffff16; border-radius:16px; background:#ffffff02; text-align:center; }
+:root[data-theme="light"] #cloud-workspace.workspace-layout { border-color:#b9d1c6; background:radial-gradient(circle at 82% -12%,#1d8b6412,transparent 34%),linear-gradient(145deg,#f4f8f6,#e8f0ec); }
+:root[data-theme="light"] #cloud-workspace .workspace-sidebar { background:linear-gradient(180deg,#f9fcfa,#eef5f1); }
+:root[data-theme="light"] #cloud-workspace .workspace-sidebar nav button::before { border-color:#cfded7; background:#f8fbf9; color:#64786e; }
+:root[data-theme="light"] #cloud-workspace .workspace-sidebar nav button.active { border-color:#9bcab7; background:linear-gradient(90deg,#dff2e9,#eef8f3); color:#17392b; }
+:root[data-theme="light"] #cloud-workspace :is(.workspace-welcome,.workspace-notice,.workspace-team-overview),
+:root[data-theme="light"] #cloud-workspace :is(.local-vault,.team-vault)>.vault-heading,
+:root[data-theme="light"] #cloud-workspace .workspace-stats button,
+:root[data-theme="light"] #cloud-workspace :is(.personal-vault-browser,.team-host-browser),
+:root[data-theme="light"] #cloud-workspace .vault-records article { border-color:#c9d9d1; background:linear-gradient(145deg,#fbfdfc,#f1f7f4); box-shadow:0 14px 38px #244b390c,0 1px 0 #fff inset; }
+:root[data-theme="light"] #cloud-workspace :is(.personal-vault-browser,.team-host-browser) :is(input,select,.modern-select-trigger) { border-color:#b7cbc1; background:#fff; }
+:root[data-theme="light"] #cloud-workspace .host-scope-switcher { border-color:#c6d8cf; background:#eaf3ef; box-shadow:none; }
+:root[data-theme="light"] #cloud-workspace .record-filters button { background:#f3f8f5; }
+
+@media (max-width:1100px) {
+  #cloud-workspace .workspace-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  #cloud-workspace .vault-records article { grid-template-columns:minmax(150px,1fr) minmax(190px,1.2fr) auto; }
+  #cloud-workspace .vault-records small { grid-column:1/3; padding-left:11px; }
+  #cloud-workspace .record-actions { grid-column:3; grid-row:1/3; }
+}
+@media (max-width:880px) {
+  #cloud-workspace.workspace-layout { grid-template-columns:1fr; border-radius:22px; }
+  #cloud-workspace .workspace-sidebar { padding:16px; }
+  #cloud-workspace .workspace-logo { padding-bottom:14px; }
+  #cloud-workspace .workspace-sidebar nav { display:flex; gap:7px; overflow-x:auto; padding-bottom:5px; scrollbar-width:thin; }
+  #cloud-workspace .workspace-sidebar nav .workspace-nav-label { display:none; }
+  #cloud-workspace .workspace-sidebar nav button { flex:0 0 auto; display:flex; min-height:40px; width:auto; padding:6px 10px; }
+  #cloud-workspace .workspace-sidebar nav button::after { display:none; }
+  #cloud-workspace .workspace-main { padding:20px; }
+  #cloud-workspace .workspace-header { display:none; }
+  #cloud-workspace :is(.local-vault,.team-vault)>.vault-heading { margin-top:0; }
+}
+@media (max-width:700px) {
+  #cloud-workspace .workspace-stats { grid-template-columns:1fr 1fr; }
+  #cloud-workspace .workspace-stats button { min-height:124px; padding:16px; }
+  #cloud-workspace .vault-records article { grid-template-columns:minmax(0,1fr); gap:7px; padding:16px; }
+  #cloud-workspace .vault-records h4,#cloud-workspace .vault-records small { padding-left:11px; }
+  #cloud-workspace .vault-records small { grid-column:1; }
+  #cloud-workspace .record-actions { grid-column:1; grid-row:auto; margin-top:5px; }
+}
+@media (max-width:520px) {
+  #cloud-workspace .workspace-main { padding:14px; }
+  #cloud-workspace .workspace-welcome { padding:22px; }
+  #cloud-workspace .workspace-stats { grid-template-columns:1fr; }
+  #cloud-workspace .workspace-stats button { min-height:112px; }
+  #cloud-workspace :is(.local-vault,.team-vault)>.vault-heading { padding:19px; }
+  #cloud-workspace .host-scope-switcher { width:100%; }
+  #cloud-workspace .host-scope-switcher button { flex:1; min-width:0; }
+}
