@@ -499,7 +499,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=175">/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=176">/u);
   assert.match(html, /\/app\.js\?v=176/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
@@ -670,7 +670,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=175/u);
+  assert.match(html, /styles\.css\?v=176/u);
   assert.match(html, /app\.js\?v=176/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
@@ -756,6 +756,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.equal((application.match(/actions\.append\(favorite, edit, remove\)/gu) ?? []).length, 2);
   assert.equal((application.match(/card\.classList\.add\("resource-card", "resource-card-clickable"/gu) ?? []).length, 2);
   assert.equal((application.match(/event\.target\.closest\?\.\("button, input, select, textarea, a, summary, label"\)/gu) ?? []).length, 2);
+  assert.match(styles, /#cloud-workspace input\.record-select\s*\{[^}]*width:18px;[^}]*min-width:18px;[^}]*max-width:18px;[^}]*height:18px;[^}]*min-height:18px;[^}]*max-height:18px;[^}]*padding:0;/u);
+  assert.ok(styles.indexOf("#cloud-workspace input.record-select") > styles.indexOf(".team-vault input"));
+  assert.match(styles, /#cloud-workspace \.record-actions \{[^}]*position:relative;[^}]*z-index:3;/u);
   assert.match(application, /recordEditor\?\.showModal\?\.\(\)/u);
   assert.match(application, /event\.metaKey \|\| event\.ctrlKey/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
@@ -854,7 +857,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
   assert.match(html, /app\.js\?v=176/u);
-  assert.match(html, /styles\.css\?v=175/u);
+  assert.match(html, /styles\.css\?v=176/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
