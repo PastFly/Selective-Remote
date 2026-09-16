@@ -500,7 +500,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
   assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=175">/u);
-  assert.match(html, /\/app\.js\?v=175/u);
+  assert.match(html, /\/app\.js\?v=176/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -671,7 +671,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
   assert.match(html, /styles\.css\?v=175/u);
-  assert.match(html, /app\.js\?v=175/u);
+  assert.match(html, /app\.js\?v=176/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -752,9 +752,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /appendVaultFolderGroup/u);
   assert.match(application, /collapsedVaultFoldersState = new Map/u);
   assert.match(application, /showVaultResourceDetail/u);
-  assert.equal((application.match(/open\.className = "secondary record-open"/gu) ?? []).length, 2);
-  assert.equal((application.match(/actions\.append\(open, favorite, edit, remove\)/gu) ?? []).length, 2);
-  assert.doesNotMatch(application, /card\.classList\.add\("resource-card", "resource-card-clickable"/u);
+  assert.doesNotMatch(application, /record-open/u);
+  assert.equal((application.match(/actions\.append\(favorite, edit, remove\)/gu) ?? []).length, 2);
+  assert.equal((application.match(/card\.classList\.add\("resource-card", "resource-card-clickable"/gu) ?? []).length, 2);
+  assert.equal((application.match(/event\.target\.closest\?\.\("button, input, select, textarea, a, summary, label"\)/gu) ?? []).length, 2);
   assert.match(application, /recordEditor\?\.showModal\?\.\(\)/u);
   assert.match(application, /event\.metaKey \|\| event\.ctrlKey/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
@@ -852,7 +853,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=175/u);
+  assert.match(html, /app\.js\?v=176/u);
   assert.match(html, /styles\.css\?v=175/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
