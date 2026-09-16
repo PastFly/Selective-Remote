@@ -21,6 +21,7 @@ import {
   personalHostRecordData,
   teamHostOrganizationValues,
   sortLocalVaultRecords,
+  shouldFocusCommandPaletteSearch,
   teamHostConnectionData,
   teamHostRecordData,
   teamVaultRecoveryMode,
@@ -63,6 +64,13 @@ test("appearance persists the selected theme and restores it after a full reload
   assert.equal(appearance.theme(), "graphite");
   assert.equal(appearancePreference("unrelated=1; sr_theme=light; another=2"), "light");
   assert.equal(appearancePreference("sr_theme=unknown"), "graphite");
+});
+
+test("command palette does not summon the software keyboard on touch-sized screens", () => {
+  assert.equal(shouldFocusCommandPaletteSearch({ coarsePointer: true, viewportWidth: 390 }), false);
+  assert.equal(shouldFocusCommandPaletteSearch({ coarsePointer: false, viewportWidth: 390 }), false);
+  assert.equal(shouldFocusCommandPaletteSearch({ coarsePointer: false, viewportWidth: 1440 }), true);
+  assert.equal(shouldFocusCommandPaletteSearch({ fromKeyboard: true, coarsePointer: true, viewportWidth: 390 }), true);
 });
 
 test("portal bootstrap reveals the resolved view and retires its loading screen", () => {
@@ -491,8 +499,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=173">/u);
-  assert.match(html, /\/app\.js\?v=173/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=174">/u);
+  assert.match(html, /\/app\.js\?v=174/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -658,8 +666,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=173/u);
-  assert.match(html, /app\.js\?v=173/u);
+  assert.match(html, /styles\.css\?v=174/u);
+  assert.match(html, /app\.js\?v=174/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -838,8 +846,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=173/u);
-  assert.match(html, /styles\.css\?v=173/u);
+  assert.match(html, /app\.js\?v=174/u);
+  assert.match(html, /styles\.css\?v=174/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
