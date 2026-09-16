@@ -493,11 +493,17 @@ export async function initializeLocalVault({
   const hostDetailOpenSFTP = documentValue.querySelector("#host-detail-open-sftp");
   if (hostDetail && hostDetail.parentElement !== documentValue.body) documentValue.body.append(hostDetail);
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
+  const smartFilterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-smart-filter]")];
+  const bulkActions = documentValue.querySelector("#personal-bulk-actions");
   const controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
   let filterChangeListener = () => {};
   let lockListener = async () => {};
   let activeRecordFilter = "all";
+  let activeSmartFilter = null;
+  let visibleRecordIDs = [];
+  const selectedRecordIDs = new Set();
+  const recentRecordIDs = [];
   let editingRecordID = null;
 
   function updateCreateButton() {
@@ -597,7 +603,7 @@ export async function initializeLocalVault({
   function updateLabels() {
     const labels = {
       host: ["Адрес", "Дополнительные данные не требуются"],
-      credential: ["Имя пользователя", "Секрет"],
+      credential: ["Имя пользователя", "Пароль, токен или ключ"],
       snippet: ["", "Текст Snippet"],
       forwarding: ["Назначение", "Параметры"],
     };
@@ -644,6 +650,8 @@ export async function initializeLocalVault({
     const filteredRecords = (activeRecordFilter === "all"
       ? current.records
       : current.records.filter((record) => record.type === activeRecordFilter))
+      .filter((record) => activeSmartFilter !== "favorites" || record.data?.favorite === true)
+      .filter((record) => activeSmartFilter !== "recent" || recentRecordIDs.includes(record.id))
       .filter((record) => record.type !== "host" || folderFilter?.value === "all" || hostFolderName(record) === folderFilter?.value);
     const query = String(search?.value ?? "").trim().toLocaleLowerCase();
     const visibleRecords = sortLocalVaultRecords(filteredRecords.filter((record) => {
@@ -657,6 +665,14 @@ export async function initializeLocalVault({
     }), sort?.value);
     if (activeRecordFilter === "host") {
       visibleRecords.sort((a, b) => hostFolderName(a).localeCompare(hostFolderName(b)));
+    }
+    visibleRecordIDs = visibleRecords.map((record) => record.id);
+    for (const id of [...selectedRecordIDs]) {
+      if (!current.records.some((record) => record.id === id)) selectedRecordIDs.delete(id);
+    }
+    if (bulkActions) {
+      bulkActions.hidden = selectedRecordIDs.size === 0;
+      setText(bulkActions.querySelector("[data-bulk-count]"), String(selectedRecordIDs.size));
     }
     records.replaceChildren();
     if (visibleRecords.length === 0) {
@@ -684,6 +700,8 @@ export async function initializeLocalVault({
       const actions = documentValue.createElement("div");
       const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
+      const favorite = documentValue.createElement("button");
+      const selector = documentValue.createElement("input");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
       metadata.textContent = `${record.type} · Изменено: ${formatVaultTimestamp(record.modifiedAt)}`;
@@ -717,11 +735,36 @@ export async function initializeLocalVault({
           remove.disabled = false;
         }
       });
+      favorite.type = "button";
+      favorite.className = "secondary record-favorite";
+      favorite.textContent = record.data?.favorite === true ? "★" : "☆";
+      favorite.setAttribute("aria-label", record.data?.favorite === true ? "Убрать из избранного" : "Добавить в избранное");
+      favorite.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        favorite.disabled = true;
+        try {
+          await controller.upsert({ id: record.id, type: record.type, data: { ...record.data, favorite: record.data?.favorite !== true } });
+          render();
+        } catch { setText(message, "Не удалось изменить избранное."); favorite.disabled = false; }
+      });
+      selector.type = "checkbox";
+      selector.className = "record-select";
+      selector.checked = selectedRecordIDs.has(record.id);
+      selector.setAttribute("aria-label", `Выбрать ${heading.textContent}`);
+      selector.addEventListener("click", (event) => event.stopPropagation());
+      selector.addEventListener("change", () => {
+        if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
+        render();
+      });
       card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
       card.tabIndex = 0;
       card.setAttribute("role", "button");
       card.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
       const openResource = () => {
+        const recentIndex = recentRecordIDs.indexOf(record.id);
+        if (recentIndex >= 0) recentRecordIDs.splice(recentIndex, 1);
+        recentRecordIDs.unshift(record.id);
+        recentRecordIDs.splice(24);
         if (record.type === "host") {
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
@@ -755,7 +798,7 @@ export async function initializeLocalVault({
         });
       };
       card.addEventListener("click", (event) => {
-        if (event.target === remove || event.target === edit) return;
+        if (actions.contains(event.target) || event.target === selector) return;
         openResource();
       });
       card.addEventListener("keydown", (event) => {
@@ -763,8 +806,8 @@ export async function initializeLocalVault({
         event.preventDefault();
         openResource();
       });
-      actions.append(edit, remove);
-      card.append(heading, summary, metadata, actions);
+      actions.append(favorite, edit, remove);
+      card.append(selector, heading, summary, metadata, actions);
       (folderContent ?? records).append(card);
     }
   }
@@ -822,14 +865,44 @@ export async function initializeLocalVault({
     button.addEventListener("click", () => {
       resetEditor();
       activeRecordFilter = button.dataset.recordFilter || "all";
+      activeSmartFilter = null;
       updateCreateButton();
       for (const candidate of filterButtons) {
         candidate.classList.toggle("active", candidate === button);
       }
+      for (const candidate of smartFilterButtons) candidate.classList.remove("active");
       if (!workspace.hidden) render();
       filterChangeListener(activeRecordFilter);
     });
   }
+  for (const button of smartFilterButtons) {
+    button.addEventListener("click", () => {
+      activeSmartFilter = activeSmartFilter === button.dataset.smartFilter ? null : button.dataset.smartFilter;
+      for (const candidate of smartFilterButtons) candidate.classList.toggle("active", candidate.dataset.smartFilter === activeSmartFilter);
+      if (!workspace.hidden) render();
+    });
+  }
+  bulkActions?.querySelector("[data-bulk-select-visible]")?.addEventListener("click", () => {
+    for (const id of visibleRecordIDs) selectedRecordIDs.add(id);
+    render();
+  });
+  bulkActions?.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+    selectedRecordIDs.clear(); render();
+  });
+  bulkActions?.querySelector("[data-bulk-favorite]")?.addEventListener("click", async () => {
+    const chosen = controller.document().records.filter((record) => selectedRecordIDs.has(record.id));
+    for (const record of chosen) await controller.upsert({ id: record.id, type: record.type, data: { ...record.data, favorite: true } });
+    setText(message, `Добавлено в избранное: ${chosen.length}.`);
+    selectedRecordIDs.clear(); render();
+  });
+  bulkActions?.querySelector("[data-bulk-delete]")?.addEventListener("click", async () => {
+    if (!selectedRecordIDs.size || !await requestConfirmation({
+      title: "Удалить выбранные записи?", message: `Будет удалено записей: ${selectedRecordIDs.size}.`, confirmLabel: "Удалить", danger: true,
+    })) return;
+    for (const id of [...selectedRecordIDs]) await controller.delete(id);
+    setText(message, "Выбранные записи удалены. Tombstones сохранены в зашифрованном Vault.");
+    selectedRecordIDs.clear(); render();
+  });
   lockButton.addEventListener("click", async () => {
     lockButton.disabled = true;
     try {
@@ -1126,6 +1199,12 @@ export function initializeTeamWorkspace({
   const overviewTeamCount = documentValue.querySelector("#workspace-team-count");
   const overviewInvitationCount = documentValue.querySelector("#workspace-team-invitation-count");
   const overviewStatus = documentValue.querySelector("#workspace-team-overview-status");
+  const activityView = documentValue.querySelector("#team-activity-view");
+  const activityList = documentValue.querySelector("#team-activity-list");
+  const activityRefresh = documentValue.querySelector("#team-activity-refresh");
+  const activityMore = documentValue.querySelector("#team-activity-more");
+  const smartFilterButtons = [...documentValue.querySelectorAll("#team-resource-filters [data-team-smart-filter]")];
+  const bulkActions = documentValue.querySelector("#team-bulk-actions");
   let identity = null;
   let teams = [];
   let vaults = [];
@@ -1144,6 +1223,12 @@ export function initializeTeamWorkspace({
   let activeConflicts = null;
   let activeView = "teams";
   let activeRecordFilter = "all";
+  let activeSmartFilter = null;
+  let activityNextCursor = null;
+  let activityEvents = [];
+  let visibleRecordIDs = [];
+  const selectedRecordIDs = new Set();
+  const recentRecordIDs = [];
   let backgroundSyncTimer = null;
   let workspaceRefreshTimer = null;
   let workspaceRefreshOperation = null;
@@ -1162,6 +1247,53 @@ export function initializeTeamWorkspace({
         : accountInvitations.length > 0
           ? "У вас есть новое приглашение в команду."
           : "Создайте первую команду или примите приглашение.");
+  }
+
+  function activityActionLabel(action) {
+    return ({
+      "team.created": "создал(а) команду", "team.renamed": "переименовал(а) команду",
+      "team.archived": "архивировал(а) команду", "team.membership_role_changed": "изменил(а) роль участника",
+      "team.membership_revoked": "удалил(а) участника", "team.member_account_deleted": "удалил(а) аккаунт участника",
+      "team.member_device_admitted": "допустил(а) устройство участника",
+      "team.invitation_created": "создал(а) приглашение", "team.invitation_accepted": "принял(а) приглашение",
+      "team.invitation_cancelled": "отозвал(а) приглашение", "team.invitation_wrappers_preprovisioned": "подготовил(а) доступ приглашённому участнику",
+      "team.vault_created": "создал(а) папку Vault", "team.vault_renamed": "переименовал(а) папку Vault",
+      "team.vault_wrapper_granted": "выдал(а) доступ устройству к Team Vault",
+      "team.device_admission_policy_updated": "изменил(а) режим допуска устройств",
+      "team.ownership_transferred": "передал(а) владение командой",
+    })[action] ?? "выполнил(а) действие в команде";
+  }
+
+  function renderActivity() {
+    if (!activityList) return;
+    activityList.replaceChildren();
+    if (activityEvents.length === 0) {
+      const empty = documentValue.createElement("p");
+      empty.className = "vault-empty";
+      empty.textContent = selectedTeam ? "В журнале пока нет событий." : "Выберите команду.";
+      activityList.append(empty);
+    }
+    for (const event of activityEvents) {
+      const row = documentValue.createElement("article");
+      const titleValue = documentValue.createElement("strong");
+      const time = documentValue.createElement("time");
+      const actor = event.actor.displayName || `@${event.actor.username}`;
+      titleValue.textContent = `${actor} ${activityActionLabel(event.action)}`;
+      time.textContent = formatVaultTimestamp(event.createdAt);
+      row.append(titleValue, time);
+      activityList.append(row);
+    }
+    if (activityMore) activityMore.hidden = !activityNextCursor;
+  }
+
+  async function loadActivity({ append = false } = {}) {
+    if (!selectedTeam || !activityList) { activityEvents = []; activityNextCursor = null; renderActivity(); return; }
+    setText(message, "Загружаем журнал активности без содержимого секретов…");
+    const page = await client.listTeamActivity(selectedTeam.id, { limit: 50, cursor: append ? activityNextCursor : null });
+    activityEvents = append ? [...activityEvents, ...page.events] : page.events;
+    activityNextCursor = page.nextCursor;
+    renderActivity();
+    setText(message, "Журнал активности загружен. Содержимое Vault и секреты в него не входят.");
   }
 
   if (initialInvitationToken) acceptInvitationForm.elements.token.value = initialInvitationToken;
@@ -1255,7 +1387,7 @@ export function initializeTeamWorkspace({
   function updateRecordLabels() {
     const labels = {
       host: ["Адрес", "Дополнительные данные не требуются"],
-      credential: ["Имя пользователя", "Секрет"],
+      credential: ["Имя пользователя", "Пароль, токен или ключ"],
       snippet: ["", "Текст Snippet"],
       forwarding: ["Назначение", "Параметры"],
     };
@@ -1372,6 +1504,8 @@ export function initializeTeamWorkspace({
     const visibleRecords = current.records.filter((value) => {
       if (activeView !== "hosts") return true;
       if (activeRecordFilter !== "all" && value.type !== activeRecordFilter) return false;
+      if (activeSmartFilter === "favorites" && value.data?.favorite !== true) return false;
+      if (activeSmartFilter === "recent" && !recentRecordIDs.includes(value.id)) return false;
       if (activeRecordFilter !== "host") return true;
       if (folder !== "all" && hostFolderName(value) !== folder) return false;
       const data = value.data ?? {};
@@ -1379,6 +1513,14 @@ export function initializeTeamWorkspace({
       return !query || [data.title, data.address, organization.folder, organization.description, ...organization.tags]
         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
     });
+    visibleRecordIDs = visibleRecords.map((record) => record.id);
+    for (const id of [...selectedRecordIDs]) {
+      if (!current.records.some((record) => record.id === id)) selectedRecordIDs.delete(id);
+    }
+    if (bulkActions) {
+      bulkActions.hidden = selectedRecordIDs.size === 0;
+      setText(bulkActions.querySelector("[data-bulk-count]"), String(selectedRecordIDs.size));
+    }
     if (visibleRecords.length === 0) {
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
@@ -1406,6 +1548,8 @@ export function initializeTeamWorkspace({
       const metadata = documentValue.createElement("small");
       const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
+      const favorite = documentValue.createElement("button");
+      const selector = documentValue.createElement("input");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
       const tags = Array.isArray(record.data.tags) ? record.data.tags.map((value) => `#${value}`).join(" ") : "";
@@ -1438,10 +1582,35 @@ export function initializeTeamWorkspace({
           remove.disabled = !canEdit();
         }
       });
+      favorite.type = "button";
+      favorite.className = "secondary record-favorite";
+      favorite.textContent = record.data?.favorite === true ? "★" : "☆";
+      favorite.disabled = !canEdit();
+      favorite.setAttribute("aria-label", record.data?.favorite === true ? "Убрать из избранного" : "Добавить в избранное");
+      favorite.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        try {
+          await controller.upsert({ id: record.id, type: record.type, data: { ...record.data, favorite: record.data?.favorite !== true } });
+          renderRecords();
+        } catch { setText(workspaceStatus, "Не удалось изменить избранное."); }
+      });
+      selector.type = "checkbox";
+      selector.className = "record-select";
+      selector.checked = selectedRecordIDs.has(record.id);
+      selector.setAttribute("aria-label", `Выбрать ${heading.textContent}`);
+      selector.addEventListener("click", (event) => event.stopPropagation());
+      selector.addEventListener("change", () => {
+        if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
+        renderRecords();
+      });
       card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
       card.tabIndex = 0;
       card.setAttribute("role", "button");
       const openResource = () => {
+        const recentIndex = recentRecordIDs.indexOf(record.id);
+        if (recentIndex >= 0) recentRecordIDs.splice(recentIndex, 1);
+        recentRecordIDs.unshift(record.id);
+        recentRecordIDs.splice(24);
         if (record.type === "host") {
           const connection = parseTeamHostConnection(record.data);
           const organization = teamHostOrganizationValues(record);
@@ -1493,16 +1662,15 @@ export function initializeTeamWorkspace({
           onStatus: (value) => setText(workspaceStatus, value),
         });
       };
-      card.addEventListener("click", (event) => { if (event.target !== remove && event.target !== edit) openResource(); });
+      card.addEventListener("click", (event) => { if (!actions.contains(event.target) && event.target !== selector) openResource(); });
       card.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault(); openResource();
       });
       const actions = documentValue.createElement("div");
       actions.className = "record-actions";
-      actions.append(edit);
-      actions.append(remove);
-      card.append(heading, summary, metadata, actions);
+      actions.append(favorite, edit, remove);
+      card.append(selector, heading, summary, metadata, actions);
       (folderContent ?? records).append(card);
     }
   }
@@ -2165,7 +2333,7 @@ export function initializeTeamWorkspace({
   }
 
   function setView(view, recordFilter = null) {
-    activeView = ["teams", "members", "vaults", "hosts", "management"].includes(view) ? view : "teams";
+    activeView = ["teams", "members", "vaults", "hosts", "activity", "management"].includes(view) ? view : "teams";
     if (activeView === "hosts") {
       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(recordFilter)
         ? recordFilter
@@ -2183,10 +2351,11 @@ export function initializeTeamWorkspace({
     const resourceTitles = { all: "Командный Vault", host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
-      hosts: resourceTitles[activeRecordFilter], management: "Управление командой",
+      hosts: resourceTitles[activeRecordFilter], activity: "Журнал активности", management: "Управление командой",
     }[activeView]);
     onboarding.hidden = activeView !== "teams";
     membersView.hidden = activeView !== "members";
+    if (activityView) activityView.hidden = activeView !== "activity";
     vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
     deviceAdmissionPolicyPanel.hidden = activeView !== "members" || !selectedTeam;
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
@@ -2195,6 +2364,7 @@ export function initializeTeamWorkspace({
         setText(message, "Не удалось загрузить список для передачи владения.");
       });
     }
+    if (activeView === "activity") void loadActivity().catch(() => setText(message, "Не удалось загрузить журнал активности."));
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     if (teamSummary) teamSummary.hidden = activeView === "hosts";
     workspace.hidden = activeView !== "hosts" || !controller;
@@ -2861,6 +3031,43 @@ export function initializeTeamWorkspace({
       setText(workspaceStatus, "Набор конфликтов устарел. Запустите синхронизацию ещё раз.");
     }
   });
+
+  for (const button of smartFilterButtons) {
+    button.addEventListener("click", () => {
+      activeSmartFilter = activeSmartFilter === button.dataset.teamSmartFilter ? null : button.dataset.teamSmartFilter;
+      for (const candidate of smartFilterButtons) {
+        candidate.classList.toggle("active", candidate.dataset.teamSmartFilter === activeSmartFilter);
+      }
+      renderRecords();
+    });
+  }
+  bulkActions?.querySelector("[data-bulk-select-visible]")?.addEventListener("click", () => {
+    for (const id of visibleRecordIDs) selectedRecordIDs.add(id);
+    renderRecords();
+  });
+  bulkActions?.querySelector("[data-bulk-clear]")?.addEventListener("click", () => {
+    selectedRecordIDs.clear(); renderRecords();
+  });
+  bulkActions?.querySelector("[data-bulk-favorite]")?.addEventListener("click", async () => {
+    if (!canEdit()) return;
+    const chosen = controller?.document().records.filter((record) => selectedRecordIDs.has(record.id)) ?? [];
+    for (const record of chosen) await controller.upsert({ id: record.id, type: record.type, data: { ...record.data, favorite: true } });
+    selectedRecordIDs.clear(); renderRecords();
+    setText(workspaceStatus, `Добавлено в избранное: ${chosen.length}. Изменения синхронизируются автоматически.`);
+  });
+  bulkActions?.querySelector("[data-bulk-delete]")?.addEventListener("click", async () => {
+    if (!canEdit() || !selectedRecordIDs.size || !await requestConfirmation({
+      title: "Удалить выбранные записи?", message: `Будет удалено записей: ${selectedRecordIDs.size}.`, confirmLabel: "Удалить", danger: true,
+    })) return;
+    for (const id of [...selectedRecordIDs]) {
+      for (const credential of hostCredentials(id)) await controller.delete(credential.id);
+      await controller.delete(id);
+    }
+    selectedRecordIDs.clear(); clearConflicts(); renderRecords();
+    setText(workspaceStatus, "Выбранные записи удалены и будут синхронизированы автоматически.");
+  });
+  activityRefresh?.addEventListener("click", () => loadActivity().catch(() => setText(message, "Не удалось обновить журнал активности.")));
+  activityMore?.addEventListener("click", () => loadActivity({ append: true }).catch(() => setText(message, "Не удалось загрузить следующую страницу журнала.")));
 
   updateRecordLabels();
   renderOverviewSummary();
@@ -3647,7 +3854,7 @@ export function initializePortalNavigation({
   };
   const teamTitles = {
     teams: "Команды", members: "Участники команд", vaults: "Папки команд",
-    hosts: "Хосты команд", management: "Управление командой",
+    hosts: "Хосты команд", activity: "Журнал активности", management: "Управление командой",
   };
   const teamResourceTitles = {
     all: "Командный Vault",
@@ -3669,6 +3876,7 @@ export function initializePortalNavigation({
     "/app/team-snippets": ["team-vault", null, "hosts", "snippet"],
     "/app/team-credentials": ["team-vault", null, "hosts", "credential"],
     "/app/team-forwarding": ["team-vault", null, "hosts", "forwarding"],
+    "/app/team-activity": ["team-vault", null, "activity", null],
     "/app/team-management": ["team-vault", null, "management", null],
     "/app/devices": ["workspace-devices", null, null, null],
     "/app/settings": ["workspace-settings", null, null, null],
@@ -3680,7 +3888,7 @@ export function initializePortalNavigation({
   let activeTeamRecordFilter = "all";
 
   const workspaceHeader = documentValue.querySelector(".workspace-header");
-  if (workspaceHeader) workspaceHeader.hidden = true;
+  if (workspaceHeader) workspaceHeader.hidden = false;
 
   function setPath(path, replace = false) {
     if (locationValue.pathname === path) return;
@@ -3707,6 +3915,9 @@ export function initializePortalNavigation({
         || !button.dataset.teamView
         || button.dataset.teamView === (teamView || "teams");
       button.classList.toggle("active", matchesPanel && matchesFilter && matchesTeamView);
+    }
+    for (const button of documentValue.querySelectorAll("[data-mobile-nav]")) {
+      button.classList.toggle("active", button.dataset.workspaceTarget === panelID);
     }
     setText(workspaceTitle, panelID === "local-vault"
       ? resourceTitles[recordFilter || "all"]
@@ -3805,8 +4016,91 @@ export function initializePortalNavigation({
       requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, teamRecordFilter);
       setPath(requestedWorkspaceRoute);
       if (!button.hasAttribute("data-preserve-scroll")) workspace.scrollIntoView?.({ block: "start" });
+      if (button.hasAttribute("data-focus-team-invitations")) documentValue.querySelector("#team-pending-invitations")?.focus?.();
     });
   }
+
+  const commandDialog = documentValue.querySelector("#workspace-command-dialog");
+  const commandSearch = documentValue.querySelector("#workspace-command-search");
+  const commandResults = documentValue.querySelector("#workspace-command-results");
+  const commandOpen = documentValue.querySelector("#workspace-command-open");
+  const workspaceCreate = documentValue.querySelector("#workspace-create");
+  const mobileAccount = documentValue.querySelector("#workspace-mobile-account");
+  const syncState = documentValue.querySelector("#workspace-sync-state");
+  const staticCommands = [
+    ["Обзор", "workspace-overview", null, null], ["Personal Vault", "local-vault", "all", null],
+    ["Хосты", "local-vault", "host", null], ["Сниппеты", "local-vault", "snippet", null],
+    ["Учётные данные", "local-vault", "credential", null], ["Forwarding", "local-vault", "forwarding", null],
+    ["Команды", "team-vault", null, "teams"], ["Участники команд", "team-vault", null, "members"],
+    ["Журнал активности", "team-vault", null, "activity"], ["Устройства", "workspace-devices", null, null],
+    ["Настройки", "workspace-settings", null, null], ["О проекте", "workspace-about", null, null],
+  ];
+  function renderCommands() {
+    if (!commandResults) return;
+    const query = String(commandSearch?.value ?? "").trim().toLocaleLowerCase();
+    const entries = staticCommands.map(([label, target, recordFilter, teamView]) => ({
+      label, detail: "Раздел", run: () => {
+        selectWorkspacePanel(target, recordFilter, teamView, null);
+        requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, null);
+        setPath(requestedWorkspaceRoute); commandDialog?.close?.();
+      },
+    }));
+    for (const card of documentValue.querySelectorAll(".workspace-panel:not([hidden]) .resource-card")) {
+      const label = card.querySelector("h4")?.textContent?.trim();
+      if (label) entries.push({ label, detail: "Запись текущего Vault", run: () => { commandDialog?.close?.(); card.click(); } });
+    }
+    commandResults.replaceChildren();
+    for (const entry of entries.filter((value) => !query || `${value.label} ${value.detail}`.toLocaleLowerCase().includes(query)).slice(0, 24)) {
+      const button = documentValue.createElement("button");
+      const label = documentValue.createElement("strong");
+      const detail = documentValue.createElement("small");
+      button.type = "button"; button.setAttribute("role", "option");
+      label.textContent = entry.label; detail.textContent = entry.detail;
+      button.append(label, detail); button.addEventListener("click", entry.run); commandResults.append(button);
+    }
+    if (!commandResults.children.length) {
+      const empty = documentValue.createElement("p"); empty.textContent = "Ничего не найдено."; commandResults.append(empty);
+    }
+  }
+  function openCommandPalette() { renderCommands(); commandDialog?.showModal?.(); commandSearch?.focus?.(); }
+  commandOpen?.addEventListener("click", openCommandPalette);
+  commandSearch?.addEventListener("input", renderCommands);
+  documentValue.addEventListener("keydown", (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); openCommandPalette(); }
+  });
+  workspaceCreate?.addEventListener("click", () => {
+    const activePanel = documentValue.querySelector(".workspace-panel:not([hidden])");
+    const create = activePanel?.querySelector("#local-record-create:not([hidden]), #team-record-create:not([hidden])");
+    if (create) { create.click(); return; }
+    const contextualForm = activePanel?.querySelector("#team-create-form:not([hidden]), #team-vault-create-form:not([hidden])");
+    if (contextualForm) { contextualForm.scrollIntoView?.({ block: "center" }); contextualForm.querySelector("input")?.focus?.(); return; }
+    selectWorkspacePanel("local-vault", "all");
+    requestedWorkspaceRoute = "/app/personal-vault"; setPath(requestedWorkspaceRoute);
+    documentValue.querySelector("#local-record-create")?.click();
+  });
+  documentValue.querySelector("#workspace-mobile-account-open")?.addEventListener("click", () => {
+    setText(documentValue.querySelector("#workspace-mobile-account-name"), documentValue.querySelector("#cloud-account-name")?.textContent ?? "");
+    mobileAccount?.showModal?.();
+  });
+  documentValue.querySelector("#workspace-mobile-logout")?.addEventListener("click", () => {
+    mobileAccount?.close?.(); documentValue.querySelector("#cloud-logout")?.click();
+  });
+  function updateSyncState() {
+    if (!syncState) return;
+    const combined = `${documentValue.querySelector("#local-vault-message")?.textContent ?? ""} ${documentValue.querySelector("#team-vault-workspace-status")?.textContent ?? ""}`.toLocaleLowerCase();
+    const state = !documentValue.defaultView?.navigator?.onLine ? "offline"
+      : /конфликт/u.test(combined) ? "conflict"
+        : /ошиб|не удалось|поврежд/u.test(combined) ? "error"
+          : /синхрониз|загружа|обновля/u.test(combined) ? "syncing" : "synced";
+    syncState.dataset.state = state;
+    setText(syncState.querySelector("span"), ({ offline: "Офлайн", conflict: "Конфликт", error: "Ошибка", syncing: "Синхронизация…", synced: "Синхронизировано" })[state]);
+  }
+  for (const target of [documentValue.querySelector("#local-vault-message"), documentValue.querySelector("#team-vault-workspace-status")].filter(Boolean)) {
+    new MutationObserver(updateSyncState).observe(target, { childList: true, characterData: true, subtree: true });
+  }
+  documentValue.defaultView?.addEventListener("online", updateSyncState);
+  documentValue.defaultView?.addEventListener("offline", updateSyncState);
+  updateSyncState();
 
   const view = {
     sessionChanged(user) {

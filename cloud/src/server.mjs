@@ -303,6 +303,13 @@ async function route(request, response) {
         ),
       );
     }
+    const teamActivityMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/activity$/i);
+    if (method === "GET" && teamActivityMatch) {
+      if (!isUUID(teamActivityMatch[1])) return sendError(response, 404, "team_not_found");
+      return handleOperation(response, () => service.listTeamAuditEvents(session, teamActivityMatch[1], {
+        limit: url.searchParams.get("limit"), cursor: url.searchParams.get("cursor"),
+      }));
+    }
     const teamInvitationsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations$/i);
     if (teamInvitationsMatch) {
       if (!isUUID(teamInvitationsMatch[1])) return sendError(response, 404, "team_not_found");

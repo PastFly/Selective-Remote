@@ -451,6 +451,12 @@ test("browser Team management covers lifecycle, members, invitations and shared 
         assert.equal(query.get("limit"), "50");
         return jsonResponse(200, { members: [member], nextCursor: null, total: 1 });
       }
+      if (path === `/v1/teams/${teamID}/activity?limit=50` && !options.method) {
+        return jsonResponse(200, { events: [{
+          id: "42", action: "team.created", createdAt: "2030-01-01T00:00:00.000Z",
+          actor: { username: "owner", displayName: "Owner" },
+        }], nextCursor: null });
+      }
       if (path.endsWith("/members") && !options.method) return jsonResponse(200, { members: [member] });
       if (path === `/v1/teams/${teamID}/invitations` && !options.method) {
         return jsonResponse(200, { invitations: [usernameInvitation, { ...linkInvitation, acceptanceURL: null }] });
@@ -527,6 +533,10 @@ test("browser Team management covers lifecycle, members, invitations and shared 
   });
   assert.deepEqual(await client.listTeamMembersPage(teamID, { search: "legacy" }), {
     members: [], nextCursor: null, total: 0,
+  });
+  assert.deepEqual(await client.listTeamActivity(teamID), {
+    events: [{ id: "42", action: "team.created", createdAt: "2030-01-01T00:00:00.000Z", actor: { username: "owner", displayName: "Owner" } }],
+    nextCursor: null,
   });
   assert.deepEqual(await client.listTeamInvitations(teamID), [usernameInvitation, { ...linkInvitation, acceptanceURL: null }]);
   assert.deepEqual(await client.listPendingTeamInvitations(), [pendingInvitation]);

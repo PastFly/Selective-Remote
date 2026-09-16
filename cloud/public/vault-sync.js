@@ -260,6 +260,21 @@ function normalizedTeamMember(value) {
   };
 }
 
+function normalizedTeamActivityEvent(value) {
+  exactKeys(value, ["action", "actor", "createdAt", "id"], "invalid_team_activity");
+  exactKeys(value.actor, ["displayName", "username"], "invalid_team_activity");
+  const id = String(value.id ?? "");
+  const action = String(value.action ?? "");
+  const createdAt = String(value.createdAt ?? "");
+  const username = String(value.actor.username ?? "");
+  const displayName = String(value.actor.displayName ?? "");
+  if (!/^[1-9][0-9]{0,18}$/u.test(id) || !/^[a-z][a-z0-9_.-]{0,63}$/u.test(action)
+    || Number.isNaN(Date.parse(createdAt)) || username.length > 64 || displayName.length > 120) {
+    throw new Error("invalid_team_activity");
+  }
+  return { id, action, createdAt, actor: { username, displayName } };
+}
+
 function normalizedTeamInvitation(value) {
   exactKeys(value, [
     "acceptanceURL", "createdAt", "expiresAt", "id", "role", "status",
@@ -771,6 +786,26 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         throw new Error("team_members_download_failed");
       }
       return result.members.map(normalizedTeamMember);
+    },
+
+    async listTeamActivity(teamID, { limit = 50, cursor = null } = {}) {
+      const normalizedTeamID = normalizedUUID(teamID, "invalid_team");
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+        || (cursor !== null && !/^[1-9][0-9]{0,18}$/u.test(String(cursor)))) {
+        throw new Error("invalid_team_activity_query");
+      }
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (cursor !== null) query.set("cursor", String(cursor));
+      const response = await authorizedRequest(`/v1/teams/${normalizedTeamID}/activity?${query}`);
+      const result = await responseJSON(response, "team_activity_download_failed");
+      if (!response.ok || !Array.isArray(result.events) || result.events.length > limit
+        || (result.nextCursor !== null && !/^[1-9][0-9]{0,18}$/u.test(String(result.nextCursor)))) {
+        throw new Error("team_activity_download_failed");
+      }
+      return {
+        events: result.events.map(normalizedTeamActivityEvent),
+        nextCursor: result.nextCursor === null ? null : String(result.nextCursor),
+      };
     },
 
     async listTeamMembersPage(teamID, { search = "", role = "", limit = 50, cursor = null } = {}) {
