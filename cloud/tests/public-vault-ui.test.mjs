@@ -516,8 +516,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.equal((html.match(/data-hero-preview-scope=/gu) ?? []).length, 2);
   assert.match(html, /id="sync-journey-title"/u);
   assert.match(html, /Создали Host на Mac/u);
-  assert.match(html, /\/images\/selective-remote-macos\.png\?v=167/u);
-  assert.match(html, /\/images\/selective-remote-cloud-browser\.png\?v=167/u);
+  assert.match(html, /\/images\/selective-remote-macos\.webp\?v=167/u);
+  assert.match(html, /\/images\/selective-remote-cloud-browser\.webp\?v=167/u);
   assert.match(html, /id="landing-features-title"/u);
   assert.match(html, /class="security-flow"[^>]*aria-label="Как работает защищённая синхронизация"/u);
   assert.match(html, /class="auth-security-note"/u);
