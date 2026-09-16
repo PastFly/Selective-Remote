@@ -24,7 +24,7 @@ struct CloudTeamSnippetsTests {
         #expect(restored.targets(for: Self.snippetID).isEmpty)
     }
 
-    @Test("Team Snippet UI exposes explicit run, target assignment, and context menu")
+    @Test("Team Snippet UI exposes explicit edit, delete, run, and target actions")
     func teamSnippetActionsAreAvailable() throws {
         let root = Self.packageRoot()
         let source = try String(
@@ -33,12 +33,30 @@ struct CloudTeamSnippetsTests {
         )
 
         #expect(source.contains(".contextMenu { snippetActions(snippet) }"))
+        #expect(source.contains("ru: \"Изменить\", en: \"Edit\""))
+        #expect(source.contains("snippetPendingDeletion = snippet"))
+        #expect(source.contains("SelectiveRemoteTeamSnippetEditorView(request: request)"))
         #expect(source.contains("ru: \"Настроить хосты…\""))
         #expect(source.contains("model.runTerminalSnippet(executable)"))
         #expect(source.contains("ru: \"Выбор хранится только на этом Mac"))
         #expect(source.contains("TimelineView(.periodic(from: .now, by: 60))"))
         #expect(source.contains("ru: \"Изменён "))
         #expect(!source.contains("Text(snippet.modifiedDate, style: .relative)"))
+    }
+
+    @Test("Snippet header keeps two fixed action slots in Personal and Team scopes")
+    func snippetHeaderHasStableActions() throws {
+        let root = Self.packageRoot()
+        let source = try String(
+            contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/TerminalSnippetsLibraryView.swift"),
+            encoding: .utf8
+        )
+
+        #expect(source.contains("@State private var teamCreateRequest = 0"))
+        #expect(source.contains(".frame(width: 112)"))
+        #expect(source.contains(".frame(width: 122)"))
+        #expect(source.contains("teamCreateRequest += 1"))
+        #expect(source.contains("name: .selectiveRemoteTeamVaultSyncNow"))
     }
 
     @Test("App startup and Cloud session changes refresh Team Snippets immediately")
@@ -149,6 +167,84 @@ struct CloudTeamSnippetsTests {
 
         #expect(first == repeated)
         #expect(first != otherVault)
+    }
+
+    @Test("Owner, Admin, and Editor can create, update, and delete Team Snippets")
+    func writableRolesMutateSnippetsCausally() throws {
+        for role in [
+            SelectiveRemoteCloudTeamRole.owner,
+            .admin,
+            .editor
+        ] {
+            let created = try SelectiveRemoteTeamSnippetDocumentMutation.create(
+                recordID: Self.snippetID,
+                title: "Deploy status",
+                body: "systemctl status app",
+                role: role,
+                deviceID: Self.deviceID,
+                modifiedAt: "2026-09-16T12:00:00.000Z"
+            )
+            let createdRecord = try #require(created.records.first)
+            #expect(createdRecord.type == .snippet)
+            #expect(createdRecord.version.counters[Self.deviceID] == 1)
+
+            let updated = try SelectiveRemoteTeamSnippetDocumentMutation.update(
+                in: created,
+                recordID: Self.snippetID,
+                title: "Restart service",
+                body: "systemctl restart app",
+                role: role,
+                deviceID: Self.deviceID,
+                modifiedAt: "2026-09-16T12:01:00.000Z"
+            )
+            #expect(updated.records.first?.version.counters[Self.deviceID] == 2)
+
+            let deleted = try SelectiveRemoteTeamSnippetDocumentMutation.delete(
+                from: updated,
+                recordID: Self.snippetID,
+                role: role,
+                deviceID: Self.deviceID,
+                deletedAt: "2026-09-16T12:02:00.000Z"
+            )
+            #expect(deleted.records.isEmpty)
+            #expect(deleted.tombstones.first?.id == Self.snippetID)
+            #expect(deleted.tombstones.first?.version.counters[Self.deviceID] == 3)
+        }
+    }
+
+    @Test("Viewer cannot mutate Team Snippets")
+    func viewerIsReadOnly() throws {
+        #expect(!SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: .viewer))
+        #expect(throws: SelectiveRemoteTeamSnippetMutationError.readOnlyRole) {
+            _ = try SelectiveRemoteTeamSnippetDocumentMutation.create(
+                recordID: Self.snippetID,
+                title: "Denied",
+                body: "echo denied",
+                role: .viewer,
+                deviceID: Self.deviceID,
+                modifiedAt: "2026-09-16T12:00:00.000Z"
+            )
+        }
+    }
+
+    @Test("Team Snippet mutations preserve unrelated Vault records")
+    func mutationsPreserveOtherRecords() throws {
+        let original = try SelectiveRemoteVaultDocument(records: [Self.snippetRecord()])
+        let secondID = try #require(
+            UUID(uuidString: "77777777-7777-4777-8777-777777777777")
+        )
+        let mutated = try SelectiveRemoteTeamSnippetDocumentMutation.create(
+            in: original,
+            recordID: secondID,
+            title: "Second",
+            body: "echo second",
+            role: .editor,
+            deviceID: Self.deviceID,
+            modifiedAt: "2026-09-16T12:00:00.000Z"
+        )
+
+        #expect(mutated.records.count == 2)
+        #expect(mutated.records.first(where: { $0.id == Self.snippetID }) == original.records.first)
     }
 
     private static func snippetRecord() throws -> SelectiveRemoteVaultRecord {

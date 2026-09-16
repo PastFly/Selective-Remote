@@ -66,6 +66,7 @@ struct TerminalSnippetsLibraryView: View {
     @State private var groupEditorPresented = false
     @State private var deleteSnippet: TerminalCommandTemplate?
     @State private var showsDisconnectConfirmation = false
+    @State private var teamCreateRequest = 0
     @AppStorage("SelectiveRemote.snippets.libraryViewMode.v1")
     private var viewModeRaw = SnippetLibraryViewMode.list.rawValue
     @AppStorage("SelectiveRemote.snippets.selectedGroupID.v1")
@@ -124,7 +125,11 @@ struct TerminalSnippetsLibraryView: View {
                 }
             } else {
                 Divider()
-                SelectiveRemoteTeamSnippetsView(store: teamStore, model: model)
+                SelectiveRemoteTeamSnippetsView(
+                    store: teamStore,
+                    model: model,
+                    createRequest: teamCreateRequest
+                )
             }
         }
         .sheet(item: $editorRequest) { request in
@@ -239,20 +244,45 @@ struct TerminalSnippetsLibraryView: View {
             .labelsHidden()
             .frame(width: 220)
 
-            if scope == .personal {
-                Button {
-                    groupEditor = nil
-                    groupEditorPresented = true
-                } label: {
-                    Label("Новая группа", systemImage: "folder.badge.plus")
+            Group {
+                if scope == .personal {
+                    Button {
+                        groupEditor = nil
+                        groupEditorPresented = true
+                    } label: {
+                        Label("Новая группа", systemImage: "folder.badge.plus")
+                            .frame(width: 112)
+                    }
+                } else {
+                    Button {
+                        NotificationCenter.default.post(
+                            name: .selectiveRemoteTeamVaultSyncNow,
+                            object: nil
+                        )
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Обновить", en: "Refresh"),
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                        .frame(width: 112)
+                    }
                 }
-                Button {
-                    presentEditor(nil, preferredGroupID: selectedGroupID)
-                } label: {
-                    Label("Новый сниппет", systemImage: "plus")
-                }
-                .buttonStyle(.borderedProminent)
             }
+
+            Button {
+                if scope == .personal {
+                    presentEditor(nil, preferredGroupID: selectedGroupID)
+                } else {
+                    teamCreateRequest += 1
+                }
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet"),
+                    systemImage: "plus"
+                )
+                .frame(width: 122)
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)

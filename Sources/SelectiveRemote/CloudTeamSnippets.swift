@@ -37,6 +37,7 @@ struct SelectiveRemoteTeamSnippetVaultContext: Identifiable, Equatable, Sendable
     let id: UUID
     let teamID: UUID
     let teamName: String
+    let role: SelectiveRemoteCloudTeamRole
     let vaultID: UUID
     let vaultName: String
 
@@ -177,6 +178,14 @@ final class SelectiveRemoteTeamSnippetStore: ObservableObject {
         rebuild(now: now)
     }
 
+    func replaceVault(
+        with snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot,
+        now: Date = Date()
+    ) {
+        snapshots[scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID)] = snapshot
+        rebuild(now: now)
+    }
+
     func clear() {
         replace(with: [])
     }
@@ -196,6 +205,7 @@ final class SelectiveRemoteTeamSnippetStore: ObservableObject {
                     ),
                     teamID: snapshot.teamID,
                     teamName: snapshot.teamName,
+                    role: snapshot.role,
                     vaultID: snapshot.vaultID,
                     vaultName: snapshot.vaultName
                 ))
@@ -231,6 +241,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @ObservedObject var store: SelectiveRemoteTeamSnippetStore
     @ObservedObject var targetStore: SelectiveRemoteTeamSnippetTargetStore
     @ObservedObject var model: AppModel
+    let createRequest: Int
 
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
@@ -238,15 +249,33 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @State private var copiedSnippetID: UUID?
     @State private var targetEditorSnippet: SelectiveRemoteTeamSnippet?
     @State private var actionMessage = ""
+    @State private var editorRequest: SelectiveRemoteTeamSnippetEditorRequest?
+    @State private var snippetPendingDeletion: SelectiveRemoteTeamSnippet?
+    @State private var showsVaultChooser = false
+    @State private var isMutating = false
+    @State private var mutationMessage: SelectiveRemoteTeamSnippetMutationMessage?
+    @AppStorage("SelectiveRemote.cloud.endpoint.v1")
+    private var endpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
+
+    private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
 
     init(
         store: SelectiveRemoteTeamSnippetStore,
         model: AppModel,
-        targetStore: SelectiveRemoteTeamSnippetTargetStore = .shared
+        targetStore: SelectiveRemoteTeamSnippetTargetStore = .shared,
+        createRequest: Int = 0
     ) {
         self.store = store
         self.model = model
         self.targetStore = targetStore
+        self.createRequest = createRequest
+    }
+
+    private var writableVaults: [SelectiveRemoteTeamSnippetVaultContext] {
+        store.vaults.filter {
+            SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: $0.role)
+        }
     }
 
     private var visibleSnippets: [SelectiveRemoteTeamSnippet] {
@@ -313,6 +342,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .onChange(of: store.snippets.map(\.id)) { _, _ in normalizeSelection() }
         .onChange(of: selectedVaultKey) { _, _ in normalizeSelection() }
         .onChange(of: selectedSnippetID) { _, _ in actionMessage = "" }
+        .onChange(of: createRequest) { _, _ in presentCreateEditor() }
         .sheet(item: $targetEditorSnippet) { snippet in
             SelectiveRemoteTeamSnippetTargetsEditor(
                 snippet: snippet,
@@ -324,6 +354,74 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     ru: "Назначения сохранены только на этом Mac",
                     en: "Targets saved on this Mac only"
                 )
+            }
+        }
+        .sheet(item: $editorRequest) { request in
+            SelectiveRemoteTeamSnippetEditorView(request: request) { recordID, title, body in
+                mutate(
+                    request.snippet.map {
+                        .update(recordID: $0.recordID, title: title, body: body)
+                    } ?? .create(recordID: recordID, title: title, body: body),
+                    context: request.context,
+                    selectedRecordID: recordID
+                )
+            }
+        }
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Выберите Team Vault", en: "Choose a Team Vault"),
+            isPresented: $showsVaultChooser
+        ) {
+            ForEach(writableVaults) { vault in
+                Button("\(vault.teamName) / \(vault.vaultName)") {
+                    editorRequest = .init(context: vault, snippet: nil)
+                }
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        }
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Удалить Team Snippet?", en: "Delete Team Snippet?"),
+            isPresented: Binding(
+                get: { snippetPendingDeletion != nil },
+                set: { if !$0 { snippetPendingDeletion = nil } }
+            ),
+            presenting: snippetPendingDeletion
+        ) { snippet in
+            Button(UpdateLocalization.text(ru: "Удалить", en: "Delete"), role: .destructive) {
+                if let context = context(for: snippet) {
+                    mutate(
+                        .delete(recordID: snippet.recordID),
+                        context: context,
+                        selectedRecordID: nil
+                    )
+                }
+                snippetPendingDeletion = nil
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        } message: { snippet in
+            Text(snippet.title)
+        }
+        .alert(item: $mutationMessage) { value in
+            Alert(
+                title: Text(value.isError
+                    ? UpdateLocalization.text(ru: "Team Snippet не изменён", en: "Team Snippet Not Changed")
+                    : UpdateLocalization.text(ru: "Team Snippet обновлён", en: "Team Snippet Updated")
+                ),
+                message: Text(value.text),
+                dismissButton: .default(Text("OK"))
+            )
+        }
+        .overlay {
+            if isMutating {
+                ZStack {
+                    Color.black.opacity(0.12)
+                    ProgressView(UpdateLocalization.text(
+                        ru: "Шифрование и синхронизация…",
+                        en: "Encrypting and synchronizing…"
+                    ))
+                    .padding(18)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                }
+                .ignoresSafeArea()
             }
         }
     }
@@ -368,6 +466,20 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 }
                 .menuStyle(.borderlessButton)
                 Spacer()
+                Menu {
+                    ForEach(writableVaults) { vault in
+                        Button("\(vault.teamName) / \(vault.vaultName)") {
+                            editorRequest = .init(context: vault, snippet: nil)
+                        }
+                    }
+                } label: {
+                    Label(
+                        UpdateLocalization.text(ru: "Добавить", en: "Add"),
+                        systemImage: "plus"
+                    )
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(writableVaults.isEmpty || isMutating)
                 Text("\(visibleSnippets.count) \(UpdateLocalization.text(ru: "из", en: "of")) \(store.snippets.count)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
@@ -417,6 +529,30 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
+                if SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
+                    Button {
+                        if let context = context(for: snippet) {
+                            editorRequest = .init(context: context, snippet: snippet)
+                        }
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Изменить", en: "Edit"),
+                            systemImage: "pencil"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isMutating)
+                    Button(role: .destructive) {
+                        snippetPendingDeletion = snippet
+                    } label: {
+                        Label(
+                            UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                            systemImage: "trash"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isMutating)
+                }
                 Button {
                     targetEditorSnippet = snippet
                 } label: {
@@ -604,6 +740,21 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
     @ViewBuilder
     private func snippetActions(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
+        if SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
+            Button(UpdateLocalization.text(ru: "Изменить…", en: "Edit…"), systemImage: "pencil") {
+                if let context = context(for: snippet) {
+                    editorRequest = .init(context: context, snippet: snippet)
+                }
+            }
+            Button(
+                UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                systemImage: "trash",
+                role: .destructive
+            ) {
+                snippetPendingDeletion = snippet
+            }
+            Divider()
+        }
         Button(UpdateLocalization.text(ru: "Запустить", en: "Run"), systemImage: "play.fill") {
             run(snippet)
         }
@@ -621,6 +772,84 @@ struct SelectiveRemoteTeamSnippetsView: View {
         ) {
             copy(snippet)
         }
+    }
+
+    private func presentCreateEditor() {
+        if writableVaults.count == 1, let vault = writableVaults.first {
+            editorRequest = .init(context: vault, snippet: nil)
+        } else if !writableVaults.isEmpty {
+            showsVaultChooser = true
+        } else {
+            mutationMessage = .init(
+                text: UpdateLocalization.text(
+                    ru: "Нет доступного Team Vault с ролью Owner, Admin или Editor.",
+                    en: "No Team Vault is available with the Owner, Admin, or Editor role."
+                ),
+                isError: true
+            )
+        }
+    }
+
+    private func context(
+        for snippet: SelectiveRemoteTeamSnippet
+    ) -> SelectiveRemoteTeamSnippetVaultContext? {
+        store.vaults.first {
+            $0.teamID == snippet.teamID && $0.vaultID == snippet.vaultID
+        }
+    }
+
+    private func mutate(
+        _ change: SelectiveRemoteTeamSnippetMutationChange,
+        context: SelectiveRemoteTeamSnippetVaultContext,
+        selectedRecordID: UUID?
+    ) {
+        guard !isMutating else { return }
+        isMutating = true
+        Task { @MainActor in
+            defer { isMutating = false }
+            do {
+                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let identity = try await identityManager.identity(
+                    endpoint: url,
+                    deviceID: resolvedDeviceID()
+                )
+                let service = try SelectiveRemoteTeamSnippetMutationService()
+                let snapshot = try await service.apply(
+                    change,
+                    to: context,
+                    endpoint: url,
+                    identity: identity
+                )
+                store.replaceVault(with: snapshot)
+                if let selectedRecordID {
+                    selectedSnippetID = SelectiveRemoteTeamSnippetMaterializer.scopedID(
+                        teamID: context.teamID,
+                        vaultID: context.vaultID,
+                        recordID: selectedRecordID
+                    )
+                } else {
+                    selectedSnippetID = nil
+                }
+                mutationMessage = .init(
+                    text: UpdateLocalization.text(
+                        ru: "Зашифрованная ревизия Team Vault синхронизирована.",
+                        en: "The encrypted Team Vault revision was synchronized."
+                    ),
+                    isError: false
+                )
+            } catch {
+                mutationMessage = .init(text: error.localizedDescription, isError: true)
+            }
+        }
+    }
+
+    private func resolvedDeviceID() -> UUID {
+        if let value = UUID(uuidString: storedDeviceID), value.isSelectiveRemoteCloudUUID {
+            return value
+        }
+        let value = UUID()
+        storedDeviceID = value.canonicalCloudString
+        return value
     }
 
     private var availableProfiles: [ConnectionProfile] {

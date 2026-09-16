@@ -119,7 +119,9 @@ func managementWorkspaceCompositionContract() throws {
 
     #expect(content.contains("@State private var mainArea = MainArea.hosts"))
     #expect(content.contains("private var showsHostQuickAccess: Bool"))
-    #expect(content.contains("max: showsHostQuickAccess ? 520 : 280"))
+    #expect(content.contains(".navigationSplitViewColumnWidth("))
+    #expect(content.contains("ideal: 300"))
+    #expect(!content.contains("max: showsHostQuickAccess"))
     #expect(content.contains("personalHostNavigatorToolbar"))
     #expect(content.contains("compact: surface == .sidebar"))
     #expect(teamHosts.contains("teamHostNavigatorToolbar"))
