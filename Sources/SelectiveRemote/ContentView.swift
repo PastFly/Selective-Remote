@@ -127,7 +127,7 @@ struct ContentView: View {
     @StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore.shared
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
-    @State private var mainArea = MainArea.connectionCenter
+    @State private var mainArea = MainArea.hosts
     @State private var hostScope = HostScope.personal
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
@@ -184,6 +184,15 @@ struct ContentView: View {
     private let secondaryMainAreas: [MainArea] = [
         .sessionLogs, .activity, .diagnostics, .keychain,
     ]
+
+    private var showsHostQuickAccess: Bool {
+        switch mainArea {
+        case .connectionCenter, .ssh, .terminal, .sftp, .forwarding:
+            true
+        case .hosts, .snippets, .sessionLogs, .activity, .diagnostics, .keychain:
+            false
+        }
+    }
 
     private var profile: ConnectionProfile { model.selectedProfile }
     private var profileBinding: Binding<ConnectionProfile> {
@@ -541,33 +550,44 @@ struct ContentView: View {
             .padding(.top, 18)
             .padding(.bottom, 16)
 
-            HStack(spacing: 7) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                TextField(
-                    hostScope == .personal
-                        ? UpdateLocalization.text(ru: "Поиск личных хостов", en: "Search Personal Hosts")
-                        : UpdateLocalization.text(ru: "Поиск командных хостов", en: "Search Team Hosts"),
-                    text: sidebarHostSearchBinding
-                )
-                .textFieldStyle(.plain)
-                if !sidebarHostSearchBinding.wrappedValue.isEmpty {
-                    Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
-                        Image(systemName: "xmark.circle.fill")
+            if showsHostQuickAccess {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        hostScope == .personal
+                            ? UpdateLocalization.text(
+                                ru: "Поиск личных хостов",
+                                en: "Search Personal Hosts"
+                            )
+                            : UpdateLocalization.text(
+                                ru: "Поиск командных хостов",
+                                en: "Search Team Hosts"
+                            ),
+                        text: sidebarHostSearchBinding
+                    )
+                    .textFieldStyle(.plain)
+                    if !sidebarHostSearchBinding.wrappedValue.isEmpty {
+                        Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
                 }
+                .padding(.horizontal, 11)
+                .frame(height: 38)
+                .background(
+                    .regularMaterial,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.08))
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
-            .padding(.horizontal, 11)
-            .frame(height: 38)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
-            }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 10)
 
             VStack(spacing: 5) {
                 Button {
@@ -672,7 +692,7 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            if cloudSessionAvailable || !teamHosts.hosts.isEmpty {
+            if showsHostQuickAccess && (cloudSessionAvailable || !teamHosts.hosts.isEmpty) {
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -693,16 +713,16 @@ struct ContentView: View {
                 }
             }
 
-            if hostScope == .personal {
+            if showsHostQuickAccess && hostScope == .personal {
                 profileTagFilterBar
                 profileCollection(surface: .sidebar)
                     .id("personal-sidebar-\(hostScopePresentationID)")
-            } else {
+            } else if showsHostQuickAccess {
                 teamHostSidebarCollection
                     .id("team-sidebar-\(hostScopePresentationID)")
             }
 
-            if hostScope == .personal {
+            if showsHostQuickAccess && hostScope == .personal {
                 Divider()
                 HStack(spacing: 9) {
                 Menu {
@@ -788,7 +808,7 @@ struct ContentView: View {
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
-            } else {
+            } else if showsHostQuickAccess {
                 Divider()
                 HStack(spacing: 9) {
                     Button {
@@ -1470,65 +1490,6 @@ struct ContentView: View {
                                 SelectiveRemoteWorkspaceChrome.accent.opacity(0.11),
                                 in: Capsule()
                             )
-                        Menu {
-                            Button(
-                                UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
-                                systemImage: "desktopcomputer"
-                            ) {
-                                model.addProfile(connectionType: .rdp)
-                            }
-                            Button(
-                                UpdateLocalization.text(ru: "Новый SSH", en: "New SSH"),
-                                systemImage: "terminal"
-                            ) {
-                                model.addProfile(connectionType: .ssh)
-                            }
-                            Button(
-                                UpdateLocalization.text(ru: "Новый Telnet", en: "New Telnet"),
-                                systemImage: "network"
-                            ) {
-                                model.addProfile(connectionType: .telnet)
-                            }
-                            Button(
-                                UpdateLocalization.text(ru: "Новый Serial", en: "New Serial"),
-                                systemImage: "cable.connector"
-                            ) {
-                                model.addProfile(connectionType: .serial)
-                            }
-                        } label: {
-                            Label(
-                                UpdateLocalization.text(ru: "Новый Host", en: "New Host"),
-                                systemImage: "plus"
-                            )
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
-                        Menu {
-                            Picker(
-                                UpdateLocalization.text(ru: "Вид", en: "View"),
-                                selection: $model.profileCollectionDisplayMode
-                            ) {
-                                ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                                }
-                            }
-                            Divider()
-                            Picker(
-                                UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
-                                selection: $model.profileSortMode
-                            ) {
-                                ForEach(ProfileSortMode.allCases) { mode in
-                                    Text(mode.title).tag(mode)
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "slider.horizontal.3")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .help(UpdateLocalization.text(
-                            ru: "Вид и сортировка списка хостов",
-                            en: "Host list view and sorting"
-                        ))
                         Button {
                             personalHostDetailVisible.toggle()
                         } label: {
@@ -1559,6 +1520,7 @@ struct ContentView: View {
                     }
                     .padding(16)
                     .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.035))
+                    personalHostNavigatorToolbar
                     Divider()
                     profileTagFilterBar
                     profileCollection(surface: .navigator)
@@ -1605,6 +1567,103 @@ struct ContentView: View {
                 personalHostNavigatorPresentationID = UUID()
             }
         }
+    }
+
+    private var personalHostNavigatorToolbar: some View {
+        VStack(spacing: 9) {
+            if cloudSessionAvailable || !teamHosts.hosts.isEmpty {
+                Picker("", selection: $hostScope) {
+                    ForEach(HostScope.allCases) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .onChange(of: hostScope) { _, scope in
+                    personalHostDropTargetID = nil
+                    DispatchQueue.main.async { refreshHostPresentations() }
+                    if scope == .team { setMainArea(.hosts) }
+                }
+            }
+
+            HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        UpdateLocalization.text(
+                            ru: "Поиск личных хостов",
+                            en: "Search Personal Hosts"
+                        ),
+                        text: sidebarHostSearchBinding
+                    )
+                    .textFieldStyle(.plain)
+                    if !sidebarHostSearchBinding.wrappedValue.isEmpty {
+                        Button { sidebarHostSearchBinding.wrappedValue = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(minHeight: 32)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+
+                Menu {
+                    Button(
+                        UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
+                        systemImage: "desktopcomputer"
+                    ) { model.addProfile(connectionType: .rdp) }
+                    Button(
+                        UpdateLocalization.text(ru: "Новый SSH", en: "New SSH"),
+                        systemImage: "terminal"
+                    ) { model.addProfile(connectionType: .ssh) }
+                    Button(
+                        UpdateLocalization.text(ru: "Новый Telnet", en: "New Telnet"),
+                        systemImage: "network"
+                    ) { model.addProfile(connectionType: .telnet) }
+                    Button(
+                        UpdateLocalization.text(ru: "Новый Serial", en: "New Serial"),
+                        systemImage: "cable.connector"
+                    ) { model.addProfile(connectionType: .serial) }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
+                .help(UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"))
+
+                Menu {
+                    Picker(
+                        UpdateLocalization.text(ru: "Вид", en: "View"),
+                        selection: $model.profileCollectionDisplayMode
+                    ) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                    Divider()
+                    Picker(
+                        UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                        selection: $model.profileSortMode
+                    ) {
+                        ForEach(ProfileSortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(
+                    ru: "Вид и сортировка списка хостов",
+                    en: "Host list view and sorting"
+                ))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     private func showsPersonalHostSelection(
@@ -1991,7 +2050,11 @@ struct ContentView: View {
                         requestedAction: $requestedTeamHostAction,
                         searchText: $teamHostSearchText,
                         onOpenTerminal: openTeamTerminal,
-                        onOpenSFTP: openTeamSFTP
+                        onOpenSFTP: openTeamSFTP,
+                        onShowPersonal: {
+                            hostScope = .personal
+                            refreshHostPresentations()
+                        }
                     )
                     .id("team-host-detail-\(hostScopePresentationID)")
                 }
