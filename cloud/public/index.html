@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=171">
-  <script src="/i18n.js?v=171"></script>
+  <link rel="stylesheet" href="/styles.css?v=172">
+  <script src="/i18n.js?v=172"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -432,7 +432,8 @@
             <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
           </label>
         </div>
-        <form class="record-form" id="local-vault-record-form" hidden>
+        <dialog class="record-editor-dialog" id="local-record-editor-dialog" aria-labelledby="local-record-editor-title">
+        <form class="record-form" id="local-vault-record-form">
           <div class="record-editor-heading">
             <h3 id="local-record-editor-title">Новая запись</h3>
             <p id="local-record-editor-hint">Выберите тип и заполните поля. Всё шифруется в браузере.</p>
@@ -472,6 +473,7 @@
             <button type="button" class="secondary" id="local-record-cancel" hidden>Отменить изменение</button>
           </div>
         </form>
+        </dialog>
         <div class="vault-records" id="local-vault-records"></div>
         <dialog class="resource-detail" id="host-detail-dialog" aria-labelledby="host-detail-title">
           <form method="dialog" class="resource-detail-card">
@@ -504,6 +506,25 @@
             </section>
           </form>
         </dialog>
+        <dialog class="resource-detail resource-detail-generic" id="resource-detail-dialog" aria-labelledby="resource-detail-title">
+          <form method="dialog" class="resource-detail-card">
+            <div class="resource-detail-heading">
+              <div><p class="eyebrow" id="resource-detail-eyebrow">VAULT RESOURCE</p><h3 id="resource-detail-title">Ресурс</h3></div>
+              <button type="submit" class="secondary" aria-label="Закрыть карточку ресурса">Закрыть</button>
+            </div>
+            <dl class="resource-detail-fields">
+              <div><dt>Тип</dt><dd id="resource-detail-type">—</dd></div>
+              <div><dt id="resource-detail-target-label">Значение</dt><dd id="resource-detail-target">—</dd></div>
+              <div><dt>Изменён</dt><dd id="resource-detail-modified">—</dd></div>
+              <div class="resource-detail-content"><dt id="resource-detail-content-label">Содержимое</dt><dd id="resource-detail-content">—</dd></div>
+            </dl>
+            <div class="resource-detail-actions">
+              <button type="button" id="resource-detail-copy" class="secondary">Копировать</button>
+              <button type="button" id="resource-detail-edit" class="secondary">Изменить</button>
+            </div>
+            <p class="resource-detail-shortcut" id="resource-detail-shortcut">⌘C копирует значение выбранного ресурса</p>
+          </form>
+        </dialog>
         <section class="vault-conflicts" id="local-vault-conflicts" aria-labelledby="local-vault-conflicts-title" hidden>
           <h3 id="local-vault-conflicts-title">Требуется разрешить конфликты</h3>
           <p>Выберите одну версию для каждой записи. Секретные поля и содержимое записей здесь не показываются.</p>
@@ -525,7 +546,10 @@
           <div><h3>Mac и браузеры</h3><p>Отзыв устройства немедленно завершает связанные сессии. Для Shared Vaults после отзыва потребуется ротация ключа.</p></div>
           <button type="button" class="secondary" id="team-devices-refresh">Обновить устройства</button>
         </div>
-        <div class="team-devices" id="team-devices"></div>
+        <div class="device-vault-map">
+          <div class="device-vault-orbit" aria-hidden="true"><span>SR<small>VAULT</small></span><i>Mac</i><i>Web</i><i>Air</i></div>
+          <div class="team-devices" id="team-devices"></div>
+        </div>
       </div>
     </section>
 
@@ -809,14 +833,15 @@
               <small>Изменения синхронизируются автоматически. Дополнительные действия появятся только при устранимой ошибке доступа.</small>
             </div>
             <div class="vault-actions">
+              <button type="button" class="secondary" id="team-record-create">Добавить запись</button>
               <button type="button" class="danger" id="team-vault-rotate" hidden>Завершить ротацию</button>
               <button type="button" class="secondary" id="team-vault-grant-wrappers" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную выдачу wrappers</button>
               <button type="button" id="team-vault-sync" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную синхронизацию</button>
               <button type="button" class="secondary" id="team-vault-lock">Заблокировать</button>
             </div>
           </div>
-          <details class="team-record-editor" id="team-record-editor">
-            <summary id="team-record-editor-summary">Добавить запись</summary>
+          <dialog class="record-editor-dialog team-record-editor" id="team-record-editor" aria-labelledby="team-record-editor-summary">
+            <div class="record-editor-heading"><div><p class="eyebrow">TEAM VAULT · E2EE</p><h3 id="team-record-editor-summary">Добавить запись</h3></div></div>
           <form class="record-form" id="team-vault-record-form">
             <label for="team-record-type">Тип записи</label>
             <select id="team-record-type" name="type">
@@ -850,9 +875,12 @@
               <label for="team-host-description">Описание</label>
               <textarea id="team-host-description" name="description" maxlength="2048" rows="2" placeholder="Назначение и примечания для команды"></textarea>
             </div>
-            <button type="submit">Зашифровать локально</button>
+            <div class="record-form-actions">
+              <button type="submit">Зашифровать локально</button>
+              <button type="button" class="secondary" id="team-record-cancel">Отменить</button>
+            </div>
           </form>
-          </details>
+          </dialog>
           <div class="team-host-browser" id="team-host-browser">
             <label class="personal-vault-control" for="team-host-search"><span>Поиск</span>
               <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
@@ -897,6 +925,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=170"></script>
+  <script type="module" src="/app.js?v=171"></script>
 </body>
 </html>

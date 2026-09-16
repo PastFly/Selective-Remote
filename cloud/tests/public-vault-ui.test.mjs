@@ -24,6 +24,7 @@ import {
   teamHostConnectionData,
   teamHostRecordData,
   teamVaultRecoveryMode,
+  vaultResourceDetail,
 } from "../public/app.js";
 
 test("account password is domain-separated before it unlocks Personal Vault", () => {
@@ -429,6 +430,24 @@ test("credential summaries never expose their secret", () => {
   assert.equal(summary.includes(record.data.secret), false);
 });
 
+test("resource details support safe Credential, Snippet, and Forwarding inspection", () => {
+  const credential = vaultResourceDetail({
+    type: "credential", modifiedAt: "2026-09-16T12:00:00Z",
+    data: { title: "Production", username: "root", secret: "secret-value" },
+  });
+  assert.equal(credential.content, "••••••••");
+  assert.equal(credential.copyValue, "secret-value");
+  assert.equal(credential.target, "root");
+  const snippet = vaultResourceDetail({ type: "snippet", data: { title: "Status", body: "uptime" } });
+  assert.equal(snippet.content, "uptime");
+  assert.equal(snippet.copyValue, "uptime");
+  const forwarding = vaultResourceDetail({
+    type: "forwarding", data: { title: "Database", destination: "db:5432", configuration: "local 15432" },
+  });
+  assert.equal(forwarding.target, "db:5432");
+  assert.equal(forwarding.content, "local 15432");
+});
+
 test("conflict choices expose only bounded metadata and never record secrets or bodies", () => {
   const credential = {
     kind: "record",
@@ -472,8 +491,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=171">/u);
-  assert.match(html, /\/app\.js\?v=170/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=172">/u);
+  assert.match(html, /\/app\.js\?v=171/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -587,6 +606,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /data-team-record-filter="snippet"[^>]*>Snippets/u);
   assert.match(html, /data-team-record-filter="forwarding"[^>]*>Forwarding/u);
   assert.match(html, /id="team-record-editor"/u);
+  assert.match(html, /id="team-record-create"/u);
+  assert.match(html, /id="team-record-cancel"/u);
+  assert.match(html, /id="resource-detail-dialog"/u);
+  assert.match(html, /id="resource-detail-copy"/u);
+  assert.match(html, /class="device-vault-map"/u);
   assert.match(html, /id="host-detail-dialog"/u);
   assert.match(html, /id="host-detail-copy"/u);
   assert.match(html, /id="host-detail-edit"/u);
@@ -622,7 +646,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /id="personal-vault-sort"/u);
   assert.match(html, /id="personal-vault-folder-filter"/u);
   assert.match(html, /id="local-record-create"/u);
-  assert.match(html, /id="local-vault-record-form"[^>]*hidden/u);
+  assert.match(html, /id="local-record-editor-dialog"/u);
+  assert.match(html, /id="local-vault-record-form"/u);
   assert.match(html, /id="local-record-cancel"[^>]*hidden/u);
   assert.doesNotMatch(html, /data-record-filter="all">Personal Vault/u);
   assert.match(html, /class="workspace-nav-label">Команды/u);
@@ -633,8 +658,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=171/u);
-  assert.match(html, /app\.js\?v=170/u);
+  assert.match(html, /styles\.css\?v=172/u);
+  assert.match(html, /app\.js\?v=171/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="host"/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -711,11 +736,17 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.workspace-security-icon/u);
   assert.doesNotMatch(application, /sidebarFooter\.append/u);
   assert.match(application, /workspaceHeader\.hidden = true/u);
-  assert.match(application, /beginHostEdit/u);
+  assert.match(application, /beginRecordEdit/u);
+  assert.match(application, /appendVaultFolderGroup/u);
+  assert.match(application, /collapsedVaultFoldersState = new Map/u);
+  assert.match(application, /showVaultResourceDetail/u);
+  assert.match(application, /actions\.append\(edit\)/u);
+  assert.match(application, /recordEditor\?\.showModal\?\.\(\)/u);
+  assert.match(application, /event\.metaKey \|\| event\.ctrlKey/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
   assert.match(application, /navigator\.clipboard\.writeText\(String\(credential\.data\.secret/u);
   assert.match(application, /target\.replace\(\/\^ssh:\/u, "sftp:"\)/u);
-  assert.match(application, /sourceID: hostID/u);
+  assert.match(application, /sourceID: recordID/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
   assert.match(application, /account_owns_teams/u);
@@ -754,7 +785,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /localVaultRecordFormValues\(record\)/u);
   assert.match(application, /editingRecordID/u);
   assert.match(application, /closeEditor\(\)/u);
-  assert.match(application, /recordForm\.hidden = hide/u);
+  assert.match(application, /editorDialog\?\.close\?\.\(\)/u);
   assert.match(application, /createButton\?\.addEventListener\("click", beginCreate\)/u);
   assert.match(application, /setFilter\(value\) \{\s*resetEditor\(\)/u);
   assert.match(application, /panelID !== "local-vault"\) vaultUI\?\.closeEditor\(\)/u);
@@ -807,8 +838,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=170/u);
-  assert.match(html, /styles\.css\?v=171/u);
+  assert.match(html, /app\.js\?v=171/u);
+  assert.match(html, /styles\.css\?v=172/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

@@ -751,6 +751,58 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   #cloud-workspace .host-scope-switcher { width:100%; }
   #cloud-workspace .host-scope-switcher button { flex:1; min-width:0; }
 }
+
+/* Cloud resource workspace v172 */
+.record-editor-dialog {
+  width:min(760px,calc(100vw - 28px));
+  max-height:min(860px,calc(100dvh - 28px));
+  overflow:auto;
+  border:1px solid #75e0b44a;
+  border-radius:20px;
+  padding:0;
+  color:var(--ink);
+  background:linear-gradient(145deg,#101a1d,#081112);
+  box-shadow:0 30px 90px #000b,0 1px 0 #ffffff0b inset;
+}
+.record-editor-dialog::backdrop { background:#020807bf; backdrop-filter:blur(8px); }
+.record-editor-dialog>.record-editor-heading { padding:24px 26px 0; }
+.record-editor-dialog>.record-form { margin:0; padding:22px 26px 26px; border:0; background:transparent; box-shadow:none; }
+.record-editor-dialog .record-editor-heading h3 { margin:3px 0 0; font-size:24px; }
+.record-editor-dialog .record-form-actions { position:sticky; bottom:-26px; padding:16px 0 0; background:linear-gradient(transparent,#081112 28%); }
+.resource-detail-generic .resource-detail-content { grid-column:1/-1; }
+.resource-detail-generic .resource-detail-content dd { max-height:280px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.resource-detail-shortcut { margin:15px 0 0; color:var(--muted); font:11px ui-monospace,monospace; }
+
+#cloud-workspace .vault-folder-group { display:grid; grid-column:1/-1; gap:8px; }
+#cloud-workspace .vault-folder-content { display:grid; grid-template-columns:1fr; gap:7px; }
+#cloud-workspace .vault-folder-heading {
+  display:flex; align-items:center; width:100%; margin:15px 0 2px; padding:9px 5px;
+  border:0; border-bottom:1px solid #ffffff10; border-radius:0; background:transparent;
+  color:#dfe8e4; text-align:left; font:800 12px/1.2 inherit; letter-spacing:.04em;
+}
+#cloud-workspace .vault-folder-heading::before { content:"▾"; margin-right:9px; color:var(--accent); transition:transform .16s; }
+#cloud-workspace .vault-folder-heading[aria-expanded="false"]::before { transform:rotate(-90deg); }
+#cloud-workspace .vault-folder-heading:hover { color:var(--accent); background:#75e0b408; }
+#cloud-workspace .resource-card-credential::after { content:"⌘C"; position:absolute; right:114px; top:24px; color:#75e0b46b; font:10px ui-monospace,monospace; }
+#cloud-workspace .resource-card-credential { border-left:2px solid #75e0b45f; }
+#cloud-workspace .resource-card-snippet p { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+#cloud-workspace .resource-card-forwarding { border-left:2px solid #7bb9ff55; }
+
+.device-vault-map { display:grid; grid-template-columns:minmax(250px,.8fr) minmax(300px,1.2fr); gap:28px; align-items:center; min-height:330px; }
+.device-vault-orbit { position:relative; width:260px; height:260px; justify-self:center; border:1px solid #75e0b429; border-radius:50%; box-shadow:0 0 70px #75e0b40d inset; }
+.device-vault-orbit::before { content:""; position:absolute; inset:36px; border:1px solid #75e0b421; border-radius:50%; }
+.device-vault-orbit>span { position:absolute; inset:82px; display:grid; place-items:center; border:1px solid #75e0b46b; border-radius:25px; background:#0b1b16; color:var(--accent); font-size:34px; font-weight:850; box-shadow:0 0 40px #75e0b41f; }
+.device-vault-orbit>span small { display:block; margin-top:-25px; font-size:10px; letter-spacing:.18em; }
+.device-vault-orbit>i { position:absolute; display:grid; place-items:center; width:52px; height:52px; border:1px solid #75e0b44d; border-radius:14px; background:#0b1815; color:#cfe4db; font:normal 11px/1 ui-monospace,monospace; }
+.device-vault-orbit>i:nth-of-type(1) { left:-12px; top:78px; }.device-vault-orbit>i:nth-of-type(2) { right:-8px; top:47px; }.device-vault-orbit>i:nth-of-type(3) { right:18px; bottom:4px; }
+.device-vault-map .team-devices { display:grid; gap:10px; }
+.device-vault-map .team-devices article { border-left:2px solid #75e0b45f; background:linear-gradient(100deg,#0b1513,#08100f); }
+:root[data-theme="light"] .record-editor-dialog { color:var(--ink); background:linear-gradient(145deg,#fbfdfc,#eef6f2); }
+:root[data-theme="light"] .record-editor-dialog .record-form-actions { background:linear-gradient(transparent,#eef6f2 28%); }
+:root[data-theme="light"] #cloud-workspace .vault-folder-heading { border-color:#cbdad3; color:#29463a; }
+:root[data-theme="light"] .device-vault-orbit>span,:root[data-theme="light"] .device-vault-orbit>i { background:#eff8f4; color:#176d4e; }
+@media (max-width:880px) { .device-vault-map { grid-template-columns:1fr; }.device-vault-orbit { width:220px; height:220px; }.device-vault-orbit>span { inset:68px; } }
+@media (max-width:560px) { .record-editor-dialog { width:calc(100vw - 16px); max-height:calc(100dvh - 16px); border-radius:16px; }.record-editor-dialog>.record-form { padding:18px; }.resource-detail-generic .resource-detail-content { grid-column:auto; }.device-vault-orbit { display:none; }.device-vault-map { min-height:0; } }
 .locale-switch {
   display: inline-flex;
   flex: 0 0 auto;
