@@ -678,8 +678,20 @@ struct SelectiveRemoteTeamHostsView: View {
         HSplitView {
             if hostNavigatorVisible {
                 VStack(spacing: 0) {
-                    HStack {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(SelectiveRemoteWorkspaceChrome.accent.opacity(0.14))
+                            Image(systemName: "person.3.fill")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
+                        }
+                        .frame(width: 42, height: 42)
                         VStack(alignment: .leading, spacing: 2) {
+                            Text("TEAM VAULT")
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .tracking(1.3)
+                                .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
                             Text(UpdateLocalization.text(
                                 ru: "Все командные хосты",
                                 en: "All Team Hosts"
@@ -695,7 +707,13 @@ struct SelectiveRemoteTeamHostsView: View {
                         Spacer()
                         Text("\(store.hosts.count)")
                             .font(.caption.bold().monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                SelectiveRemoteWorkspaceChrome.accent.opacity(0.11),
+                                in: Capsule()
+                            )
                         Menu {
                             Picker(
                                 UpdateLocalization.text(ru: "Вид", en: "View"),
@@ -751,6 +769,7 @@ struct SelectiveRemoteTeamHostsView: View {
                         ))
                     }
                     .padding(16)
+                    .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.035))
                     Divider()
 
                     if store.hosts.isEmpty {
@@ -1002,6 +1021,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                 let targetID = teamHostHostDropTargetID(host.id)
                                 hostRow(host)
                                     .tag(host.id)
+                                    .listRowBackground(Color.clear)
+                                    .listRowSeparator(.hidden)
                                     .contentShape(Rectangle())
                                     .contextMenu { teamHostContextMenu(host) }
                                     .draggable("team-host:\(host.id.uuidString)")
@@ -1149,20 +1170,10 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 92, alignment: .topLeading)
         .padding(12)
-        .background(
-            selectedHostID == host.id
-                ? Color.accentColor.opacity(0.14)
-                : Color.primary.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        .selectiveRemoteWorkspaceSurface(
+            cornerRadius: 12,
+            selected: selectedHostID == host.id
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(
-                    selectedHostID == host.id
-                        ? Color.accentColor.opacity(0.65)
-                        : Color.primary.opacity(0.08)
-                )
-        }
         .contentShape(Rectangle())
     }
 
@@ -1246,7 +1257,12 @@ struct SelectiveRemoteTeamHostsView: View {
                     .lineLimit(1)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 7)
+        .selectiveRemoteWorkspaceSurface(
+            cornerRadius: 11,
+            selected: selectedHostID == host.id
+        )
     }
 
     @ViewBuilder

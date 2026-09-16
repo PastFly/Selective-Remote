@@ -410,8 +410,8 @@ struct ContentView: View {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color(red: 0.12, green: 0.62, blue: 0.78),
-                                        Color(red: 0.25, green: 0.35, blue: 0.88)
+                                        SelectiveRemoteWorkspaceChrome.accent,
+                                        Color(red: 0.12, green: 0.52, blue: 0.46)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -422,7 +422,11 @@ struct ContentView: View {
                             .foregroundStyle(.white)
                     }
                     .frame(width: 42, height: 42)
-                    .shadow(color: Color.blue.opacity(0.22), radius: 8, y: 4)
+                    .shadow(
+                        color: SelectiveRemoteWorkspaceChrome.accent.opacity(0.20),
+                        radius: 10,
+                        y: 4
+                    )
 
                     VStack(alignment: .leading, spacing: 2) {
                         Text(AppBrand.name)
@@ -582,12 +586,15 @@ struct ContentView: View {
                             en: "Cloud Management"
                         ))
                         Spacer()
+                        Circle()
+                            .fill(cloudSessionAvailable ? Color.green : Color.secondary.opacity(0.45))
+                            .frame(width: 7, height: 7)
                     }
                     .padding(.horizontal, 11)
                     .frame(height: 34)
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: false))
                 .help(UpdateLocalization.text(
                     ru: "Аккаунт, команды и Team Vaults",
                     en: "Account, Teams, and Team Vaults"
@@ -632,13 +639,7 @@ struct ContentView: View {
                         .frame(height: 34)
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
-                    .background(
-                        mainArea == area
-                            ? Color.accentColor.opacity(0.18)
-                            : Color.clear,
-                        in: RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    )
+                    .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: mainArea == area))
                 }
 
                 Menu {
@@ -858,6 +859,18 @@ struct ContentView: View {
                 .padding(12)
             }
         }
+        .background {
+            LinearGradient(
+                colors: [
+                    SelectiveRemoteWorkspaceChrome.accent.opacity(0.055),
+                    Color(nsColor: .controlBackgroundColor).opacity(0.32),
+                    Color.clear
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            .ignoresSafeArea()
+        }
         .background(.ultraThinMaterial)
         .overlay(alignment: .trailing) {
             Rectangle()
@@ -943,6 +956,8 @@ struct ContentView: View {
                         } label: {
                             ProfileRow(
                                 profile: item,
+                                isSelected: showsPersonalHostSelection(on: surface)
+                                    && model.selectedProfileID == item.id,
                                 session: model.sessions[item.id],
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
                                 activeTunnelCount: activeTunnelCount(for: item.id)
@@ -951,11 +966,9 @@ struct ContentView: View {
                         .buttonStyle(.plain)
                         .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                         .listRowBackground(
-                            showsPersonalHostSelection(on: surface)
-                                && model.selectedProfileID == item.id
-                                ? Color.accentColor.opacity(0.24)
-                                : Color.clear
+                            Color.clear
                         )
+                        .listRowSeparator(.hidden)
                         .overlay(alignment: .top) {
                             personalHostInsertionIndicator(for: item.id)
                         }
@@ -1423,8 +1436,21 @@ struct ContentView: View {
         HSplitView {
             if personalHostNavigatorVisible {
                 VStack(spacing: 0) {
-                    HStack {
+                    HStack(spacing: 12) {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(SelectiveRemoteWorkspaceChrome.accent.opacity(0.14))
+                            Image(systemName: "server.rack")
+                                .font(.system(size: 18, weight: .semibold))
+                                .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
+                        }
+                        .frame(width: 42, height: 42)
+
                         VStack(alignment: .leading, spacing: 2) {
+                            Text(UpdateLocalization.text(ru: "PERSONAL VAULT", en: "PERSONAL VAULT"))
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .tracking(1.3)
+                                .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
                             Text(UpdateLocalization.text(ru: "Все личные хосты", en: "All Personal Hosts"))
                                 .font(.headline)
                             Text(UpdateLocalization.text(
@@ -1437,7 +1463,46 @@ struct ContentView: View {
                         Spacer()
                         Text("\(model.profileGroups.reduce(0) { $0 + $1.profiles.count })")
                             .font(.caption.bold().monospacedDigit())
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
+                            .padding(.horizontal, 9)
+                            .padding(.vertical, 5)
+                            .background(
+                                SelectiveRemoteWorkspaceChrome.accent.opacity(0.11),
+                                in: Capsule()
+                            )
+                        Menu {
+                            Button(
+                                UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
+                                systemImage: "desktopcomputer"
+                            ) {
+                                model.addProfile(connectionType: .rdp)
+                            }
+                            Button(
+                                UpdateLocalization.text(ru: "Новый SSH", en: "New SSH"),
+                                systemImage: "terminal"
+                            ) {
+                                model.addProfile(connectionType: .ssh)
+                            }
+                            Button(
+                                UpdateLocalization.text(ru: "Новый Telnet", en: "New Telnet"),
+                                systemImage: "network"
+                            ) {
+                                model.addProfile(connectionType: .telnet)
+                            }
+                            Button(
+                                UpdateLocalization.text(ru: "Новый Serial", en: "New Serial"),
+                                systemImage: "cable.connector"
+                            ) {
+                                model.addProfile(connectionType: .serial)
+                            }
+                        } label: {
+                            Label(
+                                UpdateLocalization.text(ru: "Новый Host", en: "New Host"),
+                                systemImage: "plus"
+                            )
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
                         Menu {
                             Picker(
                                 UpdateLocalization.text(ru: "Вид", en: "View"),
@@ -1493,6 +1558,7 @@ struct ContentView: View {
                         ))
                     }
                     .padding(16)
+                    .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.035))
                     Divider()
                     profileTagFilterBar
                     profileCollection(surface: .navigator)
@@ -1901,7 +1967,7 @@ struct ContentView: View {
         ZStack(alignment: .topLeading) {
             LinearGradient(
                 colors: [
-                    Color(red: 0.10, green: 0.52, blue: 0.72).opacity(0.08),
+                    SelectiveRemoteWorkspaceChrome.accent.opacity(0.075),
                     Color(nsColor: .windowBackgroundColor),
                     Color(nsColor: .windowBackgroundColor)
                 ],
@@ -5430,6 +5496,7 @@ private struct SelectiveRemoteCloudOnboardingSheet: View {
 
 private struct ProfileRow: View {
     let profile: ConnectionProfile
+    let isSelected: Bool
     let session: RDPSessionSummary?
     let hasActiveSSH: Bool
     let activeTunnelCount: Int
@@ -5492,7 +5559,9 @@ private struct ProfileRow: View {
         }
         .fixedSize(horizontal: false, vertical: true)
         .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 5)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contentShape(Rectangle())
     }
 
@@ -5580,17 +5649,7 @@ private struct ProfileGridCard: View {
         }
         .padding(9)
         .frame(maxWidth: .infinity, minHeight: 120, alignment: .topLeading)
-        .background(
-            isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 13, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(
-                    isSelected ? Color.accentColor.opacity(0.75) : Color.primary.opacity(0.08),
-                    lineWidth: isSelected ? 1.5 : 1
-                )
-        }
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 13, selected: isSelected)
     }
 }
 
