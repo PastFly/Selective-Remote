@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=174">
-  <script src="/i18n.js?v=174"></script>
+  <link rel="stylesheet" href="/styles.css?v=175">
+  <script src="/i18n.js?v=175"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -551,12 +551,6 @@
           </form>
         </section>
       </div>
-      <nav class="workspace-mobile-nav" aria-label="Мобильная навигация Cloud">
-        <button type="button" class="active" data-workspace-target="workspace-overview" data-mobile-nav><span aria-hidden="true">⌂</span>Обзор</button>
-        <button type="button" data-workspace-target="local-vault" data-record-filter="all" data-mobile-nav><span aria-hidden="true">⌁</span>Vault</button>
-        <button type="button" data-workspace-target="team-vault" data-mobile-nav><span aria-hidden="true">◎</span>Команды</button>
-        <button type="button" id="workspace-mobile-account-open"><span aria-hidden="true">◉</span>Аккаунт</button>
-      </nav>
     </section>
 
     <section class="workspace-panel workspace-devices" id="workspace-devices" hidden>
@@ -948,6 +942,12 @@
       </div>
     </section>
 
+        <nav class="workspace-mobile-nav" aria-label="Мобильная навигация Cloud">
+          <button type="button" class="active" data-workspace-target="workspace-overview" data-mobile-nav><span aria-hidden="true">⌂</span>Обзор</button>
+          <button type="button" data-workspace-target="local-vault" data-record-filter="all" data-mobile-nav><span aria-hidden="true">⌁</span>Vault</button>
+          <button type="button" data-workspace-target="team-vault" data-mobile-nav><span aria-hidden="true">◎</span>Команды</button>
+          <button type="button" id="workspace-mobile-account-open"><span aria-hidden="true">◉</span>Аккаунт</button>
+        </nav>
       </div>
     </section>
 
@@ -987,6 +987,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=174"></script>
+  <script type="module" src="/app.js?v=175"></script>
 </body>
 </html>
