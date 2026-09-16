@@ -65,6 +65,36 @@ extension View {
     }
 }
 
+struct ProfileCollectionDisplayModeMenuItems: View {
+    @Binding var selection: ProfileCollectionDisplayMode
+
+    var body: some View {
+        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+            Button {
+                selection = mode
+            } label: {
+                Label(
+                    mode.title,
+                    systemImage: selection == mode ? "checkmark" : mode.systemImage
+                )
+            }
+        }
+    }
+}
+
+struct SelectiveRemoteCompactAddMenuLabel: View {
+    var body: some View {
+        Image(systemName: "plus")
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 28)
+            .background(
+                SelectiveRemoteWorkspaceChrome.accentStrong,
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+    }
+}
+
 struct SelectiveRemoteNavigationButtonStyle: ButtonStyle {
     @Environment(\.colorScheme) private var colorScheme
     let selected: Bool

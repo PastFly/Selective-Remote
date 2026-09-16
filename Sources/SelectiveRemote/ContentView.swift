@@ -232,7 +232,11 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .navigationSplitViewColumnWidth(min: 265, ideal: 350, max: 520)
+                .navigationSplitViewColumnWidth(
+                    min: showsHostQuickAccess ? 265 : 205,
+                    ideal: showsHostQuickAccess ? 350 : 235,
+                    max: showsHostQuickAccess ? 520 : 280
+                )
         } detail: {
             detail
         }
@@ -762,11 +766,9 @@ struct ContentView: View {
                 Spacer()
 
                 Menu {
-                    Picker("Вид подключений", selection: $model.profileCollectionDisplayMode) {
-                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                        }
-                    }
+                    ProfileCollectionDisplayModeMenuItems(
+                        selection: $model.profileCollectionDisplayMode
+                    )
                 } label: {
                     Image(systemName: model.profileCollectionDisplayMode.systemImage)
                 }
@@ -827,14 +829,7 @@ struct ContentView: View {
                     Spacer()
 
                     Menu {
-                        Picker(
-                            UpdateLocalization.text(ru: "Вид", en: "View"),
-                            selection: $teamHostDisplayMode
-                        ) {
-                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                                Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                            }
-                        }
+                        ProfileCollectionDisplayModeMenuItems(selection: $teamHostDisplayMode)
                     } label: {
                         Image(systemName: teamHostDisplayMode.systemImage)
                     }
@@ -980,7 +975,8 @@ struct ContentView: View {
                                     && model.selectedProfileID == item.id,
                                 session: model.sessions[item.id],
                                 hasActiveSSH: model.isSSHTerminalRunning(profileID: item.id),
-                                activeTunnelCount: activeTunnelCount(for: item.id)
+                                activeTunnelCount: activeTunnelCount(for: item.id),
+                                compact: surface == .sidebar
                             )
                         }
                         .buttonStyle(.plain)
@@ -1628,21 +1624,16 @@ struct ContentView: View {
                         systemImage: "cable.connector"
                     ) { model.addProfile(connectionType: .serial) }
                 } label: {
-                    Image(systemName: "plus")
+                    SelectiveRemoteCompactAddMenuLabel()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 .help(UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"))
 
                 Menu {
-                    Picker(
-                        UpdateLocalization.text(ru: "Вид", en: "View"),
+                    ProfileCollectionDisplayModeMenuItems(
                         selection: $model.profileCollectionDisplayMode
-                    ) {
-                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                        }
-                    }
+                    )
                     Divider()
                     Picker(
                         UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
@@ -5563,8 +5554,42 @@ private struct ProfileRow: View {
     let session: RDPSessionSummary?
     let hasActiveSSH: Bool
     let activeTunnelCount: Int
+    let compact: Bool
 
+    @ViewBuilder
     var body: some View {
+        if compact {
+            rowContent
+                .frame(minHeight: 38, alignment: .leading)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 2)
+                .background(
+                    isSelected
+                        ? SelectiveRemoteWorkspaceChrome.accent.opacity(0.14)
+                        : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 9, style: .continuous)
+                )
+                .overlay {
+                    if isSelected {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(
+                                SelectiveRemoteWorkspaceChrome.accent.opacity(0.48),
+                                lineWidth: 1
+                            )
+                    }
+                }
+                .contentShape(Rectangle())
+        } else {
+            rowContent
+                .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 5)
+                .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
+                .contentShape(Rectangle())
+        }
+    }
+
+    private var rowContent: some View {
         HStack(spacing: 12) {
             ProfileOperatingSystemBadge(
                 profile: profile,
@@ -5621,11 +5646,6 @@ private struct ProfileRow: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
-        .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
-        .contentShape(Rectangle())
     }
 
     private var inactiveProfileSubtitle: String {

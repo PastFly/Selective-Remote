@@ -988,10 +988,10 @@ struct SelectiveRemoteTeamHostsView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "plus")
+                    SelectiveRemoteCompactAddMenuLabel()
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
+                .menuStyle(.borderlessButton)
+                .fixedSize()
                 .disabled(writableVaults.isEmpty || isMutating)
                 .help(UpdateLocalization.text(
                     ru: "Добавить Host в Team Vault",
@@ -999,14 +999,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 ))
 
                 Menu {
-                    Picker(
-                        UpdateLocalization.text(ru: "Вид", en: "View"),
-                        selection: $displayMode
-                    ) {
-                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                        }
-                    }
+                    ProfileCollectionDisplayModeMenuItems(selection: $displayMode)
                     Divider()
                     Picker(
                         UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
