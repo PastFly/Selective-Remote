@@ -7,7 +7,7 @@ const css = await readFile(new URL("../public/styles.css", import.meta.url), "ut
 const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
 
 test("public portal exposes a persistent RU and EN locale switch", () => {
-  assert.match(html, /\/i18n\.js\?v=171/);
+  assert.match(html, /\/i18n\.js\?v=172/);
   assert.match(i18n, /selective-remote\.locale\.v1/);
   assert.match(i18n, /navigator\.language/);
   assert.match(i18n, /URLSearchParams\(location\.search\)/);

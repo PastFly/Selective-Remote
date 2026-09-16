@@ -317,6 +317,95 @@ function setText(element, value) {
   if (element) element.textContent = value;
 }
 
+const collapsedVaultFoldersState = new Map();
+
+function collapsedVaultFolders(scope) {
+  return new Set(collapsedVaultFoldersState.get(scope) ?? []);
+}
+
+function persistCollapsedVaultFolders(scope, folders) {
+  collapsedVaultFoldersState.set(scope, [...folders]);
+}
+
+function appendVaultFolderGroup({ documentValue, container, name, scope }) {
+  const collapsed = collapsedVaultFolders(scope);
+  const group = documentValue.createElement("section");
+  const heading = documentValue.createElement("button");
+  const content = documentValue.createElement("div");
+  const isCollapsed = collapsed.has(name);
+  group.className = "vault-folder-group";
+  heading.type = "button";
+  heading.className = "vault-folder-heading";
+  heading.textContent = name;
+  heading.setAttribute("aria-expanded", String(!isCollapsed));
+  content.className = "vault-folder-content";
+  content.hidden = isCollapsed;
+  heading.addEventListener("click", () => {
+    const nextCollapsed = !content.hidden;
+    content.hidden = nextCollapsed;
+    heading.setAttribute("aria-expanded", String(!nextCollapsed));
+    const next = collapsedVaultFolders(scope);
+    if (nextCollapsed) next.add(name); else next.delete(name);
+    persistCollapsedVaultFolders(scope, next);
+  });
+  group.append(heading, content);
+  container.append(group);
+  return content;
+}
+
+export function vaultResourceDetail(record) {
+  const type = String(record?.type ?? "record");
+  const data = record?.data ?? {};
+  const labels = {
+    credential: ["Credential", "Имя пользователя", "Секрет"],
+    snippet: ["Snippet", "Команда", "Текст Snippet"],
+    forwarding: ["Forwarding", "Назначение", "Параметры"],
+  };
+  const [typeLabel, targetLabel, contentLabel] = labels[type] ?? [type, "Значение", "Содержимое"];
+  const contentValue = String(type === "snippet" ? data.body ?? "" : type === "forwarding" ? data.configuration ?? "" : data.secret ?? "");
+  return {
+    title: String(data.title ?? "Без названия"), type, typeLabel, targetLabel, contentLabel,
+    target: type === "snippet" ? "Shell" : String(data.username ?? data.destination ?? data.address ?? "—"),
+    content: type === "credential" ? "••••••••" : contentValue || "—",
+    copyValue: contentValue,
+    modified: formatVaultTimestamp(record?.modifiedAt),
+  };
+}
+
+function showVaultResourceDetail({ documentValue, record, scopeLabel, editable = true, onEdit, onStatus }) {
+  const dialog = documentValue.querySelector("#resource-detail-dialog");
+  if (!dialog) return;
+  if (dialog.parentElement !== documentValue.body) documentValue.body.append(dialog);
+  const detail = vaultResourceDetail(record);
+  setText(documentValue.querySelector("#resource-detail-eyebrow"), `${detail.typeLabel.toUpperCase()} · ${scopeLabel}`);
+  setText(documentValue.querySelector("#resource-detail-title"), detail.title);
+  setText(documentValue.querySelector("#resource-detail-type"), detail.typeLabel);
+  setText(documentValue.querySelector("#resource-detail-target-label"), detail.targetLabel);
+  setText(documentValue.querySelector("#resource-detail-target"), detail.target);
+  setText(documentValue.querySelector("#resource-detail-modified"), detail.modified);
+  setText(documentValue.querySelector("#resource-detail-content-label"), detail.contentLabel);
+  setText(documentValue.querySelector("#resource-detail-content"), detail.content);
+  const copy = documentValue.querySelector("#resource-detail-copy");
+  const edit = documentValue.querySelector("#resource-detail-edit");
+  const copyValue = async () => {
+    if (!detail.copyValue) return;
+    try {
+      await documentValue.defaultView.navigator.clipboard.writeText(detail.copyValue);
+      onStatus?.("Значение скопировано локально. Cloud plaintext не получал.");
+    } catch { onStatus?.("Браузер не разрешил доступ к буферу обмена."); }
+  };
+  copy.hidden = !detail.copyValue;
+  copy.onclick = copyValue;
+  edit.hidden = !editable;
+  edit.onclick = () => { dialog.close?.(); onEdit?.(record); };
+  dialog.onkeydown = (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "c" && detail.copyValue) {
+      event.preventDefault(); void copyValue();
+    }
+  };
+  dialog.showModal?.();
+}
+
 export function createConfirmationRequester({ documentValue = document, confirmValue = null } = {}) {
   return async (options) => {
     const configuration = typeof options === "string" ? { message: options } : (options ?? {});
@@ -360,6 +449,7 @@ export async function initializeLocalVault({
   const message = documentValue.querySelector("#local-vault-message");
   const records = documentValue.querySelector("#local-vault-records");
   const recordForm = documentValue.querySelector("#local-vault-record-form");
+  const editorDialog = documentValue.querySelector("#local-record-editor-dialog");
   const search = documentValue.querySelector("#personal-vault-search");
   const sort = documentValue.querySelector("#personal-vault-sort");
   const folderFilter = documentValue.querySelector("#personal-vault-folder-filter");
@@ -396,6 +486,7 @@ export async function initializeLocalVault({
   const hostDetailFolder = documentValue.querySelector("#host-detail-folder");
   const hostDetailTags = documentValue.querySelector("#host-detail-tags");
   const hostDetailDescription = documentValue.querySelector("#host-detail-description");
+  const hostDetailCopy = documentValue.querySelector("#host-detail-copy");
   const hostDetailEdit = documentValue.querySelector("#host-detail-edit");
   const hostDetailCopyPassword = documentValue.querySelector("#host-detail-copy-password");
   const hostDetailOpenSSH = documentValue.querySelector("#host-detail-open-ssh");
@@ -422,7 +513,7 @@ export async function initializeLocalVault({
   function resetEditor({ hide = true } = {}) {
     editingRecordID = null;
     recordForm.reset();
-    recordForm.hidden = hide;
+    if (hide) editorDialog?.close?.();
     type.disabled = false;
     saveButton.textContent = "Зашифровать и сохранить";
     cancelButton.textContent = "Отменить";
@@ -441,14 +532,14 @@ export async function initializeLocalVault({
     cancelButton.textContent = "Отменить создание";
     updateLabels();
     setText(message, "Новая запись. Заполните поля и сохраните зашифрованную версию.");
-    recordForm.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    editorDialog?.showModal?.();
     title.focus?.();
   }
 
   function beginEdit(record) {
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
-    recordForm.hidden = false;
+    editorDialog?.showModal?.();
     type.value = record.type;
     type.disabled = true;
     title.value = values.title;
@@ -473,7 +564,6 @@ export async function initializeLocalVault({
       ? "Основные поля и организация Host синхронизируются с приложением. Расширенные SSH/RDP-параметры сохраняются без изменений."
       : "Измените нужные поля и сохраните новую зашифрованную версию записи.");
     updateLabels();
-    recordForm.scrollIntoView?.({ behavior: "smooth", block: "center" });
     title.focus?.();
     setText(message, `Редактирование: ${String(record.data?.title ?? "Без названия")}.`);
   }
@@ -579,13 +669,13 @@ export async function initializeLocalVault({
       return;
     }
     let renderedFolder = null;
+    let folderContent = null;
     for (const record of visibleRecords) {
       if (activeRecordFilter === "host" && hostFolderName(record) !== renderedFolder) {
-        const folderHeading = documentValue.createElement("h3");
-        folderHeading.className = "personal-vault-folder-heading";
-        folderHeading.textContent = hostFolderName(record);
-        records.append(folderHeading);
         renderedFolder = hostFolderName(record);
+        folderContent = appendVaultFolderGroup({
+          documentValue, container: records, name: renderedFolder, scope: "personal-hosts",
+        });
       }
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
@@ -627,12 +717,12 @@ export async function initializeLocalVault({
           remove.disabled = false;
         }
       });
-      if (record.type === "host") {
-        card.classList.add("resource-card", "resource-card-clickable");
-        card.tabIndex = 0;
-        card.setAttribute("role", "button");
-        card.setAttribute("aria-label", `Открыть Host ${heading.textContent}`);
-        const openHost = () => {
+      card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      const openResource = () => {
+        if (record.type === "host") {
           setText(hostDetailTitle, String(record.data.title ?? "Host"));
           setText(hostDetailAddress, String(record.data.address ?? "—"));
           setText(hostDetailModified, formatVaultTimestamp(record.modifiedAt));
@@ -644,26 +734,38 @@ export async function initializeLocalVault({
           setText(hostDetailFolder, connection.folder || "Без папки");
           setText(hostDetailTags, connection.tags || "—");
           setText(hostDetailDescription, connection.description || "—");
+          hostDetailCopy.hidden = false;
+          hostDetailCopy.onclick = async () => {
+            try {
+              await documentValue.defaultView.navigator.clipboard.writeText(String(record.data.address ?? ""));
+              setText(message, "Адрес Host скопирован без передачи в Cloud.");
+            } catch { setText(message, "Браузер не разрешил доступ к буферу обмена."); }
+          };
           hostDetailEdit.hidden = false;
           hostDetailEdit.onclick = () => { hostDetail.close?.(); beginEdit(record); };
           hostDetailCopyPassword.hidden = true;
           hostDetailOpenSSH.hidden = true;
           hostDetailOpenSFTP.hidden = true;
           hostDetail?.showModal();
-        };
-        card.addEventListener("click", (event) => {
-          if (event.target === remove || event.target === edit) return;
-          openHost();
+          return;
+        }
+        showVaultResourceDetail({
+          documentValue, record, scopeLabel: "PERSONAL VAULT", onEdit: beginEdit,
+          onStatus: (value) => setText(message, value),
         });
-        card.addEventListener("keydown", (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault();
-          openHost();
-        });
-      }
+      };
+      card.addEventListener("click", (event) => {
+        if (event.target === remove || event.target === edit) return;
+        openResource();
+      });
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        openResource();
+      });
       actions.append(edit, remove);
       card.append(heading, summary, metadata, actions);
-      records.append(card);
+      (folderContent ?? records).append(card);
     }
   }
 
@@ -942,6 +1044,7 @@ export function initializeTeamWorkspace({
   const teamSelect = documentValue.querySelector("#team-select");
   const teamRefresh = documentValue.querySelector("#team-refresh");
   const selectedPanel = documentValue.querySelector("#team-selected");
+  const teamSummary = documentValue.querySelector("#team-selected .team-summary");
   const teamRole = documentValue.querySelector("#team-role");
   const members = documentValue.querySelector("#team-members");
   const membersView = documentValue.querySelector("#team-members-view");
@@ -978,6 +1081,8 @@ export function initializeTeamWorkspace({
   const recordForm = documentValue.querySelector("#team-vault-record-form");
   const recordEditor = documentValue.querySelector("#team-record-editor");
   const recordEditorSummary = documentValue.querySelector("#team-record-editor-summary");
+  const recordCreate = documentValue.querySelector("#team-record-create");
+  const recordCancel = documentValue.querySelector("#team-record-cancel");
   const recordType = documentValue.querySelector("#team-record-type");
   const recordTitle = documentValue.querySelector("#team-record-title");
   const recordTarget = documentValue.querySelector("#team-record-target");
@@ -1044,7 +1149,7 @@ export function initializeTeamWorkspace({
   let workspaceRefreshOperation = null;
   let backgroundMaintenanceOperation = null;
   let vaultOperation = null;
-  let editingHostID = null;
+  let editingRecordID = null;
   let detailedHostID = null;
 
   function renderOverviewSummary() {
@@ -1087,11 +1192,11 @@ export function initializeTeamWorkspace({
 
   function setRecoveryControls(mode = "none") {
     const retriesSynchronization = mode === "synchronize" || mode === "access";
-    syncButton.hidden = !retriesSynchronization;
-    syncButton.disabled = !retriesSynchronization || !controller;
+    syncButton.hidden = false;
+    syncButton.disabled = !controller;
     syncButton.textContent = mode === "access"
       ? "Проверить доступ снова"
-      : "Повторить безопасную синхронизацию";
+      : retriesSynchronization ? "Повторить безопасную синхронизацию" : "Синхронизировать";
     grantWrappersButton.hidden = mode !== "wrappers";
     grantWrappersButton.disabled = mode !== "wrappers" || !controller || selectedVault?.rotationRequired;
   }
@@ -1165,37 +1270,64 @@ export function initializeTeamWorkspace({
     hostFields.hidden = recordType.value !== "host";
     hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
     const createLabels = { all: "Добавить запись", host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
-    setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
+    setText(recordEditorSummary, editingRecordID ? "Редактировать запись" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
   }
 
-  function beginHostEdit(record) {
-    const connection = parseTeamHostConnection(record.data);
-    const organization = teamHostOrganizationValues(record);
-    editingHostID = record.id;
-    recordType.value = "host";
-    recordTitle.value = String(record.data.title ?? "");
-    recordTarget.value = connection.host;
-    hostProtocol.value = connection.protocol;
-    hostPort.value = String(connection.port);
-    hostUsername.value = connection.username;
-    hostPassword.value = "";
-    hostRemovePassword.checked = false;
-    hostFolder.value = organization.folder;
-    hostTags.value = organization.tags.join(", ");
-    hostDescription.value = organization.description;
-    const advanced = Boolean(record.data.profile);
-    recordTitle.disabled = advanced;
-    recordTarget.disabled = advanced;
-    hostProtocol.disabled = advanced;
-    hostPort.disabled = advanced;
-    hostUsername.disabled = advanced;
+  function resetRecordEditor() {
+    editingRecordID = null;
+    recordForm.reset();
+    recordTitle.disabled = false;
+    recordTarget.disabled = false;
+    hostProtocol.disabled = false;
+    hostPort.disabled = false;
+    hostUsername.disabled = false;
+    if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
+    recordType.disabled = activeView === "hosts" && activeRecordFilter !== "all";
     updateRecordLabels();
-    recordEditor.open = true;
-    recordEditor.scrollIntoView({ behavior: "smooth", block: "start" });
+    recordEditor?.close?.();
+  }
+
+  function beginRecordCreate() {
+    resetRecordEditor();
+    if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
+    updateRecordLabels();
+    recordEditor?.showModal?.();
     recordTitle.focus();
-    setText(workspaceStatus, advanced
-      ? "Полный профиль создан в приложении: в браузере можно менять папку, теги и описание."
-      : "Измените Host и сохраните зашифрованную запись.");
+  }
+
+  function beginRecordEdit(record) {
+    const values = localVaultRecordFormValues(record);
+    editingRecordID = record.id;
+    recordType.value = record.type;
+    recordType.disabled = true;
+    recordTitle.value = values.title;
+    recordTarget.value = values.target;
+    recordSecret.value = values.secret;
+    if (record.type === "host") {
+      const connection = parseTeamHostConnection(record.data);
+      const organization = teamHostOrganizationValues(record);
+      recordTarget.value = connection.host;
+      hostProtocol.value = connection.protocol;
+      hostPort.value = String(connection.port);
+      hostUsername.value = connection.username;
+      hostPassword.value = "";
+      hostRemovePassword.checked = false;
+      hostFolder.value = organization.folder;
+      hostTags.value = organization.tags.join(", ");
+      hostDescription.value = organization.description;
+      const advanced = Boolean(record.data.profile);
+      recordTitle.disabled = advanced;
+      recordTarget.disabled = advanced;
+      hostProtocol.disabled = advanced;
+      hostPort.disabled = advanced;
+      hostUsername.disabled = advanced;
+      setText(workspaceStatus, advanced
+        ? "Полный профиль создан в приложении: в браузере можно менять папку, теги и описание."
+        : "Измените Host и сохраните зашифрованную запись.");
+    }
+    updateRecordLabels();
+    recordEditor?.showModal?.();
+    recordTitle.focus();
   }
 
   function hostCredentials(hostID) {
@@ -1258,14 +1390,15 @@ export function initializeTeamWorkspace({
       return;
     }
     let renderedFolder = null;
+    let folderContent = null;
     for (const record of visibleRecords.sort((a, b) => activeView === "hosts" && activeRecordFilter === "host" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
       const folderName = hostFolderName(record);
       if (activeView === "hosts" && activeRecordFilter === "host" && folderName !== renderedFolder) {
-        const folderHeading = documentValue.createElement("h3");
-        folderHeading.className = "team-host-folder-heading";
-        folderHeading.textContent = folderName;
-        records.append(folderHeading);
         renderedFolder = folderName;
+        folderContent = appendVaultFolderGroup({
+          documentValue, container: records, name: renderedFolder,
+          scope: `team-hosts:${selectedTeam?.id ?? "unknown"}:${selectedVault?.id ?? "unknown"}`,
+        });
       }
       const card = documentValue.createElement("article");
       const heading = documentValue.createElement("h4");
@@ -1285,8 +1418,14 @@ export function initializeTeamWorkspace({
       edit.className = "secondary record-edit";
       edit.textContent = "Изменить";
       edit.disabled = !canEdit();
-      edit.addEventListener("click", (event) => { event.stopPropagation(); beginHostEdit(record); });
+      edit.addEventListener("click", (event) => { event.stopPropagation(); beginRecordEdit(record); });
       remove.addEventListener("click", async () => {
+        if (!await requestConfirmation({
+          title: "Удалить запись?",
+          message: `«${heading.textContent}» будет удалена из Team Vault у всех участников.`,
+          confirmLabel: "Удалить",
+          danger: true,
+        })) return;
         remove.disabled = true;
         try {
           for (const credential of hostCredentials(record.id)) await controller.delete(credential.id);
@@ -1299,11 +1438,11 @@ export function initializeTeamWorkspace({
           remove.disabled = !canEdit();
         }
       });
-      if (record.type === "host") {
-        card.classList.add("resource-card", "resource-card-clickable");
-        card.tabIndex = 0;
-        card.setAttribute("role", "button");
-        const openHost = () => {
+      card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      const openResource = () => {
+        if (record.type === "host") {
           const connection = parseTeamHostConnection(record.data);
           const organization = teamHostOrganizationValues(record);
           const credentials = hostCredentials(record.id);
@@ -1323,20 +1462,48 @@ export function initializeTeamWorkspace({
           hostDetailCopyPassword.hidden = credentials.length === 0;
           hostDetailOpenSSH.hidden = connection.protocol !== "ssh";
           hostDetailOpenSFTP.hidden = connection.protocol !== "ssh";
+          hostDetailCopy.onclick = async () => {
+            try {
+              await documentValue.defaultView.navigator.clipboard.writeText(hostDetailAddress.textContent);
+              setText(workspaceStatus, "Адрес Host скопирован без передачи в Cloud.");
+            } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
+          };
+          hostDetailEdit.onclick = () => { hostDetail.close(); beginRecordEdit(record); };
+          hostDetailCopyPassword.onclick = async () => {
+            const credential = credentials[0];
+            if (!credential) return;
+            try {
+              await documentValue.defaultView.navigator.clipboard.writeText(String(credential.data.secret ?? ""));
+              setText(workspaceStatus, "Пароль Host скопирован локально. Cloud plaintext не получал.");
+            } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
+          };
+          hostDetailOpenSSH.onclick = () => {
+            const target = detailConnectionURL("ssh");
+            if (target) documentValue.defaultView.location.href = target;
+          };
+          hostDetailOpenSFTP.onclick = () => {
+            const target = detailConnectionURL("ssh");
+            if (target) documentValue.defaultView.location.href = target.replace(/^ssh:/u, "sftp:");
+          };
           hostDetail?.showModal();
-        };
-        card.addEventListener("click", (event) => { if (event.target !== remove && event.target !== edit) openHost(); });
-        card.addEventListener("keydown", (event) => {
-          if (event.key !== "Enter" && event.key !== " ") return;
-          event.preventDefault(); openHost();
+          return;
+        }
+        showVaultResourceDetail({
+          documentValue, record, scopeLabel: "TEAM VAULT", editable: canEdit(), onEdit: beginRecordEdit,
+          onStatus: (value) => setText(workspaceStatus, value),
         });
-      }
+      };
+      card.addEventListener("click", (event) => { if (event.target !== remove && event.target !== edit) openResource(); });
+      card.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault(); openResource();
+      });
       const actions = documentValue.createElement("div");
       actions.className = "record-actions";
-      if (record.type === "host") actions.append(edit);
+      actions.append(edit);
       actions.append(remove);
       card.append(heading, summary, metadata, actions);
-      records.append(card);
+      (folderContent ?? records).append(card);
     }
   }
 
@@ -1989,6 +2156,7 @@ export function initializeTeamWorkspace({
     controller = null;
     selectedVault = null;
     workspace.hidden = true;
+    recordCreate.hidden = true;
     rotateButton.hidden = true;
     rotateButton.disabled = true;
     setRecoveryControls("none");
@@ -2028,7 +2196,10 @@ export function initializeTeamWorkspace({
       });
     }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
+    if (teamSummary) teamSummary.hidden = activeView === "hosts";
     workspace.hidden = activeView !== "hosts" || !controller;
+    recordCreate.hidden = activeView !== "hosts" || !controller;
+    recordCreate.disabled = !controller || !canEdit();
     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
     if (controller) {
@@ -2053,6 +2224,8 @@ export function initializeTeamWorkspace({
       scope,
     });
     workspace.hidden = activeView !== "hosts";
+    recordCreate.hidden = activeView !== "hosts";
+    recordCreate.disabled = !canEdit();
     rotateButton.hidden = true;
     rotateButton.disabled = true;
     setRecoveryControls("none");
@@ -2098,6 +2271,7 @@ export function initializeTeamWorkspace({
     }
     selectedPanel.hidden = false;
     teamRole.textContent = `${selectedTeam.name} · ${teamRoleLabel(selectedTeam.role)}`;
+    teamSelect.title = "Роль определяет доступ к зашифрованным ресурсам.";
     inviteForm.hidden = !canManage();
     const adminInviteOption = [...inviteForm.elements.role.options]
       .find((option) => option.value === "admin");
@@ -2568,49 +2742,23 @@ export function initializeTeamWorkspace({
   hostProtocol.addEventListener("change", () => {
     hostPort.value = hostProtocol.value === "ssh" ? "22" : "3389";
   });
-  hostDetailCopy.addEventListener("click", async () => {
-    try {
-      await documentValue.defaultView.navigator.clipboard.writeText(hostDetailAddress.textContent);
-      setText(workspaceStatus, "Адрес Host скопирован без передачи в Cloud.");
-    } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
-  });
-  hostDetailEdit.addEventListener("click", () => {
-    const record = controller?.document().records.find((value) => value.id === detailedHostID && value.type === "host");
-    hostDetail.close();
-    if (record) beginHostEdit(record);
-  });
-  hostDetailCopyPassword.addEventListener("click", async () => {
-    const credential = hostCredentials(detailedHostID)[0];
-    if (!credential) return;
-    try {
-      await documentValue.defaultView.navigator.clipboard.writeText(String(credential.data.secret ?? ""));
-      setText(workspaceStatus, "Пароль Host скопирован локально. Cloud plaintext не получал.");
-    } catch { setText(workspaceStatus, "Браузер не разрешил доступ к буферу обмена."); }
-  });
-  hostDetailOpenSSH.addEventListener("click", () => {
-    const target = detailConnectionURL("ssh");
-    if (target) documentValue.defaultView.location.href = target;
-  });
-  hostDetailOpenSFTP.addEventListener("click", () => {
-    const target = detailConnectionURL("ssh");
-    if (target) documentValue.defaultView.location.href = target.replace(/^ssh:/u, "sftp:");
-  });
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     const button = recordForm.querySelector("button");
     button.disabled = true;
     try {
-      const existingHost = editingHostID
-        ? controller.document().records.find((value) => value.id === editingHostID && value.type === "host")
+      const existingRecord = editingRecordID
+        ? controller.document().records.find((value) => value.id === editingRecordID)
         : null;
+      const existingHost = existingRecord?.type === "host" ? existingRecord : null;
       const connection = recordType.value === "host" && !existingHost?.data?.profile
         ? teamHostConnectionData({
             protocol: hostProtocol.value, host: recordTarget.value,
             port: hostPort.value, username: hostUsername.value,
           })
         : null;
-      const hostID = await controller.upsert({
-        ...(editingHostID ? { id: editingHostID } : {}),
+      const recordID = await controller.upsert({
+        ...(editingRecordID ? { id: editingRecordID } : {}),
         type: recordType.value,
         data: recordType.value === "host"
           ? teamHostRecordData({
@@ -2620,13 +2768,11 @@ export function initializeTeamWorkspace({
           : localVaultRecordData(
               recordType.value,
               { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
-              editingHostID
-                ? controller.document().records.find((value) => value.id === editingHostID)?.data
-                : null,
+              existingRecord?.data,
             ),
       });
       if (recordType.value === "host") {
-        const credentials = hostCredentials(hostID);
+        const credentials = hostCredentials(recordID);
         if (hostRemovePassword.checked) {
           for (const credential of credentials) await controller.delete(credential.id);
         } else if (hostPassword.value) {
@@ -2637,22 +2783,13 @@ export function initializeTeamWorkspace({
             data: {
               title: `${recordTitle.value.trim()} · ${connectionValue.protocol}`,
               username: connectionValue.username, secret: hostPassword.value,
-              kind: connectionValue.protocol, sourceID: hostID,
+              kind: connectionValue.protocol, sourceID: recordID,
             },
           });
           for (const duplicate of credentials.slice(1)) await controller.delete(duplicate.id);
         }
       }
-      recordForm.reset();
-      editingHostID = null;
-      if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
-      recordTitle.disabled = false;
-      recordTarget.disabled = false;
-      hostProtocol.disabled = false;
-      hostPort.disabled = false;
-      hostUsername.disabled = false;
-      recordEditor.open = false;
-      updateRecordLabels();
+      resetRecordEditor();
       clearConflicts();
       rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();
       renderRecords();
@@ -2662,6 +2799,12 @@ export function initializeTeamWorkspace({
     } finally {
       button.disabled = !canEdit();
     }
+  });
+
+  recordCreate.addEventListener("click", beginRecordCreate);
+  recordCancel.addEventListener("click", () => {
+    resetRecordEditor();
+    setText(workspaceStatus, "Изменение отменено.");
   });
 
   syncButton.addEventListener("click", async () => {
