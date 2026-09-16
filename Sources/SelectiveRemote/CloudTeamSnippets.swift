@@ -17,6 +17,22 @@ enum SelectiveRemoteSnippetScope: String, CaseIterable, Identifiable {
     }
 }
 
+private enum SelectiveRemoteTeamSnippetSortMode: String, CaseIterable, Identifiable {
+    case name
+    case folder
+    case modifiedNewest
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .name: UpdateLocalization.text(ru: "По названию", en: "Name")
+        case .folder: UpdateLocalization.text(ru: "По папке", en: "Folder")
+        case .modifiedNewest: UpdateLocalization.text(ru: "Сначала новые", en: "Newest first")
+        }
+    }
+}
+
 struct SelectiveRemoteTeamSnippet: Identifiable, Equatable, Sendable {
     let id: UUID
     let recordID: UUID
@@ -31,6 +47,7 @@ struct SelectiveRemoteTeamSnippet: Identifiable, Equatable, Sendable {
     let modifiedDate: Date
     let title: String
     let body: String
+    let folder: String
 }
 
 struct SelectiveRemoteTeamSnippetVaultContext: Identifiable, Equatable, Sendable {
@@ -72,14 +89,30 @@ enum SelectiveRemoteTeamSnippetMaterializer {
 
         return try document.records.compactMap { record in
             guard record.type == .snippet else { return nil }
-            guard case let .object(data) = record.data,
-                  Set(data.keys) == Set(["title", "body"]),
+            guard case let .object(data) = record.data else {
+                throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
+            }
+            let keys = Set(data.keys)
+            guard keys == Set(["title", "body"])
+                    || keys == Set(["title", "body", "folder"]),
                   let title = string(data["title"]),
                   let body = string(data["body"]),
                   validTitle(title),
                   validBody(body),
                   let modifiedDate = timestamp(record.modifiedAt)
             else { throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord }
+            let folder: String
+            if data["folder"] != nil {
+                guard let value = string(data["folder"]) else {
+                    throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
+                }
+                folder = value
+            } else {
+                folder = ""
+            }
+            guard validFolder(folder) else {
+                throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
+            }
 
             return SelectiveRemoteTeamSnippet(
                 id: scopedID(
@@ -98,7 +131,8 @@ enum SelectiveRemoteTeamSnippetMaterializer {
                 modifiedAt: record.modifiedAt,
                 modifiedDate: modifiedDate,
                 title: title,
-                body: body
+                body: body,
+                folder: folder
             )
         }
     }
@@ -144,6 +178,12 @@ enum SelectiveRemoteTeamSnippetMaterializer {
                     && $0.value != 10
                     && $0.value != 13
             })
+    }
+
+    private static func validFolder(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value == trimmed && value.count <= 120
+            && !value.contains(where: { $0.isNewline })
     }
 
     private static func timestamp(_ value: String) -> Date? {
@@ -246,6 +286,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
     @State private var selectedVaultKey = ""
+    @State private var selectedFolder: String?
     @State private var copiedSnippetID: UUID?
     @State private var targetEditorSnippet: SelectiveRemoteTeamSnippet?
     @State private var actionMessage = ""
@@ -254,6 +295,10 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @State private var showsVaultChooser = false
     @State private var isMutating = false
     @State private var mutationMessage: SelectiveRemoteTeamSnippetMutationMessage?
+    @AppStorage("SelectiveRemote.team-snippet.display-mode.v1")
+    private var displayMode = ProfileCollectionDisplayMode.list
+    @AppStorage("SelectiveRemote.team-snippet.sort-mode.v1")
+    private var sortMode = SelectiveRemoteTeamSnippetSortMode.name
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
@@ -280,12 +325,26 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
     private var visibleSnippets: [SelectiveRemoteTeamSnippet] {
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return store.snippets.filter { snippet in
+        let filtered = store.snippets.filter { snippet in
             (selectedVaultKey.isEmpty || vaultKey(snippet) == selectedVaultKey)
+                && (selectedFolder.map { snippet.folder == $0 } ?? true)
                 && (normalizedQuery.isEmpty || [
-                    snippet.title, snippet.body, snippet.teamName, snippet.vaultName
+                    snippet.title, snippet.body, snippet.folder, snippet.teamName, snippet.vaultName
                 ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) })
         }
+        return filtered.sorted(by: snippetsAreOrdered)
+    }
+
+    private var availableFolders: [String] {
+        Array(Set(store.snippets.filter {
+            selectedVaultKey.isEmpty || vaultKey($0) == selectedVaultKey
+        }.map(\.folder))).sorted { folderTitle($0).localizedStandardCompare(folderTitle($1)) == .orderedAscending }
+    }
+
+    private var groupedSnippets: [(folder: String, snippets: [SelectiveRemoteTeamSnippet])] {
+        Dictionary(grouping: visibleSnippets, by: \.folder)
+            .map { (folder: $0.key, snippets: $0.value) }
+            .sorted { folderTitle($0.folder).localizedStandardCompare(folderTitle($1.folder)) == .orderedAscending }
     }
 
     private var selectedSnippet: SelectiveRemoteTeamSnippet? {
@@ -313,12 +372,33 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     } else if visibleSnippets.isEmpty {
                         ContentUnavailableView.search(text: query)
                     } else {
-                        List(visibleSnippets, selection: $selectedSnippetID) { snippet in
-                            snippetRow(snippet)
-                                .tag(snippet.id)
-                                .contextMenu { snippetActions(snippet) }
+                        if displayMode == .list {
+                            List(selection: $selectedSnippetID) {
+                                ForEach(groupedSnippets, id: \.folder) { group in
+                                    Section(folderTitle(group.folder)) {
+                                        ForEach(group.snippets) { snippet in
+                                            snippetRow(snippet)
+                                                .tag(snippet.id)
+                                                .contextMenu { snippetActions(snippet) }
+                                        }
+                                    }
+                                }
+                            }
+                            .listStyle(.inset)
+                        } else {
+                            ScrollView {
+                                LazyVGrid(
+                                    columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
+                                    alignment: .leading,
+                                    spacing: 12
+                                ) {
+                                    ForEach(visibleSnippets) { snippet in
+                                        snippetGridCard(snippet)
+                                    }
+                                }
+                                .padding(14)
+                            }
                         }
-                        .listStyle(.inset)
                     }
                     Divider()
                     status
@@ -341,6 +421,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .onAppear { normalizeSelection() }
         .onChange(of: store.snippets.map(\.id)) { _, _ in normalizeSelection() }
         .onChange(of: selectedVaultKey) { _, _ in normalizeSelection() }
+        .onChange(of: selectedFolder) { _, _ in normalizeSelection() }
         .onChange(of: selectedSnippetID) { _, _ in actionMessage = "" }
         .onChange(of: createRequest) { _, _ in presentCreateEditor() }
         .sheet(item: $targetEditorSnippet) { snippet in
@@ -357,11 +438,11 @@ struct SelectiveRemoteTeamSnippetsView: View {
             }
         }
         .sheet(item: $editorRequest) { request in
-            SelectiveRemoteTeamSnippetEditorView(request: request) { recordID, title, body in
+            SelectiveRemoteTeamSnippetEditorView(request: request) { recordID, title, body, folder in
                 mutate(
                     request.snippet.map {
-                        .update(recordID: $0.recordID, title: title, body: body)
-                    } ?? .create(recordID: recordID, title: title, body: body),
+                        .update(recordID: $0.recordID, title: title, body: body, folder: folder)
+                    } ?? .create(recordID: recordID, title: title, body: body, folder: folder),
                     context: request.context,
                     selectedRecordID: recordID
                 )
@@ -465,7 +546,46 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     Label(selectedVaultTitle, systemImage: "tray.full")
                 }
                 .menuStyle(.borderlessButton)
+
+                Menu {
+                    Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
+                        selectedFolder = nil
+                    }
+                    if !availableFolders.isEmpty { Divider() }
+                    ForEach(availableFolders, id: \.self) { folder in
+                        Button(folderTitle(folder)) { selectedFolder = folder }
+                    }
+                } label: {
+                    Label(
+                        selectedFolder.map(folderTitle)
+                            ?? UpdateLocalization.text(ru: "Все папки", en: "All Folders"),
+                        systemImage: "folder"
+                    )
+                }
+                .menuStyle(.borderlessButton)
+
                 Spacer()
+
+                Menu {
+                    ProfileCollectionDisplayModeMenuItems(selection: $displayMode)
+                } label: {
+                    Image(systemName: displayMode.systemImage)
+                }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Вид", en: "View"))
+
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                        ForEach(SelectiveRemoteTeamSnippetSortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "arrow.up.arrow.down")
+                }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
+
                 Menu {
                     ForEach(writableVaults) { vault in
                         Button("\(vault.teamName) / \(vault.vaultName)") {
@@ -499,7 +619,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            Text("\(snippet.teamName) / \(snippet.vaultName)")
+            Text(snippetLocation(snippet))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -514,6 +634,53 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .padding(.vertical, 6)
     }
 
+    private func snippetGridCard(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
+        Button {
+            selectedSnippetID = snippet.id
+        } label: {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack {
+                    Image(systemName: "curlybraces")
+                        .foregroundStyle(Color.accentColor)
+                    Text(snippet.title)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Spacer()
+                }
+                Text(snippetLocation(snippet))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(snippet.body.replacingOccurrences(of: "\n", with: " "))
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack {
+                    Label(targetCountTitle(for: snippet), systemImage: "server.rack")
+                    Spacer()
+                    Text(snippet.role.localizedTitle)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, minHeight: 142, alignment: .topLeading)
+            .background(
+                selectedSnippetID == snippet.id ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+            .overlay {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(
+                        selectedSnippetID == snippet.id ? Color.accentColor : Color.secondary.opacity(0.18)
+                    )
+            }
+        }
+        .buttonStyle(.plain)
+        .contextMenu { snippetActions(snippet) }
+    }
+
     private func inspector(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top, spacing: 14) {
@@ -525,7 +692,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(snippet.title)
                         .font(.title2.bold())
-                    Text("\(snippet.teamName) / \(snippet.vaultName)")
+                    Text(snippetLocation(snippet))
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -717,6 +884,35 @@ struct SelectiveRemoteTeamSnippetsView: View {
         return "\(vault.teamName) / \(vault.vaultName)"
     }
 
+    private func folderTitle(_ folder: String) -> String {
+        folder.isEmpty
+            ? UpdateLocalization.text(ru: "Без папки", en: "No Folder")
+            : folder
+    }
+
+    private func snippetLocation(_ snippet: SelectiveRemoteTeamSnippet) -> String {
+        "\(snippet.teamName) / \(snippet.vaultName) · \(folderTitle(snippet.folder))"
+    }
+
+    private func snippetsAreOrdered(
+        _ left: SelectiveRemoteTeamSnippet,
+        _ right: SelectiveRemoteTeamSnippet
+    ) -> Bool {
+        switch sortMode {
+        case .name:
+            return left.title.localizedStandardCompare(right.title) == .orderedAscending
+        case .folder:
+            let folders = folderTitle(left.folder).localizedStandardCompare(folderTitle(right.folder))
+            return folders == .orderedSame
+                ? left.title.localizedStandardCompare(right.title) == .orderedAscending
+                : folders == .orderedAscending
+        case .modifiedNewest:
+            return left.modifiedDate == right.modifiedDate
+                ? left.title.localizedStandardCompare(right.title) == .orderedAscending
+                : left.modifiedDate > right.modifiedDate
+        }
+    }
+
     private func vaultKey(_ snippet: SelectiveRemoteTeamSnippet) -> String {
         "\(snippet.teamID.canonicalCloudString)/\(snippet.vaultID.canonicalCloudString)"
     }
@@ -725,6 +921,9 @@ struct SelectiveRemoteTeamSnippetsView: View {
         if !selectedVaultKey.isEmpty,
            !store.vaults.contains(where: { $0.selectionKey == selectedVaultKey }) {
             selectedVaultKey = ""
+        }
+        if let selectedFolder, !availableFolders.contains(selectedFolder) {
+            self.selectedFolder = nil
         }
         if selectedSnippet == nil {
             selectedSnippetID = visibleSnippets.first?.id
@@ -889,7 +1088,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
             profileID: first.id,
             title: snippet.title,
             command: snippet.body,
-            category: "\(snippet.teamName) / \(snippet.vaultName)",
+            category: snippetLocation(snippet),
             targets: profiles.map { .sshProfile($0.id) },
             updatedAt: snippet.modifiedDate
         )

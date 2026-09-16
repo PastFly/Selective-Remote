@@ -874,6 +874,7 @@ struct ContentView: View {
                 .padding(12)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .background {
             LinearGradient(
                 colors: [
