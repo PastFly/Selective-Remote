@@ -6,7 +6,7 @@
   <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=167">
+  <link rel="stylesheet" href="/styles.css?v=168">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -270,17 +270,31 @@
 
       <section class="product-gallery" aria-labelledby="product-gallery-title">
         <div class="landing-section-heading">
-          <div><p class="eyebrow">ОДИН VAULT · ДВА ИНТЕРФЕЙСА</p><h2 id="product-gallery-title">Настоящее приложение.<br>Настоящий Cloud.</h2></div>
-          <p>Нативная работа на Mac и доступ к зашифрованному рабочему пространству из браузера — с общей структурой Hosts, папок и Team Vaults.</p>
+          <div><p class="eyebrow">ОДИН VAULT · ДВА ИНТЕРФЕЙСА</p><h2 id="product-gallery-title">Нативно на Mac.<br>Доступно в Cloud.</h2></div>
+          <p>Интерфейсные макеты используют только демонстрационные данные и показывают общую структуру Hosts, папок и Team Vaults.</p>
         </div>
         <div class="product-gallery-grid">
           <figure class="product-shot product-shot-macos">
-            <div class="product-shot-label"><span>macOS</span><strong>Selective Remote</strong><small>Hosts и Team Credentials</small></div>
-            <div class="product-shot-frame"><img src="/images/selective-remote-macos.webp?v=167" alt="Настоящий интерфейс Selective Remote для macOS с Hosts и Team Credentials" loading="lazy" decoding="async"></div>
+            <div class="product-shot-label"><span>macOS</span><strong>Selective Remote</strong><small>Синтетические демонстрационные данные</small></div>
+            <div class="product-shot-frame">
+              <div class="product-mock product-mock-macos" role="img" aria-label="Синтетический макет Selective Remote для macOS">
+                <div class="product-mock-titlebar"><i></i><i></i><i></i><span>Selective Remote</span><b>DEMO DATA</b></div>
+                <div class="product-mock-body">
+                  <aside><strong>SR</strong><span class="active">Hosts</span><span>Credentials</span><span>Snippets</span><span>Devices</span></aside>
+                  <section class="product-mock-tree"><small>PERSONAL VAULT</small><strong>Hosts</strong><span class="active">▾ Production</span><span>⌙ Edge</span><span>⌙ Web</span><span>› Development</span></section>
+                  <section class="product-mock-list"><header><div><small>PRODUCTION</small><strong>Подключения</strong></div><button type="button" tabindex="-1">＋ Host</button></header><article><i></i><div><strong>edge-demo</strong><small>SSH · demo.example</small></div><em>22</em></article><article><i></i><div><strong>web-demo</strong><small>SSH · staging.example</small></div><em>22</em></article><article><i class="idle"></i><div><strong>office-demo</strong><small>RDP · office.example</small></div><em>3389</em></article></section>
+                </div>
+              </div>
+            </div>
           </figure>
           <figure class="product-shot product-shot-browser">
-            <div class="product-shot-label"><span>Browser</span><strong>Selective Remote Cloud</strong><small>Team Hosts и папки</small></div>
-            <div class="product-shot-frame"><img src="/images/selective-remote-cloud-browser.webp?v=167" alt="Настоящий браузерный интерфейс Selective Remote Cloud с Team Hosts" loading="lazy" decoding="async"></div>
+            <div class="product-shot-label"><span>Browser</span><strong>Selective Remote Cloud</strong><small>Синтетические демонстрационные данные</small></div>
+            <div class="product-shot-frame">
+              <div class="product-mock product-mock-browser" role="img" aria-label="Синтетический макет Selective Remote Cloud">
+                <div class="product-mock-browserbar"><i></i><span>cloud.example</span><b>DEMO DATA</b></div>
+                <div class="product-mock-cloud"><header><div><small>TEAM VAULT</small><strong>Platform Team</strong></div><span>● Encrypted</span></header><nav><b>Hosts</b><span>Credentials</span><span>Snippets</span></nav><section><article><i></i><div><strong>gateway-demo</strong><small>SSH · Infrastructure</small></div></article><article><i></i><div><strong>database-demo</strong><small>SSH · Production</small></div></article><article><i class="idle"></i><div><strong>workspace-demo</strong><small>RDP · Office</small></div></article></section></div>
+              </div>
+            </div>
           </figure>
         </div>
       </section>
@@ -878,6 +892,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=167"></script>
+  <script type="module" src="/app.js?v=168"></script>
 </body>
 </html>
