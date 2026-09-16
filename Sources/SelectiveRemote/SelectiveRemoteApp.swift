@@ -444,6 +444,7 @@ struct SelectiveRemoteApp: App {
     }
 
     private func schedulePersonalVaultAutoSync() {
+        guard !appLock.isLocked else { return }
         guard UserDefaults.standard.object(
             forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
         ) as? Bool ?? true else { return }

@@ -259,14 +259,18 @@ actor SelectiveRemotePersonalVaultAutoSync {
         pending = Task {
             try? await Task.sleep(for: .seconds(2))
             guard !Task.isCancelled else { return }
-            try? await synchronize(
-                endpoint: endpoint,
-                deviceID: deviceID,
-                profiles: profiles,
-                snippets: snippets,
-                forwarding: forwarding,
-                sshKeys: sshKeys
-            )
+            do {
+                try await synchronize(
+                    endpoint: endpoint,
+                    deviceID: deviceID,
+                    profiles: profiles,
+                    snippets: snippets,
+                    forwarding: forwarding,
+                    sshKeys: sshKeys
+                )
+            } catch {
+                SelectiveRemotePersonalVaultSyncStatus.recordError(error)
+            }
         }
     }
 
@@ -404,7 +408,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
         let credentials = current.records.filter {
             $0.type == .credential
                 && !localCredentialIDs.contains($0.id)
-                && credentialSourceID($0).map(profileIDs.contains) == true
+                && (isStandaloneCredential($0)
+                    || credentialSourceID($0).map(profileIDs.contains) == true)
         }
         return try .init(
             records: local.records + credentials,
@@ -417,5 +422,10 @@ actor SelectiveRemotePersonalVaultAutoSync {
               case let .string(source)? = data["sourceID"]
         else { return nil }
         return UUID(uuidString: source)
+    }
+
+    private func isStandaloneCredential(_ record: SelectiveRemoteVaultRecord) -> Bool {
+        guard case let .object(data) = record.data else { return false }
+        return data["sourceID"] == nil && data["kind"] == nil
     }
 }

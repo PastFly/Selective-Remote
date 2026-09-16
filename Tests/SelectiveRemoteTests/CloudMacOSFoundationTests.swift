@@ -1589,6 +1589,29 @@ struct PersonalVaultInitialDownloadDecoderTests {
         #expect(decoded.snippets.first?.id == snippetID)
     }
 
+    @Test("standalone browser Credential does not block native Vault materialization")
+    func standaloneBrowserCredential() throws {
+        let version = try SelectiveRemoteVaultVersion([
+            UUID(uuidString: "33333333-3333-4333-8333-333333333333")!: 1
+        ])
+        let record = try SelectiveRemoteVaultRecord(
+            id: UUID(uuidString: "66666666-6666-4666-8666-666666666666")!,
+            type: .credential,
+            version: version,
+            modifiedAt: "2026-09-10T00:00:00.000Z",
+            data: .object([
+                "title": .string("Standalone"),
+                "username": .string("operator"),
+                "secret": .string("synthetic-secret")
+            ])
+        )
+
+        let decoded = try SelectiveRemotePersonalVaultImporter.decode(
+            SelectiveRemoteVaultDocument(records: [record])
+        )
+        #expect(decoded.credentials.isEmpty)
+    }
+
     @Test("empty Mac accepts additions while an ID collision blocks the whole plan")
     func conflictAwarePlan() throws {
         var remote = ConnectionProfile(connectionType: .ssh)

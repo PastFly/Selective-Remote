@@ -565,12 +565,14 @@ test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-fo
 
 
 test("macOS Personal Vault auto-sync preserves encrypted credentials without extra Keychain items", async () => {
-  const [sync, crypto, settings, app, snippets] = await Promise.all([
+  const [sync, crypto, settings, app, snippets, credentials, importer] = await Promise.all([
     readFile(new URL("CloudPersonalVaultAutoSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudPersonalVaultSync.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudSettingsView.swift", sourceRoot), "utf8"),
     readFile(new URL("SelectiveRemoteApp.swift", sourceRoot), "utf8"),
     readFile(new URL("TerminalCommandHistory.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudPersonalVaultCredentials.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudPersonalVaultImport.swift", sourceRoot), "utf8"),
   ]);
   assert.doesNotMatch(sync, /!material\.includesCredentials/u);
   assert.match(sync, /SelectiveRemotePersonalVaultCrypto\.open/u);
@@ -595,6 +597,15 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /enum SelectiveRemotePersonalVaultSyncStatus/u);
   assert.match(sync, /recordSuccess\(revision:/u);
   assert.match(sync, /recordError\(_ error:/u);
+  assert.match(sync, /catch \{[\s\S]*SelectiveRemotePersonalVaultSyncStatus\.recordError\(error\)/u);
+  assert.doesNotMatch(credentials, /authenticateDeviceOwner/u);
+  assert.match(app, /guard !appLock\.isLocked else \{ return \}/u);
+  assert.match(crypto, /"folder": \.string\(profile\.group\)/u);
+  assert.match(crypto, /"tags": \.array\(profile\.tags\.map/u);
+  assert.match(crypto, /"description": \.string\(profile\.profileDescription\)/u);
+  assert.match(sync, /isStandaloneCredential\(\$0\)/u);
+  assert.match(importer, /Browser-created standalone credentials/u);
+  assert.match(importer, /if source == nil, kindText == nil/u);
   assert.match(app, /selectiveRemotePersonalVaultSyncNow/u);
   assert.match(settings, /Последняя синхронизация/u);
   assert.match(settings, /Синхронизировать сейчас/u);
@@ -695,4 +706,37 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(library, /SelectiveRemoteTeamSnippetsView\(store: teamStore, model: model\)/u);
   assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
   assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);
+});
+
+test("macOS Team Credentials use the shared sync lifecycle and a separate memory-only UI", async () => {
+  const [credentials, autoSync, vault, hosts] = await Promise.all([
+    readFile(new URL("CloudTeamCredentials.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamVaultAutoSync.swift", sourceRoot), "utf8"),
+    readFile(new URL("CredentialVaultView.swift", sourceRoot), "utf8"),
+    readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
+  ]);
+  assert.match(credentials, /selective-remote\/team-credential\/v1/u);
+  assert.match(credentials, /let keys = Set\(data\.keys\)/u);
+  assert.match(credentials, /keys == hostCredentialKeys/u);
+  assert.match(credentials, /keys == credentialKeys/u);
+  assert.match(credentials, /NSPasteboard\.general/u);
+  assert.match(credentials, /revealedCredentialIDs/u);
+  assert.match(credentials, /CredentialDisclosurePolicy\.visibleNanoseconds/u);
+  assert.match(credentials, /CredentialDisclosurePolicy\.clipboardNanoseconds/u);
+  assert.match(credentials, /sourceHostTitle/u);
+  assert.match(credentials, /credentialKindTitle/u);
+  assert.match(credentials, /DisclosureGroup/u);
+  assert.match(credentials, /expandedVaultKeysStorage/u);
+  assert.match(credentials, /expandedFolderKeysStorage/u);
+  assert.match(credentials, /credential\.tags\.joined/u);
+  assert.match(credentials, /SelectiveRemoteTeamCredentialMutationService/u);
+  assert.match(credentials, /Изменить папку и теги/u);
+  assert.match(credentials, /NSApplication\.didResignActiveNotification/u);
+  assert.match(credentials, /Только в памяти/u);
+  assert.doesNotMatch(credentials, /UserDefaults|FileManager|KeychainService/u);
+  assert.match(autoSync, /SelectiveRemoteTeamCredentialStore\.shared\.replace\(with: snapshots\)/u);
+  assert.match(vault, /SelectiveRemote\.credentials\.scope\.v1/u);
+  assert.match(vault, /Picker\([\s\S]*CredentialVaultScope\.allCases/u);
+  assert.match(vault, /SelectiveRemoteTeamCredentialsView\(store: teamCredentials\)/u);
+  assert.match(hosts, /Standalone Team Credentials belong to the credential projection/u);
 });
