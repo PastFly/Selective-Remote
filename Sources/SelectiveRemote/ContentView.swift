@@ -168,6 +168,10 @@ struct ContentView: View {
     private var personalHostNavigatorVisible = true
     @AppStorage("SelectiveRemote.personal-host.detail-visible.v1")
     private var personalHostDetailVisible = true
+    @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
+    private var sidebarHostQuickAccessVisible = true
+    @AppStorage("SelectiveRemote.sidebar-host-scope-picker-visible.v1")
+    private var sidebarHostScopePickerVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -186,12 +190,7 @@ struct ContentView: View {
     ]
 
     private var showsHostQuickAccess: Bool {
-        switch mainArea {
-        case .connectionCenter, .ssh, .terminal, .sftp, .forwarding:
-            true
-        case .hosts, .snippets, .sessionLogs, .activity, .diagnostics, .keychain:
-            false
-        }
+        sidebarHostQuickAccessVisible && mainArea != .hosts
     }
 
     private var profile: ConnectionProfile { model.selectedProfile }
@@ -674,6 +673,24 @@ struct ContentView: View {
                             Label(area.title, systemImage: area.systemImage)
                         }
                     }
+                    Divider()
+                    Section(UpdateLocalization.text(ru: "Боковая панель", en: "Sidebar")) {
+                        Toggle(
+                            UpdateLocalization.text(
+                                ru: "Показывать быстрый список Hosts",
+                                en: "Show Quick Host List"
+                            ),
+                            isOn: $sidebarHostQuickAccessVisible
+                        )
+                        Toggle(
+                            UpdateLocalization.text(
+                                ru: "Показывать Personal / Team",
+                                en: "Show Personal / Team"
+                            ),
+                            isOn: $sidebarHostScopePickerVisible
+                        )
+                        .disabled(!sidebarHostQuickAccessVisible)
+                    }
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: "ellipsis.circle")
@@ -696,7 +713,8 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            if showsHostQuickAccess && (cloudSessionAvailable || !teamHosts.hosts.isEmpty) {
+            if showsHostQuickAccess && sidebarHostScopePickerVisible
+                && (cloudSessionAvailable || !teamHosts.hosts.isEmpty) {
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -710,9 +728,6 @@ struct ContentView: View {
                     personalHostDropTargetID = nil
                     DispatchQueue.main.async {
                         refreshHostPresentations()
-                    }
-                    if scope == .team {
-                        setMainArea(.hosts)
                     }
                 }
             }

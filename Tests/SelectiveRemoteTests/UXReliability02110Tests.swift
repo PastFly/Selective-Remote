@@ -142,4 +142,17 @@ struct UXReliability02110Tests {
                 + "            LinearGradient("
         ))
     }
+
+    @Test("Sidebar Host quick access is persistent, optional, and stable across sections")
+    func sidebarHostQuickAccessIsUserConfigurable() throws {
+        let content = try source("Sources/SelectiveRemote/ContentView.swift")
+
+        #expect(content.contains("SelectiveRemote.sidebar-host-quick-access-visible.v1"))
+        #expect(content.contains("SelectiveRemote.sidebar-host-scope-picker-visible.v1"))
+        #expect(content.contains("sidebarHostQuickAccessVisible && mainArea != .hosts"))
+        #expect(content.contains("ru: \"Показывать быстрый список Hosts\""))
+        #expect(content.contains("ru: \"Показывать Personal / Team\""))
+        #expect(content.contains("if showsHostQuickAccess && sidebarHostScopePickerVisible"))
+        #expect(!content.contains("if scope == .team {\n                        setMainArea(.hosts)"))
+    }
 }
