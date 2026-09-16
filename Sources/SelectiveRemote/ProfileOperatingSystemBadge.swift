@@ -95,31 +95,31 @@ struct ProfileOperatingSystemStyle {
         )
 
         switch identity {
-        case .windows: .init(identity: identity, title: "Windows / RDP", colors: [.blue, .indigo])
-        case .macOS: .init(identity: identity, title: "macOS", colors: [.gray, .blue])
-        case .ubuntu: .init(identity: identity, title: "Ubuntu", colors: [.orange, .red])
-        case .debian: .init(identity: identity, title: "Debian", colors: [.pink, .purple])
-        case .kali: .init(identity: identity, title: "Kali Linux", colors: [.cyan, .blue])
-        case .astra: .init(identity: identity, title: "Astra Linux", colors: [.blue, .indigo])
-        case .arch: .init(identity: identity, title: "Arch Linux", colors: [.cyan, .blue])
-        case .manjaro: .init(identity: identity, title: "Manjaro", colors: [.green, .teal])
-        case .alpine: .init(identity: identity, title: "Alpine Linux", colors: [.blue, .cyan])
-        case .fedora: .init(identity: identity, title: "Fedora", colors: [.blue, .indigo])
-        case .redHat: .init(identity: identity, title: "Red Hat Enterprise Linux", colors: [.red, .black])
-        case .centOS: .init(identity: identity, title: "CentOS Stream", colors: [.purple, .indigo])
-        case .rocky: .init(identity: identity, title: "Rocky Linux", colors: [.green, .teal])
-        case .alma: .init(identity: identity, title: "AlmaLinux", colors: [.blue, .orange])
-        case .suse: .init(identity: identity, title: "SUSE", colors: [.green, .teal])
-        case .bsd: .init(identity: identity, title: "BSD", colors: [.red, .orange])
+        case .windows: return .init(identity: identity, title: "Windows / RDP", colors: [.blue, .indigo])
+        case .macOS: return .init(identity: identity, title: "macOS", colors: [.gray, .blue])
+        case .ubuntu: return .init(identity: identity, title: "Ubuntu", colors: [.orange, .red])
+        case .debian: return .init(identity: identity, title: "Debian", colors: [.pink, .purple])
+        case .kali: return .init(identity: identity, title: "Kali Linux", colors: [.cyan, .blue])
+        case .astra: return .init(identity: identity, title: "Astra Linux", colors: [.blue, .indigo])
+        case .arch: return .init(identity: identity, title: "Arch Linux", colors: [.cyan, .blue])
+        case .manjaro: return .init(identity: identity, title: "Manjaro", colors: [.green, .teal])
+        case .alpine: return .init(identity: identity, title: "Alpine Linux", colors: [.blue, .cyan])
+        case .fedora: return .init(identity: identity, title: "Fedora", colors: [.blue, .indigo])
+        case .redHat: return .init(identity: identity, title: "Red Hat Enterprise Linux", colors: [.red, .black])
+        case .centOS: return .init(identity: identity, title: "CentOS Stream", colors: [.purple, .indigo])
+        case .rocky: return .init(identity: identity, title: "Rocky Linux", colors: [.green, .teal])
+        case .alma: return .init(identity: identity, title: "AlmaLinux", colors: [.blue, .orange])
+        case .suse: return .init(identity: identity, title: "SUSE", colors: [.green, .teal])
+        case .bsd: return .init(identity: identity, title: "BSD", colors: [.red, .orange])
         case .linux:
-            .init(
+            return .init(
                 identity: identity,
                 title: profile.detectedOperatingSystem.isEmpty ? "Linux" : profile.detectedOperatingSystem,
                 colors: [.teal, .indigo]
             )
-        case .ssh: .init(identity: identity, title: "SSH", colors: [.purple, .indigo])
-        case .telnet: .init(identity: identity, title: "Telnet", colors: [.orange, .red])
-        case .serial: .init(identity: identity, title: "Serial", colors: [.teal, .blue])
+        case .ssh: return .init(identity: identity, title: "SSH", colors: [.purple, .indigo])
+        case .telnet: return .init(identity: identity, title: "Telnet", colors: [.orange, .red])
+        case .serial: return .init(identity: identity, title: "Serial", colors: [.teal, .blue])
         }
     }
 }
