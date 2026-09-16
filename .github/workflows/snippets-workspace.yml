@@ -1,0 +1,35 @@
+name: Prepare snippets development workspace
+on:
+  push:
+    branches: [chore/web-snippets-workspace-20260917]
+permissions:
+  contents: read
+jobs:
+  workspace:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: 6803665d58ec7bcd78d012cac035e5c48739777f
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+      - name: Archive exact source and install test dependencies
+        run: |
+          test "$(git rev-parse HEAD)" = 6803665d58ec7bcd78d012cac035e5c48739777f
+          git archive --format=tar HEAD > "$RUNNER_TEMP/source-baseline.tar"
+          npm --prefix cloud ci --ignore-scripts
+          tar -cf "$RUNNER_TEMP/cloud-dependencies.tar" cloud/node_modules
+          cd "$RUNNER_TEMP"
+          sha256sum source-baseline.tar cloud-dependencies.tar > workspace.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snippets-workspace-6803665
+          path: |
+            ${{ runner.temp }}/source-baseline.tar
+            ${{ runner.temp }}/cloud-dependencies.tar
+            ${{ runner.temp }}/workspace.sha256
+          retention-days: 1
+          if-no-files-found: error
