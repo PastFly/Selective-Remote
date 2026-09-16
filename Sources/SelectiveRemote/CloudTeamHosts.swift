@@ -998,9 +998,9 @@ struct SelectiveRemoteTeamHostsView: View {
                     en: "Add a Host to a Team Vault"
                 ))
 
+                ProfileCollectionDisplayModePicker(selection: $displayMode)
+
                 Menu {
-                    ProfileCollectionDisplayModeMenuItems(selection: $displayMode)
-                    Divider()
                     Picker(
                         UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
                         selection: $sortMode
@@ -1010,12 +1010,12 @@ struct SelectiveRemoteTeamHostsView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Image(systemName: "arrow.up.arrow.down")
                 }
                 .menuStyle(.borderlessButton)
                 .help(UpdateLocalization.text(
-                    ru: "Вид и сортировка Team Hosts",
-                    en: "Team Host view and sorting"
+                    ru: "Сортировка Team Hosts",
+                    en: "Sort Team Hosts"
                 ))
             }
         }
@@ -1059,6 +1059,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
                                     .contentShape(Rectangle())
+                                    .focusEffectDisabled()
                                     .contextMenu { teamHostContextMenu(host) }
                                     .draggable("team-host:\(host.id.uuidString)")
                                     .overlay(alignment: .top) {
@@ -1147,6 +1148,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                             teamHostGridCard(host)
                                         }
                                         .buttonStyle(.plain)
+                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
                                         .draggable("team-host:\(host.id.uuidString)")
                                         .overlay(alignment: .top) {

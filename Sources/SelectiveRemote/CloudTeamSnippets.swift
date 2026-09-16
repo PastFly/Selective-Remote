@@ -675,13 +675,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
                 Spacer()
 
-                Menu {
-                    ProfileCollectionDisplayModeMenuItems(selection: $displayMode)
-                } label: {
-                    Image(systemName: displayMode.systemImage)
-                }
-                .menuStyle(.borderlessButton)
-                .help(UpdateLocalization.text(ru: "Вид", en: "View"))
+                ProfileCollectionDisplayModePicker(selection: $displayMode)
 
                 Menu {
                     Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
