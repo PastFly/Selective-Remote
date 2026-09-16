@@ -635,10 +635,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
                                     ForEach(vault.folders) { folder in
                                         DisclosureGroup(isExpanded: expansionBinding(forFolder: folder.id)) {
                                             ForEach(folder.credentials) { credential in
-                                                credentialRow(
-                                                    credential,
-                                                    selected: selectedCredentialID == credential.id
-                                                )
+                                                credentialRow(credential)
                                                     .tag(credential.id)
                                                     .listRowBackground(Color.clear)
                                                     .listRowSeparator(.hidden)
@@ -760,10 +757,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
         .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.025))
     }
 
-    private func credentialRow(
-        _ credential: SelectiveRemoteTeamCredential,
-        selected: Bool
-    ) -> some View {
+    private func credentialRow(_ credential: SelectiveRemoteTeamCredential) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(credential.title).font(.headline).lineLimit(1)
@@ -792,7 +786,6 @@ struct SelectiveRemoteTeamCredentialsView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: selected)
     }
 
     private func inspector(_ credential: SelectiveRemoteTeamCredential) -> some View {

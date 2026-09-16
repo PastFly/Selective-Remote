@@ -97,5 +97,25 @@ func managementWorkspacesShareVisualLanguage() throws {
     #expect(content.contains("selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)"))
     #expect(credentials.contains("TEAM VAULT"))
     #expect(credentials.contains("SelectiveRemoteWorkspaceChrome.accentStrong"))
-    #expect(teamCredentials.contains("selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: selected)"))
+    #expect(!teamCredentials.contains("selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: selected)"))
+}
+
+@Test("Management workspace avoids duplicated navigation and crowded host controls")
+func managementWorkspaceCompositionContract() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let content = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+    let teamHosts = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamHosts.swift"),
+        encoding: .utf8
+    )
+
+    #expect(content.contains("@State private var mainArea = MainArea.hosts"))
+    #expect(content.contains("private var showsHostQuickAccess: Bool"))
+    #expect(content.contains("personalHostNavigatorToolbar"))
+    #expect(teamHosts.contains("teamHostNavigatorToolbar"))
+    #expect(teamHosts.contains("let onShowPersonal: () -> Void"))
 }

@@ -884,7 +884,6 @@ struct CredentialVaultView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать public key", systemImage: "doc.on.doc") {
                 model.copySSHPublicKey(key.id)
@@ -956,7 +955,6 @@ struct CredentialVaultView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             if let onOpenProfile {
                 Button("Открыть SSH-профиль", systemImage: "arrow.right.circle") {
@@ -1004,7 +1002,6 @@ struct CredentialVaultView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать fingerprint", systemImage: "doc.on.doc") {
                 NSPasteboard.general.clearContents()
@@ -1054,7 +1051,6 @@ struct CredentialVaultView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
-        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать fingerprint", systemImage: "doc.on.doc") {
                 NSPasteboard.general.clearContents()

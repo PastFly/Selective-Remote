@@ -582,6 +582,7 @@ struct SelectiveRemoteTeamHostsView: View {
         SelectiveRemoteTeamHostPersonalSettingsStore.shared
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onOpenSFTP: (SelectiveRemoteTeamHost, String, String?) -> Void
+    let onShowPersonal: () -> Void
 
     @State private var username = ""
     @State private var password = ""
@@ -714,32 +715,6 @@ struct SelectiveRemoteTeamHostsView: View {
                                 SelectiveRemoteWorkspaceChrome.accent.opacity(0.11),
                                 in: Capsule()
                             )
-                        Menu {
-                            Picker(
-                                UpdateLocalization.text(ru: "Вид", en: "View"),
-                                selection: $displayMode
-                            ) {
-                                ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-                                    Label(mode.title, systemImage: mode.systemImage).tag(mode)
-                                }
-                            }
-                            Divider()
-                            Picker(
-                                UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
-                                selection: $sortMode
-                            ) {
-                                ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
-                                    Text(mode.title).tag(mode)
-                                }
-                            }
-                        } label: {
-                            Image(systemName: "slider.horizontal.3")
-                        }
-                        .menuStyle(.borderlessButton)
-                        .help(UpdateLocalization.text(
-                            ru: "Вид и сортировка Team Hosts",
-                            en: "Team Host view and sorting"
-                        ))
                         Button {
                             hostDetailVisible.toggle()
                         } label: {
@@ -770,6 +745,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     }
                     .padding(16)
                     .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.035))
+                    teamHostNavigatorToolbar
                     Divider()
 
                     if store.hosts.isEmpty {
@@ -815,29 +791,6 @@ struct SelectiveRemoteTeamHostsView: View {
                             )
                         }
 
-                        Menu {
-                            ForEach(writableVaults) { vault in
-                                Button("\(vault.teamName) / \(vault.vaultName)") {
-                                    editorRequest = .init(context: vault, host: nil)
-                                }
-                            }
-                        } label: {
-                            Label(
-                                UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"),
-                                systemImage: "plus"
-                            )
-                        }
-                        .disabled(writableVaults.isEmpty || isMutating)
-                        .help(writableVaults.isEmpty
-                            ? UpdateLocalization.text(
-                                ru: "Нет синхронизированного Team Vault с правом записи",
-                                en: "No synchronized writable Team Vault"
-                            )
-                            : UpdateLocalization.text(
-                                ru: "Добавить Host в Team Vault",
-                                en: "Add a Host to a Team Vault"
-                            )
-                        )
                         if store.invalidVaultCount > 0 {
                             Label(
                                 "\(store.invalidVaultCount)",
@@ -986,6 +939,95 @@ struct SelectiveRemoteTeamHostsView: View {
                 .ignoresSafeArea()
             }
         }
+    }
+
+    private var teamHostNavigatorToolbar: some View {
+        VStack(spacing: 9) {
+            Picker("", selection: Binding(
+                get: { "team" },
+                set: { value in
+                    if value == "personal" { onShowPersonal() }
+                }
+            )) {
+                Text(UpdateLocalization.text(ru: "Личные", en: "Personal"))
+                    .tag("personal")
+                Text(UpdateLocalization.text(ru: "Командные", en: "Team"))
+                    .tag("team")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            HStack(spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: "magnifyingglass")
+                        .foregroundStyle(.secondary)
+                    TextField(
+                        UpdateLocalization.text(
+                            ru: "Поиск командных хостов",
+                            en: "Search Team Hosts"
+                        ),
+                        text: $searchText
+                    )
+                    .textFieldStyle(.plain)
+                    if !searchText.isEmpty {
+                        Button { searchText = "" } label: {
+                            Image(systemName: "xmark.circle.fill")
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(minHeight: 32)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
+
+                Menu {
+                    ForEach(writableVaults) { vault in
+                        Button("\(vault.teamName) / \(vault.vaultName)") {
+                            editorRequest = .init(context: vault, host: nil)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "plus")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(SelectiveRemoteWorkspaceChrome.accentStrong)
+                .disabled(writableVaults.isEmpty || isMutating)
+                .help(UpdateLocalization.text(
+                    ru: "Добавить Host в Team Vault",
+                    en: "Add a Host to a Team Vault"
+                ))
+
+                Menu {
+                    Picker(
+                        UpdateLocalization.text(ru: "Вид", en: "View"),
+                        selection: $displayMode
+                    ) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                            Label(mode.title, systemImage: mode.systemImage).tag(mode)
+                        }
+                    }
+                    Divider()
+                    Picker(
+                        UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                        selection: $sortMode
+                    ) {
+                        ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "slider.horizontal.3")
+                }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(
+                    ru: "Вид и сортировка Team Hosts",
+                    en: "Team Host view and sorting"
+                ))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
     }
 
     @ViewBuilder
