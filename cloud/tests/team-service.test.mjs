@@ -39,6 +39,14 @@ class TeamStore {
     }];
   }
 
+  async listTeamAuditEvents(requestedTeamID, userID, page) {
+    this.calls.push(["listTeamAuditEvents", requestedTeamID, userID, page]);
+    return { rows: [{
+      id: "42", action: "team.created", created_at: "2030-01-01T00:00:00.000Z",
+      username: "owner.name", display_name: "Owner", metadata: { secret: "must-not-leak" },
+    }], nextCursor: null };
+  }
+
   async createTeam(input) {
     this.calls.push(["createTeam", input]);
     return {
@@ -294,6 +302,19 @@ class TeamStore {
     return { granted: true, keyGeneration: input.keyGeneration, deviceID: input.wrapper.deviceID };
   }
 }
+
+test("Team activity exposes bounded audit facts without metadata", async () => {
+  const store = new TeamStore();
+  const service = new CloudService(store, config);
+  assert.deepEqual(await service.listTeamAuditEvents(session, teamID, { limit: "25", cursor: null }), {
+    events: [{ id: "42", action: "team.created", createdAt: "2030-01-01T00:00:00.000Z", actor: { username: "owner.name", displayName: "Owner" } }],
+    nextCursor: null,
+  });
+  assert.deepEqual(store.calls[0], ["listTeamAuditEvents", teamID, session.user_id, { limit: 25, cursor: null }]);
+  assert.equal(JSON.stringify(await service.listTeamAuditEvents(session, teamID, { limit: 1 })).includes("must-not-leak"), false);
+  await assert.rejects(service.listTeamAuditEvents(session, teamID, { limit: 101 }), /invalid_team_activity_query/u);
+  await assert.rejects(service.listTeamAuditEvents(session, teamID, { cursor: "0 OR 1=1" }), /invalid_team_activity_query/u);
+});
 
 test("Team creation derives Owner identity from the authenticated session", async () => {
   const store = new TeamStore();

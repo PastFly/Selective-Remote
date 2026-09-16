@@ -906,6 +906,34 @@ export class PostgresStore {
     return result.rows;
   }
 
+  async listTeamAuditEvents(teamID, actorUserID, { limit = 50, cursor = null } = {}) {
+    const result = await this.pool.query(
+      `SELECT event.id::text, event.action, event.created_at,
+         account.username, account.display_name
+       FROM team_memberships AS actor
+       JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
+       JOIN team_audit_events AS event ON event.team_id = team.id
+       LEFT JOIN users AS account ON account.id = event.actor_user_id
+       WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
+         AND ($3::bigint IS NULL OR event.id < $3::bigint)
+       ORDER BY event.id DESC
+       LIMIT $4`,
+      [teamID, actorUserID, cursor, limit + 1],
+    );
+    if (result.rows.length === 0) {
+      const actor = await this.pool.query(
+        `SELECT 1 FROM team_memberships AS membership
+         JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+         WHERE membership.team_id = $1 AND membership.user_id = $2 AND membership.revoked_at IS NULL`,
+        [teamID, actorUserID],
+      );
+      if (!actor.rows[0]) throw new Error("team_not_found");
+    }
+    const hasMore = result.rows.length > limit;
+    const rows = result.rows.slice(0, limit);
+    return { rows, nextCursor: hasMore ? rows.at(-1).id : null };
+  }
+
   async listTeamMembersPage(teamID, actorUserID, { search, role, limit, cursor }) {
     const result = await this.pool.query(
       `WITH filtered AS (

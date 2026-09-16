@@ -368,7 +368,30 @@
     "root · обновлено сейчас": "root · updated now",
     "Selective Remote объединяет подключения и автоматизацию, не заставляя отдавать серверу ключи от вашей инфраструктуры.": "Selective Remote combines connections and automation without requiring you to give the server the keys to your infrastructure.",
     "Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.": "Selective Remote Cloud — secure synchronization for Hosts, Credentials, Snippets, and Team Vaults with client-side encryption.",
-    "Vault заблокирован.": "Vault is locked."
+    "Vault заблокирован.": "Vault is locked.",
+    "Пространство": "Workspace",
+    "⌘K Поиск": "⌘K Search",
+    "＋ Создать": "＋ Create",
+    "★ Избранное": "★ Favorites",
+    "Недавние": "Recent",
+    "выбрано": "selected",
+    "Выбрать видимые": "Select visible",
+    "В избранное": "Add to favorites",
+    "Отменить выбор": "Clear selection",
+    "Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.": "Password, token, or key. The value is encrypted in the browser before synchronization.",
+    "Пароль, токен или ключ. Значение шифруется на устройстве до отправки.": "Password, token, or key. The value is encrypted on the device before upload.",
+    "Активность": "Activity",
+    "Журнал активности": "Activity log",
+    "Только события управления и типы действий. Секреты, логины Credential и содержимое Snippets не загружаются.": "Management events and action types only. Secrets, Credential usernames, and Snippet contents are never loaded.",
+    "БЫСТРЫЙ ПЕРЕХОД": "QUICK NAVIGATION",
+    "Поиск по Cloud": "Search Cloud",
+    "Команда, раздел или запись": "Command, section, or record",
+    "Дополнительные настройки": "More settings",
+    "Мобильная навигация Cloud": "Cloud mobile navigation",
+    "Например, Host, команда или Production": "For example, Host, team, or Production",
+    "Состояние локальной и Cloud-синхронизации": "Local and Cloud synchronization status",
+    "Быстрый переход к разделу или записи": "Quickly open a section or record",
+    "Создать запись в открытом пространстве": "Create a record in the current workspace"
   }));
 
   for (const [source, translation] of Object.entries({
@@ -408,6 +431,21 @@
     "Добавить Credential": "Add Credential",
     "Добавить Forwarding": "Add Forwarding",
     "Добавить Snippet": "Add Snippet",
+    "Пароль, токен или ключ": "Password, token, or key",
+    "Офлайн": "Offline",
+    "Конфликт": "Conflict",
+    "Ошибка": "Error",
+    "Синхронизация…": "Synchronizing…",
+    "Ничего не найдено.": "Nothing found.",
+    "Раздел": "Section",
+    "Запись текущего Vault": "Current Vault record",
+    "В журнале пока нет событий.": "There are no activity events yet.",
+    "Выберите команду.": "Select a team.",
+    "Загружаем журнал активности без содержимого секретов…": "Loading activity without secret contents…",
+    "Журнал активности загружен. Содержимое Vault и секреты в него не входят.": "Activity loaded. Vault contents and secrets are not included.",
+    "Не удалось загрузить журнал активности.": "Could not load the activity log.",
+    "Не удалось обновить журнал активности.": "Could not refresh the activity log.",
+    "Не удалось загрузить следующую страницу журнала.": "Could not load the next activity page.",
     "Допуск устройств отменён; ключи и wrappers не изменены.": "Device approval was cancelled; keys and wrappers were not changed.",
     "Допустимы латинские буквы, цифры, точка, дефис и подчёркивание.": "Latin letters, digits, dots, hyphens, and underscores are allowed.",
     "Допустить устройство": "Approve device",
@@ -659,6 +697,23 @@
     [/^(\d+) из (\d+)$/u, "$1 of $2"],
     [/^Участников: (\d+)$/u, "Members: $1"],
     [/^Удалено · (.+)$/u, "Deleted · $1"],
+    [/^(.+) создал\(а\) команду$/u, "$1 created the team"],
+    [/^(.+) переименовал\(а\) команду$/u, "$1 renamed the team"],
+    [/^(.+) архивировал\(а\) команду$/u, "$1 archived the team"],
+    [/^(.+) изменил\(а\) роль участника$/u, "$1 changed a member role"],
+    [/^(.+) удалил\(а\) участника$/u, "$1 removed a member"],
+    [/^(.+) удалил\(а\) аккаунт участника$/u, "$1 deleted a member account"],
+    [/^(.+) допустил\(а\) устройство участника$/u, "$1 approved a member device"],
+    [/^(.+) создал\(а\) приглашение$/u, "$1 created an invitation"],
+    [/^(.+) принял\(а\) приглашение$/u, "$1 accepted an invitation"],
+    [/^(.+) отозвал\(а\) приглашение$/u, "$1 revoked an invitation"],
+    [/^(.+) подготовил\(а\) доступ приглашённому участнику$/u, "$1 prepared access for an invited member"],
+    [/^(.+) создал\(а\) папку Vault$/u, "$1 created a Vault folder"],
+    [/^(.+) переименовал\(а\) папку Vault$/u, "$1 renamed a Vault folder"],
+    [/^(.+) выдал\(а\) доступ устройству к Team Vault$/u, "$1 granted a device access to Team Vault"],
+    [/^(.+) изменил\(а\) режим допуска устройств$/u, "$1 changed the device approval policy"],
+    [/^(.+) передал\(а\) владение командой$/u, "$1 transferred Team ownership"],
+    [/^(.+) выполнил\(а\) действие в команде$/u, "$1 performed a Team action"],
   ];
 
   const originalText = new WeakMap();
@@ -694,7 +749,7 @@
 
   function translateElement(element) {
     if (!(element instanceof Element)) return;
-    const attributes = ["aria-label", "title", "placeholder"];
+    const attributes = ["aria-label", "title", "placeholder", "data-tooltip"];
     let saved = originalAttributes.get(element);
     if (!saved) {
       saved = {};
@@ -768,7 +823,7 @@
     translateElement(document.body);
     mountSwitches();
     refreshSwitches();
-    observer?.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-label", "title", "placeholder"] });
+    observer?.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-label", "title", "placeholder", "data-tooltip"] });
     document.dispatchEvent(new CustomEvent("selective-remote:locale-changed", { detail: { locale } }));
   }
 
@@ -801,7 +856,7 @@
           else if (node.nodeType === Node.ELEMENT_NODE) translateElement(node);
         }
       }
-      observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-label", "title", "placeholder"] });
+      observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["aria-label", "title", "placeholder", "data-tooltip"] });
     });
     apply();
   }, { once: true });

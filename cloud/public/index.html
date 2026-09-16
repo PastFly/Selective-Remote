@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=172">
-  <script src="/i18n.js?v=172"></script>
+  <link rel="stylesheet" href="/styles.css?v=173">
+  <script src="/i18n.js?v=173"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -35,18 +35,23 @@
         <a href="#public-grid">Возможности</a>
         <a href="#public-security">Безопасность</a>
         <a href="#public-team">Для команд</a>
-        <a href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">GitHub ↗</a>
       </nav>
       <nav class="brand-actions" id="public-actions" aria-label="Аккаунт">
-        <label class="theme-control">Тема
-          <select data-theme-select aria-label="Тема оформления">
-            <option value="graphite">Графит</option>
-            <option value="emerald">Изумруд</option>
-            <option value="light">Светлая</option>
-          </select>
-        </label>
         <button type="button" class="secondary" data-open-auth="login">Войти</button>
         <button type="button" data-open-auth="registration">Создать аккаунт</button>
+        <details class="site-more">
+          <summary aria-label="Дополнительные настройки">•••</summary>
+          <div class="site-more-menu">
+            <label class="theme-control">Тема
+              <select data-theme-select aria-label="Тема оформления">
+                <option value="graphite">Графит</option>
+                <option value="emerald">Изумруд</option>
+                <option value="light">Светлая</option>
+              </select>
+            </label>
+            <a href="https://github.com/PastFly/Selective-Remote" target="_blank" rel="noreferrer">GitHub ↗</a>
+          </div>
+        </details>
       </nav>
       <span class="status" id="service-status" role="status" title="Проверяем доступность Cloud"><i aria-hidden="true"></i><span>Проверка</span></span>
     </header>
@@ -310,12 +315,8 @@
         <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
         <nav aria-label="Разделы Cloud">
           <button type="button" class="active" data-nav-icon="⌂" data-workspace-target="workspace-overview">Обзор</button>
-          <p class="workspace-nav-label">Ресурсы</p>
-          <button type="button" data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="host">Хосты</button>
-          <button type="button" data-nav-icon="⌘" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
-          <button type="button" data-nav-icon="◇" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
-          <button type="button" data-nav-icon="↔" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
-          <p class="workspace-nav-label">Команды</p>
+          <p class="workspace-nav-label">Пространство</p>
+          <button type="button" data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault</button>
           <button type="button" data-nav-icon="◎" data-workspace-target="team-vault">Команды</button>
           <p class="workspace-nav-label">Аккаунт</p>
           <button type="button" data-nav-icon="◫" data-workspace-target="workspace-devices">Устройства</button>
@@ -346,6 +347,11 @@
       <div class="workspace-main">
         <header class="workspace-header">
           <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
+          <div class="workspace-global-actions">
+            <span class="workspace-sync-state" id="workspace-sync-state" data-state="synced" role="status" data-tooltip="Состояние локальной и Cloud-синхронизации"><i aria-hidden="true"></i><span>Синхронизировано</span></span>
+            <button type="button" class="secondary" id="workspace-command-open" aria-keyshortcuts="Meta+K Control+K" data-tooltip="Быстрый переход к разделу или записи">⌘K Поиск</button>
+            <button type="button" id="workspace-create" data-tooltip="Создать запись в открытом пространстве">＋ Создать</button>
+          </div>
         </header>
 
         <section class="workspace-panel workspace-overview" id="workspace-overview">
@@ -370,8 +376,8 @@
             </div>
             <div class="workspace-team-overview-content">
               <div class="workspace-team-metrics">
-                <span><strong id="workspace-team-count">—</strong><small>Доступные команды</small></span>
-                <span><strong id="workspace-team-invitation-count">—</strong><small>Новые приглашения</small></span>
+                <button type="button" data-workspace-target="team-vault" data-team-view="teams"><strong id="workspace-team-count">—</strong><small>Доступные команды</small></button>
+                <button type="button" data-workspace-target="team-vault" data-team-view="teams" data-focus-team-invitations><strong id="workspace-team-invitation-count">—</strong><small>Новые приглашения</small></button>
               </div>
               <div class="workspace-team-actions">
                 <button type="button" data-workspace-target="team-vault" data-team-view="teams">Открыть команды</button>
@@ -416,6 +422,8 @@
           <button type="button" data-record-filter="credential">Credentials</button>
           <button type="button" data-record-filter="snippet">Snippets</button>
           <button type="button" data-record-filter="forwarding">Forwarding</button>
+          <button type="button" data-smart-filter="favorites">★ Избранное</button>
+          <button type="button" data-smart-filter="recent">Недавние</button>
         </nav>
         <div class="personal-vault-browser" id="personal-vault-browser">
           <label class="personal-vault-control" for="personal-vault-search"><span>Поиск</span>
@@ -431,6 +439,13 @@
           <label class="personal-vault-control" for="personal-vault-folder-filter"><span>Папка Hosts</span>
             <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
           </label>
+        </div>
+        <div class="bulk-actions" id="personal-bulk-actions" hidden>
+          <strong><span data-bulk-count>0</span> выбрано</strong>
+          <button type="button" class="secondary" data-bulk-select-visible>Выбрать видимые</button>
+          <button type="button" class="secondary" data-bulk-favorite>В избранное</button>
+          <button type="button" class="danger" data-bulk-delete>Удалить</button>
+          <button type="button" class="secondary" data-bulk-clear>Отменить выбор</button>
         </div>
         <dialog class="record-editor-dialog" id="local-record-editor-dialog" aria-labelledby="local-record-editor-title">
         <form class="record-form" id="local-vault-record-form">
@@ -450,7 +465,7 @@
           <label for="local-record-target" id="local-record-target-label">Адрес</label>
           <input id="local-record-target" name="target" maxlength="2048">
           <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
-          <textarea id="local-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
+          <div class="field-with-help"><textarea id="local-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="local-record-secret-help"></textarea><small id="local-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.</small></div>
           <div class="personal-host-fields" id="personal-host-fields">
             <label for="local-host-protocol">Протокол</label>
             <select id="local-host-protocol" name="protocol">
@@ -534,6 +549,12 @@
           </form>
         </section>
       </div>
+      <nav class="workspace-mobile-nav" aria-label="Мобильная навигация Cloud">
+        <button type="button" class="active" data-workspace-target="workspace-overview" data-mobile-nav><span aria-hidden="true">⌂</span>Обзор</button>
+        <button type="button" data-workspace-target="local-vault" data-record-filter="all" data-mobile-nav><span aria-hidden="true">⌁</span>Vault</button>
+        <button type="button" data-workspace-target="team-vault" data-mobile-nav><span aria-hidden="true">◎</span>Команды</button>
+        <button type="button" id="workspace-mobile-account-open"><span aria-hidden="true">◉</span>Аккаунт</button>
+      </nav>
     </section>
 
     <section class="workspace-panel workspace-devices" id="workspace-devices" hidden>
@@ -651,6 +672,7 @@
         <button type="button" data-workspace-target="team-vault" data-team-view="members">Участники</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="vaults">Vaults</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="hosts">Ресурсы</button>
+        <button type="button" data-workspace-target="team-vault" data-team-view="activity">Активность</button>
         <button type="button" data-workspace-target="team-vault" data-team-view="management">Управление</button>
       </nav>
 
@@ -665,6 +687,8 @@
           <button type="button" data-workspace-target="team-vault" data-team-view="hosts" data-team-record-filter="credential" data-preserve-scroll>Credentials</button>
           <button type="button" data-workspace-target="team-vault" data-team-view="hosts" data-team-record-filter="snippet" data-preserve-scroll>Snippets</button>
           <button type="button" data-workspace-target="team-vault" data-team-view="hosts" data-team-record-filter="forwarding" data-preserve-scroll>Forwarding</button>
+          <button type="button" data-team-smart-filter="favorites">★ Избранное</button>
+          <button type="button" data-team-smart-filter="recent">Недавние</button>
         </nav>
       </div>
 
@@ -825,6 +849,13 @@
           </div>
         </section>
 
+        <section class="team-activity" id="team-activity-view" hidden aria-labelledby="team-activity-title">
+          <div class="team-activity-heading"><div><p class="eyebrow">TEAM AUDIT</p><h3 id="team-activity-title">Журнал активности</h3></div><button type="button" class="secondary" id="team-activity-refresh">Обновить</button></div>
+          <p>Только события управления и типы действий. Секреты, логины Credential и содержимое Snippets не загружаются.</p>
+          <div class="team-activity-list" id="team-activity-list" aria-live="polite"></div>
+          <button type="button" class="secondary" id="team-activity-more" hidden>Показать ещё</button>
+        </section>
+
         <div class="vault-workspace" id="team-vault-workspace" hidden>
           <div class="vault-toolbar">
             <div>
@@ -855,7 +886,7 @@
             <label for="team-record-target" id="team-record-target-label">Адрес</label>
             <input id="team-record-target" name="target" maxlength="2048">
             <label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label>
-            <textarea id="team-record-secret" name="secret" maxlength="32768" rows="3"></textarea>
+            <div class="field-with-help"><textarea id="team-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="team-record-secret-help"></textarea><small id="team-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется на устройстве до отправки.</small></div>
             <div class="team-host-fields" id="team-host-fields">
               <label for="team-host-protocol">Протокол</label>
               <select id="team-host-protocol" name="protocol"><option value="ssh">SSH</option><option value="rdp">RDP</option></select>
@@ -889,6 +920,13 @@
               <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
             </label>
           </div>
+          <div class="bulk-actions" id="team-bulk-actions" hidden>
+            <strong><span data-bulk-count>0</span> выбрано</strong>
+            <button type="button" class="secondary" data-bulk-select-visible>Выбрать видимые</button>
+            <button type="button" class="secondary" data-bulk-favorite>В избранное</button>
+            <button type="button" class="danger" data-bulk-delete>Удалить</button>
+            <button type="button" class="secondary" data-bulk-clear>Отменить выбор</button>
+          </div>
           <div class="vault-records" id="team-vault-records"></div>
           <section class="vault-conflicts" id="team-vault-conflicts" aria-labelledby="team-vault-conflicts-title" hidden>
             <h3 id="team-vault-conflicts-title">Конфликт Team-ревизий</h3>
@@ -910,6 +948,22 @@
       <div class="access-actions"><button type="button" data-open-auth="registration">Создать аккаунт</button><button type="button" class="secondary" data-open-auth="login">Войти</button></div>
     </section>
   </main>
+  <dialog class="command-palette" id="workspace-command-dialog" aria-labelledby="workspace-command-title">
+    <form method="dialog" class="command-palette-card">
+      <div class="command-palette-heading"><div><p class="eyebrow">БЫСТРЫЙ ПЕРЕХОД</p><h3 id="workspace-command-title">Поиск по Cloud</h3></div><button type="submit" class="secondary" aria-label="Закрыть">Esc</button></div>
+      <label for="workspace-command-search">Команда, раздел или запись</label>
+      <input id="workspace-command-search" type="search" maxlength="160" placeholder="Например, Host, команда или Production" autocomplete="off">
+      <div class="command-palette-results" id="workspace-command-results" role="listbox" aria-live="polite"></div>
+    </form>
+  </dialog>
+  <dialog class="mobile-account-dialog" id="workspace-mobile-account" aria-labelledby="workspace-mobile-account-title">
+    <form method="dialog" class="mobile-account-card">
+      <div class="command-palette-heading"><div><p class="eyebrow">CLOUD ACCOUNT</p><h3 id="workspace-mobile-account-title">Аккаунт</h3></div><button type="submit" class="secondary" aria-label="Закрыть">Закрыть</button></div>
+      <p id="workspace-mobile-account-name"></p>
+      <label class="theme-control"><span>Оформление</span><select data-theme-select aria-label="Тема оформления"><option value="graphite">Графит</option><option value="emerald">Изумруд</option><option value="light">Светлая</option></select></label>
+      <button type="button" class="danger" id="workspace-mobile-logout">Выйти из Cloud</button>
+    </form>
+  </dialog>
   <dialog class="app-confirmation" id="app-confirmation-dialog" aria-labelledby="app-confirmation-title" aria-describedby="app-confirmation-message">
     <form method="dialog" class="app-confirmation-card">
       <div class="app-confirmation-icon" aria-hidden="true">✓</div>
@@ -925,6 +979,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=171"></script>
+  <script type="module" src="/app.js?v=173"></script>
 </body>
 </html>

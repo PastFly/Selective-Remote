@@ -401,6 +401,25 @@ export class CloudService {
     };
   }
 
+  async listTeamAuditEvents(session, teamID, input = {}) {
+    const limit = Number(input?.limit ?? 50);
+    const cursorValue = input?.cursor;
+    const cursor = cursorValue === null || cursorValue === undefined || cursorValue === ""
+      ? null : String(cursorValue);
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100
+      || (cursor !== null && !/^[1-9][0-9]{0,18}$/u.test(cursor))) {
+      throw new Error("invalid_team_activity_query");
+    }
+    const page = await this.store.listTeamAuditEvents(teamID, session.user_id, { limit, cursor });
+    return {
+      events: page.rows.map((row) => ({
+        id: String(row.id), action: String(row.action), createdAt: row.created_at,
+        actor: { username: String(row.username ?? "deleted-user"), displayName: String(row.display_name ?? "Удалённый аккаунт") },
+      })),
+      nextCursor: page.nextCursor,
+    };
+  }
+
   async listTeamInvitations(session, teamID) {
     const rows = await this.store.listTeamInvitations(teamID, session.user_id);
     return { invitations: rows.map((row) => publicTeamInvitation(row)) };
