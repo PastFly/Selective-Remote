@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 63189)
-Total output lines: 5796
-
 import SwiftUI
 
 private enum ProfileTab: String, CaseIterable, Identifiable {
@@ -2356,7 +2353,1367 @@ struct ContentView: View {
                 HStack(spacing: 7) {
                     Text(profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName)
                         .font(.headline)
-           …13189 tokens truncated…     model.errorMessage = "Достигнут лимит вкладок Terminal Workspace"
+                        .lineLimit(1)
+                    Text("SSH")
+                        .font(.caption2.bold())
+                        .foregroundStyle(Color.indigo)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.indigo.opacity(0.10), in: Capsule())
+                }
+                Text(sshEndpointLabel)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 12)
+            sshWorkspaceSwitcher
+
+            Button {
+                selectedTab = .general
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Настройки", en: "Settings"),
+                    systemImage: "slider.horizontal.3"
+                )
+                .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .help(UpdateLocalization.text(ru: "Настройки профиля", en: "Profile Settings"))
+
+            Button {
+                setTerminalFocusMode(true)
+            } label: {
+                Label(
+                    UpdateLocalization.text(ru: "Фокус", en: "Focus"),
+                    systemImage: "arrow.up.left.and.arrow.down.right"
+                )
+                .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.bordered)
+            .help(
+                UpdateLocalization.text(
+                    ru: "Скрыть навигацию и отдать рабочей области максимум места",
+                    en: "Hide navigation and maximize the workspace"
+                )
+            )
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+        }
+    }
+
+    private var sshWorkspaceSwitcher: some View {
+        Picker(
+            UpdateLocalization.text(ru: "Рабочая область", en: "Workspace"),
+            selection: $selectedTab
+        ) {
+            ForEach(sshWorkspaceTabs) { tab in
+                Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                    .tag(tab)
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .frame(width: 300)
+    }
+
+    private var sshWorkspaceHeader: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.indigo, Color.purple],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Image(systemName: "terminal.fill")
+                    .font(.system(size: 25, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 56, height: 56)
+            .shadow(color: Color.indigo.opacity(0.20), radius: 9, y: 4)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(
+                        profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Новое SSH-подключение",
+                                en: "New SSH connection"
+                            )
+                            : profile.friendlyName
+                    )
+                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+
+                    Text("SSH")
+                        .font(.caption2.bold())
+                        .foregroundStyle(Color.indigo)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.indigo.opacity(0.10), in: Capsule())
+                }
+
+                HStack(spacing: 9) {
+                    Label(sshEndpointLabel, systemImage: "network")
+
+                    Label(
+                        profile.sshAuthenticationMode.title,
+                        systemImage: profile.sshAuthenticationMode.systemImage
+                    )
+
+                    if sshJumpHostProfile != nil {
+                        Label("Jump Host", systemImage: "server.rack")
+                    }
+
+                    if model.selectedProfileHasActiveTunnels {
+                        Label(
+                            UpdateLocalization.text(ru: "Туннель активен", en: "Tunnel active"),
+                            systemImage: "arrow.left.arrow.right"
+                        )
+                        .foregroundStyle(.orange)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button { model.toggleFavorite() } label: {
+                Image(systemName: profile.isFavorite ? "star.fill" : "star")
+            }
+            .buttonStyle(.bordered)
+            .help(UpdateLocalization.text(ru: "Избранное", en: "Favorite"))
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.075))
+        }
+    }
+
+    private var sshSectionRail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(UpdateLocalization.text(ru: "НАСТРОЙКА И РАБОТА", en: "SETTINGS & WORK"))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 2)
+
+            ForEach(availableTabs) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: tab.systemImage)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rdpTabTitle(tab))
+                                .font(.subheadline.weight(.semibold))
+                            Text(rdpTabSubtitle(tab))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if selectedTab == tab {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                        }
+                    }
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+                    .padding(.horizontal, 11)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    selectedTab == tab ? Color.accentColor.opacity(0.11) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label(
+                    UpdateLocalization.text(ru: "Автосохранение", en: "Auto Save"),
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+
+                Text(
+                    UpdateLocalization.text(
+                        ru: "Настройки применяются при следующем подключении.",
+                        en: "Settings apply to the next connection."
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .padding(10)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private var sshSectionHeading: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.10))
+                Image(systemName: selectedTab.systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rdpTabTitle(selectedTab))
+                    .font(.title2.bold())
+                Text(rdpTabDescription(selectedTab))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var sshQuickFacts: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 155), spacing: 10)],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            rdpFactCard(
+                UpdateLocalization.text(ru: "SSH-сервер", en: "SSH server"),
+                value: profile.host.isEmpty ? "—" : profile.host,
+                systemImage: "server.rack"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Пользователь", en: "User"),
+                value: profile.username.isEmpty ? "—" : profile.username,
+                systemImage: "person"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Порт", en: "Port"),
+                value: "\(profile.sshPort)",
+                systemImage: "number"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Маршрут", en: "Route"),
+                value: sshJumpHostProfile.map {
+                    $0.friendlyName.isEmpty
+                        ? ($0.host.isEmpty ? "Jump Host" : $0.host)
+                        : $0.friendlyName
+                } ?? UpdateLocalization.text(ru: "Прямое", en: "Direct"),
+                systemImage: "point.3.connected.trianglepath.dotted"
+            )
+        }
+    }
+
+    private var sshProfileInspector: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(UpdateLocalization.text(ru: "Сводка", en: "Summary"))
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(model.canConnect ? Color.green : Color.orange)
+                    .frame(width: 8, height: 8)
+            }
+
+            VStack(spacing: 8) {
+                rdpRouteNode(
+                    title: UpdateLocalization.text(ru: "Ваш Mac", en: "Your Mac"),
+                    subtitle: "Selective Remote",
+                    systemImage: "macbook"
+                )
+                Image(systemName: "arrow.down")
+                    .foregroundStyle(.secondary)
+
+                if let jump = sshJumpHostProfile {
+                    rdpRouteNode(
+                        title: jump.friendlyName.isEmpty ? "Jump Host" : jump.friendlyName,
+                        subtitle: sshEndpointLabel(for: jump),
+                        systemImage: "server.rack"
+                    )
+                    Image(systemName: "arrow.down")
+                        .foregroundStyle(.secondary)
+                }
+
+                rdpRouteNode(
+                    title: profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName,
+                    subtitle: sshEndpointLabel,
+                    systemImage: "terminal"
+                )
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(Color.primary.opacity(0.03), in: RoundedRectangle(cornerRadius: 13))
+
+            Divider()
+
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Аутентификация", en: "Authentication"),
+                value: profile.sshAuthenticationMode.title
+            )
+            rdpSummaryLine(
+                "Terminal",
+                value: profile.sshTerminalProtocol.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Host key", en: "Host key"),
+                value: profile.sshHostKeyPolicy.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Keepalive", en: "Keepalive"),
+                value: "\(profile.sshKeepAliveSeconds) s"
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Сжатие", en: "Compression"),
+                value: profile.sshCompression
+                    ? UpdateLocalization.text(ru: "Вкл.", en: "On")
+                    : UpdateLocalization.text(ru: "Выкл.", en: "Off")
+            )
+
+            Divider()
+
+            Text(UpdateLocalization.text(ru: "Рабочие области", en: "Workspaces"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            sshWorkspaceSummaryRow(
+                .terminal,
+                status: model.isSelectedSSHTerminalRunning
+                    ? UpdateLocalization.text(ru: "Активен", en: "Active")
+                    : UpdateLocalization.text(ru: "Готов", en: "Ready")
+            )
+            sshWorkspaceSummaryRow(
+                .sftp,
+                status: selectedProfileSFTPWorkspaceConnected
+                    ? UpdateLocalization.text(ru: "Подключён", en: "Connected")
+                    : UpdateLocalization.text(ru: "Готов", en: "Ready")
+            )
+            sshWorkspaceSummaryRow(
+                .forwarding,
+                status: model.selectedProfileHasActiveTunnels
+                    ? UpdateLocalization.text(ru: "Активны", en: "Active")
+                    : UpdateLocalization.text(ru: "Готов", en: "Ready")
+            )
+
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private func sshWorkspaceSummaryRow(_ tab: ProfileTab, status: String) -> some View {
+        Button {
+            selectedTab = tab
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: tab.systemImage)
+                    .frame(width: 18)
+                Text(rdpTabTitle(tab))
+                    .font(.caption)
+                Spacer()
+                Text(status)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var sshJumpHostProfile: ConnectionProfile? {
+        guard let jumpID = profile.sshJumpHostProfileID else { return nil }
+        return model.profiles.first(where: { $0.id == jumpID })
+    }
+
+    private var sshEndpointLabel: String {
+        sshEndpointLabel(for: profile)
+    }
+
+    private var selectedProfileSFTPWorkspaceConnected: Bool {
+        model.sftpWorkspace.tabs.contains { tab in
+            [tab.left, tab.right].contains { pane in
+                pane.kind == .remote
+                    && pane.connection?.profileID == profile.id
+                    && pane.isReady
+            }
+        }
+    }
+
+    private func sshEndpointLabel(for profile: ConnectionProfile) -> String {
+        let host = profile.host.isEmpty
+            ? UpdateLocalization.text(ru: "сервер не указан", en: "server not set")
+            : profile.host
+        let endpoint = "\(host):\(profile.sshPort)"
+        return profile.username.isEmpty ? endpoint : "\(profile.username)@\(endpoint)"
+    }
+
+
+    private var compactProfileSectionPicker: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 7) {
+                ForEach(availableTabs) { tab in
+                    Button {
+                        selectedTab = tab
+                    } label: {
+                        Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 8)
+                            .foregroundStyle(
+                                selectedTab == tab ? Color.accentColor : Color.primary
+                            )
+                            .background(
+                                selectedTab == tab
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.primary.opacity(0.04),
+                                in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var rdpProfileWorkspace: some View {
+        VStack(spacing: 0) {
+            GeometryReader { proxy in
+                VStack(alignment: .leading, spacing: 18) {
+                    rdpWorkspaceHeader
+
+                    if AdaptiveWorkspaceLayout.usesSingleColumnProfileEditor(
+                        width: proxy.size.width
+                    ) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            compactProfileSectionPicker
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        HStack(alignment: .top, spacing: 16) {
+                            rdpSectionRail
+                                .frame(width: 205)
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 18) {
+                                    rdpSectionHeading
+                                    rdpQuickFacts
+                                    selectedSettingsContent
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.bottom, 20)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            if AdaptiveWorkspaceLayout.showsProfileInspector(
+                                width: proxy.size.width
+                            ) {
+                                rdpProfileInspector
+                                    .frame(width: 270)
+                            }
+                        }
+                        .frame(maxWidth: 1380, maxHeight: .infinity, alignment: .topLeading)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            }
+
+            connectionBar
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
+    }
+
+    private var rdpWorkspaceHeader: some View {
+        HStack(spacing: 16) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.blue, Color.indigo],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Image(systemName: "desktopcomputer")
+                    .font(.system(size: 25, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            .frame(width: 56, height: 56)
+            .shadow(color: Color.blue.opacity(0.20), radius: 9, y: 4)
+
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(spacing: 8) {
+                    Text(
+                        profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Новое RDP-подключение",
+                                en: "New RDP connection"
+                            )
+                            : profile.friendlyName
+                    )
+                    .font(.system(size: 27, weight: .bold, design: .rounded))
+                    .lineLimit(1)
+
+                    Text("RDP")
+                        .font(.caption2.bold())
+                        .foregroundStyle(Color.blue)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.blue.opacity(0.10), in: Capsule())
+                }
+
+                HStack(spacing: 9) {
+                    Label(
+                        profile.host.isEmpty
+                            ? UpdateLocalization.text(
+                                ru: "Компьютер не указан",
+                                en: "Computer not set"
+                            )
+                            : profile.host,
+                        systemImage: "network"
+                    )
+
+                    if model.selectedProfileHasSavedPassword {
+                        Label(
+                            UpdateLocalization.text(
+                                ru: "Пароль в Keychain",
+                                en: "Password in Keychain"
+                            ),
+                            systemImage: "key.fill"
+                        )
+                        .foregroundStyle(.green)
+                    }
+
+                    if !profile.gatewayHost.isEmpty {
+                        Label("RD Gateway", systemImage: "building.2")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            Button { model.toggleFavorite() } label: {
+                Image(systemName: profile.isFavorite ? "star.fill" : "star")
+            }
+            .buttonStyle(.bordered)
+            .help(UpdateLocalization.text(ru: "Избранное", en: "Favorite"))
+        }
+        .padding(18)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.075))
+        }
+    }
+
+    private var rdpSectionRail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(UpdateLocalization.text(ru: "НАСТРОЙКА", en: "SETTINGS"))
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 10)
+                .padding(.bottom, 2)
+
+            ForEach(availableTabs) { tab in
+                Button {
+                    selectedTab = tab
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: tab.systemImage)
+                            .frame(width: 20)
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(rdpTabTitle(tab))
+                                .font(.subheadline.weight(.semibold))
+                            Text(rdpTabSubtitle(tab))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+
+                        Spacer(minLength: 0)
+
+                        if selectedTab == tab {
+                            Image(systemName: "chevron.right")
+                                .font(.caption2.weight(.bold))
+                        }
+                    }
+                    .foregroundStyle(selectedTab == tab ? Color.accentColor : Color.primary)
+                    .padding(.horizontal, 11)
+                    .frame(minHeight: 48)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .background(
+                    selectedTab == tab ? Color.accentColor.opacity(0.11) : Color.clear,
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+            }
+
+            Spacer(minLength: 12)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Label(
+                    UpdateLocalization.text(ru: "Автосохранение", en: "Auto Save"),
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+
+                Text(
+                    UpdateLocalization.text(
+                        ru: "Изменения профиля сохраняются сразу.",
+                        en: "Profile changes are saved immediately."
+                    )
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(11)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                Color.primary.opacity(0.035),
+                in: RoundedRectangle(cornerRadius: 12)
+            )
+        }
+        .padding(10)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private var rdpSectionHeading: some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.10))
+                Image(systemName: selectedTab.systemImage)
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 42, height: 42)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(rdpTabTitle(selectedTab))
+                    .font(.title2.bold())
+                Text(rdpTabDescription(selectedTab))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var rdpQuickFacts: some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 155), spacing: 10)],
+            alignment: .leading,
+            spacing: 10
+        ) {
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Компьютер", en: "Computer"),
+                value: profile.host.isEmpty ? "—" : profile.host,
+                systemImage: "desktopcomputer"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Пользователь", en: "User"),
+                value: profile.username.isEmpty ? "—" : profile.username,
+                systemImage: "person"
+            )
+            rdpFactCard(
+                UpdateLocalization.text(ru: "Мониторы", en: "Displays"),
+                value: "\(model.effectiveSelectedDisplayIDs.count)",
+                systemImage: "display.2"
+            )
+            rdpFactCard(
+                "Gateway",
+                value: profile.gatewayHost.isEmpty
+                    ? UpdateLocalization.text(ru: "Прямое", en: "Direct")
+                    : profile.gatewayHost,
+                systemImage: "point.3.connected.trianglepath.dotted"
+            )
+        }
+    }
+
+    private func rdpFactCard(
+        _ title: String,
+        value: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 9) {
+            Image(systemName: systemImage)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(value)
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .textSelection(.enabled)
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(11)
+        .background(
+            Color.primary.opacity(0.035),
+            in: RoundedRectangle(cornerRadius: 12)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(Color.primary.opacity(0.055))
+        }
+    }
+
+    private var rdpProfileInspector: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text(UpdateLocalization.text(ru: "Сводка", en: "Summary"))
+                    .font(.headline)
+                Spacer()
+                Circle()
+                    .fill(
+                        model.canConnect || model.isSelectedSessionRunning
+                            ? Color.green
+                            : Color.orange
+                    )
+                    .frame(width: 8, height: 8)
+            }
+
+            VStack(spacing: 8) {
+                rdpRouteNode(
+                    title: UpdateLocalization.text(ru: "Ваш Mac", en: "Your Mac"),
+                    subtitle: "Selective Remote",
+                    systemImage: "macbook"
+                )
+                Image(systemName: "arrow.down")
+                    .foregroundStyle(.secondary)
+
+                if !profile.gatewayHost.isEmpty {
+                    rdpRouteNode(
+                        title: "RD Gateway",
+                        subtitle: profile.gatewayHost,
+                        systemImage: "building.2"
+                    )
+                    Image(systemName: "arrow.down")
+                        .foregroundStyle(.secondary)
+                }
+
+                rdpRouteNode(
+                    title: "Windows",
+                    subtitle: profile.host.isEmpty ? "—" : profile.host,
+                    systemImage: "desktopcomputer"
+                )
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity)
+            .background(
+                Color.primary.opacity(0.03),
+                in: RoundedRectangle(cornerRadius: 13)
+            )
+
+            Divider()
+
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Режим окна", en: "Window mode"),
+                value: profile.rdpWindowMode.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Масштаб", en: "Scale"),
+                value: profile.windowsScale.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Качество", en: "Quality"),
+                value: profile.rdpQuality.title
+            )
+            rdpSummaryLine(
+                UpdateLocalization.text(ru: "Мониторы", en: "Displays"),
+                value: "\(model.effectiveSelectedDisplayIDs.count)"
+            )
+
+            Divider()
+
+            Text(UpdateLocalization.text(ru: "Перенаправления", en: "Redirection"))
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Микрофон", en: "Microphone"),
+                enabled: profile.redirectMicrophone,
+                systemImage: "mic"
+            )
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Камера", en: "Camera"),
+                enabled: profile.redirectCamera,
+                systemImage: "video"
+            )
+            rdpFeatureRow(
+                UpdateLocalization.text(ru: "Принтеры", en: "Printers"),
+                enabled: profile.redirectPrinters,
+                systemImage: "printer"
+            )
+
+            Spacer(minLength: 0)
+        }
+        .padding(15)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(
+            .regularMaterial,
+            in: RoundedRectangle(cornerRadius: 16, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.065))
+        }
+    }
+
+    private func rdpRouteNode(
+        title: String,
+        subtitle: String,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 9) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 9)
+                    .fill(Color.accentColor.opacity(0.10))
+                Image(systemName: systemImage)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 34, height: 34)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                Text(subtitle)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func rdpSummaryLine(_ title: String, value: String) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(title)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .font(.caption.weight(.semibold))
+                .multilineTextAlignment(.trailing)
+                .lineLimit(2)
+        }
+    }
+
+    private func rdpFeatureRow(
+        _ title: String,
+        enabled: Bool,
+        systemImage: String
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .frame(width: 18)
+                .foregroundStyle(enabled ? Color.green : Color.secondary)
+            Text(title)
+                .font(.caption)
+            Spacer()
+            Text(
+                enabled
+                    ? UpdateLocalization.text(ru: "Вкл.", en: "On")
+                    : UpdateLocalization.text(ru: "Выкл.", en: "Off")
+            )
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(enabled ? Color.green : Color.secondary)
+        }
+    }
+
+    private func rdpTabTitle(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            UpdateLocalization.text(ru: "Основное", en: "General")
+        case .authentication:
+            UpdateLocalization.text(ru: "Аутентификация", en: "Authentication")
+        case .route:
+            UpdateLocalization.text(ru: "Маршрут", en: "Route")
+        case .display:
+            UpdateLocalization.text(ru: "Экран", en: "Display")
+        case .devices:
+            UpdateLocalization.text(ru: "Устройства", en: "Devices")
+        case .folders:
+            UpdateLocalization.text(ru: "Папки", en: "Folders")
+        case .security:
+            UpdateLocalization.text(ru: "Безопасность", en: "Security")
+        case .terminal:
+            UpdateLocalization.text(ru: "Терминал", en: "Terminal")
+        case .automation:
+            UpdateLocalization.text(ru: "Автоматизация", en: "Automation")
+        case .sftp:
+            "SFTP"
+        case .forwarding:
+            UpdateLocalization.text(ru: "Туннели", en: "Forwarding")
+        }
+    }
+
+    private func rdpTabSubtitle(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            UpdateLocalization.text(
+                ru: "Адрес и учётная запись",
+                en: "Address and account"
+            )
+        case .authentication:
+            UpdateLocalization.text(
+                ru: "Пароль, ключ или Touch ID",
+                en: "Password, key, or Touch ID"
+            )
+        case .route:
+            UpdateLocalization.text(
+                ru: "Jump Host, proxy, OpenSSH",
+                en: "Jump Host, proxy, OpenSSH"
+            )
+        case .display:
+            UpdateLocalization.text(
+                ru: "Мониторы и качество",
+                en: "Displays and quality"
+            )
+        case .devices:
+            UpdateLocalization.text(
+                ru: "Звук, камера, клавиатура",
+                en: "Audio, camera, keyboard"
+            )
+        case .folders:
+            UpdateLocalization.text(
+                ru: "Локальные ресурсы",
+                en: "Local resources"
+            )
+        case .security:
+            UpdateLocalization.text(
+                ru: "Доверие и хранение",
+                en: "Trust and storage"
+            )
+        case .terminal:
+            UpdateLocalization.text(ru: "Командная строка", en: "Command line")
+        case .automation:
+            UpdateLocalization.text(ru: "Startup Snippets и группы", en: "Startup Snippets & groups")
+        case .sftp:
+            UpdateLocalization.text(ru: "Файлы и серверы", en: "Files & servers")
+        case .forwarding:
+            UpdateLocalization.text(ru: "Проброс портов", en: "Port forwarding")
+        }
+    }
+
+    private func rdpTabDescription(_ tab: ProfileTab) -> String {
+        switch tab {
+        case .general:
+            profile.connectionType == .ssh
+                ? UpdateLocalization.text(
+                    ru: "Название, адрес SSH-сервера, пользователь и порт.",
+                    en: "Name, SSH server address, user, and port."
+                )
+                : UpdateLocalization.text(
+                    ru: "Компьютер, пользователь, Keychain и RD Gateway.",
+                    en: "Computer, user, Keychain, and RD Gateway."
+                )
+        case .authentication:
+            UpdateLocalization.text(
+                ru: "Выберите способ входа, пароль, SSH ID или ключ с Touch ID.",
+                en: "Choose a sign-in method, password, SSH ID, or Touch ID key."
+            )
+        case .route:
+            UpdateLocalization.text(
+                ru: "Настройте Jump Host, HTTP/SOCKS proxy и параметры OpenSSH.",
+                en: "Configure Jump Host, HTTP/SOCKS proxy, and OpenSSH options."
+            )
+        case .display:
+            UpdateLocalization.text(
+                ru: "Мониторы Mac, виртуальная схема Windows, масштаб и качество изображения.",
+                en: "Mac displays, Windows virtual layout, scale, and image quality."
+            )
+        case .devices:
+            UpdateLocalization.text(
+                ru: "Звук, буфер обмена, клавиатура, микрофон, камера и принтеры.",
+                en: "Audio, clipboard, keyboard, microphone, camera, and printers."
+            )
+        case .folders:
+            UpdateLocalization.text(
+                ru: "Папки Mac, которые будут доступны внутри Windows.",
+                en: "Mac folders that will be available inside Windows."
+            )
+        case .security:
+            UpdateLocalization.text(
+                ru: "Доверие, Keychain, импорт и экспорт профиля.",
+                en: "Trust, Keychain, profile import, and export."
+            )
+        case .terminal:
+            UpdateLocalization.text(
+                ru: "Полноразмерный Terminal Workspace этого SSH-профиля.",
+                en: "Full-size Terminal Workspace for this SSH profile."
+            )
+        case .automation:
+            UpdateLocalization.text(
+                ru: "Startup Snippet, переменные и наследование настроек SSH-группы.",
+                en: "Startup Snippet, variables, and SSH group inheritance."
+            )
+        case .sftp:
+            UpdateLocalization.text(
+                ru: "SFTP Workspace этого SSH-профиля: соседняя панель может быть этим Mac или другим сервером.",
+                en: "SFTP Workspace for this SSH profile; the opposite pane can be this Mac or another server."
+            )
+        case .forwarding:
+            UpdateLocalization.text(
+                ru: "Локальные, удалённые и динамические SSH-туннели.",
+                en: "Local, remote, and dynamic SSH tunnels."
+            )
+        }
+    }
+
+
+    private var globalTerminalDetail: some View {
+        VStack(spacing: 0) {
+            if !terminalFocusMode {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("SSH")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("SSH, Mosh, Telnet и Serial · вкладки и разделённые панели")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 16)
+            }
+
+            globalTerminalPanel
+                .padding(.horizontal, terminalFocusMode ? 10 : 28)
+                .padding(.bottom, terminalFocusMode ? 10 : 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
+    }
+
+    private var localTerminalDetail: some View {
+        VStack(spacing: 0) {
+            if !terminalFocusMode {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("Терминал")
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                        Text("Локальный shell этого Mac · вкладки, история и сниппеты")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 28)
+                .padding(.top, 28)
+                .padding(.bottom, 10)
+            }
+
+            LocalTerminalView(
+                workspace: model.localTerminalWorkspace(),
+                appearance: terminalAppearance,
+                appAppearance: appAppearance,
+                sshProfiles: sortedSSHProfiles,
+                isFocusMode: terminalFocusMode,
+                connect: { tab in
+                    model.connectLocalTerminal(
+                        connection: tab.connection,
+                        tabID: tab.id,
+                        session: tab.session
+                    )
+                },
+                toggleFocusMode: {
+                    setTerminalFocusMode(!terminalFocusMode)
+                },
+                executeSnippet: model.runTerminalSnippet
+            )
+            .padding(.horizontal, terminalFocusMode ? 0 : 10)
+            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .controlSize(.large)
+    }
+
+    private var globalSFTPDetail: some View {
+        VStack(spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(UpdateLocalization.text(ru: "Файлы SFTP", en: "SFTP"))
+                        .font(.system(size: 30, weight: .bold, design: .rounded))
+                    Text("Несколько SFTP-вкладок · Local ↔ Server · Server ↔ Server")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 28)
+            .padding(.bottom, 16)
+
+            SFTPWorkspaceView(workspace: model.sftpWorkspace)
+                .padding(.horizontal, 28)
+                .padding(.bottom, 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .groupBoxStyle(ModernGroupBoxStyle())
+        .controlSize(.large)
+    }
+
+    private var credentialVaultDetail: some View {
+        CredentialVaultView(presentation: .embedded) { profileID in
+            model.selectProfile(profileID)
+            openPersonalHosts()
+            selectedTab = .general
+        }
+        .environmentObject(model)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var sortedSSHProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType == .ssh }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+    }
+
+    private var sortedRemoteTerminalProfiles: [ConnectionProfile] {
+        model.profiles
+            .filter { $0.connectionType != .rdp }
+            .sorted {
+                $0.friendlyName.localizedStandardCompare($1.friendlyName)
+                    == .orderedAscending
+            }
+    }
+
+    @ViewBuilder
+    private var selectedSettingsContent: some View {
+        switch selectedTab {
+        case .general: generalSettings
+        case .authentication: sshAuthenticationSettings
+        case .route: sshRouteSettings
+        case .display: displaySettings
+        case .devices: deviceSettings
+        case .folders: folderSettings
+        case .terminal: EmptyView()
+        case .automation:
+            SSHAutomationSettingsView(
+                profile: profileBinding,
+                sshProfiles: model.profiles.filter { $0.connectionType == .ssh }
+            )
+        case .sftp: EmptyView()
+        case .forwarding: EmptyView()
+        case .security: securitySettings
+        }
+    }
+
+    private var terminalPanel: some View {
+        SSHTerminalView(
+            workspace: model.terminalWorkspace(profileID: profile.id),
+            appearance: terminalAppearance,
+            appAppearance: appAppearance,
+            workspaceTitle: profile.friendlyName,
+            defaultProfileID: profile.id,
+            locksPrimaryConnection: true,
+            sshProfiles: sortedRemoteTerminalProfiles,
+            hasInstallableKey: profile.connectionType == .ssh
+                && model.selectedSSHKey?.publicKeyPath != nil,
+            isFocusMode: terminalFocusMode,
+            connect: { tab, temporaryPassword in
+                model.connectTerminal(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session,
+                    temporaryPassword: temporaryPassword
+                )
+            },
+            installKey: model.installSelectedSSHPublicKey,
+            toggleFocusMode: {
+                setTerminalFocusMode(!terminalFocusMode)
+            },
+            openSFTP: { tab in
+                model.sftpWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: nil
+                )
+                selectedTab = .sftp
+            },
+            openSFTPPath: { tab, path in
+                model.sftpWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: path
+                )
+                selectedTab = .sftp
+            },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
+            },
+            executeSnippet: model.runTerminalSnippet,
+            discoverContext: { tab in
+                try await model.discoverTerminalContext(
+                    connection: tab.connection,
+                    tabID: tab.id
+                )
+            }
+        )
+    }
+
+    private var globalTerminalPanel: some View {
+        let profiles = sortedRemoteTerminalProfiles
+        return SSHTerminalView(
+            workspace: model.globalTerminalWorkspace(),
+            appearance: terminalAppearance,
+            appAppearance: appAppearance,
+            workspaceTitle: "SSH",
+            defaultProfileID: profiles.first?.id,
+            locksPrimaryConnection: false,
+            sshProfiles: profiles,
+            hasInstallableKey: false,
+            isFocusMode: terminalFocusMode,
+            connect: { tab, temporaryPassword in
+                model.connectTerminal(
+                    connection: tab.connection,
+                    tabID: tab.id,
+                    session: tab.session,
+                    temporaryPassword: temporaryPassword
+                )
+            },
+            installKey: {},
+            toggleFocusMode: {
+                setTerminalFocusMode(!terminalFocusMode)
+            },
+            openSFTP: { tab in
+                model.sftpWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: nil
+                )
+                setMainArea(.sftp)
+            },
+            openSFTPPath: { tab, path in
+                model.sftpWorkspace.requestOpen(
+                    connection: tab.connection,
+                    path: path
+                )
+                setMainArea(.sftp)
+            },
+            openSnippetLibrary: {
+                setMainArea(.snippets)
+            },
+            executeSnippet: model.runTerminalSnippet,
+            discoverContext: { tab in
+                try await model.discoverTerminalContext(
+                    connection: tab.connection,
+                    tabID: tab.id
+                )
+            }
+        )
+    }
+
+
+    private func profileTabStorageKey(profileID: UUID) -> String {
+        "SelectiveRemote.profile.lastTab.v1.\(profileID.uuidString)"
+    }
+
+    private func restoredProfileTab(for profileID: UUID) -> ProfileTab {
+        if let cached = profileTabs[profileID] {
+            return cached
+        }
+        guard let rawValue = UserDefaults.standard.string(
+            forKey: profileTabStorageKey(profileID: profileID)
+        ), let stored = ProfileTab(rawValue: rawValue) else {
+            return .general
+        }
+        return stored
+    }
+
+    private func openQuickConnectSSH(_ request: QuickConnectSSHRequest) {
+        let connection: TerminalTabConnection
+        let temporaryPassword: String?
+
+        if request.saveAsProfile {
+            guard let profileID = model.saveQuickConnectSSHProfile(request) else { return }
+            connection = .savedProfile(profileID)
+            temporaryPassword = nil
+        } else {
+            connection = .custom(
+                host: request.target.host,
+                username: request.target.username,
+                port: request.target.port,
+                authenticationMode: request.authenticationMode,
+                identityID: request.identityID,
+                jumpHostProfileID: request.jumpHostProfileID
+            )
+            temporaryPassword = request.password.isEmpty ? nil : request.password
+        }
+
+        let workspace = model.globalTerminalWorkspace()
+        guard let tab = workspace.addTab(
+            connection: connection,
+            title: connection.displayLabel(profiles: sortedSSHProfiles)
+        ) else {
+            model.errorMessage = "Достигнут лимит вкладок Terminal Workspace"
             return
         }
         model.connectSSHTerminal(
