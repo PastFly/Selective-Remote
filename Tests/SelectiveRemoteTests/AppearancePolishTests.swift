@@ -112,6 +112,10 @@ func managementWorkspaceCompositionContract() throws {
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamHosts.swift"),
         encoding: .utf8
     )
+    let teamSnippets = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamSnippets.swift"),
+        encoding: .utf8
+    )
     let controls = try String(
         contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppControlStyles.swift"),
         encoding: .utf8
@@ -126,6 +130,13 @@ func managementWorkspaceCompositionContract() throws {
     #expect(content.contains("compact: surface == .sidebar"))
     #expect(teamHosts.contains("teamHostNavigatorToolbar"))
     #expect(teamHosts.contains("let onShowPersonal: () -> Void"))
-    #expect(controls.contains("ProfileCollectionDisplayModeMenuItems"))
+    #expect(controls.contains("struct ProfileCollectionDisplayModePicker"))
+    #expect(controls.contains(".pickerStyle(.segmented)"))
+    #expect(content.components(separatedBy: "ProfileCollectionDisplayModePicker(").count == 4)
+    #expect(teamHosts.contains("ProfileCollectionDisplayModePicker(selection: $displayMode)"))
+    #expect(teamSnippets.contains("ProfileCollectionDisplayModePicker(selection: $displayMode)"))
+    #expect(!controls.contains("ProfileCollectionDisplayModeMenuItems"))
+    #expect(content.contains(".focusEffectDisabled()"))
+    #expect(teamHosts.contains(".focusEffectDisabled()"))
     #expect(controls.contains("SelectiveRemoteCompactAddMenuLabel"))
 }

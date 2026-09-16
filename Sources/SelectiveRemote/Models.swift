@@ -693,8 +693,8 @@ enum ProfileCollectionDisplayMode: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .list: "Список"
-        case .grid: "Плитка"
+        case .list: UpdateLocalization.text(ru: "Список", en: "List")
+        case .grid: UpdateLocalization.text(ru: "Плитка", en: "Grid")
         }
     }
 

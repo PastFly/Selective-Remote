@@ -65,20 +65,28 @@ extension View {
     }
 }
 
-struct ProfileCollectionDisplayModeMenuItems: View {
+struct ProfileCollectionDisplayModePicker: View {
     @Binding var selection: ProfileCollectionDisplayMode
 
     var body: some View {
-        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
-            Button {
-                selection = mode
-            } label: {
-                Label(
-                    mode.title,
-                    systemImage: selection == mode ? "checkmark" : mode.systemImage
-                )
+        Picker(
+            UpdateLocalization.text(ru: "Вид", en: "View"),
+            selection: $selection
+        ) {
+            ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                Image(systemName: mode.systemImage)
+                    .tag(mode)
+                    .accessibilityLabel(mode.title)
             }
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .frame(width: 82)
+        .help(UpdateLocalization.text(
+            ru: "Список или плитка",
+            en: "List or grid"
+        ))
     }
 }
 

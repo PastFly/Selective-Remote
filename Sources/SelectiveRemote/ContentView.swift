@@ -789,14 +789,9 @@ struct ContentView: View {
 
                 Spacer()
 
-                Menu {
-                    ProfileCollectionDisplayModeMenuItems(
-                        selection: $model.profileCollectionDisplayMode
-                    )
-                } label: {
-                    Image(systemName: model.profileCollectionDisplayMode.systemImage)
-                }
-                .help("Список или плитка подключений")
+                ProfileCollectionDisplayModePicker(
+                    selection: $model.profileCollectionDisplayMode
+                )
 
                 Menu {
                     Button("Импортировать…", systemImage: "square.and.arrow.down") {
@@ -852,15 +847,7 @@ struct ContentView: View {
 
                     Spacer()
 
-                    Menu {
-                        ProfileCollectionDisplayModeMenuItems(selection: $teamHostDisplayMode)
-                    } label: {
-                        Image(systemName: teamHostDisplayMode.systemImage)
-                    }
-                    .help(UpdateLocalization.text(
-                        ru: "Список или плитка Team Hosts",
-                        en: "Team Hosts list or grid"
-                    ))
+                    ProfileCollectionDisplayModePicker(selection: $teamHostDisplayMode)
 
                     Menu {
                         Picker(
@@ -1005,6 +992,7 @@ struct ContentView: View {
                             )
                         }
                         .buttonStyle(.plain)
+                        .focusEffectDisabled()
                         .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                         .listRowBackground(
                             Color.clear
@@ -1081,6 +1069,7 @@ struct ContentView: View {
                                         )
                                     }
                                     .buttonStyle(.plain)
+                                    .focusEffectDisabled()
                                     .contextMenu { profileContextMenu(item) }
                                     .draggable("personal-host:\(item.id.uuidString)")
                                     .dropDestination(for: String.self) { values, _ in
@@ -1246,6 +1235,7 @@ struct ContentView: View {
                                             teamHostSidebarGridCard(host)
                                         }
                                         .buttonStyle(.plain)
+                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
                                     }
                                 }
@@ -1285,6 +1275,7 @@ struct ContentView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .focusEffectDisabled()
     }
 
     private func teamHostSidebarGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -1655,11 +1646,11 @@ struct ContentView: View {
                 .fixedSize()
                 .help(UpdateLocalization.text(ru: "Добавить Host", en: "Add Host"))
 
+                ProfileCollectionDisplayModePicker(
+                    selection: $model.profileCollectionDisplayMode
+                )
+
                 Menu {
-                    ProfileCollectionDisplayModeMenuItems(
-                        selection: $model.profileCollectionDisplayMode
-                    )
-                    Divider()
                     Picker(
                         UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
                         selection: $model.profileSortMode
@@ -1669,12 +1660,12 @@ struct ContentView: View {
                         }
                     }
                 } label: {
-                    Image(systemName: "slider.horizontal.3")
+                    Image(systemName: "arrow.up.arrow.down")
                 }
                 .menuStyle(.borderlessButton)
                 .help(UpdateLocalization.text(
-                    ru: "Вид и сортировка списка хостов",
-                    en: "Host list view and sorting"
+                    ru: "Сортировка хостов",
+                    en: "Sort Hosts"
                 ))
             }
         }
