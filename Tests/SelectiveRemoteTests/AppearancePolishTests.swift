@@ -67,3 +67,35 @@ func menuPickersShareModernChrome() throws {
         #expect(source.contains(".modernMenuPicker("), "Missing shared picker style in \(path)")
     }
 }
+
+@Test("Hosts and Credentials share the native management workspace chrome")
+func managementWorkspacesShareVisualLanguage() throws {
+    let root = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let controls = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/AppControlStyles.swift"),
+        encoding: .utf8
+    )
+    let content = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+    let credentials = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CredentialVaultView.swift"),
+        encoding: .utf8
+    )
+    let teamCredentials = try String(
+        contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/CloudTeamCredentials.swift"),
+        encoding: .utf8
+    )
+
+    #expect(controls.contains("SelectiveRemoteWorkspaceChrome"))
+    #expect(controls.contains("SelectiveRemoteNavigationButtonStyle"))
+    #expect(controls.contains("func selectiveRemoteWorkspaceSurface"))
+    #expect(content.contains("PERSONAL VAULT"))
+    #expect(content.contains("SelectiveRemoteNavigationButtonStyle(selected: mainArea == area)"))
+    #expect(content.contains("selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)"))
+    #expect(credentials.contains("TEAM VAULT"))
+    #expect(credentials.contains("SelectiveRemoteWorkspaceChrome.accentStrong"))
+    #expect(teamCredentials.contains("selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: selected)"))
+}

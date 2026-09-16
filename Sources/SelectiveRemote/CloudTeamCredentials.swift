@@ -635,8 +635,13 @@ struct SelectiveRemoteTeamCredentialsView: View {
                                     ForEach(vault.folders) { folder in
                                         DisclosureGroup(isExpanded: expansionBinding(forFolder: folder.id)) {
                                             ForEach(folder.credentials) { credential in
-                                                credentialRow(credential)
+                                                credentialRow(
+                                                    credential,
+                                                    selected: selectedCredentialID == credential.id
+                                                )
                                                     .tag(credential.id)
+                                                    .listRowBackground(Color.clear)
+                                                    .listRowSeparator(.hidden)
                                                     .contextMenu { credentialActions(credential) }
                                             }
                                         } label: {
@@ -649,6 +654,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
                             }
                         }
                         .listStyle(.inset)
+                        .scrollContentBackground(.hidden)
                     }
                     Divider()
                     status
@@ -751,9 +757,13 @@ struct SelectiveRemoteTeamCredentialsView: View {
             }
         }
         .padding(14)
+        .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.025))
     }
 
-    private func credentialRow(_ credential: SelectiveRemoteTeamCredential) -> some View {
+    private func credentialRow(
+        _ credential: SelectiveRemoteTeamCredential,
+        selected: Bool
+    ) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Text(credential.title).font(.headline).lineLimit(1)
@@ -780,7 +790,9 @@ struct SelectiveRemoteTeamCredentialsView: View {
                 .lineLimit(1)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: selected)
     }
 
     private func inspector(_ credential: SelectiveRemoteTeamCredential) -> some View {
@@ -788,9 +800,12 @@ struct SelectiveRemoteTeamCredentialsView: View {
             HStack(alignment: .top, spacing: 14) {
                 Image(systemName: "key.viewfinder")
                     .font(.title2.weight(.semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
                     .frame(width: 42, height: 42)
-                    .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 11))
+                    .background(
+                        SelectiveRemoteWorkspaceChrome.accent.opacity(0.14),
+                        in: RoundedRectangle(cornerRadius: 11)
+                    )
                 VStack(alignment: .leading, spacing: 4) {
                     Text(credential.title).font(.title2.bold())
                     Text("\(credential.teamName) / \(credential.vaultName)")

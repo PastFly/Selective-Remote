@@ -280,6 +280,18 @@ struct CredentialVaultView: View {
                     }
                 }
             }
+            .background {
+                LinearGradient(
+                    colors: [
+                        SelectiveRemoteWorkspaceChrome.accent.opacity(0.065),
+                        Color(nsColor: .windowBackgroundColor),
+                        Color(nsColor: .windowBackgroundColor)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+            }
         }
         .frame(
             minWidth: presentation == .sheet ? 680 : nil,
@@ -420,14 +432,20 @@ struct CredentialVaultView: View {
         HStack(alignment: .center, spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(Color.accentColor.opacity(0.13))
+                    .fill(SelectiveRemoteWorkspaceChrome.accent.opacity(0.14))
                 Image(systemName: "key.viewfinder")
                     .font(.system(size: 24, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
             }
             .frame(width: compact ? 40 : 48, height: compact ? 40 : 48)
 
             VStack(alignment: .leading, spacing: 3) {
+                Text(credentialScope == .personal
+                    ? UpdateLocalization.text(ru: "PERSONAL VAULT", en: "PERSONAL VAULT")
+                    : UpdateLocalization.text(ru: "TEAM VAULT", en: "TEAM VAULT"))
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .tracking(1.3)
+                    .foregroundStyle(SelectiveRemoteWorkspaceChrome.accentStrong)
                 Text(credentialScope == .personal
                     ? UpdateLocalization.text(ru: "Связка ключей", en: "Keychain")
                     : UpdateLocalization.text(ru: "Учётные данные", en: "Credentials"))
@@ -506,6 +524,7 @@ struct CredentialVaultView: View {
         }
         .padding(.horizontal, compact ? 16 : 22)
         .padding(.vertical, compact ? 12 : 16)
+        .background(SelectiveRemoteWorkspaceChrome.accent.opacity(0.035))
     }
 
     private func vaultList(compact: Bool) -> some View {
@@ -566,8 +585,13 @@ struct CredentialVaultView: View {
                             .font(.caption.weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .buttonStyle(.bordered)
-                    .tint(filter == item ? Color.accentColor : nil)
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 9)
+                    .frame(minHeight: 30)
+                    .selectiveRemoteWorkspaceSurface(
+                        cornerRadius: 9,
+                        selected: filter == item
+                    )
                 }
             }
             .padding(12)
@@ -650,6 +674,11 @@ struct CredentialVaultView: View {
             agentStrip
         }
         .background(.ultraThinMaterial)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(width: 1)
+        }
     }
 
     private var keychainSearchToolbar: some View {
@@ -853,7 +882,9 @@ struct CredentialVaultView: View {
                     .help("Загружен в ssh-agent")
             }
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать public key", systemImage: "doc.on.doc") {
                 model.copySSHPublicKey(key.id)
@@ -923,7 +954,9 @@ struct CredentialVaultView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             if let onOpenProfile {
                 Button("Открыть SSH-профиль", systemImage: "arrow.right.circle") {
@@ -969,7 +1002,9 @@ struct CredentialVaultView: View {
                     .foregroundStyle(.orange)
             }
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать fingerprint", systemImage: "doc.on.doc") {
                 NSPasteboard.general.clearContents()
@@ -1017,7 +1052,9 @@ struct CredentialVaultView: View {
             Image(systemName: authority.hasPrivateKey ? "checkmark.shield.fill" : "lock.open")
                 .foregroundStyle(authority.hasPrivateKey ? Color.green : Color.secondary)
         }
-        .padding(.vertical, 5)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 6)
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)
         .contextMenu {
             Button("Копировать fingerprint", systemImage: "doc.on.doc") {
                 NSPasteboard.general.clearContents()
@@ -1610,11 +1647,7 @@ struct CredentialVaultView: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.07))
-        }
+        .selectiveRemoteWorkspaceSurface(cornerRadius: 16)
     }
 
     private func compactSelectionGesture(
