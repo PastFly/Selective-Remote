@@ -919,3 +919,153 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
     display: inline-flex;
   }
 }
+
+/* Cloud review fixes v174 */
+.brand { position:relative; z-index:100; }
+.site-more { z-index:110; }
+.site-more-menu { z-index:120; }
+.hero { z-index:1; }
+.hero-preview {
+  background:linear-gradient(150deg,#12231ec7,#07100dd8);
+  box-shadow:0 35px 100px #0008,0 0 70px #75e0b410,0 1px 0 #ffffff09 inset;
+}
+.preview-workspace,.preview-window-bar { position:relative; z-index:1; }
+
+#cloud-workspace .workspace-main { min-width:0; }
+#cloud-workspace .workspace-header {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:center;
+  min-height:76px;
+}
+#cloud-workspace .workspace-header>div:first-child { min-width:0; }
+#cloud-workspace .workspace-header h2 {
+  overflow:hidden;
+  white-space:nowrap;
+  text-overflow:ellipsis;
+}
+.workspace-global-actions { flex-wrap:nowrap; }
+.workspace-global-actions>* { flex:0 0 auto; }
+
+.team-resource-context {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:14px;
+  margin-bottom:13px;
+}
+.team-resource-context>span { color:var(--muted); font-size:12px; font-weight:750; letter-spacing:.05em; text-transform:uppercase; }
+.team-resource-context button { min-height:38px; padding:8px 12px; }
+
+.vault-utility-menu { position:relative; flex:0 0 auto; }
+.vault-utility-menu>summary {
+  display:grid;
+  place-items:center;
+  width:42px;
+  height:42px;
+  list-style:none;
+  border:1px solid var(--line);
+  border-radius:11px;
+  background:transparent;
+  color:var(--ink);
+  cursor:pointer;
+  font-weight:850;
+}
+.vault-utility-menu>summary::-webkit-details-marker { display:none; }
+.vault-utility-menu[open]>summary { border-color:#75e0b45c; background:#75e0b40d; color:var(--accent); }
+.vault-utility-menu-panel {
+  position:absolute;
+  z-index:80;
+  right:0;
+  top:49px;
+  display:grid;
+  gap:7px;
+  width:max-content;
+  min-width:230px;
+  padding:10px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:#08110ef5;
+  box-shadow:0 22px 60px #000a;
+  text-align:left;
+}
+.vault-utility-menu-panel button { width:100%; margin:0; text-align:left; }
+.vault-toolbar-compact { align-items:center; min-height:58px; padding:10px 0; }
+.vault-toolbar-status { display:flex; align-items:center; gap:13px; min-width:0; }
+.vault-toolbar-status h3 { flex:0 1 auto; margin:0; white-space:nowrap; }
+.vault-toolbar-status p {
+  min-width:0;
+  overflow:hidden;
+  margin:0;
+  padding-left:13px;
+  border-left:1px solid var(--line);
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  font-size:12px;
+}
+:root[data-theme="light"] .vault-utility-menu-panel { background:#f8fcfaf5; }
+
+.device-vault-orbit>i {
+  left:var(--device-x);
+  right:auto;
+  top:var(--device-y);
+  bottom:auto;
+  transform:translate(-50%,-50%);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  box-shadow:0 0 22px #75e0b420;
+  animation:device-node-arrive .42s cubic-bezier(.2,.8,.2,1) both;
+}
+.device-vault-orbit>i::before {
+  content:"";
+  position:absolute;
+  z-index:-1;
+  width:130px;
+  height:1px;
+  right:50%;
+  top:50%;
+  background:linear-gradient(90deg,#75e0b43d,transparent);
+  transform-origin:right center;
+}
+.device-vault-orbit>i.pending { border-color:#f1bb616e; color:#f1d39c; box-shadow:0 0 22px #f1bb6120; }
+.device-vault-orbit>i.current { border-color:var(--accent); background:#10281f; color:var(--accent); }
+@keyframes device-node-arrive { from { opacity:0; scale:.72; } to { opacity:1; scale:1; } }
+
+@media (max-width:880px) {
+  #cloud-workspace.workspace-layout { padding-bottom:calc(90px + env(safe-area-inset-bottom)); }
+  #cloud-workspace .workspace-header {
+    display:flex;
+    align-items:center;
+    min-height:58px;
+    margin-bottom:14px;
+    padding-bottom:14px;
+  }
+  .workspace-mobile-nav {
+    position:fixed;
+    z-index:900;
+    left:8px;
+    right:8px;
+    bottom:max(8px,env(safe-area-inset-bottom));
+    overflow:hidden;
+    border:1px solid var(--line);
+    border-radius:16px;
+    box-shadow:0 18px 50px #0009;
+  }
+  .team-resource-context { align-items:stretch; flex-direction:column; }
+  .team-resource-context button { width:100%; }
+  .vault-toolbar-status { align-items:flex-start; flex-direction:column; gap:5px; }
+  .vault-toolbar-status p { width:100%; padding-left:0; border-left:0; }
+}
+
+@media (max-width:560px) {
+  .device-vault-orbit { display:block; width:190px; height:190px; margin:8px auto 4px; }
+  .device-vault-orbit>span { inset:57px; border-radius:19px; font-size:26px; }
+  .device-vault-orbit>span small { margin-top:-18px; font-size:8px; }
+  .device-vault-orbit>i { width:45px; height:45px; font-size:9px; }
+  .vault-utility-menu-panel { position:fixed; left:12px; right:12px; bottom:calc(84px + env(safe-area-inset-bottom)); top:auto; width:auto; }
+}
+
+@media (prefers-reduced-motion:reduce) {
+  .device-vault-orbit>i { animation:none; }
+}

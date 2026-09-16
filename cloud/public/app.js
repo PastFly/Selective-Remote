@@ -1109,6 +1109,7 @@ export function initializeTeamWorkspace({
   const sectionTitle = documentValue.querySelector("#team-vault-title");
   const message = documentValue.querySelector("#team-vault-message");
   const devices = documentValue.querySelector("#team-devices");
+  const deviceOrbit = documentValue.querySelector("#device-vault-orbit");
   const devicesRefresh = documentValue.querySelector("#team-devices-refresh");
   const createTeamForm = documentValue.querySelector("#team-create-form");
   const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
@@ -1550,6 +1551,7 @@ export function initializeTeamWorkspace({
       const remove = documentValue.createElement("button");
       const favorite = documentValue.createElement("button");
       const selector = documentValue.createElement("input");
+      const actions = documentValue.createElement("div");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
       const tags = Array.isArray(record.data.tags) ? record.data.tags.map((value) => `#${value}`).join(" ") : "";
@@ -1563,7 +1565,8 @@ export function initializeTeamWorkspace({
       edit.textContent = "Изменить";
       edit.disabled = !canEdit();
       edit.addEventListener("click", (event) => { event.stopPropagation(); beginRecordEdit(record); });
-      remove.addEventListener("click", async () => {
+      remove.addEventListener("click", async (event) => {
+        event.stopPropagation();
         if (!await requestConfirmation({
           title: "Удалить запись?",
           message: `«${heading.textContent}» будет удалена из Team Vault у всех участников.`,
@@ -1662,13 +1665,17 @@ export function initializeTeamWorkspace({
           onStatus: (value) => setText(workspaceStatus, value),
         });
       };
-      card.addEventListener("click", (event) => { if (!actions.contains(event.target) && event.target !== selector) openResource(); });
+      actions.className = "record-actions";
+      actions.addEventListener("pointerdown", (event) => event.stopPropagation());
+      actions.addEventListener("click", (event) => event.stopPropagation());
+      card.addEventListener("click", (event) => {
+        const interactive = event.target.closest?.("button, input, select, textarea, a, summary");
+        if (!interactive) openResource();
+      });
       card.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
+        if (event.target !== card || (event.key !== "Enter" && event.key !== " ")) return;
         event.preventDefault(); openResource();
       });
-      const actions = documentValue.createElement("div");
-      actions.className = "record-actions";
       actions.append(favorite, edit, remove);
       card.append(selector, heading, summary, metadata, actions);
       (folderContent ?? records).append(card);
@@ -1704,6 +1711,22 @@ export function initializeTeamWorkspace({
   async function loadDevices() {
     const values = await client.listDevices();
     devices.replaceChildren();
+    if (deviceOrbit) {
+      deviceOrbit.querySelectorAll("i").forEach((node) => node.remove());
+      const visibleDevices = values.filter((device) => !device.revokedAt).slice(0, 10);
+      visibleDevices.forEach((device, index) => {
+        const node = documentValue.createElement("i");
+        const angle = -Math.PI / 2 + (Math.PI * 2 * index) / Math.max(visibleDevices.length, 1);
+        const radius = visibleDevices.length < 4 ? 45 : 48;
+        node.style.setProperty("--device-x", `${50 + Math.cos(angle) * radius}%`);
+        node.style.setProperty("--device-y", `${50 + Math.sin(angle) * radius}%`);
+        node.classList.toggle("pending", device.keyApprovedAt === null);
+        node.classList.toggle("current", device.id === client.deviceID());
+        node.textContent = String(device.platform || device.name || "Web").slice(0, 8);
+        node.title = `${device.name || "Без названия"}: ${device.keyApprovedAt === null ? "ожидает одобрения" : "подключено"}`;
+        deviceOrbit.append(node);
+      });
+    }
     for (const device of values) {
       const card = documentValue.createElement("article");
       const name = documentValue.createElement("strong");
@@ -4062,11 +4085,21 @@ export function initializePortalNavigation({
       const empty = documentValue.createElement("p"); empty.textContent = "Ничего не найдено."; commandResults.append(empty);
     }
   }
-  function openCommandPalette() { renderCommands(); commandDialog?.showModal?.(); commandSearch?.focus?.(); }
-  commandOpen?.addEventListener("click", openCommandPalette);
+  function openCommandPalette({ fromKeyboard = false } = {}) {
+    renderCommands();
+    commandDialog?.showModal?.();
+    const windowValue = documentValue.defaultView;
+    const coarsePointer = windowValue?.matchMedia?.("(pointer: coarse)")?.matches === true;
+    if (shouldFocusCommandPaletteSearch({
+      fromKeyboard,
+      coarsePointer,
+      viewportWidth: Number(windowValue?.innerWidth ?? 0),
+    })) commandSearch?.focus?.();
+  }
+  commandOpen?.addEventListener("click", () => openCommandPalette());
   commandSearch?.addEventListener("input", renderCommands);
   documentValue.addEventListener("keydown", (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); openCommandPalette(); }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLocaleLowerCase() === "k") { event.preventDefault(); openCommandPalette({ fromKeyboard: true }); }
   });
   workspaceCreate?.addEventListener("click", () => {
     const activePanel = documentValue.querySelector(".workspace-panel:not([hidden])");
@@ -4264,6 +4297,11 @@ export async function initializePortal({
 export function appearancePreference(cookieValue = "") {
   const match = String(cookieValue).match(/(?:^|;\s*)sr_theme=(graphite|emerald|light)(?:;|$)/u);
   return match?.[1] ?? "graphite";
+}
+
+export function shouldFocusCommandPaletteSearch({ fromKeyboard = false, coarsePointer = false, viewportWidth = 0 } = {}) {
+  const compactViewport = Number(viewportWidth) > 0 && Number(viewportWidth) <= 880;
+  return fromKeyboard || (!coarsePointer && !compactViewport);
 }
 
 export function initializeAppearance({ documentValue = document } = {}) {

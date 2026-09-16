@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=173">
-  <script src="/i18n.js?v=173"></script>
+  <link rel="stylesheet" href="/styles.css?v=174">
+  <script src="/i18n.js?v=174"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -395,11 +395,14 @@
         </div>
         <div class="vault-heading-side">
           <p id="local-vault-message" aria-live="polite">Проверяем локальное хранилище…</p>
-          <div class="vault-actions" id="local-vault-actions" hidden>
-            <button type="button" class="secondary" id="local-record-create">Добавить запись</button>
-            <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
-            <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
-          </div>
+          <details class="vault-utility-menu" id="local-vault-actions" hidden>
+            <summary aria-label="Дополнительные действия Vault" data-tooltip="Синхронизация и блокировка">•••</summary>
+            <div class="vault-utility-menu-panel">
+              <button type="button" class="secondary" id="local-record-create">Добавить запись</button>
+              <button type="button" id="cloud-vault-sync" disabled>Синхронизировать</button>
+              <button type="button" class="secondary" id="local-vault-lock">Заблокировать</button>
+            </div>
+          </details>
         </div>
       </div>
 
@@ -534,10 +537,9 @@
               <div class="resource-detail-content"><dt id="resource-detail-content-label">Содержимое</dt><dd id="resource-detail-content">—</dd></div>
             </dl>
             <div class="resource-detail-actions">
-              <button type="button" id="resource-detail-copy" class="secondary">Копировать</button>
+              <button type="button" id="resource-detail-copy" class="secondary">Копировать · ⌘C</button>
               <button type="button" id="resource-detail-edit" class="secondary">Изменить</button>
             </div>
-            <p class="resource-detail-shortcut" id="resource-detail-shortcut">⌘C копирует значение выбранного ресурса</p>
           </form>
         </dialog>
         <section class="vault-conflicts" id="local-vault-conflicts" aria-labelledby="local-vault-conflicts-title" hidden>
@@ -568,7 +570,7 @@
           <button type="button" class="secondary" id="team-devices-refresh">Обновить устройства</button>
         </div>
         <div class="device-vault-map">
-          <div class="device-vault-orbit" aria-hidden="true"><span>SR<small>VAULT</small></span><i>Mac</i><i>Web</i><i>Air</i></div>
+          <div class="device-vault-orbit" id="device-vault-orbit" aria-label="Схема подключённых устройств"><span>SR<small>VAULT</small></span></div>
           <div class="team-devices" id="team-devices"></div>
         </div>
       </div>
@@ -677,6 +679,10 @@
       </nav>
 
       <div class="team-resource-navigation" id="team-resource-navigation" aria-label="Навигация по ресурсам">
+        <div class="team-resource-context">
+          <span>Ресурсы выбранной команды</span>
+          <button type="button" class="secondary" data-workspace-target="team-vault" data-team-view="teams">← К настройкам команды</button>
+        </div>
         <nav class="host-scope-switcher" aria-label="Область ресурсов">
           <button type="button" data-workspace-target="local-vault" data-preserve-record-filter data-preserve-scroll>Личные</button>
           <button type="button" class="active" data-workspace-target="team-vault" data-team-view="hosts" data-preserve-record-filter data-preserve-scroll>Командные</button>
@@ -857,19 +863,21 @@
         </section>
 
         <div class="vault-workspace" id="team-vault-workspace" hidden>
-          <div class="vault-toolbar">
-            <div>
+          <div class="vault-toolbar vault-toolbar-compact">
+            <div class="vault-toolbar-status">
               <h3 id="team-vault-workspace-title">Папка команды</h3>
-              <p id="team-vault-workspace-status" aria-live="polite">Vault заблокирован.</p>
-              <small>Изменения синхронизируются автоматически. Дополнительные действия появятся только при устранимой ошибке доступа.</small>
+              <p id="team-vault-workspace-status" aria-live="polite" data-tooltip="Изменения синхронизируются автоматически. Дополнительные действия появятся только при устранимой ошибке доступа.">Vault заблокирован.</p>
             </div>
-            <div class="vault-actions">
-              <button type="button" class="secondary" id="team-record-create">Добавить запись</button>
-              <button type="button" class="danger" id="team-vault-rotate" hidden>Завершить ротацию</button>
-              <button type="button" class="secondary" id="team-vault-grant-wrappers" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную выдачу wrappers</button>
-              <button type="button" id="team-vault-sync" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную синхронизацию</button>
-              <button type="button" class="secondary" id="team-vault-lock">Заблокировать</button>
-            </div>
+            <details class="vault-utility-menu">
+              <summary aria-label="Дополнительные действия Team Vault" data-tooltip="Синхронизация и блокировка">•••</summary>
+              <div class="vault-utility-menu-panel">
+                <button type="button" class="secondary" id="team-record-create">Добавить запись</button>
+                <button type="button" class="danger" id="team-vault-rotate" hidden>Завершить ротацию</button>
+                <button type="button" class="secondary" id="team-vault-grant-wrappers" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную выдачу wrappers</button>
+                <button type="button" id="team-vault-sync" aria-describedby="team-vault-workspace-status" hidden>Повторить безопасную синхронизацию</button>
+                <button type="button" class="secondary" id="team-vault-lock">Заблокировать</button>
+              </div>
+            </details>
           </div>
           <dialog class="record-editor-dialog team-record-editor" id="team-record-editor" aria-labelledby="team-record-editor-summary">
             <div class="record-editor-heading"><div><p class="eyebrow">TEAM VAULT · E2EE</p><h3 id="team-record-editor-summary">Добавить запись</h3></div></div>
@@ -979,6 +987,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=173"></script>
+  <script type="module" src="/app.js?v=174"></script>
 </body>
 </html>
