@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Защищённая синхронизация Selective Remote">
+  <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=162">
+  <link rel="stylesheet" href="/styles.css?v=165">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -62,25 +62,42 @@
     </section>
 
     <section class="hero hero-with-auth" id="public-hero">
+      <div class="hero-ambient" aria-hidden="true">
+        <span class="hero-ribbon hero-ribbon-one"></span>
+        <span class="hero-ribbon hero-ribbon-two"></span>
+        <span class="hero-glow"></span>
+      </div>
       <div class="hero-copy" id="public-hero-copy">
-        <p class="kicker">Ваши подключения — на ваших устройствах</p>
-        <h2>Синхронизация без доступа сервера к данным.</h2>
-        <p class="lead">Профили, Snippets и секреты шифруются на Mac до отправки. Cloud хранит только зашифрованные ревизии.</p>
+        <p class="kicker"><span></span> Ваши подключения — на ваших устройствах</p>
+        <h2>Удалённый доступ.<br><em>Без компромиссов.</em></h2>
+        <p class="lead">Hosts, Credentials, Snippets и Team Vaults синхронизируются между вашими устройствами. Cloud хранит только зашифрованные ревизии и не видит содержимое.</p>
+        <div class="hero-actions">
+          <button type="button" data-open-auth="registration">Начать работу</button>
+          <button type="button" class="secondary" data-open-auth="login">У меня есть аккаунт</button>
+        </div>
         <div class="trust-row" aria-label="Свойства безопасности">
-          <span>Локальное шифрование</span>
-          <span>Сессия только в памяти</span>
-          <span>HTTPS</span>
+          <span>✓ Клиентское шифрование</span>
+          <span>✓ Personal и Team Vaults</span>
+          <span>✓ macOS + Browser</span>
         </div>
       </div>
 
       <aside class="hero-preview" id="cloud-hero-preview" aria-label="Возможности Cloud">
-        <p class="eyebrow">CLOUD WORKSPACE</p>
-        <h3>Одна рабочая область для всех подключений</h3>
-        <div class="hero-preview-grid">
-          <span><strong>Hosts</strong><small>RDP и SSH</small></span>
-          <span><strong>Vault</strong><small>Личный и Team</small></span>
-          <span><strong>Snippets</strong><small>Команды</small></span>
-          <span><strong>Devices</strong><small>Контроль доступа</small></span>
+        <div class="preview-window-bar"><span></span><span></span><span></span><small>Selective Remote</small></div>
+        <div class="preview-workspace">
+          <div class="preview-sidebar" aria-hidden="true">
+            <strong>SR</strong><span class="active"></span><span></span><span></span><span></span>
+          </div>
+          <div class="preview-content">
+            <p class="eyebrow">CLOUD WORKSPACE</p>
+            <h3>Всё нужное — в одном защищённом пространстве</h3>
+            <div class="hero-preview-grid">
+              <span><i>12</i><strong>Hosts</strong><small>RDP и SSH</small></span>
+              <span><i>8</i><strong>Credentials</strong><small>Личные и Team</small></span>
+              <span><i>24</i><strong>Snippets</strong><small>Команды</small></span>
+              <span><i>3</i><strong>Devices</strong><small>Под вашим контролем</small></span>
+            </div>
+          </div>
         </div>
       </aside>
 
@@ -140,13 +157,33 @@
           <button type="button" class="secondary" id="cloud-registration-done">Вернуться ко входу</button>
         </div>
 
+        <p class="auth-security-note"><span aria-hidden="true">◇</span> Сервер проверяет аккаунт отдельно от зашифрованного содержимого Vault.</p>
+
       </section>
     </section>
 
-    <section class="grid" id="public-grid" aria-label="Возможности первой версии">
-      <article><span>01</span><h3>Личный Vault</h3><p>Одна зашифрованная библиотека с историей ревизий и защитой от перезаписи.</p></article>
-      <article><span>02</span><h3>Ваши устройства</h3><p>Список активных Mac, дата последнего доступа и мгновенный отзыв сессии.</p></article>
-      <article><span>03</span><h3>Локальный режим</h3><p>Аккаунт необязателен: приложение продолжает полноценно работать автономно.</p></article>
+    <section class="landing-features" id="public-grid" aria-labelledby="landing-features-title">
+      <div class="landing-section-heading">
+        <div><p class="eyebrow">ОДНО ПРОСТРАНСТВО</p><h2 id="landing-features-title">Для личной работы и команды</h2></div>
+        <p>Selective Remote объединяет подключения и автоматизацию, не заставляя отдавать серверу ключи от вашей инфраструктуры.</p>
+      </div>
+      <div class="grid">
+        <article><span>01</span><h3>Personal Vault</h3><p>Hosts, пароли, SSH-настройки и Snippets синхронизируются между вашими устройствами.</p></article>
+        <article><span>02</span><h3>Team Workspace</h3><p>Общие Vaults, папки, роли и приглашения для безопасной совместной работы.</p></article>
+        <article><span>03</span><h3>Локальный режим</h3><p>Cloud остаётся дополнением: приложение продолжает полноценно работать автономно.</p></article>
+      </div>
+      <div class="security-story">
+        <div class="security-story-copy">
+          <p class="eyebrow">CLIENT-SIDE E2EE</p>
+          <h2>Сначала шифрование.<br>Потом синхронизация.</h2>
+          <p>Данные превращаются в зашифрованную ревизию на вашем устройстве. Сервер управляет сессиями, устройствами и версиями — но не получает открытое содержимое Vault.</p>
+        </div>
+        <ol class="security-flow" aria-label="Как работает защищённая синхронизация">
+          <li><span>1</span><div><strong>Создаёте подключение</strong><small>На Mac или в браузере</small></div></li>
+          <li><span>2</span><div><strong>Устройство шифрует Vault</strong><small>До отправки в Cloud</small></div></li>
+          <li><span>3</span><div><strong>Другие устройства получают ревизию</strong><small>И расшифровывают локально</small></div></li>
+        </ol>
+      </div>
     </section>
 
     <section class="workspace-layout" id="cloud-workspace" hidden>
@@ -722,8 +759,8 @@
     </section>
 
     <section class="access" id="public-access">
-      <div><p class="eyebrow">V0.32 FOUNDATION</p><h2>Cloud управляется вами</h2></div>
-      <p>Регистрация доступна только во время контролируемого окна. Вход, подтверждение почты и восстановление пароля остаются доступны для существующего аккаунта.</p>
+      <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2>Ваше рабочее пространство уже ждёт</h2><p>Начните с личного Vault и подключите командные возможности, когда они понадобятся.</p></div>
+      <div class="access-actions"><button type="button" data-open-auth="registration">Создать аккаунт</button><button type="button" class="secondary" data-open-auth="login">Войти</button></div>
     </section>
   </main>
   <dialog class="app-confirmation" id="app-confirmation-dialog" aria-labelledby="app-confirmation-title" aria-describedby="app-confirmation-message">
@@ -741,6 +778,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=164"></script>
+  <script type="module" src="/app.js?v=165"></script>
 </body>
 </html>
