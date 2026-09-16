@@ -332,7 +332,22 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     snippet.title, snippet.body, snippet.folder, snippet.teamName, snippet.vaultName
                 ].contains { $0.localizedCaseInsensitiveContains(normalizedQuery) })
         }
-        return filtered.sorted(by: snippetsAreOrdered)
+        return filtered.sorted { left, right in
+            switch sortMode {
+            case .name:
+                return left.title.localizedStandardCompare(right.title) == .orderedAscending
+            case .folder:
+                let folders = folderTitle(left.folder)
+                    .localizedStandardCompare(folderTitle(right.folder))
+                return folders == .orderedSame
+                    ? left.title.localizedStandardCompare(right.title) == .orderedAscending
+                    : folders == .orderedAscending
+            case .modifiedNewest:
+                return left.modifiedDate == right.modifiedDate
+                    ? left.title.localizedStandardCompare(right.title) == .orderedAscending
+                    : left.modifiedDate > right.modifiedDate
+            }
+        }
     }
 
     private var availableFolders: [String] {
@@ -892,25 +907,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
     private func snippetLocation(_ snippet: SelectiveRemoteTeamSnippet) -> String {
         "\(snippet.teamName) / \(snippet.vaultName) · \(folderTitle(snippet.folder))"
-    }
-
-    private func snippetsAreOrdered(
-        _ left: SelectiveRemoteTeamSnippet,
-        _ right: SelectiveRemoteTeamSnippet
-    ) -> Bool {
-        switch sortMode {
-        case .name:
-            return left.title.localizedStandardCompare(right.title) == .orderedAscending
-        case .folder:
-            let folders = folderTitle(left.folder).localizedStandardCompare(folderTitle(right.folder))
-            return folders == .orderedSame
-                ? left.title.localizedStandardCompare(right.title) == .orderedAscending
-                : folders == .orderedAscending
-        case .modifiedNewest:
-            return left.modifiedDate == right.modifiedDate
-                ? left.title.localizedStandardCompare(right.title) == .orderedAscending
-                : left.modifiedDate > right.modifiedDate
-        }
     }
 
     private func vaultKey(_ snippet: SelectiveRemoteTeamSnippet) -> String {
