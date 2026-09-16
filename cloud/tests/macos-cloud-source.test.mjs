@@ -703,7 +703,8 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(library, /Picker\([\s\S]*SelectiveRemoteSnippetScope\.allCases/u);
   assert.match(targets, /Persists only the user's local mapping/u);
   assert.doesNotMatch(targets, /\.body|\.command|vaultName|teamName/u);
-  assert.match(library, /SelectiveRemoteTeamSnippetsView\(store: teamStore, model: model\)/u);
+  assert.match(library, /SelectiveRemoteTeamSnippetsView\([\s\S]{0,220}store: teamStore,[\s\S]{0,160}model: model,[\s\S]{0,160}createRequest: teamCreateRequest/u);
+  assert.match(library, /teamCreateRequest \+= 1/u);
   assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
   assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);
 });
