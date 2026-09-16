@@ -6,7 +6,7 @@
   <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=170">
+  <link rel="stylesheet" href="/styles.css?v=176">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -845,14 +845,25 @@
               <label for="team-host-description">Описание</label>
               <textarea id="team-host-description" name="description" maxlength="2048" rows="2" placeholder="Назначение и примечания для команды"></textarea>
             </div>
+            <div class="team-snippet-fields" id="team-snippet-fields" hidden>
+              <label for="team-snippet-folder">Папка</label>
+              <input id="team-snippet-folder" name="snippetFolder" maxlength="120" list="team-snippet-folder-options" placeholder="Например, Диагностика">
+              <datalist id="team-snippet-folder-options"></datalist>
+            </div>
             <button type="submit">Зашифровать локально</button>
           </form>
           </details>
           <div class="team-host-browser" id="team-host-browser">
-            <label class="personal-vault-control" for="team-host-search"><span>Поиск</span>
+            <label class="personal-vault-control" for="team-host-search"><span id="team-resource-search-label">Поиск Hosts</span>
               <input id="team-host-search" type="search" maxlength="120" placeholder="Название, адрес, тег или описание">
             </label>
-            <label class="personal-vault-control" for="team-host-folder-filter"><span>Папка</span>
+            <label class="personal-vault-control" for="team-record-sort"><span>Сортировка</span>
+              <select id="team-record-sort">
+                <option value="modified-desc">Сначала изменённые</option>
+                <option value="title-asc">По названию</option>
+              </select>
+            </label>
+            <label class="personal-vault-control" for="team-host-folder-filter"><span id="team-resource-folder-label">Папка Hosts</span>
               <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
             </label>
           </div>
@@ -892,6 +903,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=170"></script>
+  <script type="module" src="/app.js?v=176"></script>
 </body>
 </html>

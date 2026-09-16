@@ -23,6 +23,7 @@ import {
   sortLocalVaultRecords,
   teamHostConnectionData,
   teamHostRecordData,
+  teamSnippetRecordData,
   teamVaultRecoveryMode,
 } from "../public/app.js";
 
@@ -289,6 +290,18 @@ test("Team Host organization stays inside the encrypted record", () => {
   } }), { folder: "Browser", tags: ["new"], description: "Edited in browser" });
 });
 
+test("Team Snippet folders stay inside the encrypted record and survive edits", () => {
+  assert.deepEqual(teamSnippetRecordData({
+    title: " Status ", body: "uptime", folder: " Diagnostics ",
+  }), { title: "Status", body: "uptime", folder: "Diagnostics" });
+  assert.deepEqual(teamSnippetRecordData({
+    title: "Status", body: "uptime -p", folder: "", baseData: { folder: "Old", native: true },
+  }), { title: "Status", body: "uptime -p", native: true });
+  assert.throws(() => teamSnippetRecordData({
+    title: "Status", body: "uptime", folder: "x".repeat(121),
+  }), /invalid_team_snippet_folder/u);
+});
+
 test("Team Host connection fields produce password-free interoperable URLs", () => {
   assert.deepEqual(teamHostConnectionData({
     protocol: "ssh", host: "bastion.example.invalid", port: "2222", username: "deployer",
@@ -472,8 +485,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=170">/u);
-  assert.match(html, /\/app\.js\?v=170/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=176">/u);
+  assert.match(html, /\/app\.js\?v=176/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -633,8 +646,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=170/u);
-  assert.match(html, /app\.js\?v=170/u);
+  assert.match(html, /styles\.css\?v=176/u);
+  assert.match(html, /app\.js\?v=176/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="host"/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v170/u);
@@ -699,10 +712,14 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /выберите папку для просмотра \$\{resourceNames\[activeRecordFilter\]\}/u);
   assert.match(application, /await openSelectedVault\(\)/u);
   assert.match(application, /value\.type !== activeRecordFilter/u);
-  assert.match(application, /activeRecordFilter !== "host"\) return true/u);
+  assert.match(application, /\["host", "snippet"\]\.includes\(activeRecordFilter\)/u);
   assert.match(html, /id="team-host-search"/u);
+  assert.match(html, /id="team-record-sort"/u);
   assert.match(html, /id="team-host-folder-filter"/u);
+  assert.match(html, /id="team-snippet-folder"/u);
+  assert.match(html, /id="team-snippet-folder-options"/u);
   assert.match(application, /teamHostRecordData/u);
+  assert.match(application, /teamSnippetRecordData/u);
   assert.match(application, /В выбранном Team Vault пока нет \$\{emptyLabels\[activeRecordFilter\]\}/u);
   assert.match(application, /hostDetail\?\.showModal\(\)/u);
   assert.match(application, /documentValue\.body\.append\(hostDetail\)/u);
@@ -711,11 +728,12 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.workspace-security-icon/u);
   assert.doesNotMatch(application, /sidebarFooter\.append/u);
   assert.match(application, /workspaceHeader\.hidden = true/u);
-  assert.match(application, /beginHostEdit/u);
+  assert.match(application, /beginRecordEdit/u);
+  assert.match(application, /actions\.append\(edit\)/u);
   assert.match(application, /navigator\.clipboard\.writeText\(hostDetailAddress\.textContent\)/u);
   assert.match(application, /navigator\.clipboard\.writeText\(String\(credential\.data\.secret/u);
   assert.match(application, /target\.replace\(\/\^ssh:\/u, "sftp:"\)/u);
-  assert.match(application, /sourceID: hostID/u);
+  assert.match(application, /sourceID: recordID/u);
   assert.match(application, /resourceTitles/u);
   assert.match(application, /client\.deleteAccount/u);
   assert.match(application, /account_owns_teams/u);
@@ -761,7 +779,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /personalHostRecordData/u);
   assert.match(styles, /\.personal-vault-browser/u);
   assert.match(styles, /grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/u);
-  assert.match(styles, /\.team-host-browser \{ display:grid; grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
+  assert.match(styles, /\.team-host-browser \{ display:grid; grid-template-columns:repeat\(3,minmax\(0,1fr\)\)/u);
   assert.match(styles, /\.record-form input\[type="checkbox"\] \{ width:auto/u);
   assert.match(styles, /\.team-section-tabs,\.host-scope-switcher/u);
   assert.ok(styles.includes('.brand-actions button:not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
@@ -807,8 +825,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=170/u);
-  assert.match(html, /styles\.css\?v=170/u);
+  assert.match(html, /app\.js\?v=176/u);
+  assert.match(html, /styles\.css\?v=176/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

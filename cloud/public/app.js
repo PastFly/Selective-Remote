@@ -224,6 +224,15 @@ export function teamHostRecordData({ title, target, folder, tags, description, b
   return data;
 }
 
+export function teamSnippetRecordData({ title, body, folder, baseData = null }) {
+  const data = localVaultRecordData("snippet", { title, target: "", secret: body }, baseData);
+  const normalizedFolder = String(folder ?? "").trim();
+  if (normalizedFolder.length > 120) throw new Error("invalid_team_snippet_folder");
+  if (normalizedFolder) data.folder = normalizedFolder;
+  else delete data.folder;
+  return data;
+}
+
 export function teamHostOrganizationValues(record) {
   const data = record?.data ?? {};
   let profile = null;
@@ -995,9 +1004,15 @@ export function initializeTeamWorkspace({
   const hostFolderOptions = documentValue.querySelector("#team-host-folder-options");
   const hostTags = documentValue.querySelector("#team-host-tags");
   const hostDescription = documentValue.querySelector("#team-host-description");
+  const snippetFields = documentValue.querySelector("#team-snippet-fields");
+  const snippetFolder = documentValue.querySelector("#team-snippet-folder");
+  const snippetFolderOptions = documentValue.querySelector("#team-snippet-folder-options");
   const hostBrowser = documentValue.querySelector("#team-host-browser");
   const hostSearch = documentValue.querySelector("#team-host-search");
+  const recordSort = documentValue.querySelector("#team-record-sort");
   const hostFolderFilter = documentValue.querySelector("#team-host-folder-filter");
+  const resourceSearchLabel = documentValue.querySelector("#team-resource-search-label");
+  const resourceFolderLabel = documentValue.querySelector("#team-resource-folder-label");
   const hostDetail = documentValue.querySelector("#host-detail-dialog");
   const hostDetailTitle = documentValue.querySelector("#host-detail-title");
   const hostDetailAddress = documentValue.querySelector("#host-detail-address");
@@ -1044,7 +1059,7 @@ export function initializeTeamWorkspace({
   let workspaceRefreshOperation = null;
   let backgroundMaintenanceOperation = null;
   let vaultOperation = null;
-  let editingHostID = null;
+  let editingRecordID = null;
   let detailedHostID = null;
 
   function renderOverviewSummary() {
@@ -1135,7 +1150,8 @@ export function initializeTeamWorkspace({
       control.disabled = disabled || !canEdit();
     }
     for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
-    recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
+    recordType.disabled = disabled || !canEdit() || editingRecordID !== null
+      || (activeView === "hosts" && activeRecordFilter !== "all");
   }
 
   function clearConflicts() {
@@ -1163,27 +1179,39 @@ export function initializeTeamWorkspace({
     recordTarget.required = !isSnippet;
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
     hostFields.hidden = recordType.value !== "host";
-    hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
+    snippetFields.hidden = !isSnippet;
+    const browsableResource = ["host", "snippet"].includes(activeRecordFilter);
+    hostBrowser.hidden = activeView !== "hosts" || !browsableResource;
+    hostSearch.placeholder = activeRecordFilter === "snippet"
+      ? "Название, команда или папка"
+      : "Название, адрес, тег или описание";
+    setText(resourceSearchLabel, activeRecordFilter === "snippet" ? "Поиск Snippets" : "Поиск Hosts");
+    setText(resourceFolderLabel, activeRecordFilter === "snippet" ? "Папка Snippets" : "Папка Hosts");
     const createLabels = { all: "Добавить запись", host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
-    setText(recordEditorSummary, editingHostID ? "Редактировать Host" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
+    const editLabels = { host: "Редактировать Host", credential: "Редактировать Credential", snippet: "Редактировать Snippet", forwarding: "Редактировать Forwarding" };
+    setText(recordEditorSummary, editingRecordID ? editLabels[recordType.value] : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
   }
 
-  function beginHostEdit(record) {
-    const connection = parseTeamHostConnection(record.data);
-    const organization = teamHostOrganizationValues(record);
-    editingHostID = record.id;
-    recordType.value = "host";
-    recordTitle.value = String(record.data.title ?? "");
-    recordTarget.value = connection.host;
-    hostProtocol.value = connection.protocol;
-    hostPort.value = String(connection.port);
-    hostUsername.value = connection.username;
+  function beginRecordEdit(record) {
+    const values = localVaultRecordFormValues(record);
+    editingRecordID = record.id;
+    recordType.value = record.type;
+    recordType.disabled = true;
+    recordTitle.value = values.title;
+    recordTarget.value = values.target;
+    recordSecret.value = values.secret;
+    snippetFolder.value = record.type === "snippet" ? String(record.data.folder ?? "") : "";
     hostPassword.value = "";
     hostRemovePassword.checked = false;
-    hostFolder.value = organization.folder;
-    hostTags.value = organization.tags.join(", ");
-    hostDescription.value = organization.description;
-    const advanced = Boolean(record.data.profile);
+    const connection = record.type === "host" ? parseTeamHostConnection(record.data) : null;
+    const organization = record.type === "host" ? teamHostOrganizationValues(record) : null;
+    hostProtocol.value = connection?.protocol ?? "ssh";
+    hostPort.value = String(connection?.port ?? 22);
+    hostUsername.value = connection?.username ?? "";
+    hostFolder.value = organization?.folder ?? "";
+    hostTags.value = organization?.tags.join(", ") ?? "";
+    hostDescription.value = organization?.description ?? "";
+    const advanced = record.type === "host" && Boolean(record.data.profile);
     recordTitle.disabled = advanced;
     recordTarget.disabled = advanced;
     hostProtocol.disabled = advanced;
@@ -1195,7 +1223,20 @@ export function initializeTeamWorkspace({
     recordTitle.focus();
     setText(workspaceStatus, advanced
       ? "Полный профиль создан в приложении: в браузере можно менять папку, теги и описание."
-      : "Измените Host и сохраните зашифрованную запись.");
+      : `Измените ${record.type === "snippet" ? "Snippet" : "запись"} и сохраните зашифрованную версию.`);
+  }
+
+  function resetRecordEditor({ close = true } = {}) {
+    editingRecordID = null;
+    recordForm.reset();
+    recordTitle.disabled = false;
+    recordTarget.disabled = false;
+    hostProtocol.disabled = false;
+    hostPort.disabled = false;
+    hostUsername.disabled = false;
+    recordType.disabled = activeView === "hosts" && activeRecordFilter !== "all";
+    if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
+    if (close) recordEditor.open = false;
   }
 
   function hostCredentials(hostID) {
@@ -1213,12 +1254,22 @@ export function initializeTeamWorkspace({
     return teamHostOrganizationValues(record).folder.trim() || "Без папки";
   }
 
-  function updateHostFolders(hosts) {
+  function snippetFolderName(record) {
+    return String(record.data?.folder ?? "").trim() || "Без папки";
+  }
+
+  function resourceFolderName(record) {
+    return record.type === "snippet" ? snippetFolderName(record) : hostFolderName(record);
+  }
+
+  function updateResourceFolders(resourceRecords) {
     const selected = hostFolderFilter.value;
-    const folders = [...new Set(hosts.map(hostFolderName))].sort((a, b) => a.localeCompare(b));
-    hostFolderOptions.replaceChildren(...folders.filter((value) => value !== "Без папки").map((value) => {
+    const folders = [...new Set(resourceRecords.map(resourceFolderName))].sort((a, b) => a.localeCompare(b));
+    const options = folders.filter((value) => value !== "Без папки").map((value) => {
       const option = documentValue.createElement("option"); option.value = value; return option;
-    }));
+    });
+    if (activeRecordFilter === "snippet") snippetFolderOptions.replaceChildren(...options);
+    else hostFolderOptions.replaceChildren(...options);
     hostFolderFilter.replaceChildren();
     for (const value of ["all", ...folders]) {
       const option = documentValue.createElement("option");
@@ -1233,18 +1284,21 @@ export function initializeTeamWorkspace({
     records.replaceChildren();
     if (!controller) return;
     const current = controller.document();
-    const hosts = current.records.filter((value) => value.type === "host");
-    updateHostFolders(hosts);
+    const browsableResource = ["host", "snippet"].includes(activeRecordFilter);
+    const resourceRecords = browsableResource
+      ? current.records.filter((value) => value.type === activeRecordFilter)
+      : [];
+    updateResourceFolders(resourceRecords);
     const query = hostSearch.value.trim().toLocaleLowerCase();
     const folder = hostFolderFilter.value;
     const visibleRecords = current.records.filter((value) => {
       if (activeView !== "hosts") return true;
       if (activeRecordFilter !== "all" && value.type !== activeRecordFilter) return false;
-      if (activeRecordFilter !== "host") return true;
-      if (folder !== "all" && hostFolderName(value) !== folder) return false;
+      if (!browsableResource) return true;
+      if (folder !== "all" && resourceFolderName(value) !== folder) return false;
       const data = value.data ?? {};
-      const organization = teamHostOrganizationValues(value);
-      return !query || [data.title, data.address, organization.folder, organization.description, ...organization.tags]
+      const organization = value.type === "host" ? teamHostOrganizationValues(value) : { folder: data.folder, description: "", tags: [] };
+      return !query || [data.title, data.address, data.body, organization.folder, organization.description, ...organization.tags]
         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
     });
     if (visibleRecords.length === 0) {
@@ -1257,10 +1311,14 @@ export function initializeTeamWorkspace({
       records.append(empty);
       return;
     }
+    const sortedRecords = sortLocalVaultRecords(visibleRecords, recordSort.value);
+    if (activeView === "hosts" && browsableResource) {
+      sortedRecords.sort((a, b) => resourceFolderName(a).localeCompare(resourceFolderName(b)));
+    }
     let renderedFolder = null;
-    for (const record of visibleRecords.sort((a, b) => activeView === "hosts" && activeRecordFilter === "host" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
-      const folderName = hostFolderName(record);
-      if (activeView === "hosts" && activeRecordFilter === "host" && folderName !== renderedFolder) {
+    for (const record of sortedRecords) {
+      const folderName = browsableResource ? resourceFolderName(record) : null;
+      if (activeView === "hosts" && browsableResource && folderName !== renderedFolder) {
         const folderHeading = documentValue.createElement("h3");
         folderHeading.className = "team-host-folder-heading";
         folderHeading.textContent = folderName;
@@ -1285,7 +1343,7 @@ export function initializeTeamWorkspace({
       edit.className = "secondary record-edit";
       edit.textContent = "Изменить";
       edit.disabled = !canEdit();
-      edit.addEventListener("click", (event) => { event.stopPropagation(); beginHostEdit(record); });
+      edit.addEventListener("click", (event) => { event.stopPropagation(); beginRecordEdit(record); });
       remove.addEventListener("click", async () => {
         remove.disabled = true;
         try {
@@ -1333,7 +1391,7 @@ export function initializeTeamWorkspace({
       }
       const actions = documentValue.createElement("div");
       actions.className = "record-actions";
-      if (record.type === "host") actions.append(edit);
+      actions.append(edit);
       actions.append(remove);
       card.append(heading, summary, metadata, actions);
       records.append(card);
@@ -2003,6 +2061,7 @@ export function initializeTeamWorkspace({
         ? recordFilter
         : "all";
     }
+    resetRecordEditor();
     section.dataset.teamView = activeView;
     for (const button of documentValue.querySelectorAll("#team-view-tabs [data-team-view]")) {
       button.classList.toggle("active", button.dataset.teamView === activeView);
@@ -2029,7 +2088,6 @@ export function initializeTeamWorkspace({
     }
     createVaultForm.hidden = activeView !== "vaults" || !canManage();
     workspace.hidden = activeView !== "hosts" || !controller;
-    if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
     if (controller) {
       clearConflicts();
@@ -2564,6 +2622,7 @@ export function initializeTeamWorkspace({
   });
   recordType.addEventListener("change", updateRecordLabels);
   hostSearch.addEventListener("input", renderRecords);
+  recordSort.addEventListener("change", renderRecords);
   hostFolderFilter.addEventListener("change", renderRecords);
   hostProtocol.addEventListener("change", () => {
     hostPort.value = hostProtocol.value === "ssh" ? "22" : "3389";
@@ -2577,7 +2636,7 @@ export function initializeTeamWorkspace({
   hostDetailEdit.addEventListener("click", () => {
     const record = controller?.document().records.find((value) => value.id === detailedHostID && value.type === "host");
     hostDetail.close();
-    if (record) beginHostEdit(record);
+    if (record) beginRecordEdit(record);
   });
   hostDetailCopyPassword.addEventListener("click", async () => {
     const credential = hostCredentials(detailedHostID)[0];
@@ -2600,33 +2659,37 @@ export function initializeTeamWorkspace({
     const button = recordForm.querySelector("button");
     button.disabled = true;
     try {
-      const existingHost = editingHostID
-        ? controller.document().records.find((value) => value.id === editingHostID && value.type === "host")
+      const existingRecord = editingRecordID
+        ? controller.document().records.find((value) => value.id === editingRecordID && value.type === recordType.value)
         : null;
+      const existingHost = existingRecord?.type === "host" ? existingRecord : null;
       const connection = recordType.value === "host" && !existingHost?.data?.profile
         ? teamHostConnectionData({
             protocol: hostProtocol.value, host: recordTarget.value,
             port: hostPort.value, username: hostUsername.value,
           })
         : null;
-      const hostID = await controller.upsert({
-        ...(editingHostID ? { id: editingHostID } : {}),
+      const recordID = await controller.upsert({
+        ...(editingRecordID ? { id: editingRecordID } : {}),
         type: recordType.value,
         data: recordType.value === "host"
           ? teamHostRecordData({
               title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
-          : localVaultRecordData(
-              recordType.value,
-              { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
-              editingHostID
-                ? controller.document().records.find((value) => value.id === editingHostID)?.data
-                : null,
-            ),
+          : recordType.value === "snippet"
+            ? teamSnippetRecordData({
+                title: recordTitle.value, body: recordSecret.value,
+                folder: snippetFolder.value, baseData: existingRecord?.data,
+              })
+            : localVaultRecordData(
+                recordType.value,
+                { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
+                existingRecord?.data,
+              ),
       });
       if (recordType.value === "host") {
-        const credentials = hostCredentials(hostID);
+        const credentials = hostCredentials(recordID);
         if (hostRemovePassword.checked) {
           for (const credential of credentials) await controller.delete(credential.id);
         } else if (hostPassword.value) {
@@ -2637,21 +2700,13 @@ export function initializeTeamWorkspace({
             data: {
               title: `${recordTitle.value.trim()} · ${connectionValue.protocol}`,
               username: connectionValue.username, secret: hostPassword.value,
-              kind: connectionValue.protocol, sourceID: hostID,
+              kind: connectionValue.protocol, sourceID: recordID,
             },
           });
           for (const duplicate of credentials.slice(1)) await controller.delete(duplicate.id);
         }
       }
-      recordForm.reset();
-      editingHostID = null;
-      if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
-      recordTitle.disabled = false;
-      recordTarget.disabled = false;
-      hostProtocol.disabled = false;
-      hostPort.disabled = false;
-      hostUsername.disabled = false;
-      recordEditor.open = false;
+      resetRecordEditor();
       updateRecordLabels();
       clearConflicts();
       rotateButton.disabled = !selectedVault?.rotationRequired || !canManage();
