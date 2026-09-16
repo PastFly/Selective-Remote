@@ -698,6 +698,7 @@ export async function initializeLocalVault({
       const summary = documentValue.createElement("p");
       const metadata = documentValue.createElement("small");
       const actions = documentValue.createElement("div");
+      const open = documentValue.createElement("button");
       const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
       const favorite = documentValue.createElement("button");
@@ -756,10 +757,7 @@ export async function initializeLocalVault({
         if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
         render();
       });
-      card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-      card.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      card.classList.add("resource-card", `resource-card-${record.type}`);
       const openResource = () => {
         const recentIndex = recentRecordIDs.indexOf(record.id);
         if (recentIndex >= 0) recentRecordIDs.splice(recentIndex, 1);
@@ -797,16 +795,12 @@ export async function initializeLocalVault({
           onStatus: (value) => setText(message, value),
         });
       };
-      card.addEventListener("click", (event) => {
-        if (actions.contains(event.target) || event.target === selector) return;
-        openResource();
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        openResource();
-      });
-      actions.append(favorite, edit, remove);
+      open.type = "button";
+      open.className = "secondary record-open";
+      open.textContent = "Открыть";
+      open.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      open.addEventListener("click", openResource);
+      actions.append(open, favorite, edit, remove);
       card.append(selector, heading, summary, metadata, actions);
       (folderContent ?? records).append(card);
     }
@@ -1547,6 +1541,7 @@ export function initializeTeamWorkspace({
       const heading = documentValue.createElement("h4");
       const summary = documentValue.createElement("p");
       const metadata = documentValue.createElement("small");
+      const open = documentValue.createElement("button");
       const edit = documentValue.createElement("button");
       const remove = documentValue.createElement("button");
       const favorite = documentValue.createElement("button");
@@ -1606,9 +1601,7 @@ export function initializeTeamWorkspace({
         if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
         renderRecords();
       });
-      card.classList.add("resource-card", "resource-card-clickable", `resource-card-${record.type}`);
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
+      card.classList.add("resource-card", `resource-card-${record.type}`);
       const openResource = () => {
         const recentIndex = recentRecordIDs.indexOf(record.id);
         if (recentIndex >= 0) recentRecordIDs.splice(recentIndex, 1);
@@ -1666,17 +1659,12 @@ export function initializeTeamWorkspace({
         });
       };
       actions.className = "record-actions";
-      actions.addEventListener("pointerdown", (event) => event.stopPropagation());
-      actions.addEventListener("click", (event) => event.stopPropagation());
-      card.addEventListener("click", (event) => {
-        const interactive = event.target.closest?.("button, input, select, textarea, a, summary");
-        if (!interactive) openResource();
-      });
-      card.addEventListener("keydown", (event) => {
-        if (event.target !== card || (event.key !== "Enter" && event.key !== " ")) return;
-        event.preventDefault(); openResource();
-      });
-      actions.append(favorite, edit, remove);
+      open.type = "button";
+      open.className = "secondary record-open";
+      open.textContent = "Открыть";
+      open.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      open.addEventListener("click", openResource);
+      actions.append(open, favorite, edit, remove);
       card.append(selector, heading, summary, metadata, actions);
       (folderContent ?? records).append(card);
     }
