@@ -460,7 +460,7 @@ func validatesGlobalSnippetGroupsAndTargets() throws {
         targetProfileIDs: [first, second, first] + extraTargets
     ))
     #expect(store.templates().first?.targetProfileIDs.count == 8)
-    let docker = try #require(store.snippetGroups().first)
+    let docker = try #require(store.snippetGroups().first(where: { $0.name == "Docker" }))
     #expect(store.templates().first?.groupID == docker.id)
     #expect(Array(store.templates().first?.targetProfileIDs.prefix(2) ?? []) == [first, second])
     #expect(!store.saveTemplate(
