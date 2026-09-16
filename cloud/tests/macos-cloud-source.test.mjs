@@ -703,6 +703,10 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(snippets, /Она не запускается автоматически/u);
   assert.match(snippets, /SelectiveRemote\.team-snippet\.display-mode\.v1/u);
   assert.match(snippets, /SelectiveRemote\.team-snippet\.sort-mode\.v1/u);
+  assert.match(snippets, /SelectiveRemote\.team-snippet\.collapsed-folders\.v1/u);
+  assert.match(snippets, /folderExpansionBinding\(for: group\.folder\)/u);
+  assert.match(snippets, /folderDisclosureLabel\(group\)/u);
+  assert.match(snippets, /DisclosureGroup\(/u);
   assert.match(snippets, /LazyVGrid/u);
   assert.match(snippets, /Все папки/u);
   assert.doesNotMatch(snippets, /UserDefaults|FileManager|KeychainService/u);
