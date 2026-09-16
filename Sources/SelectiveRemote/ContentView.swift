@@ -233,9 +233,9 @@ struct ContentView: View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(
-                    min: showsHostQuickAccess ? 265 : 205,
-                    ideal: showsHostQuickAccess ? 350 : 235,
-                    max: showsHostQuickAccess ? 520 : 280
+                    min: 260,
+                    ideal: 300,
+                    max: 380
                 )
         } detail: {
             detail
