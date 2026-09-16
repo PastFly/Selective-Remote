@@ -8,6 +8,7 @@ import {
   formatVaultSynchronizationSummary,
   formatVaultTimestamp,
   initializeAppearance,
+  initializeHeroPreview,
   localVaultConflictSideSummary,
   localVaultRecordData,
   localVaultRecordFormValues,
@@ -74,6 +75,72 @@ test("portal bootstrap reveals the resolved view and retires its loading screen"
   });
   assert.deepEqual(removed, ["app-booting"]);
   assert.equal(bootScreen.hidden, true);
+});
+
+test("hero preview opens cinematic product scenes and returns to its overview", () => {
+  const makeElement = (dataset = {}) => {
+    const classes = new Set();
+    const listeners = new Map();
+    return {
+      dataset,
+      hidden: false,
+      attributes: new Map(),
+      classList: {
+        add: (...values) => values.forEach((value) => classes.add(value)),
+        remove: (...values) => values.forEach((value) => classes.delete(value)),
+        toggle: (value, force) => force ? classes.add(value) : classes.delete(value),
+        contains: (value) => classes.has(value),
+      },
+      addEventListener: (name, listener) => listeners.set(name, listener),
+      setAttribute(name, value) { this.attributes.set(name, value); },
+      focus() { this.focused = true; },
+      listeners,
+    };
+  };
+  const scenes = ["hosts", "credentials", "snippets", "devices"];
+  const overviewButtons = scenes.map((scene) => makeElement({ heroPreviewScene: scene }));
+  const stageButtons = scenes.map((scene) => makeElement({ heroPreviewScene: scene }));
+  const panels = scenes.map((scene) => makeElement({ previewScenePanel: scene }));
+  const sidebarItems = scenes.map(() => makeElement());
+  const preview = makeElement();
+  preview.querySelectorAll = () => sidebarItems;
+  const overview = makeElement();
+  const stage = makeElement();
+  stage.hidden = true;
+  const back = makeElement();
+  const overviewTabs = makeElement();
+  overviewTabs.querySelectorAll = () => overviewButtons;
+  const stageTabs = makeElement();
+  stageTabs.querySelectorAll = () => stageButtons;
+  const documentValue = {
+    activeElement: null,
+    querySelector: (selector) => ({
+      "#cloud-hero-preview": preview,
+      "#hero-preview-overview": overview,
+      "#hero-preview-stage": stage,
+      "[data-hero-preview-back]": back,
+      '[data-hero-preview-scene="hosts"]': overviewButtons[0],
+    })[selector] ?? null,
+    querySelectorAll: (selector) => ({
+      "[data-hero-preview-scene]": [...overviewButtons, ...stageButtons],
+      "[data-preview-scene-panel]": panels,
+      ".hero-preview-grid, .preview-scene-tabs": [overviewTabs, stageTabs],
+    })[selector] ?? [],
+  };
+  const controller = initializeHeroPreview({ documentValue });
+  overviewButtons[1].listeners.get("click")();
+  assert.equal(controller.scene(), "credentials");
+  assert.equal(preview.dataset.scene, "credentials");
+  assert.equal(preview.classList.contains("preview-scene-active"), true);
+  assert.equal(overview.hidden, true);
+  assert.equal(stage.hidden, false);
+  assert.deepEqual(panels.map(({ hidden }) => hidden), [true, false, true, true]);
+  assert.equal(stageButtons[1].attributes.get("aria-selected"), "true");
+  back.listeners.get("click")();
+  assert.equal(controller.scene(), null);
+  assert.equal(overview.hidden, false);
+  assert.equal(stage.hidden, true);
+  assert.equal(overviewButtons[0].focused, true);
 });
 
 test("Vault form values map to the four versioned record types", () => {
@@ -397,8 +464,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=165">/u);
-  assert.match(html, /\/app\.js\?v=165/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=166">/u);
+  assert.match(html, /\/app\.js\?v=166/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -429,6 +496,12 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<nav class="brand-actions"[\s\S]*data-open-auth="login"[\s\S]*data-open-auth="registration"[\s\S]*<\/nav>/u);
   assert.match(html, /class="hero-actions"[\s\S]*data-open-auth="registration"[\s\S]*data-open-auth="login"/u);
   assert.match(html, /class="hero-ambient"[^>]*aria-hidden="true"/u);
+  assert.equal((html.match(/data-hero-preview-scene=/gu) ?? []).length, 8);
+  assert.match(html, /id="hero-preview-stage"[^>]*aria-live="polite"[^>]*hidden/u);
+  assert.match(html, /data-preview-scene-panel="hosts"/u);
+  assert.match(html, /data-preview-scene-panel="credentials"/u);
+  assert.match(html, /data-preview-scene-panel="snippets"/u);
+  assert.match(html, /data-preview-scene-panel="devices"/u);
   assert.match(html, /id="landing-features-title"/u);
   assert.match(html, /class="security-flow"[^>]*aria-label="Как работает защищённая синхронизация"/u);
   assert.match(html, /class="auth-security-note"/u);
@@ -549,6 +622,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /@keyframes reveal-up/u);
   assert.match(styles, /@keyframes ribbon-drift/u);
   assert.match(styles, /@keyframes auth-card-arrive/u);
+  assert.match(styles, /@keyframes preview-stage-enter/u);
+  assert.match(styles, /@keyframes preview-credential-unlock/u);
+  assert.match(styles, /@keyframes preview-orbit-spin/u);
   assert.match(styles, /\.hero-ribbon/u);
   assert.match(styles, /\.security-story/u);
   assert.match(styles, /prefers-reduced-motion:reduce[^}]*[\s\S]*animation:none!important/u);
@@ -566,6 +642,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.app-confirmation::backdrop/u);
   assert.match(styles, /:focus-visible/u);
   assert.match(application, /initializePortalNavigation/u);
+  assert.match(application, /initializeHeroPreview/u);
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
   assert.match(application, /vault\.rememberSession\(user\.id\)/u);
@@ -696,8 +773,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=165/u);
-  assert.match(html, /styles\.css\?v=165/u);
+  assert.match(html, /app\.js\?v=166/u);
+  assert.match(html, /styles\.css\?v=166/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

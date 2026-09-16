@@ -3386,6 +3386,66 @@ export async function initializeCloudAccount({
   return { client, showAuth: setAuthMode, teamWorkspace };
 }
 
+export function initializeHeroPreview({ documentValue = document } = {}) {
+  const preview = documentValue.querySelector("#cloud-hero-preview");
+  const overview = documentValue.querySelector("#hero-preview-overview");
+  const stage = documentValue.querySelector("#hero-preview-stage");
+  const back = documentValue.querySelector("[data-hero-preview-back]");
+  if (!preview || !overview || !stage || !back) return null;
+
+  const sceneOrder = ["hosts", "credentials", "snippets", "devices"];
+  const sceneButtons = [...documentValue.querySelectorAll("[data-hero-preview-scene]")];
+  const scenePanels = [...documentValue.querySelectorAll("[data-preview-scene-panel]")];
+  const sidebarItems = [...preview.querySelectorAll(".preview-sidebar span")];
+  let activeScene = null;
+
+  function selectScene(scene) {
+    if (!sceneOrder.includes(scene)) return;
+    activeScene = scene;
+    preview.dataset.scene = scene;
+    preview.classList.add("preview-scene-active");
+    overview.hidden = true;
+    stage.hidden = false;
+    for (const button of sceneButtons) {
+      button.setAttribute("aria-selected", String(button.dataset.heroPreviewScene === scene));
+    }
+    for (const panel of scenePanels) panel.hidden = panel.dataset.previewScenePanel !== scene;
+    sidebarItems.forEach((item, index) => item.classList.toggle("active", index === sceneOrder.indexOf(scene)));
+  }
+
+  function showOverview({ focus = false } = {}) {
+    activeScene = null;
+    delete preview.dataset.scene;
+    preview.classList.remove("preview-scene-active");
+    stage.hidden = true;
+    overview.hidden = false;
+    for (const button of sceneButtons) button.setAttribute("aria-selected", "false");
+    for (const panel of scenePanels) panel.hidden = true;
+    sidebarItems.forEach((item, index) => item.classList.toggle("active", index === 0));
+    if (focus) documentValue.querySelector('[data-hero-preview-scene="hosts"]')?.focus();
+  }
+
+  for (const button of sceneButtons) {
+    button.addEventListener("click", () => selectScene(button.dataset.heroPreviewScene));
+  }
+  back.addEventListener("click", () => showOverview({ focus: true }));
+
+  for (const tablist of documentValue.querySelectorAll(".hero-preview-grid, .preview-scene-tabs")) {
+    const buttons = [...tablist.querySelectorAll("[data-hero-preview-scene]")];
+    tablist.addEventListener("keydown", (event) => {
+      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const currentIndex = Math.max(0, buttons.indexOf(documentValue.activeElement));
+      const nextIndex = event.key === "Home" ? 0
+        : event.key === "End" ? buttons.length - 1
+          : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+      buttons[nextIndex]?.focus();
+    });
+  }
+
+  return { scene: () => activeScene, selectScene, showOverview };
+}
+
 export function initializePortalNavigation({
   documentValue = document,
   locationValue = location,
@@ -3644,6 +3704,7 @@ export async function initializePortal({
   historyValue = history,
   fetchValue = fetch,
 } = {}) {
+  initializeHeroPreview({ documentValue });
   const verification = consumeVerificationFragment(locationValue, historyValue);
   const passwordReset = consumePasswordResetFragment(locationValue, historyValue);
   const teamInvitation = consumeTeamInvitationFragment(locationValue, historyValue);
