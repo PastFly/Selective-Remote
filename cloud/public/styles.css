@@ -1069,3 +1069,46 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
 @media (prefers-reduced-motion:reduce) {
   .device-vault-orbit>i { animation:none; }
 }
+
+/* Mobile navigation and explicit resource actions v175 */
+.record-select {
+  cursor:pointer;
+  touch-action:manipulation;
+}
+
+@media (max-width:560px) {
+  .brand {
+    grid-template-columns:auto minmax(0,1fr) auto;
+    align-items:center;
+  }
+  .brand .site-nav {
+    grid-column:1 / -1;
+    grid-row:2;
+  }
+  .brand .brand-actions {
+    grid-column:1 / -1;
+    grid-row:3;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;
+    width:100%;
+    margin-left:0;
+  }
+  .brand-actions>button[data-open-auth="login"] {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .brand-actions>button[data-open-auth="registration"] {
+    display:inline-flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .brand .status {
+    grid-column:3;
+    grid-row:1;
+    max-width:none;
+    padding:7px 9px;
+    font-size:9px;
+  }
+  .brand .status span { display:inline; }
+}
