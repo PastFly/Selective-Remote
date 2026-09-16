@@ -299,6 +299,8 @@ struct SelectiveRemoteTeamSnippetsView: View {
     private var displayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-snippet.sort-mode.v1")
     private var sortMode = SelectiveRemoteTeamSnippetSortMode.name
+    @AppStorage("SelectiveRemote.team-snippet.collapsed-folders.v1")
+    private var collapsedFoldersJSON = "[]"
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var endpoint = SelectiveRemoteCloudEndpoint.production
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
@@ -390,25 +392,41 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         if displayMode == .list {
                             List(selection: $selectedSnippetID) {
                                 ForEach(groupedSnippets, id: \.folder) { group in
-                                    Section(folderTitle(group.folder)) {
+                                    DisclosureGroup(
+                                        isExpanded: folderExpansionBinding(for: group.folder)
+                                    ) {
                                         ForEach(group.snippets) { snippet in
                                             snippetRow(snippet)
                                                 .tag(snippet.id)
                                                 .contextMenu { snippetActions(snippet) }
                                         }
+                                    } label: {
+                                        folderDisclosureLabel(group)
                                     }
                                 }
                             }
                             .listStyle(.inset)
                         } else {
                             ScrollView {
-                                LazyVGrid(
-                                    columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
-                                    alignment: .leading,
-                                    spacing: 12
-                                ) {
-                                    ForEach(visibleSnippets) { snippet in
-                                        snippetGridCard(snippet)
+                                LazyVStack(alignment: .leading, spacing: 14) {
+                                    ForEach(groupedSnippets, id: \.folder) { group in
+                                        DisclosureGroup(
+                                            isExpanded: folderExpansionBinding(for: group.folder)
+                                        ) {
+                                            LazyVGrid(
+                                                columns: [GridItem(.adaptive(minimum: 220), spacing: 12)],
+                                                alignment: .leading,
+                                                spacing: 12
+                                            ) {
+                                                ForEach(group.snippets) { snippet in
+                                                    snippetGridCard(snippet)
+                                                }
+                                            }
+                                            .padding(.top, 10)
+                                        } label: {
+                                            folderDisclosureLabel(group)
+                                                .padding(.vertical, 4)
+                                        }
                                     }
                                 }
                                 .padding(14)
@@ -647,6 +665,42 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
+    }
+
+    private var collapsedFolders: Set<String> {
+        guard let data = collapsedFoldersJSON.data(using: .utf8),
+              let folders = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return Set(folders)
+    }
+
+    private func folderExpansionBinding(for folder: String) -> Binding<Bool> {
+        Binding(
+            get: { !collapsedFolders.contains(folder) },
+            set: { expanded in
+                var folders = collapsedFolders
+                if expanded { folders.remove(folder) } else { folders.insert(folder) }
+                guard let data = try? JSONEncoder().encode(folders.sorted()),
+                      let value = String(data: data, encoding: .utf8)
+                else { return }
+                collapsedFoldersJSON = value
+            }
+        )
+    }
+
+    private func folderDisclosureLabel(
+        _ group: (folder: String, snippets: [SelectiveRemoteTeamSnippet])
+    ) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "folder.fill")
+                .foregroundStyle(Color.accentColor)
+            Text(folderTitle(group.folder))
+                .font(.headline)
+            Spacer()
+            Text("\(group.snippets.count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+        }
     }
 
     private func snippetGridCard(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
