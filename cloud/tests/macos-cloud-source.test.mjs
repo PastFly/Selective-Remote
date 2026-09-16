@@ -703,6 +703,13 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(snippets, /Она не запускается автоматически/u);
   assert.match(snippets, /SelectiveRemote\.team-snippet\.display-mode\.v1/u);
   assert.match(snippets, /SelectiveRemote\.team-snippet\.sort-mode\.v1/u);
+  assert.match(snippets, /SelectiveRemote\.team-snippet\.collapsed-folders\.v1/u);
+  assert.match(snippets, /SelectiveRemoteTeamSnippetFolderNode/u);
+  assert.match(snippets, /folderExpansionBinding\(for: node\.path\)/u);
+  assert.match(snippets, /teamSnippetListFolder\(child\)/u);
+  assert.match(snippets, /teamSnippetGridFolder\(child\)/u);
+  assert.match(snippets, /SelectiveRemoteTeamSnippetFolderEditor/u);
+  assert.match(snippets, /DisclosureGroup\(/u);
   assert.match(snippets, /LazyVGrid/u);
   assert.match(snippets, /Все папки/u);
   assert.doesNotMatch(snippets, /UserDefaults|FileManager|KeychainService/u);
@@ -712,7 +719,9 @@ test("macOS Team Snippets use a separate fail-closed memory-only projection", as
   assert.match(library, /Picker\([\s\S]*SelectiveRemoteSnippetScope\.allCases/u);
   assert.match(targets, /Persists only the user's local mapping/u);
   assert.doesNotMatch(targets, /\.body|\.command|vaultName|teamName/u);
-  assert.match(library, /SelectiveRemoteTeamSnippetsView\([\s\S]{0,220}store: teamStore,[\s\S]{0,160}model: model,[\s\S]{0,160}createRequest: teamCreateRequest/u);
+  assert.match(library, /SelectiveRemoteTeamSnippetsView\([\s\S]{0,220}store: teamStore,[\s\S]{0,160}model: model,[\s\S]{0,160}createFolderRequest: teamCreateFolderRequest,[\s\S]{0,160}createRequest: teamCreateRequest/u);
+  assert.match(library, /Новая вложенная группа/u);
+  assert.match(library, /groupParentPath/u);
   assert.match(library, /teamCreateRequest \+= 1/u);
   assert.match(content, /@StateObject private var teamSnippets = SelectiveRemoteTeamSnippetStore\.shared/u);
   assert.match(terminal, /teamStore: SelectiveRemoteTeamSnippetStore\.shared/u);

@@ -343,6 +343,36 @@ func persistsSnippetGroupsAndCRUD() throws {
     #expect(store.templates().isEmpty)
 }
 
+@Test("Переименование родительской группы сохраняет вложенное дерево Snippets")
+@MainActor
+func renamesNestedSnippetGroupTree() throws {
+    let suiteName = "TerminalNestedSnippetGroupTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let store = TerminalCommandHistoryStore(defaults: defaults)
+    let profileID = UUID()
+    let parent = try #require(store.createSnippetGroup(name: "Production", profileID: profileID))
+    let child = try #require(store.createSnippetGroup(name: "Production/Deploy", profileID: profileID))
+    #expect(store.saveTemplate(
+        id: nil,
+        title: "Deploy",
+        command: "systemctl restart app",
+        category: child.name,
+        groupID: child.id,
+        profileID: profileID,
+        targets: [.sshProfile(profileID)]
+    ))
+
+    #expect(store.renameSnippetGroup(
+        id: parent.id,
+        name: "Infrastructure",
+        profileID: profileID
+    ))
+    #expect(store.snippetGroup(id: child.id)?.name == "Infrastructure/Deploy")
+    #expect(store.templates(in: child.id).first?.category == "Infrastructure/Deploy")
+    #expect(!store.removeSnippetGroup(id: parent.id, profileID: profileID))
+}
+
 @Test("Legacy Templates становятся глобальными Snippets с исходным профилем как Target")
 @MainActor
 func migratesLegacyTemplatesToSnippetGroups() throws {
@@ -412,12 +442,14 @@ func validatesGlobalSnippetGroupsAndTargets() throws {
     let second = UUID()
 
     #expect(store.createSnippetGroup(name: "", profileID: first) == nil)
-    #expect(store.createSnippetGroup(name: String(repeating: "x", count: 61), profileID: first) == nil)
+    #expect(store.createSnippetGroup(name: String(repeating: "x", count: 121), profileID: first) == nil)
+    #expect(store.createSnippetGroup(name: "Docker/Production", profileID: first) != nil)
+    #expect(store.createSnippetGroup(name: "Docker//Broken", profileID: first) == nil)
     #expect(store.createSnippetGroup(name: "Docker", profileID: first) != nil)
     #expect(store.createSnippetGroup(name: "docker", profileID: first) == nil)
     #expect(store.createSnippetGroup(name: "Docker", profileID: second) == nil)
-    #expect(store.snippetGroups(for: first).count == 1)
-    #expect(store.snippetGroups(for: second).count == 1)
+    #expect(store.snippetGroups(for: first).count == 2)
+    #expect(store.snippetGroups(for: second).count == 2)
     let extraTargets = (0..<10).map { _ in UUID() }
     #expect(store.saveTemplate(
         id: nil,
@@ -428,7 +460,7 @@ func validatesGlobalSnippetGroupsAndTargets() throws {
         targetProfileIDs: [first, second, first] + extraTargets
     ))
     #expect(store.templates().first?.targetProfileIDs.count == 8)
-    let docker = try #require(store.snippetGroups().first)
+    let docker = try #require(store.snippetGroups().first(where: { $0.name == "Docker" }))
     #expect(store.templates().first?.groupID == docker.id)
     #expect(Array(store.templates().first?.targetProfileIDs.prefix(2) ?? []) == [first, second])
     #expect(!store.saveTemplate(

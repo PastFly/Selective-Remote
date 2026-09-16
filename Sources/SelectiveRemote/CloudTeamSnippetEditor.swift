@@ -4,6 +4,17 @@ struct SelectiveRemoteTeamSnippetEditorRequest: Identifiable {
     let id = UUID()
     let context: SelectiveRemoteTeamSnippetVaultContext
     let snippet: SelectiveRemoteTeamSnippet?
+    let preferredFolder: String
+
+    init(
+        context: SelectiveRemoteTeamSnippetVaultContext,
+        snippet: SelectiveRemoteTeamSnippet?,
+        preferredFolder: String = ""
+    ) {
+        self.context = context
+        self.snippet = snippet
+        self.preferredFolder = preferredFolder
+    }
 }
 
 struct SelectiveRemoteTeamSnippetMutationMessage: Identifiable {
@@ -28,7 +39,7 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
         self.request = request
         self.onSave = onSave
         _title = State(initialValue: request.snippet?.title ?? "")
-        _folder = State(initialValue: request.snippet?.folder ?? "")
+        _folder = State(initialValue: request.snippet?.folder ?? request.preferredFolder)
         _command = State(initialValue: request.snippet?.body ?? "")
     }
 
@@ -41,6 +52,9 @@ struct SelectiveRemoteTeamSnippetEditorView: View {
             && folder == folder.trimmingCharacters(in: .whitespacesAndNewlines)
             && folder.count <= 120
             && !folder.contains(where: { $0.isNewline })
+            && !folder.hasPrefix("/")
+            && !folder.hasSuffix("/")
+            && !folder.contains("//")
             && !command.isEmpty
             && command.count <= 32_768
             && !command.unicodeScalars.contains(where: {

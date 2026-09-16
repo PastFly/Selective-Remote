@@ -590,6 +590,15 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
+            } else if sidebarHostQuickAccessVisible {
+                // Hosts owns its search field in the navigator column. Keep the
+                // same reserved sidebar height so the primary navigation does
+                // not jump when moving between Hosts and another workspace.
+                Color.clear
+                    .frame(height: 38)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
+                    .accessibilityHidden(true)
             }
 
             VStack(spacing: 5) {

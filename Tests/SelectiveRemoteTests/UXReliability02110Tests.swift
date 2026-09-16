@@ -153,6 +153,8 @@ struct UXReliability02110Tests {
         #expect(content.contains("ru: \"Показывать быстрый список Hosts\""))
         #expect(content.contains("ru: \"Показывать Personal / Team\""))
         #expect(content.contains("if showsHostQuickAccess && sidebarHostScopePickerVisible"))
+        #expect(content.contains("else if sidebarHostQuickAccessVisible"))
+        #expect(content.contains("same reserved sidebar height"))
         #expect(!content.contains("if scope == .team {\n                        setMainArea(.hosts)"))
     }
 }
