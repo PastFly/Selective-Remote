@@ -472,7 +472,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=170">/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=171">/u);
   assert.match(html, /\/app\.js\?v=170/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
@@ -633,11 +633,11 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=170/u);
+  assert.match(html, /styles\.css\?v=171/u);
   assert.match(html, /app\.js\?v=170/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="host"/u);
   assert.match(html, /data-stat-kind="credential"/u);
-  assert.match(styles, /Cloud workspace v170/u);
+  assert.match(styles, /Cloud workspace v171/u);
   assert.match(styles, /#cloud-workspace \.vault-records article \{[^}]*grid-template-columns:minmax\(160px,1\.1fr\)/u);
   assert.match(styles, /@media \(max-width:700px\) \{[\s\S]*#cloud-workspace \.vault-records article \{ grid-template-columns:minmax\(0,1fr\)/u);
   assert.match(styles, /:root\[data-theme="light"\] \.access,[\s\S]*\.resource-detail,[\s\S]*\.vault-conflicts\s*\{\s*background:var\(--surface-raised\)/u);
@@ -808,7 +808,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
   assert.match(html, /app\.js\?v=170/u);
-  assert.match(html, /styles\.css\?v=170/u);
+  assert.match(html, /styles\.css\?v=171/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
