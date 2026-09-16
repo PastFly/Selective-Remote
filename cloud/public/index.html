@@ -6,7 +6,7 @@
   <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=168">
+  <link rel="stylesheet" href="/styles.css?v=169">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -271,28 +271,28 @@
       <section class="product-gallery" aria-labelledby="product-gallery-title">
         <div class="landing-section-heading">
           <div><p class="eyebrow">ОДИН VAULT · ДВА ИНТЕРФЕЙСА</p><h2 id="product-gallery-title">Нативно на Mac.<br>Доступно в Cloud.</h2></div>
-          <p>Интерфейсные макеты используют только демонстрационные данные и показывают общую структуру Hosts, папок и Team Vaults.</p>
+          <p>Два полноценных интерфейса одного Vault. Все адреса и названия ниже вымышлены и существуют только для демонстрации.</p>
         </div>
         <div class="product-gallery-grid">
           <figure class="product-shot product-shot-macos">
-            <div class="product-shot-label"><span>macOS</span><strong>Selective Remote</strong><small>Синтетические демонстрационные данные</small></div>
+            <div class="product-shot-label"><span>macOS</span><strong>Selective Remote</strong><small>Нативное управление подключениями</small></div>
             <div class="product-shot-frame">
               <div class="product-mock product-mock-macos" role="img" aria-label="Синтетический макет Selective Remote для macOS">
                 <div class="product-mock-titlebar"><i></i><i></i><i></i><span>Selective Remote</span><b>DEMO DATA</b></div>
                 <div class="product-mock-body">
-                  <aside><strong>SR</strong><span class="active">Hosts</span><span>Credentials</span><span>Snippets</span><span>Devices</span></aside>
-                  <section class="product-mock-tree"><small>PERSONAL VAULT</small><strong>Hosts</strong><span class="active">▾ Production</span><span>⌙ Edge</span><span>⌙ Web</span><span>› Development</span></section>
-                  <section class="product-mock-list"><header><div><small>PRODUCTION</small><strong>Подключения</strong></div><button type="button" tabindex="-1">＋ Host</button></header><article><i></i><div><strong>edge-demo</strong><small>SSH · demo.example</small></div><em>22</em></article><article><i></i><div><strong>web-demo</strong><small>SSH · staging.example</small></div><em>22</em></article><article><i class="idle"></i><div><strong>office-demo</strong><small>RDP · office.example</small></div><em>3389</em></article></section>
+                  <aside><strong>SR</strong><span class="active"><i>⌁</i> Hosts</span><span><i>◇</i> Credentials</span><span><i>⌘</i> Snippets</span><span><i>◉</i> Devices</span><small>PERSONAL</small><span><i>☁</i> Cloud Vault</span></aside>
+                  <section class="product-mock-tree"><header><strong>Hosts</strong><button type="button" tabindex="-1">＋</button></header><label>⌕ <span>Поиск</span></label><small>ИЗБРАННОЕ</small><span>★ Все подключения</span><small>ПАПКИ</small><span class="active">▾ Production <b>3</b></span><span>⌙ Edge</span><span>⌙ Web</span><span>› Development <b>2</b></span></section>
+                  <section class="product-mock-list"><header><div><small>PRODUCTION</small><strong>Подключения</strong></div><button type="button" tabindex="-1">＋ Новый Host</button></header><div class="product-mock-toolbar"><span>⌕ Поиск по Production</span><b>Сортировка⌄</b></div><section class="product-mock-rows"><article class="selected"><i></i><div><strong>edge-gateway</strong><small>SSH · edge.demo.example</small></div><em><b>Online</b> 22</em></article><article><i></i><div><strong>web-staging</strong><small>SSH · staging.demo.example</small></div><em><b>Online</b> 22</em></article><article><i class="idle"></i><div><strong>office-workspace</strong><small>RDP · office.demo.example</small></div><em>Offline · 3389</em></article></section><footer><span>3 подключения</span><span>Обновлено сейчас</span></footer></section>
                 </div>
               </div>
             </div>
           </figure>
           <figure class="product-shot product-shot-browser">
-            <div class="product-shot-label"><span>Browser</span><strong>Selective Remote Cloud</strong><small>Синтетические демонстрационные данные</small></div>
+            <div class="product-shot-label"><span>Browser</span><strong>Selective Remote Cloud</strong><small>Командный доступ из браузера</small></div>
             <div class="product-shot-frame">
               <div class="product-mock product-mock-browser" role="img" aria-label="Синтетический макет Selective Remote Cloud">
-                <div class="product-mock-browserbar"><i></i><span>cloud.example</span><b>DEMO DATA</b></div>
-                <div class="product-mock-cloud"><header><div><small>TEAM VAULT</small><strong>Platform Team</strong></div><span>● Encrypted</span></header><nav><b>Hosts</b><span>Credentials</span><span>Snippets</span></nav><section><article><i></i><div><strong>gateway-demo</strong><small>SSH · Infrastructure</small></div></article><article><i></i><div><strong>database-demo</strong><small>SSH · Production</small></div></article><article><i class="idle"></i><div><strong>workspace-demo</strong><small>RDP · Office</small></div></article></section></div>
+                <div class="product-mock-browserbar"><i></i><i></i><i></i><span>cloud.demo.example</span><b>DEMO DATA</b></div>
+                <div class="product-mock-cloud"><header><div><small>TEAM VAULT</small><strong>Platform Team</strong></div><span>● Зашифровано</span></header><nav><b>Hosts <em>4</em></b><span>Credentials <em>6</em></span><span>Snippets <em>3</em></span></nav><div class="product-mock-cloud-tools"><label>⌕ <span>Название, адрес или папка</span></label><button type="button" tabindex="-1">＋ Добавить Host</button></div><section><div class="product-mock-cloud-head"><span>HOST</span><span>ПАПКА</span><span>СТАТУС</span></div><article><i></i><div><strong>gateway-edge</strong><small>SSH · gateway.demo.example</small></div><em>Infrastructure</em><b>Online</b></article><article class="selected"><i></i><div><strong>database-primary</strong><small>SSH · db.demo.example</small></div><em>Production</em><b>Online</b></article><article><i class="idle"></i><div><strong>design-workspace</strong><small>RDP · workspace.demo.example</small></div><em>Office</em><b>Offline</b></article></section><footer><span>3 из 4 Hosts</span><span>Синхронизировано сейчас</span></footer></div>
               </div>
             </div>
           </figure>
@@ -892,6 +892,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=168"></script>
+  <script type="module" src="/app.js?v=169"></script>
 </body>
 </html>
