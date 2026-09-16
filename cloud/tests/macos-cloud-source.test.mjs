@@ -236,6 +236,11 @@ test("macOS keeps Hosts navigation stable and gates Team UI behind a Cloud sessi
   assert.match(content, /\.connectionCenter, \.hosts, \.ssh, \.terminal, \.sftp/u);
   assert.match(content, /private let secondaryMainAreas[\s\S]*\.sessionLogs/u);
   assert.match(content, /sidebarHostSearchBinding/u);
+  assert.match(content, /SelectiveRemote\.sidebar-host-quick-access-visible\.v1/u);
+  assert.match(content, /SelectiveRemote\.sidebar-host-scope-picker-visible\.v1/u);
+  assert.match(content, /sidebarHostQuickAccessVisible && mainArea != \.hosts/u);
+  assert.match(content, /Показывать быстрый список Hosts/u);
+  assert.match(content, /Показывать Personal \/ Team/u);
   assert.match(content, /if cloudSessionAvailable \|\| !teamHosts\.hosts\.isEmpty/u);
   assert.match(content, /SelectiveRemoteCloudOnboardingSheet/u);
   assert.match(content, /personalHostsManagementDetail/u);
