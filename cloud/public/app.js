@@ -3395,9 +3395,22 @@ export function initializeHeroPreview({ documentValue = document } = {}) {
 
   const sceneOrder = ["hosts", "credentials", "snippets", "devices"];
   const sceneButtons = [...documentValue.querySelectorAll("[data-hero-preview-scene]")];
+  const scopeButtons = [...documentValue.querySelectorAll("[data-hero-preview-scope]")];
+  const scopeLabels = [...documentValue.querySelectorAll("[data-preview-scope-label]")];
   const scenePanels = [...documentValue.querySelectorAll("[data-preview-scene-panel]")];
   const sidebarItems = [...preview.querySelectorAll(".preview-sidebar span")];
   let activeScene = null;
+  let activeScope = "personal";
+
+  function selectScope(scope) {
+    if (!["personal", "team"].includes(scope)) return;
+    activeScope = scope;
+    preview.dataset.scope = scope;
+    for (const button of scopeButtons) {
+      button.setAttribute("aria-pressed", String(button.dataset.heroPreviewScope === scope));
+    }
+    for (const label of scopeLabels) label.textContent = scope === "team" ? "Team Vault" : "Personal Vault";
+  }
 
   function selectScene(scene) {
     if (!sceneOrder.includes(scene)) return;
@@ -3428,6 +3441,9 @@ export function initializeHeroPreview({ documentValue = document } = {}) {
   for (const button of sceneButtons) {
     button.addEventListener("click", () => selectScene(button.dataset.heroPreviewScene));
   }
+  for (const button of scopeButtons) {
+    button.addEventListener("click", () => selectScope(button.dataset.heroPreviewScope));
+  }
   back.addEventListener("click", () => showOverview({ focus: true }));
 
   for (const tablist of documentValue.querySelectorAll(".hero-preview-grid, .preview-scene-tabs")) {
@@ -3443,7 +3459,8 @@ export function initializeHeroPreview({ documentValue = document } = {}) {
     });
   }
 
-  return { scene: () => activeScene, selectScene, showOverview };
+  selectScope(activeScope);
+  return { scene: () => activeScene, scope: () => activeScope, selectScene, selectScope, showOverview };
 }
 
 export function initializePortalNavigation({
@@ -3455,6 +3472,7 @@ export function initializePortalNavigation({
   showAuthMode = () => {},
 } = {}) {
   const brand = documentValue.querySelector("#site-brand");
+  const siteNav = documentValue.querySelector(".site-nav");
   const publicActions = documentValue.querySelector("#public-actions");
   const hero = documentValue.querySelector("#public-hero");
   const heroCopy = documentValue.querySelector("#public-hero-copy");
@@ -3581,6 +3599,7 @@ export function initializePortalNavigation({
   function showLanding({ replace = false } = {}) {
     vaultUI?.closeEditor();
     brand.hidden = false;
+    if (siteNav) siteNav.hidden = false;
     publicActions.hidden = false;
     hero.hidden = false;
     hero.classList.remove("auth-active");
@@ -3596,6 +3615,7 @@ export function initializePortalNavigation({
   function showAuthentication(mode = "login", { replace = false } = {}) {
     vaultUI?.closeEditor();
     brand.hidden = false;
+    if (siteNav) siteNav.hidden = true;
     publicActions.hidden = true;
     hero.hidden = false;
     hero.classList.add("auth-active");
@@ -3612,6 +3632,7 @@ export function initializePortalNavigation({
 
   function showWorkspace({ replace = false } = {}) {
     brand.hidden = true;
+    if (siteNav) siteNav.hidden = true;
     hero.hidden = true;
     publicGrid.hidden = true;
     publicAccess.hidden = true;
@@ -3682,6 +3703,7 @@ export function initializePortalNavigation({
 
 async function updateServiceStatus(documentValue, fetchValue) {
   const status = documentValue.querySelector("#service-status");
+  const label = status.querySelector?.("span") ?? status;
   try {
     const response = await fetchValue("/v1/meta", {
       headers: { Accept: "application/json" },
@@ -3689,11 +3711,16 @@ async function updateServiceStatus(documentValue, fetchValue) {
     });
     if (!response.ok) throw new Error("unavailable");
     const meta = await response.json();
-    status.textContent = `API v${meta.apiVersion} · сервис доступен`;
+    label.textContent = "Online";
+    status.title = `Cloud API v${meta.apiVersion} доступен`;
+    status.classList.remove("error");
     status.classList.add("ok");
     return meta;
   } catch {
-    status.textContent = "Сервис недоступен";
+    label.textContent = "Offline";
+    status.title = "Cloud недоступен";
+    status.classList.remove("ok");
+    status.classList.add("error");
     return null;
   }
 }
