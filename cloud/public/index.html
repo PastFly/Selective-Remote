@@ -6,7 +6,7 @@
   <meta name="description" content="Selective Remote Cloud — защищённая синхронизация Hosts, Credentials, Snippets и Team Vaults с клиентским шифрованием.">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=169">
+  <link rel="stylesheet" href="/styles.css?v=170">
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -304,18 +304,18 @@
       <aside class="workspace-sidebar">
         <div class="workspace-logo"><span>SR</span><strong>Cloud</strong></div>
         <nav aria-label="Разделы Cloud">
-          <button type="button" class="active" data-workspace-target="workspace-overview">Обзор</button>
+          <button type="button" class="active" data-nav-icon="⌂" data-workspace-target="workspace-overview">Обзор</button>
           <p class="workspace-nav-label">Ресурсы</p>
-          <button type="button" data-workspace-target="local-vault" data-record-filter="host">Хосты</button>
-          <button type="button" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
-          <button type="button" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
-          <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
+          <button type="button" data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="host">Хосты</button>
+          <button type="button" data-nav-icon="⌘" data-workspace-target="local-vault" data-record-filter="snippet">Сниппеты</button>
+          <button type="button" data-nav-icon="◇" data-workspace-target="local-vault" data-record-filter="credential">Учётные данные</button>
+          <button type="button" data-nav-icon="↔" data-workspace-target="local-vault" data-record-filter="forwarding">Forwarding</button>
           <p class="workspace-nav-label">Команды</p>
-          <button type="button" data-workspace-target="team-vault">Команды</button>
+          <button type="button" data-nav-icon="◎" data-workspace-target="team-vault">Команды</button>
           <p class="workspace-nav-label">Аккаунт</p>
-          <button type="button" data-workspace-target="workspace-devices">Устройства</button>
-          <button type="button" data-workspace-target="workspace-settings">Настройки</button>
-          <button type="button" data-workspace-target="workspace-about">О проекте</button>
+          <button type="button" data-nav-icon="◫" data-workspace-target="workspace-devices">Устройства</button>
+          <button type="button" data-nav-icon="⚙" data-workspace-target="workspace-settings">Настройки</button>
+          <button type="button" data-nav-icon="i" data-workspace-target="workspace-about">О проекте</button>
         </nav>
         <div class="workspace-security" id="workspace-sidebar-footer">
           <div class="workspace-security-status">
@@ -349,10 +349,10 @@
             <button type="button" data-workspace-target="local-vault">Открыть Personal Vault</button>
           </div>
           <div class="workspace-stats">
-            <button type="button" data-workspace-target="local-vault" data-record-filter="host"><span id="workspace-host-count">—</span><strong>Hosts</strong><small>RDP и SSH подключения</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="credential"><span id="workspace-credential-count">—</span><strong>Credentials</strong><small>Секреты и учётные записи</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="snippet"><span id="workspace-snippet-count">—</span><strong>Snippets</strong><small>Сохранённые команды</small></button>
-            <button type="button" data-workspace-target="local-vault" data-record-filter="forwarding"><span id="workspace-forwarding-count">—</span><strong>Forwarding</strong><small>Туннели и правила</small></button>
+            <button type="button" data-stat-kind="host" data-workspace-target="local-vault" data-record-filter="host"><span id="workspace-host-count">—</span><strong>Hosts</strong><small>RDP и SSH подключения</small></button>
+            <button type="button" data-stat-kind="credential" data-workspace-target="local-vault" data-record-filter="credential"><span id="workspace-credential-count">—</span><strong>Credentials</strong><small>Секреты и учётные записи</small></button>
+            <button type="button" data-stat-kind="snippet" data-workspace-target="local-vault" data-record-filter="snippet"><span id="workspace-snippet-count">—</span><strong>Snippets</strong><small>Сохранённые команды</small></button>
+            <button type="button" data-stat-kind="forwarding" data-workspace-target="local-vault" data-record-filter="forwarding"><span id="workspace-forwarding-count">—</span><strong>Forwarding</strong><small>Туннели и правила</small></button>
           </div>
           <div class="workspace-notice" id="workspace-vault-notice">
             <strong>Personal Vault заблокирован</strong>
@@ -892,6 +892,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=169"></script>
+  <script type="module" src="/app.js?v=170"></script>
 </body>
 </html>
