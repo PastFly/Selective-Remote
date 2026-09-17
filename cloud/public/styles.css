@@ -1133,3 +1133,35 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   }
   .brand .status span { display:inline; }
 }
+
+/* Team Snippets use the native folder path without altering the resource-card hitbox. */
+#team-vault-workspace > .team-snippet-browser { order:2; }
+#cloud-workspace .team-snippet-browser {
+  display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(150px,1fr) minmax(140px,.8fr);
+  gap:12px; margin-top:16px; padding:16px; border:1px solid var(--line); border-radius:16px;
+  background:var(--surface-raised);
+}
+#cloud-workspace .snippet-browser-actions { grid-column:1/-1; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+#cloud-workspace .snippet-browser-actions p { margin:0 auto 0 0; color:var(--muted); font-size:12px; }
+#cloud-workspace .team-snippet-browser label { min-width:0; }
+#cloud-workspace .team-snippet-browser label > span { color:var(--muted); font-size:11px; font-weight:700; }
+#cloud-workspace .snippet-tree-actions { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:8px; }
+#cloud-workspace .snippet-tree-actions button { padding:6px 10px; font-size:11px; }
+#cloud-workspace .snippet-folder-toolbar { display:flex; align-items:center; gap:8px; min-width:0; }
+#cloud-workspace .snippet-folder-toolbar .vault-folder-heading { flex:1; min-width:0; margin:0; padding:12px 5px; }
+#cloud-workspace .snippet-folder-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#cloud-workspace .snippet-folder-count { flex:none; margin-left:10px; color:var(--muted); font-size:11px; }
+#cloud-workspace .snippet-folder-add { flex:none; width:32px; min-height:32px; padding:4px; }
+#cloud-workspace .snippet-folder-nested { padding-left:14px; border-left:1px solid var(--line); }
+#cloud-workspace .snippet-folder-group, #cloud-workspace .snippet-folder-content { min-width:0; }
+.snippet-group-help { grid-column:1/-1; margin:0; }
+@media (max-width:880px) {
+  #cloud-workspace .team-snippet-browser { grid-template-columns:1fr 1fr; }
+  #cloud-workspace .team-snippet-browser > label:first-of-type { grid-column:1/-1; }
+}
+@media (max-width:560px) {
+  #cloud-workspace .team-snippet-browser { grid-template-columns:minmax(0,1fr); padding:12px; }
+  #cloud-workspace .snippet-browser-actions p { flex-basis:100%; }
+  #cloud-workspace .snippet-browser-actions button { flex:1; }
+  #cloud-workspace .snippet-folder-nested { padding-left:6px; }
+}
