@@ -1,0 +1,562 @@
+diff --git a/cloud/public/app.js b/cloud/public/app.js
+index 50ea94a..786e216 100644
+--- a/cloud/public/app.js
++++ b/cloud/public/app.js
+@@ -1,6 +1,10 @@
+ import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
+ import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
+ import { newestVaultConflictChoice } from "./vault-model.js";
++import {
++  filterTeamSnippets, normalizeTeamSnippetFolder, renderTeamSnippetTree,
++  teamSnippetFolder, teamSnippetFolderPaths, teamSnippetRecordData,
++} from "./team-snippet-browser.js?v=187";
+ import { initializeModernSelects } from "./modern-select.js?v=158";
+ import {
+   createIndexedDBTeamDeviceRepository,
+@@ -1174,6 +1178,23 @@ export function initializeTeamWorkspace({
+   const hostTags = documentValue.querySelector("#team-host-tags");
+   const hostDescription = documentValue.querySelector("#team-host-description");
+   const hostBrowser = documentValue.querySelector("#team-host-browser");
++  const snippetBrowser = documentValue.querySelector("#team-snippet-browser");
++  const snippetSearch = documentValue.querySelector("#team-snippet-search");
++  const snippetFolderFilter = documentValue.querySelector("#team-snippet-folder-filter");
++  const snippetSort = documentValue.querySelector("#team-snippet-sort");
++  const snippetCount = documentValue.querySelector("#team-snippet-count");
++  const snippetFolderField = documentValue.querySelector("#team-snippet-folder-field");
++  const snippetFolderLabel = documentValue.querySelector("#team-snippet-folder-label");
++  const snippetFolder = documentValue.querySelector("#team-snippet-folder");
++  const snippetFolderOptions = documentValue.querySelector("#team-snippet-folder-options");
++  const snippetCreate = documentValue.querySelector("#team-snippet-create");
++  const snippetGroupCreate = documentValue.querySelector("#team-snippet-group-create");
++  const snippetGroupEditor = documentValue.querySelector("#team-snippet-group-editor");
++  const snippetGroupForm = documentValue.querySelector("#team-snippet-group-form");
++  const snippetGroupParent = documentValue.querySelector("#team-snippet-group-parent");
++  const snippetGroupName = documentValue.querySelector("#team-snippet-group-name");
++  const snippetCollapsedFolders = new Set();
++  const snippetFilteredCollapsedFolders = new Set();
+   const hostSearch = documentValue.querySelector("#team-host-search");
+   const hostFolderFilter = documentValue.querySelector("#team-host-folder-filter");
+   const hostDetail = documentValue.querySelector("#host-detail-dialog");
+@@ -1235,6 +1256,7 @@ export function initializeTeamWorkspace({
+   let backgroundMaintenanceOperation = null;
+   let vaultOperation = null;
+   let editingRecordID = null;
++  let recordSavePending = false;
+   let detailedHostID = null;
+ 
+   function renderOverviewSummary() {
+@@ -1371,7 +1393,9 @@ export function initializeTeamWorkspace({
+     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) {
+       control.disabled = disabled || !canEdit();
+     }
+-    for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
++    // Folder disclosure is read-only navigation and must remain usable by Viewers.
++    for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
++    for (const button of [snippetCreate, snippetGroupCreate]) if (button) button.disabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
+     recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
+   }
+ 
+@@ -1395,6 +1419,14 @@ export function initializeTeamWorkspace({
+     setText(recordTargetLabel, targetText);
+     setText(recordSecretLabel, secretText);
+     const isSnippet = recordType.value === "snippet";
++    if (snippetFolderField) snippetFolderField.hidden = !isSnippet;
++    if (snippetFolderLabel) snippetFolderLabel.hidden = !isSnippet;
++    if (snippetFolder) snippetFolder.disabled = !isSnippet || !canEdit();
++    if (snippetBrowser) snippetBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "snippet";
++    setText(documentValue.querySelector("#team-record-secret-help"), isSnippet
++      ? "Команда шифруется на устройстве и синхронизируется внутри выбранного Team Vault."
++      : "Пароль, токен или ключ. Значение шифруется на устройстве до отправки.");
++    recordSecret.rows = isSnippet ? 6 : 3;
+     recordTargetLabel.hidden = isSnippet;
+     recordTarget.hidden = isSnippet;
+     recordTarget.required = !isSnippet;
+@@ -1420,14 +1452,17 @@ export function initializeTeamWorkspace({
+   }
+ 
+   function beginRecordCreate() {
++    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+     resetRecordEditor();
+     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
+     updateRecordLabels();
++    if (recordType.value === "snippet" && snippetFolderFilter?.value.startsWith("folder:")) snippetFolder.value = snippetFolderFilter.value.slice(7);
+     recordEditor?.showModal?.();
+     recordTitle.focus();
+   }
+ 
+   function beginRecordEdit(record) {
++    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+     const values = localVaultRecordFormValues(record);
+     editingRecordID = record.id;
+     recordType.value = record.type;
+@@ -1435,6 +1470,7 @@ export function initializeTeamWorkspace({
+     recordTitle.value = values.title;
+     recordTarget.value = values.target;
+     recordSecret.value = values.secret;
++    if (snippetFolder) snippetFolder.value = record.type === "snippet" ? teamSnippetFolder(record) : "";
+     if (record.type === "host") {
+       const connection = parseTeamHostConnection(record.data);
+       const organization = teamHostOrganizationValues(record);
+@@ -1493,15 +1529,76 @@ export function initializeTeamWorkspace({
+     hostFolderFilter.value = folders.includes(selected) || selected === "all" ? selected : "all";
+   }
+ 
++  function resetSnippetBrowser({ lock = false } = {}) {
++    if (!snippetBrowser) return;
++    snippetSearch.value = "";
++    snippetFolderFilter.value = "all";
++    snippetSort.value = "title-asc";
++    snippetFilteredCollapsedFolders.clear();
++    snippetGroupForm.reset();
++    snippetGroupEditor.close?.();
++    if (lock) {
++      snippetCollapsedFolders.clear();
++      snippetFolderOptions.replaceChildren();
++      snippetFolderFilter.replaceChildren(newOption("all", "Все папки"), newOption("none", "Без папки"));
++      snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"));
++      snippetCount.textContent = "";
++      snippetFolder.value = "";
++      selectedRecordIDs.clear();
++      visibleRecordIDs = [];
++      if (bulkActions) bulkActions.hidden = true;
++    }
++  }
++
++  function newOption(value, title = value) {
++    const option = documentValue.createElement("option");
++    option.value = value;
++    option.textContent = title;
++    return option;
++  }
++
++  function updateSnippetFolders(snippets) {
++    if (!snippetBrowser) return;
++    const paths = teamSnippetFolderPaths(snippets);
++    // Avoid replacing focused controls when an unrelated background sync renders again.
++    const previous = [...snippetFolderOptions.options].map((option) => option.value);
++    if (JSON.stringify(previous) === JSON.stringify(paths) && snippetFolderFilter.options.length === paths.length + 2) return;
++    const selected = snippetFolderFilter.value;
++    const parent = snippetGroupParent.value;
++    snippetFolderOptions.replaceChildren(...paths.map((path) => newOption(path)));
++    snippetFolderFilter.replaceChildren(newOption("all", "Все папки"), newOption("none", "Без папки"), ...paths.map((path) => newOption(`folder:${path}`, path)));
++    snippetFolderFilter.value = [...snippetFolderFilter.options].some((option) => option.value === selected) ? selected : "all";
++    snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"), ...paths.map((path) => newOption(path)));
++    snippetGroupParent.value = paths.includes(parent) ? parent : "";
++    for (const path of [...snippetCollapsedFolders]) if (path && !paths.includes(path)) snippetCollapsedFolders.delete(path);
++  }
++
++  function activeSnippetCollapsedFolders() {
++    return snippetSearch.value.trim() || snippetFolderFilter.value !== "all" || activeSmartFilter
++      ? snippetFilteredCollapsedFolders : snippetCollapsedFolders;
++  }
++
++  function beginSnippetGroup(parent = null) {
++    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
++    snippetGroupForm.reset();
++    snippetGroupName.setCustomValidity("");
++    snippetGroupParent.value = parent ?? (snippetFolderFilter.value.startsWith("folder:") ? snippetFolderFilter.value.slice(7) : "");
++    snippetGroupEditor.showModal();
++    snippetGroupName.focus();
++  }
++
+   function renderRecords() {
+     records.replaceChildren();
+     if (!controller) return;
+     const current = controller.document();
+     const hosts = current.records.filter((value) => value.type === "host");
++    const snippets = current.records.filter((value) => value.type === "snippet");
++    const showingSnippets = Boolean(snippetBrowser && activeView === "hosts" && activeRecordFilter === "snippet");
+     updateHostFolders(hosts);
++    updateSnippetFolders(snippets);
+     const query = hostSearch.value.trim().toLocaleLowerCase();
+     const folder = hostFolderFilter.value;
+-    const visibleRecords = current.records.filter((value) => {
++    let visibleRecords = current.records.filter((value) => {
+       if (activeView !== "hosts") return true;
+       if (activeRecordFilter !== "all" && value.type !== activeRecordFilter) return false;
+       if (activeSmartFilter === "favorites" && value.data?.favorite !== true) return false;
+@@ -1513,6 +1610,10 @@ export function initializeTeamWorkspace({
+       return !query || [data.title, data.address, organization.folder, organization.description, ...organization.tags]
+         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
+     });
++    if (showingSnippets) {
++      visibleRecords = filterTeamSnippets(visibleRecords, { query: snippetSearch.value, folder: snippetFolderFilter.value, sort: snippetSort.value });
++      setText(snippetCount, `Сниппеты: ${visibleRecords.length} / ${snippets.length}`);
++    }
+     visibleRecordIDs = visibleRecords.map((record) => record.id);
+     for (const id of [...selectedRecordIDs]) {
+       if (!current.records.some((record) => record.id === id)) selectedRecordIDs.delete(id);
+@@ -1525,12 +1626,20 @@ export function initializeTeamWorkspace({
+       const empty = documentValue.createElement("p");
+       empty.className = "vault-empty";
+       const emptyLabels = { all: "записей", host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
+-      empty.textContent = activeView === "hosts"
++      empty.textContent = showingSnippets && snippets.length > 0
++        ? "Ничего не найдено. Измените поиск, папку или быстрый фильтр."
++        : activeView === "hosts"
+         ? `В выбранном Team Vault пока нет ${emptyLabels[activeRecordFilter]}.`
+         : "Папка команды пока пуста.";
+       records.append(empty);
+       return;
+     }
++    const snippetTree = showingSnippets ? renderTeamSnippetTree({
++      documentValue, container: records, records: visibleRecords, collapsed: activeSnippetCollapsedFolders(),
++      editable: canEdit() && !activeConflicts && !selectedVault?.rotationRequired,
++      onToggle: (ids) => { visibleRecordIDs = ids; }, onCreateGroup: beginSnippetGroup,
++    }) : null;
++    if (snippetTree) visibleRecordIDs = snippetTree.visibleIDs;
+     let renderedFolder = null;
+     let folderContent = null;
+     for (const record of visibleRecords.sort((a, b) => activeView === "hosts" && activeRecordFilter === "host" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
+@@ -1676,7 +1785,9 @@ export function initializeTeamWorkspace({
+       });
+       actions.append(favorite, edit, remove);
+       card.append(selector, heading, summary, metadata, actions);
+-      (folderContent ?? records).append(card);
++      const snippetContainer = snippetTree?.containers.get(record.id);
++      if (snippetContainer) snippetContainer.insertBefore(card, snippetContainer.querySelector(":scope > .snippet-folder-group"));
++      else (folderContent ?? records).append(card);
+     }
+   }
+ 
+@@ -2341,6 +2452,8 @@ export function initializeTeamWorkspace({
+ 
+   function lockCurrentVault() {
+     stopBackgroundSync();
++    resetRecordEditor();
++    resetSnippetBrowser({ lock: true });
+     controller?.lock();
+     controller = null;
+     selectedVault = null;
+@@ -2354,6 +2467,11 @@ export function initializeTeamWorkspace({
+   }
+ 
+   function setView(view, recordFilter = null) {
++    if (view !== activeView || (recordFilter && recordFilter !== activeRecordFilter)) {
++      resetSnippetBrowser();
++      resetRecordEditor();
++      selectedRecordIDs.clear();
++    }
+     activeView = ["teams", "members", "vaults", "hosts", "activity", "management"].includes(view) ? view : "teams";
+     if (activeView === "hosts") {
+       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(recordFilter)
+@@ -2928,6 +3046,44 @@ export function initializeTeamWorkspace({
+     }
+   });
+   recordType.addEventListener("change", updateRecordLabels);
++  snippetSearch?.addEventListener("input", () => { snippetFilteredCollapsedFolders.clear(); renderRecords(); });
++  snippetFolderFilter?.addEventListener("change", () => { snippetFilteredCollapsedFolders.clear(); renderRecords(); });
++  snippetSort?.addEventListener("change", renderRecords);
++  snippetCreate?.addEventListener("click", beginRecordCreate);
++  snippetGroupCreate?.addEventListener("click", () => beginSnippetGroup());
++  snippetGroupName?.addEventListener("input", () => snippetGroupName.setCustomValidity(""));
++  snippetGroupParent?.addEventListener("change", () => snippetGroupName.setCustomValidity(""));
++  documentValue.querySelector("#team-snippet-group-cancel")?.addEventListener("click", () => { snippetGroupForm.reset(); snippetGroupEditor.close(); });
++  snippetGroupForm?.addEventListener("submit", (event) => {
++    event.preventDefault();
++    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
++    try {
++      const name = normalizeTeamSnippetFolder(snippetGroupName.value);
++      if (!name || name.includes("/")) throw new Error("invalid_snippet_folder");
++      const path = normalizeTeamSnippetFolder([snippetGroupParent.value, name].filter(Boolean).join("/"));
++      if (teamSnippetFolderPaths(controller.document().records).includes(path)) throw new Error("snippet_folder_exists");
++      snippetGroupEditor.close();
++      beginRecordCreate();
++      recordType.value = "snippet";
++      snippetFolder.value = path;
++      updateRecordLabels();
++      recordTitle.focus();
++    } catch {
++      snippetGroupName.setCustomValidity("Укажите новое имя без /; полный путь — не более 120 символов.");
++      snippetGroupName.reportValidity();
++    }
++  });
++  for (const button of documentValue.querySelectorAll("[data-snippet-expand]")) {
++    button.addEventListener("click", () => {
++      const collapsed = activeSnippetCollapsedFolders();
++      collapsed.clear();
++      if (button.dataset.snippetExpand === "false" && controller) {
++        for (const path of ["", ...teamSnippetFolderPaths(controller.document().records)]) collapsed.add(path);
++      }
++      renderRecords();
++    });
++  }
++  recordEditor?.addEventListener("cancel", () => resetRecordEditor());
+   hostSearch.addEventListener("input", renderRecords);
+   hostFolderFilter.addEventListener("change", renderRecords);
+   hostProtocol.addEventListener("change", () => {
+@@ -2935,12 +3091,17 @@ export function initializeTeamWorkspace({
+   });
+   recordForm.addEventListener("submit", async (event) => {
+     event.preventDefault();
+-    const button = recordForm.querySelector("button");
++    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
++    const editingController = controller;
++    const submittedType = recordType.value;
++    recordSavePending = true;
++    const button = recordForm.querySelector('button[type="submit"]');
+     button.disabled = true;
+     try {
+       const existingRecord = editingRecordID
+         ? controller.document().records.find((value) => value.id === editingRecordID)
+         : null;
++      if (editingRecordID && (!existingRecord || existingRecord.type !== recordType.value)) throw new Error("record_changed");
+       const existingHost = existingRecord?.type === "host" ? existingRecord : null;
+       const connection = recordType.value === "host" && !existingHost?.data?.profile
+         ? teamHostConnectionData({
+@@ -2956,13 +3117,16 @@ export function initializeTeamWorkspace({
+               title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
+               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
+             })
+-          : localVaultRecordData(
+-              recordType.value,
+-              { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
+-              existingRecord?.data,
+-            ),
++          : recordType.value === "snippet"
++            ? teamSnippetRecordData({ title: recordTitle.value, body: recordSecret.value, folder: snippetFolder.value }, existingRecord?.data)
++            : localVaultRecordData(
++                recordType.value,
++                { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
++                existingRecord?.data,
++              ),
+       });
+-      if (recordType.value === "host") {
++      if (controller !== editingController) return;
++      if (submittedType === "host") {
+         const credentials = hostCredentials(recordID);
+         if (hostRemovePassword.checked) {
+           for (const credential of credentials) await controller.delete(credential.id);
+@@ -2988,6 +3152,7 @@ export function initializeTeamWorkspace({
+     } catch {
+       setText(workspaceStatus, "Запись не сохранена. Проверьте поля и роль.");
+     } finally {
++      recordSavePending = false;
+       button.disabled = !canEdit();
+     }
+   });
+@@ -3056,6 +3221,7 @@ export function initializeTeamWorkspace({
+   for (const button of smartFilterButtons) {
+     button.addEventListener("click", () => {
+       activeSmartFilter = activeSmartFilter === button.dataset.teamSmartFilter ? null : button.dataset.teamSmartFilter;
++      snippetFilteredCollapsedFolders.clear();
+       for (const candidate of smartFilterButtons) {
+         candidate.classList.toggle("active", candidate.dataset.teamSmartFilter === activeSmartFilter);
+       }
+ diff --git a/cloud/public/i18n.js b/cloud/public/i18n.js
+index 467a657..8f46256 100644
+--- a/cloud/public/i18n.js
++++ b/cloud/public/i18n.js
+@@ -15,6 +15,24 @@
+   };
+ 
+   const en = new Map(Object.entries({
++    "Папка сниппета": "Snippet folder",
++    "Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.": "Choose a folder or enter a nested path separated by /. Leave blank for no folder.",
++    "Новая группа": "New folder",
++    "Поиск сниппетов": "Search snippets",
++    "Папка и вложенные": "Folder and descendants",
++    "Развернуть всё": "Expand all",
++    "Свернуть всё": "Collapse all",
++    "Родительская папка": "Parent folder",
++    "Без родительской папки": "No parent folder",
++    "Название группы": "Folder name",
++    "Далее откроется первый сниппет. Группа появится у команды после его сохранения и зашифрованной синхронизации.": "Next, create the first snippet. The folder appears for your team after it is saved and synchronized with encryption.",
++    "Продолжить": "Continue",
++    "Например, Production/Deploy": "For example, Production/Deploy",
++    "Название, команда или папка": "Name, command or folder",
++    "Новая вложенная группа": "New child folder",
++    "Команда шифруется на устройстве и синхронизируется внутри выбранного Team Vault.": "The command is encrypted on this device and synchronized within the selected Team Vault.",
++    "Ничего не найдено. Измените поиск, папку или быстрый фильтр.": "No matches. Change the search, folder or quick filter.",
++    "Укажите новое имя без /; полный путь — не более 120 символов.": "Enter a new name without /; the full path must not exceed 120 characters.",
+     "Загрузка Selective Remote Cloud": "Loading Selective Remote Cloud",
+     "Открываем защищённое пространство…": "Opening your secure workspace…",
+     "Разделы страницы": "Page sections",
+@@ -645,6 +663,7 @@
+   })) en.set(source, translation);
+ 
+   const patterns = [
++    [/^Сниппеты: (\d+) \/ (\d+)$/u, "Snippets: $1 / $2"],
+     [/^Автоматически выдано недостающих wrappers: (\d+)\.$/u, "Missing wrappers provisioned automatically: $1."],
+     [/^Автоматически разрешено конфликтов: (\d+)\.$/u, "Conflicts resolved automatically: $1."],
+     [/^«(.+)» будет закрыта для всех участников\.$/u, "“$1” will be closed for all members."],
+@@ -749,13 +768,14 @@
+   }
+ 
+   function translateTextNode(node) {
++    if (node.parentElement?.closest?.('[translate="no"]')) return;
+     if (!originalText.has(node)) originalText.set(node, node.nodeValue);
+     const source = originalText.get(node);
+     node.nodeValue = locale === "ru" ? source : translate(source);
+   }
+ 
+   function translateElement(element) {
+-    if (!(element instanceof Element)) return;
++    if (!(element instanceof Element) || element.closest?.('[translate="no"]')) return;
+     const attributes = ["aria-label", "title", "placeholder", "data-tooltip"];
+     let saved = originalAttributes.get(element);
+     if (!saved) {
+diff --git a/cloud/public/index.html b/cloud/public/index.html
+index 26fe745..55e3e04 100644
+--- a/cloud/public/index.html
++++ b/cloud/public/index.html
+@@ -10,8 +10,8 @@
+   <link rel="alternate" hreflang="x-default" href="/">
+   <title>Selective Remote Cloud</title>
+   <script src="/appearance-bootstrap.js?v=162"></script>
+-  <link rel="stylesheet" href="/styles.css?v=176">
+-  <script src="/i18n.js?v=175"></script>
++  <link rel="stylesheet" href="/styles.css?v=187">
++  <script src="/i18n.js?v=187"></script>
+ </head>
+ <body>
+   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
+@@ -887,6 +887,12 @@
+             <input id="team-record-title" name="title" maxlength="120" required>
+             <label for="team-record-target" id="team-record-target-label">Адрес</label>
+             <input id="team-record-target" name="target" maxlength="2048">
++            <label for="team-snippet-folder" id="team-snippet-folder-label" hidden>Папка сниппета</label>
++            <div class="field-with-help" id="team-snippet-folder-field" hidden>
++              <input id="team-snippet-folder" name="snippetFolder" maxlength="120" list="team-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="team-snippet-folder-help">
++              <datalist id="team-snippet-folder-options"></datalist>
++              <small class="field-help" id="team-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small>
++            </div>
+             <label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label>
+             <div class="field-with-help"><textarea id="team-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="team-record-secret-help"></textarea><small id="team-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется на устройстве до отправки.</small></div>
+             <div class="team-host-fields" id="team-host-fields">
+@@ -922,6 +928,37 @@
+               <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
+             </label>
+           </div>
++          <div class="team-snippet-browser" id="team-snippet-browser" hidden>
++            <div class="snippet-browser-actions">
++              <p id="team-snippet-count" role="status" aria-live="polite"></p>
++              <button type="button" id="team-snippet-create">Добавить Snippet</button>
++              <button type="button" class="secondary" id="team-snippet-group-create">Новая группа</button>
++            </div>
++            <label class="personal-vault-control" for="team-snippet-search"><span>Поиск сниппетов</span>
++              <input id="team-snippet-search" type="search" maxlength="120" placeholder="Название, команда или папка" autocomplete="off">
++            </label>
++            <label class="personal-vault-control" for="team-snippet-folder-filter"><span>Папка и вложенные</span>
++              <select id="team-snippet-folder-filter"><option value="all">Все папки</option><option value="none">Без папки</option></select>
++            </label>
++            <label class="personal-vault-control" for="team-snippet-sort"><span>Сортировка</span>
++              <select id="team-snippet-sort"><option value="title-asc">По названию</option><option value="modified-desc">Сначала изменённые</option></select>
++            </label>
++            <div class="snippet-tree-actions">
++              <button type="button" class="secondary" data-snippet-expand="true">Развернуть всё</button>
++              <button type="button" class="secondary" data-snippet-expand="false">Свернуть всё</button>
++            </div>
++          </div>
++          <dialog class="record-editor-dialog" id="team-snippet-group-editor" aria-labelledby="team-snippet-group-title">
++            <div class="record-editor-heading"><h3 id="team-snippet-group-title">Новая группа</h3></div>
++            <form class="record-form" id="team-snippet-group-form">
++              <label for="team-snippet-group-parent">Родительская папка</label>
++              <select id="team-snippet-group-parent"><option value="">Без родительской папки</option></select>
++              <label for="team-snippet-group-name">Название группы</label>
++              <input id="team-snippet-group-name" maxlength="120" required autocomplete="off" aria-describedby="team-snippet-group-help">
++              <p class="field-help snippet-group-help" id="team-snippet-group-help">Далее откроется первый сниппет. Группа появится у команды после его сохранения и зашифрованной синхронизации.</p>
++              <div class="record-form-actions"><button type="submit">Продолжить</button><button type="button" class="secondary" id="team-snippet-group-cancel">Отмена</button></div>
++            </form>
++          </dialog>
+           <div class="bulk-actions" id="team-bulk-actions" hidden>
+             <strong><span data-bulk-count>0</span> выбрано</strong>
+             <button type="button" class="secondary" data-bulk-select-visible>Выбрать видимые</button>
+@@ -987,6 +1024,6 @@
+       </div>
+     </form>
+   </dialog>
+-  <script type="module" src="/app.js?v=176"></script>
++  <script type="module" src="/app.js?v=187"></script>
+ </body>
+ </html>
+diff --git a/cloud/public/styles.css b/cloud/public/styles.css
+index 2b3beca..148e7cf 100644
+--- a/cloud/public/styles.css
++++ b/cloud/public/styles.css
+@@ -1133,3 +1133,35 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
+   }
+   .brand .status span { display:inline; }
+ }
++
++/* Team Snippets use the native folder path without altering the resource-card hitbox. */
++#team-vault-workspace > .team-snippet-browser { order:2; }
++#cloud-workspace .team-snippet-browser {
++  display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(150px,1fr) minmax(140px,.8fr);
++  gap:12px; margin-top:16px; padding:16px; border:1px solid var(--line); border-radius:16px;
++  background:var(--surface-raised);
++}
++#cloud-workspace .snippet-browser-actions { grid-column:1/-1; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
++#cloud-workspace .snippet-browser-actions p { margin:0 auto 0 0; color:var(--muted); font-size:12px; }
++#cloud-workspace .team-snippet-browser label { min-width:0; }
++#cloud-workspace .team-snippet-browser label > span { color:var(--muted); font-size:11px; font-weight:700; }
++#cloud-workspace .snippet-tree-actions { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:8px; }
++#cloud-workspace .snippet-tree-actions button { padding:6px 10px; font-size:11px; }
++#cloud-workspace .snippet-folder-toolbar { display:flex; align-items:center; gap:8px; min-width:0; }
++#cloud-workspace .snippet-folder-toolbar .vault-folder-heading { flex:1; min-width:0; margin:0; padding:12px 5px; }
++#cloud-workspace .snippet-folder-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
++#cloud-workspace .snippet-folder-count { flex:none; margin-left:10px; color:var(--muted); font-size:11px; }
++#cloud-workspace .snippet-folder-add { flex:none; width:32px; min-height:32px; padding:4px; }
++#cloud-workspace .snippet-folder-nested { padding-left:14px; border-left:1px solid var(--line); }
++#cloud-workspace .snippet-folder-group, #cloud-workspace .snippet-folder-content { min-width:0; }
++.snippet-group-help { grid-column:1/-1; margin:0; }
++@media (max-width:880px) {
++  #cloud-workspace .team-snippet-browser { grid-template-columns:1fr 1fr; }
++  #cloud-workspace .team-snippet-browser > label:first-of-type { grid-column:1/-1; }
++}
++@media (max-width:560px) {
++  #cloud-workspace .team-snippet-browser { grid-template-columns:minmax(0,1fr); padding:12px; }
++  #cloud-workspace .snippet-browser-actions p { flex-basis:100%; }
++  #cloud-workspace .snippet-browser-actions button { flex:1; }
++  #cloud-workspace .snippet-folder-nested { padding-left:6px; }
++}
+diff --git a/cloud/tests/public-i18n.test.mjs b/cloud/tests/public-i18n.test.mjs
+index ce52dec..4be0594 100644
+--- a/cloud/tests/public-i18n.test.mjs
++++ b/cloud/tests/public-i18n.test.mjs
+@@ -7,7 +7,7 @@ const css = await readFile(new URL("../public/styles.css", import.meta.url), "ut
+ const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+ 
+ test("public portal exposes a persistent RU and EN locale switch", () => {
+-  assert.match(html, /\/i18n\.js\?v=175/);
++  assert.match(html, /\/i18n\.js\?v=187/);
+   assert.match(i18n, /selective-remote\.locale\.v1/);
+   assert.match(i18n, /navigator\.language/);
+   assert.match(i18n, /URLSearchParams\(location\.search\)/);
+diff --git a/cloud/tests/public-vault-ui.test.mjs b/cloud/tests/public-vault-ui.test.mjs
+index 312885b..e566349 100644
+--- a/cloud/tests/public-vault-ui.test.mjs
++++ b/cloud/tests/public-vault-ui.test.mjs
+@@ -499,8 +499,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
+   assert.match(html, /<html lang="ru" class="app-booting">/u);
+   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
+   assert.match(html, /Открываем защищённое пространство/u);
+-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=176">/u);
+-  assert.match(html, /\/app\.js\?v=176/u);
++  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=187">/u);
++  assert.match(html, /\/app\.js\?v=187/u);
+   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
+   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
+   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
+@@ -670,8 +670,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
+   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
+   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
+   assert.match(styles, /\.workspace-layout/u);
+-  assert.match(html, /styles\.css\?v=176/u);
+-  assert.match(html, /app\.js\?v=176/u);
++  assert.match(html, /styles\.css\?v=187/u);
++  assert.match(html, /app\.js\?v=187/u);
+   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
+   assert.match(html, /data-stat-kind="credential"/u);
+   assert.match(styles, /Cloud workspace v171/u);
+@@ -856,8 +856,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
+   assert.match(application, /Данные команды обновлены/u);
+   assert.match(application, /Синхронизация продолжится автоматически/u);
+   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
+-  assert.match(html, /app\.js\?v=176/u);
+-  assert.match(html, /styles\.css\?v=176/u);
++  assert.match(html, /app\.js\?v=187/u);
++  assert.match(html, /styles\.css\?v=187/u);
+   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
+   assert.match(application, /runBackgroundTeamVaultSync/u);
+   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
