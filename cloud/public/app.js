@@ -1,6 +1,10 @@
 import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
 import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
+import {
+  filterTeamSnippets, normalizeTeamSnippetFolder, renderTeamSnippetTree,
+  teamSnippetFolder, teamSnippetFolderPaths, teamSnippetRecordData,
+} from "./team-snippet-browser.js?v=187";
 import { initializeModernSelects } from "./modern-select.js?v=158";
 import {
   createIndexedDBTeamDeviceRepository,
@@ -1174,6 +1178,23 @@ export function initializeTeamWorkspace({
   const hostTags = documentValue.querySelector("#team-host-tags");
   const hostDescription = documentValue.querySelector("#team-host-description");
   const hostBrowser = documentValue.querySelector("#team-host-browser");
+  const snippetBrowser = documentValue.querySelector("#team-snippet-browser");
+  const snippetSearch = documentValue.querySelector("#team-snippet-search");
+  const snippetFolderFilter = documentValue.querySelector("#team-snippet-folder-filter");
+  const snippetSort = documentValue.querySelector("#team-snippet-sort");
+  const snippetCount = documentValue.querySelector("#team-snippet-count");
+  const snippetFolderField = documentValue.querySelector("#team-snippet-folder-field");
+  const snippetFolderLabel = documentValue.querySelector("#team-snippet-folder-label");
+  const snippetFolder = documentValue.querySelector("#team-snippet-folder");
+  const snippetFolderOptions = documentValue.querySelector("#team-snippet-folder-options");
+  const snippetCreate = documentValue.querySelector("#team-snippet-create");
+  const snippetGroupCreate = documentValue.querySelector("#team-snippet-group-create");
+  const snippetGroupEditor = documentValue.querySelector("#team-snippet-group-editor");
+  const snippetGroupForm = documentValue.querySelector("#team-snippet-group-form");
+  const snippetGroupParent = documentValue.querySelector("#team-snippet-group-parent");
+  const snippetGroupName = documentValue.querySelector("#team-snippet-group-name");
+  const snippetCollapsedFolders = new Set();
+  const snippetFilteredCollapsedFolders = new Set();
   const hostSearch = documentValue.querySelector("#team-host-search");
   const hostFolderFilter = documentValue.querySelector("#team-host-folder-filter");
   const hostDetail = documentValue.querySelector("#host-detail-dialog");
@@ -1235,6 +1256,7 @@ export function initializeTeamWorkspace({
   let backgroundMaintenanceOperation = null;
   let vaultOperation = null;
   let editingRecordID = null;
+  let recordSavePending = false;
   let detailedHostID = null;
 
   function renderOverviewSummary() {
@@ -1371,7 +1393,9 @@ export function initializeTeamWorkspace({
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) {
       control.disabled = disabled || !canEdit();
     }
-    for (const button of records.querySelectorAll("button")) button.disabled = disabled || !canEdit();
+    // Folder disclosure is read-only navigation and must remain usable by Viewers.
+    for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
+    for (const button of [snippetCreate, snippetGroupCreate]) if (button) button.disabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
     recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
   }
 
@@ -1395,6 +1419,14 @@ export function initializeTeamWorkspace({
     setText(recordTargetLabel, targetText);
     setText(recordSecretLabel, secretText);
     const isSnippet = recordType.value === "snippet";
+    if (snippetFolderField) snippetFolderField.hidden = !isSnippet;
+    if (snippetFolderLabel) snippetFolderLabel.hidden = !isSnippet;
+    if (snippetFolder) snippetFolder.disabled = !isSnippet || !canEdit();
+    if (snippetBrowser) snippetBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "snippet";
+    setText(documentValue.querySelector("#team-record-secret-help"), isSnippet
+      ? "Команда шифруется на устройстве и синхронизируется внутри выбранного Team Vault."
+      : "Пароль, токен или ключ. Значение шифруется на устройстве до отправки.");
+    recordSecret.rows = isSnippet ? 6 : 3;
     recordTargetLabel.hidden = isSnippet;
     recordTarget.hidden = isSnippet;
     recordTarget.required = !isSnippet;
@@ -1420,14 +1452,17 @@ export function initializeTeamWorkspace({
   }
 
   function beginRecordCreate() {
+    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
     resetRecordEditor();
     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     updateRecordLabels();
+    if (recordType.value === "snippet" && snippetFolderFilter?.value.startsWith("folder:")) snippetFolder.value = snippetFolderFilter.value.slice(7);
     recordEditor?.showModal?.();
     recordTitle.focus();
   }
 
   function beginRecordEdit(record) {
+    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
     recordType.value = record.type;
@@ -1435,6 +1470,7 @@ export function initializeTeamWorkspace({
     recordTitle.value = values.title;
     recordTarget.value = values.target;
     recordSecret.value = values.secret;
+    if (snippetFolder) snippetFolder.value = record.type === "snippet" ? teamSnippetFolder(record) : "";
     if (record.type === "host") {
       const connection = parseTeamHostConnection(record.data);
       const organization = teamHostOrganizationValues(record);
@@ -1493,15 +1529,76 @@ export function initializeTeamWorkspace({
     hostFolderFilter.value = folders.includes(selected) || selected === "all" ? selected : "all";
   }
 
+  function resetSnippetBrowser({ lock = false } = {}) {
+    if (!snippetBrowser) return;
+    snippetSearch.value = "";
+    snippetFolderFilter.value = "all";
+    snippetSort.value = "title-asc";
+    snippetFilteredCollapsedFolders.clear();
+    snippetGroupForm.reset();
+    snippetGroupEditor.close?.();
+    if (lock) {
+      snippetCollapsedFolders.clear();
+      snippetFolderOptions.replaceChildren();
+      snippetFolderFilter.replaceChildren(newOption("all", "Все папки"), newOption("none", "Без папки"));
+      snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"));
+      snippetCount.textContent = "";
+      snippetFolder.value = "";
+      selectedRecordIDs.clear();
+      visibleRecordIDs = [];
+      if (bulkActions) bulkActions.hidden = true;
+    }
+  }
+
+  function newOption(value, title = value) {
+    const option = documentValue.createElement("option");
+    option.value = value;
+    option.textContent = title;
+    return option;
+  }
+
+  function updateSnippetFolders(snippets) {
+    if (!snippetBrowser) return;
+    const paths = teamSnippetFolderPaths(snippets);
+    // Avoid replacing focused controls when an unrelated background sync renders again.
+    const previous = [...snippetFolderOptions.options].map((option) => option.value);
+    if (JSON.stringify(previous) === JSON.stringify(paths) && snippetFolderFilter.options.length === paths.length + 2) return;
+    const selected = snippetFolderFilter.value;
+    const parent = snippetGroupParent.value;
+    snippetFolderOptions.replaceChildren(...paths.map((path) => newOption(path)));
+    snippetFolderFilter.replaceChildren(newOption("all", "Все папки"), newOption("none", "Без папки"), ...paths.map((path) => newOption(`folder:${path}`, path)));
+    snippetFolderFilter.value = [...snippetFolderFilter.options].some((option) => option.value === selected) ? selected : "all";
+    snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"), ...paths.map((path) => newOption(path)));
+    snippetGroupParent.value = paths.includes(parent) ? parent : "";
+    for (const path of [...snippetCollapsedFolders]) if (path && !paths.includes(path)) snippetCollapsedFolders.delete(path);
+  }
+
+  function activeSnippetCollapsedFolders() {
+    return snippetSearch.value.trim() || snippetFolderFilter.value !== "all" || activeSmartFilter
+      ? snippetFilteredCollapsedFolders : snippetCollapsedFolders;
+  }
+
+  function beginSnippetGroup(parent = null) {
+    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+    snippetGroupForm.reset();
+    snippetGroupName.setCustomValidity("");
+    snippetGroupParent.value = parent ?? (snippetFolderFilter.value.startsWith("folder:") ? snippetFolderFilter.value.slice(7) : "");
+    snippetGroupEditor.showModal();
+    snippetGroupName.focus();
+  }
+
   function renderRecords() {
     records.replaceChildren();
     if (!controller) return;
     const current = controller.document();
     const hosts = current.records.filter((value) => value.type === "host");
+    const snippets = current.records.filter((value) => value.type === "snippet");
+    const showingSnippets = Boolean(snippetBrowser && activeView === "hosts" && activeRecordFilter === "snippet");
     updateHostFolders(hosts);
+    updateSnippetFolders(snippets);
     const query = hostSearch.value.trim().toLocaleLowerCase();
     const folder = hostFolderFilter.value;
-    const visibleRecords = current.records.filter((value) => {
+    let visibleRecords = current.records.filter((value) => {
       if (activeView !== "hosts") return true;
       if (activeRecordFilter !== "all" && value.type !== activeRecordFilter) return false;
       if (activeSmartFilter === "favorites" && value.data?.favorite !== true) return false;
@@ -1513,6 +1610,10 @@ export function initializeTeamWorkspace({
       return !query || [data.title, data.address, organization.folder, organization.description, ...organization.tags]
         .some((part) => String(part ?? "").toLocaleLowerCase().includes(query));
     });
+    if (showingSnippets) {
+      visibleRecords = filterTeamSnippets(visibleRecords, { query: snippetSearch.value, folder: snippetFolderFilter.value, sort: snippetSort.value });
+      setText(snippetCount, `Сниппеты: ${visibleRecords.length} / ${snippets.length}`);
+    }
     visibleRecordIDs = visibleRecords.map((record) => record.id);
     for (const id of [...selectedRecordIDs]) {
       if (!current.records.some((record) => record.id === id)) selectedRecordIDs.delete(id);
@@ -1525,12 +1626,20 @@ export function initializeTeamWorkspace({
       const empty = documentValue.createElement("p");
       empty.className = "vault-empty";
       const emptyLabels = { all: "записей", host: "хостов", credential: "учётных данных", snippet: "сниппетов", forwarding: "правил Forwarding" };
-      empty.textContent = activeView === "hosts"
+      empty.textContent = showingSnippets && snippets.length > 0
+        ? "Ничего не найдено. Измените поиск, папку или быстрый фильтр."
+        : activeView === "hosts"
         ? `В выбранном Team Vault пока нет ${emptyLabels[activeRecordFilter]}.`
         : "Папка команды пока пуста.";
       records.append(empty);
       return;
     }
+    const snippetTree = showingSnippets ? renderTeamSnippetTree({
+      documentValue, container: records, records: visibleRecords, collapsed: activeSnippetCollapsedFolders(),
+      editable: canEdit() && !activeConflicts && !selectedVault?.rotationRequired,
+      onToggle: (ids) => { visibleRecordIDs = ids; }, onCreateGroup: beginSnippetGroup,
+    }) : null;
+    if (snippetTree) visibleRecordIDs = snippetTree.visibleIDs;
     let renderedFolder = null;
     let folderContent = null;
     for (const record of visibleRecords.sort((a, b) => activeView === "hosts" && activeRecordFilter === "host" ? hostFolderName(a).localeCompare(hostFolderName(b)) : 0)) {
@@ -1676,7 +1785,9 @@ export function initializeTeamWorkspace({
       });
       actions.append(favorite, edit, remove);
       card.append(selector, heading, summary, metadata, actions);
-      (folderContent ?? records).append(card);
+      const snippetContainer = snippetTree?.containers.get(record.id);
+      if (snippetContainer) snippetContainer.insertBefore(card, snippetContainer.querySelector(":scope > .snippet-folder-group"));
+      else (folderContent ?? records).append(card);
     }
   }
 
@@ -2341,6 +2452,8 @@ export function initializeTeamWorkspace({
 
   function lockCurrentVault() {
     stopBackgroundSync();
+    resetRecordEditor();
+    resetSnippetBrowser({ lock: true });
     controller?.lock();
     controller = null;
     selectedVault = null;
@@ -2354,6 +2467,11 @@ export function initializeTeamWorkspace({
   }
 
   function setView(view, recordFilter = null) {
+    if (view !== activeView || (recordFilter && recordFilter !== activeRecordFilter)) {
+      resetSnippetBrowser();
+      resetRecordEditor();
+      selectedRecordIDs.clear();
+    }
     activeView = ["teams", "members", "vaults", "hosts", "activity", "management"].includes(view) ? view : "teams";
     if (activeView === "hosts") {
       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(recordFilter)
@@ -2928,6 +3046,44 @@ export function initializeTeamWorkspace({
     }
   });
   recordType.addEventListener("change", updateRecordLabels);
+  snippetSearch?.addEventListener("input", () => { snippetFilteredCollapsedFolders.clear(); renderRecords(); });
+  snippetFolderFilter?.addEventListener("change", () => { snippetFilteredCollapsedFolders.clear(); renderRecords(); });
+  snippetSort?.addEventListener("change", renderRecords);
+  snippetCreate?.addEventListener("click", beginRecordCreate);
+  snippetGroupCreate?.addEventListener("click", () => beginSnippetGroup());
+  snippetGroupName?.addEventListener("input", () => snippetGroupName.setCustomValidity(""));
+  snippetGroupParent?.addEventListener("change", () => snippetGroupName.setCustomValidity(""));
+  documentValue.querySelector("#team-snippet-group-cancel")?.addEventListener("click", () => { snippetGroupForm.reset(); snippetGroupEditor.close(); });
+  snippetGroupForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+    try {
+      const name = normalizeTeamSnippetFolder(snippetGroupName.value);
+      if (!name || name.includes("/")) throw new Error("invalid_snippet_folder");
+      const path = normalizeTeamSnippetFolder([snippetGroupParent.value, name].filter(Boolean).join("/"));
+      if (teamSnippetFolderPaths(controller.document().records).includes(path)) throw new Error("snippet_folder_exists");
+      snippetGroupEditor.close();
+      beginRecordCreate();
+      recordType.value = "snippet";
+      snippetFolder.value = path;
+      updateRecordLabels();
+      recordTitle.focus();
+    } catch {
+      snippetGroupName.setCustomValidity("Укажите новое имя без /; полный путь — не более 120 символов.");
+      snippetGroupName.reportValidity();
+    }
+  });
+  for (const button of documentValue.querySelectorAll("[data-snippet-expand]")) {
+    button.addEventListener("click", () => {
+      const collapsed = activeSnippetCollapsedFolders();
+      collapsed.clear();
+      if (button.dataset.snippetExpand === "false" && controller) {
+        for (const path of ["", ...teamSnippetFolderPaths(controller.document().records)]) collapsed.add(path);
+      }
+      renderRecords();
+    });
+  }
+  recordEditor?.addEventListener("cancel", () => resetRecordEditor());
   hostSearch.addEventListener("input", renderRecords);
   hostFolderFilter.addEventListener("change", renderRecords);
   hostProtocol.addEventListener("change", () => {
@@ -2935,12 +3091,17 @@ export function initializeTeamWorkspace({
   });
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    const button = recordForm.querySelector("button");
+    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+    const editingController = controller;
+    const submittedType = recordType.value;
+    recordSavePending = true;
+    const button = recordForm.querySelector('button[type="submit"]');
     button.disabled = true;
     try {
       const existingRecord = editingRecordID
         ? controller.document().records.find((value) => value.id === editingRecordID)
         : null;
+      if (editingRecordID && (!existingRecord || existingRecord.type !== recordType.value)) throw new Error("record_changed");
       const existingHost = existingRecord?.type === "host" ? existingRecord : null;
       const connection = recordType.value === "host" && !existingHost?.data?.profile
         ? teamHostConnectionData({
@@ -2956,13 +3117,16 @@ export function initializeTeamWorkspace({
               title: recordTitle.value, target: connection?.target ?? recordTarget.value, folder: hostFolder.value,
               tags: hostTags.value, description: hostDescription.value, baseData: existingHost?.data,
             })
-          : localVaultRecordData(
-              recordType.value,
-              { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
-              existingRecord?.data,
-            ),
+          : recordType.value === "snippet"
+            ? teamSnippetRecordData({ title: recordTitle.value, body: recordSecret.value, folder: snippetFolder.value }, existingRecord?.data)
+            : localVaultRecordData(
+                recordType.value,
+                { title: recordTitle.value, target: recordTarget.value, secret: recordSecret.value },
+                existingRecord?.data,
+              ),
       });
-      if (recordType.value === "host") {
+      if (controller !== editingController) return;
+      if (submittedType === "host") {
         const credentials = hostCredentials(recordID);
         if (hostRemovePassword.checked) {
           for (const credential of credentials) await controller.delete(credential.id);
@@ -2988,6 +3152,7 @@ export function initializeTeamWorkspace({
     } catch {
       setText(workspaceStatus, "Запись не сохранена. Проверьте поля и роль.");
     } finally {
+      recordSavePending = false;
       button.disabled = !canEdit();
     }
   });
@@ -3056,6 +3221,7 @@ export function initializeTeamWorkspace({
   for (const button of smartFilterButtons) {
     button.addEventListener("click", () => {
       activeSmartFilter = activeSmartFilter === button.dataset.teamSmartFilter ? null : button.dataset.teamSmartFilter;
+      snippetFilteredCollapsedFolders.clear();
       for (const candidate of smartFilterButtons) {
         candidate.classList.toggle("active", candidate.dataset.teamSmartFilter === activeSmartFilter);
       }

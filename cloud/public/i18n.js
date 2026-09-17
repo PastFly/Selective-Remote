@@ -15,6 +15,24 @@
   };
 
   const en = new Map(Object.entries({
+    "Папка сниппета": "Snippet folder",
+    "Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.": "Choose a folder or enter a nested path separated by /. Leave blank for no folder.",
+    "Новая группа": "New folder",
+    "Поиск сниппетов": "Search snippets",
+    "Папка и вложенные": "Folder and descendants",
+    "Развернуть всё": "Expand all",
+    "Свернуть всё": "Collapse all",
+    "Родительская папка": "Parent folder",
+    "Без родительской папки": "No parent folder",
+    "Название группы": "Folder name",
+    "Далее откроется первый сниппет. Группа появится у команды после его сохранения и зашифрованной синхронизации.": "Next, create the first snippet. The folder appears for your team after it is saved and synchronized with encryption.",
+    "Продолжить": "Continue",
+    "Например, Production/Deploy": "For example, Production/Deploy",
+    "Название, команда или папка": "Name, command or folder",
+    "Новая вложенная группа": "New child folder",
+    "Команда шифруется на устройстве и синхронизируется внутри выбранного Team Vault.": "The command is encrypted on this device and synchronized within the selected Team Vault.",
+    "Ничего не найдено. Измените поиск, папку или быстрый фильтр.": "No matches. Change the search, folder or quick filter.",
+    "Укажите новое имя без /; полный путь — не более 120 символов.": "Enter a new name without /; the full path must not exceed 120 characters.",
     "Загрузка Selective Remote Cloud": "Loading Selective Remote Cloud",
     "Открываем защищённое пространство…": "Opening your secure workspace…",
     "Разделы страницы": "Page sections",
@@ -645,6 +663,7 @@
   })) en.set(source, translation);
 
   const patterns = [
+    [/^Сниппеты: (\d+) \/ (\d+)$/u, "Snippets: $1 / $2"],
     [/^Автоматически выдано недостающих wrappers: (\d+)\.$/u, "Missing wrappers provisioned automatically: $1."],
     [/^Автоматически разрешено конфликтов: (\d+)\.$/u, "Conflicts resolved automatically: $1."],
     [/^«(.+)» будет закрыта для всех участников\.$/u, "“$1” will be closed for all members."],
@@ -749,13 +768,14 @@
   }
 
   function translateTextNode(node) {
+    if (node.parentElement?.closest?.('[translate="no"]')) return;
     if (!originalText.has(node)) originalText.set(node, node.nodeValue);
     const source = originalText.get(node);
     node.nodeValue = locale === "ru" ? source : translate(source);
   }
 
   function translateElement(element) {
-    if (!(element instanceof Element)) return;
+    if (!(element instanceof Element) || element.closest?.('[translate="no"]')) return;
     const attributes = ["aria-label", "title", "placeholder", "data-tooltip"];
     let saved = originalAttributes.get(element);
     if (!saved) {

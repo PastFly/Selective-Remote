@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=176">
-  <script src="/i18n.js?v=175"></script>
+  <link rel="stylesheet" href="/styles.css?v=187">
+  <script src="/i18n.js?v=187"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -887,6 +887,12 @@
             <input id="team-record-title" name="title" maxlength="120" required>
             <label for="team-record-target" id="team-record-target-label">Адрес</label>
             <input id="team-record-target" name="target" maxlength="2048">
+            <label for="team-snippet-folder" id="team-snippet-folder-label" hidden>Папка сниппета</label>
+            <div class="field-with-help" id="team-snippet-folder-field" hidden>
+              <input id="team-snippet-folder" name="snippetFolder" maxlength="120" list="team-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="team-snippet-folder-help">
+              <datalist id="team-snippet-folder-options"></datalist>
+              <small class="field-help" id="team-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small>
+            </div>
             <label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label>
             <div class="field-with-help"><textarea id="team-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="team-record-secret-help"></textarea><small id="team-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется на устройстве до отправки.</small></div>
             <div class="team-host-fields" id="team-host-fields">
@@ -922,6 +928,37 @@
               <select id="team-host-folder-filter"><option value="all">Все папки</option></select>
             </label>
           </div>
+          <div class="team-snippet-browser" id="team-snippet-browser" hidden>
+            <div class="snippet-browser-actions">
+              <p id="team-snippet-count" role="status" aria-live="polite"></p>
+              <button type="button" id="team-snippet-create">Добавить Snippet</button>
+              <button type="button" class="secondary" id="team-snippet-group-create">Новая группа</button>
+            </div>
+            <label class="personal-vault-control" for="team-snippet-search"><span>Поиск сниппетов</span>
+              <input id="team-snippet-search" type="search" maxlength="120" placeholder="Название, команда или папка" autocomplete="off">
+            </label>
+            <label class="personal-vault-control" for="team-snippet-folder-filter"><span>Папка и вложенные</span>
+              <select id="team-snippet-folder-filter"><option value="all">Все папки</option><option value="none">Без папки</option></select>
+            </label>
+            <label class="personal-vault-control" for="team-snippet-sort"><span>Сортировка</span>
+              <select id="team-snippet-sort"><option value="title-asc">По названию</option><option value="modified-desc">Сначала изменённые</option></select>
+            </label>
+            <div class="snippet-tree-actions">
+              <button type="button" class="secondary" data-snippet-expand="true">Развернуть всё</button>
+              <button type="button" class="secondary" data-snippet-expand="false">Свернуть всё</button>
+            </div>
+          </div>
+          <dialog class="record-editor-dialog" id="team-snippet-group-editor" aria-labelledby="team-snippet-group-title">
+            <div class="record-editor-heading"><h3 id="team-snippet-group-title">Новая группа</h3></div>
+            <form class="record-form" id="team-snippet-group-form">
+              <label for="team-snippet-group-parent">Родительская папка</label>
+              <select id="team-snippet-group-parent"><option value="">Без родительской папки</option></select>
+              <label for="team-snippet-group-name">Название группы</label>
+              <input id="team-snippet-group-name" maxlength="120" required autocomplete="off" aria-describedby="team-snippet-group-help">
+              <p class="field-help snippet-group-help" id="team-snippet-group-help">Далее откроется первый сниппет. Группа появится у команды после его сохранения и зашифрованной синхронизации.</p>
+              <div class="record-form-actions"><button type="submit">Продолжить</button><button type="button" class="secondary" id="team-snippet-group-cancel">Отмена</button></div>
+            </form>
+          </dialog>
           <div class="bulk-actions" id="team-bulk-actions" hidden>
             <strong><span data-bulk-count>0</span> выбрано</strong>
             <button type="button" class="secondary" data-bulk-select-visible>Выбрать видимые</button>
@@ -987,6 +1024,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=176"></script>
+  <script type="module" src="/app.js?v=187"></script>
 </body>
 </html>
