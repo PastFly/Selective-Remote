@@ -1,0 +1,87 @@
+name: Publish verified Team Snippet feature tree
+on:
+  push:
+    branches: [chore/publish-team-snippets-20260917]
+permissions:
+  contents: write
+concurrency:
+  group: publish-team-snippets-20260917
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Read publication inputs
+        uses: actions/checkout@v6
+        with:
+          path: publisher
+          persist-credentials: false
+      - name: Read exact product baseline
+        uses: actions/checkout@v6
+        with:
+          ref: 6803665d58ec7bcd78d012cac035e5c48739777f
+          path: product
+      - name: Reconstruct and verify exact tested tree
+        working-directory: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = 6803665d58ec7bcd78d012cac035e5c48739777f
+          test "$(git rev-parse 'HEAD^{tree}')" = 0a82d130c3fb7c242c0a8ebd934fdc5204078318
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, shutil
+          patch = Path('../publisher/.github/snippet-publication.patch').read_bytes()
+          assert hashlib.sha1(f'blob {len(patch)}\0'.encode() + patch).hexdigest() == '3b909674f167684477d57c1c4a68eed75264671b'
+          # Correct one known leading transport space, then require exact reviewed bytes.
+          patch = patch.replace(b'\n diff --git a/cloud/public/i18n.js', b'\ndiff --git a/cloud/public/i18n.js')
+          assert hashlib.sha256(patch).hexdigest() == 'eca50d846fc71fe9afce04e50e9b82db2a164360a300edafdc5adcdd0972ffb1'
+          Path('../verified-snippets.patch').write_bytes(patch)
+          files = {
+              'cloud/public/team-snippet-browser.js': 'c7bbb20d506e065d84dae46afc6ceb812ba81f2d',
+              'cloud/tests/team-snippet-browser.test.mjs': '944b6ef889154478852980b6757ea8c6ddcd2462',
+              'cloud/docs/team-snippet-browser.md': '1b05c058beffaffaec509dc248ad972d9e12a90c',
+              'cloud/tests/browser/team-snippets-smoke.py': 'f3d8f4b26c2676619f6aa285d45743de2621fdf7',
+          }
+          for name, expected in files.items():
+              source = Path('../publisher') / name
+              data = source.read_bytes()
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest() == expected, name
+              target = Path(name)
+              assert not target.exists(), name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, target)
+          PY
+          git apply --check ../verified-snippets.patch
+          git apply ../verified-snippets.patch
+          git add -- cloud/docs/team-snippet-browser.md cloud/public/app.js cloud/public/i18n.js cloud/public/index.html cloud/public/styles.css cloud/public/team-snippet-browser.js cloud/tests/browser/team-snippets-smoke.py cloud/tests/public-i18n.test.mjs cloud/tests/public-vault-ui.test.mjs cloud/tests/team-snippet-browser.test.mjs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 10
+          test "$(git write-tree)" = 5b6e071cdc6ce0124559d4fa9180ccfa8a0b69c9
+          test -z "$(git diff --cached --name-only -- .github cloud/migrations cloud/src cloud/package.json cloud/package-lock.json)"
+          echo EXACT_TESTED_TREE_OK
+      - name: Select production Node version
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+      - name: Validate Cloud
+        working-directory: product
+        run: |
+          npm --prefix cloud ci
+          npm --prefix cloud test
+      - name: Publish only the new feature branch
+        working-directory: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git write-tree)" = 5b6e071cdc6ce0124559d4fa9180ccfa8a0b69c9
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = 6803665d58ec7bcd78d012cac035e5c48739777f
+          test -z "$(git ls-remote --heads origin refs/heads/feat/web-team-snippet-browser-tree)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'feat(web): add nested Team Snippet browser'
+          test "$(git rev-parse 'HEAD^{tree}')" = 5b6e071cdc6ce0124559d4fa9180ccfa8a0b69c9
+          git push origin HEAD:refs/heads/feat/web-team-snippet-browser-tree
+          printf 'PUBLISHED_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'PUBLISHED_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
