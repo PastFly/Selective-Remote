@@ -1,0 +1,225 @@
+diff --git a/Sources/SelectiveRemote/TerminalCommandHistory.swift b/Sources/SelectiveRemote/TerminalCommandHistory.swift
+index 9e757e5..57ad4a2 100644
+--- a/Sources/SelectiveRemote/TerminalCommandHistory.swift
++++ b/Sources/SelectiveRemote/TerminalCommandHistory.swift
+@@ -394 +394,2 @@ final class TerminalCommandHistoryStore: ObservableObject {
+-        storedTemplates.append(contentsOf: values.filter { !existing.contains($0.id) })
++        let additions = values.filter { !existing.contains($0.id) }
++        storedTemplates.append(contentsOf: additions)
+@@ -398,0 +400,2 @@ final class TerminalCommandHistoryStore: ObservableObject {
++        reconcileImportedSnippetGroups(additions)
++        migrateTemplatesToGlobalLibraryIfNeeded()
+@@ -406,0 +410,2 @@ final class TerminalCommandHistoryStore: ObservableObject {
++        reconcileImportedSnippetGroups(replacement)
++        migrateTemplatesToGlobalLibraryIfNeeded()
+@@ -408,0 +414,43 @@ final class TerminalCommandHistoryStore: ObservableObject {
++
++    /// Materialize downloaded groups now, retaining the incoming identity instead
++    /// of generating a different group ID on every Mac and echoing it back to Cloud.
++    private func reconcileImportedSnippetGroups(_ values: [TerminalCommandTemplate]) {
++        var handledNames: [String] = []
++        var handledIDs = Set<UUID>()
++        let before = storedSnippetGroups
++        for value in values.sorted(by: {
++            $0.updatedAt == $1.updatedAt
++                ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt
++        }) {
++            guard !isInternalTemplate(value),
++                  value.groupID != TerminalCommandTemplate.legacyUnassignedGroupID,
++                  let name = normalizedSnippetGroupName(value.category),
++                  !handledIDs.contains(value.groupID),
++                  !handledNames.contains(where: {
++                      $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
++                  })
++            else { continue }
++            handledIDs.insert(value.groupID)
++            handledNames.append(name)
++            let previous = storedSnippetGroups.first { $0.id == value.groupID }
++            let aliases = storedSnippetGroups.filter {
++                $0.id == value.groupID
++                    || $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
++            }
++            let aliasIDs = Set(aliases.map(\.id))
++            storedSnippetGroups.removeAll { aliasIDs.contains($0.id) }
++            storedSnippetGroups.append(.init(
++                id: value.groupID, profileID: Self.globalSnippetLibraryID,
++                name: name, createdAt: previous?.createdAt ?? value.updatedAt,
++                updatedAt: value.updatedAt
++            ))
++            for index in storedTemplates.indices where
++                aliasIDs.contains(storedTemplates[index].groupID)
++                    && storedTemplates[index].category.compare(
++                        name, options: [.caseInsensitive, .diacriticInsensitive]
++                    ) == .orderedSame {
++                storedTemplates[index].groupID = value.groupID
++            }
++        }
++        if storedSnippetGroups != before { persistSnippetGroups() }
++    }
+diff --git a/cloud/public/app.js b/cloud/public/app.js
+index 786e216..9508cdd 100644
+--- a/cloud/public/app.js
++++ b/cloud/public/app.js
+@@ -7 +7 @@ import {
+-} from "./team-snippet-browser.js?v=187";
++} from "./team-snippet-browser.js?v=188";
+@@ -146,0 +147,45 @@ function encodePortableRecord(value) {
++// Personal snippets use category + the native portable template, not Team's folder field.
++export function personalSnippetEditorValues(record) {
++  const data = record?.data ?? {};
++  let template = null;
++  try { if (data.template) template = decodePortableRecord(data.template); } catch { /* Keep outer fields readable. */ }
++  return {
++    title: String(data.title ?? template?.title ?? ""),
++    body: String(data.body ?? template?.command ?? ""),
++    folder: String(data.category ?? template?.category ?? ""),
++  };
++}
++
++export function personalSnippetProjection(record) {
++  const values = personalSnippetEditorValues(record);
++  let folder = "";
++  try { folder = normalizeTeamSnippetFolder(values.folder); } catch { /* Do not hide malformed imports. */ }
++  return { ...record, data: { ...record.data, title: values.title, body: values.body, folder } };
++}
++
++export function personalSnippetRecordData({ title, body, folder = "", recordID = null }, baseData = {}, now = new Date()) {
++  const checked = teamSnippetRecordData({ title, body, folder });
++  if (checked.folder && checked.folder.split("/").some((part) => !part.trim() || part !== part.trim())) {
++    throw new Error("invalid_snippet_folder");
++  }
++  const data = { ...baseData, title: checked.title, body: checked.body, category: checked.folder };
++  if (baseData?.template != null) {
++    const template = decodePortableRecord(baseData.template);
++    if (typeof template.id !== "string" || typeof template.profileID !== "string"
++      || typeof template.category !== "string" || typeof template.command !== "string"
++      || (recordID && template.id.toLowerCase() !== recordID.toLowerCase())) {
++      throw new Error("invalid_personal_snippet_template");
++    }
++    // The native importer reads template first: update it together with the outer fields.
++    // A move must not retain the old group's opaque ID on an already-running Mac.
++    if (template.category !== checked.folder) template.groupID = "00000000-0000-0000-0000-000000000000";
++    template.title = checked.title;
++    template.command = checked.body;
++    template.category = checked.folder;
++    template.isExplicitlyUngrouped = !checked.folder;
++    template.updatedAt = new Date(now).toISOString().replace(/\.\d{3}Z$/u, "Z");
++    data.template = encodePortableRecord(template);
++  }
++  return data;
++}
++
+@@ -511,0 +557,57 @@ export async function initializeLocalVault({
++  let savePending = false;
++  let conflictMode = false;
++  let scopeGeneration = 0;
++  const snippetActions = documentValue.querySelector("#personal-snippet-actions");
++  const snippetTreeActions = documentValue.querySelector("#personal-snippet-tree-actions");
++  const snippetCount = documentValue.querySelector("#personal-snippet-count");
++  const snippetFolder = documentValue.querySelector("#local-snippet-folder");
++  const snippetFolderOptions = documentValue.querySelector("#local-snippet-folder-options");
++  const snippetGroupEditor = documentValue.querySelector("#personal-snippet-group-editor");
++  const snippetGroupForm = documentValue.querySelector("#personal-snippet-group-form");
++  const snippetGroupParent = documentValue.querySelector("#personal-snippet-group-parent");
++  const snippetGroupName = documentValue.querySelector("#personal-snippet-group-name");
++  const snippetCollapsedFolders = new Set();
++  const snippetFilteredCollapsedFolders = new Set();
++
++  function newOption(value, text = value) {
++    const option = documentValue.createElement("option");
++    option.value = value;
++    option.textContent = text;
++    if (value && !["all", "none"].includes(value)) option.setAttribute("translate", "no");
++    return option;
++  }
++
++  function resetSnippetBrowser({ lock = false } = {}) {
++    snippetGroupForm?.reset();
++    snippetGroupName?.setCustomValidity("");
++    snippetGroupEditor?.close?.();
++    if (search) search.value = "";
++    if (folderFilter) folderFilter.value = "all";
++    snippetFilteredCollapsedFolders.clear();
++    selectedRecordIDs.clear();
++    if (bulkActions) bulkActions.hidden = true;
++    if (lock) {
++      snippetCollapsedFolders.clear();
++      snippetFolderOptions?.replaceChildren();
++      snippetGroupParent?.replaceChildren(newOption("", "Без родительской папки"));
++      folderFilter?.replaceChildren(newOption("all", "Все папки"));
++      if (snippetFolder) snippetFolder.value = "";
++      setText(snippetCount, "");
++      recentRecordIDs.length = 0;
++      visibleRecordIDs = [];
++    }
++  }
++
++  function activeSnippetCollapsedFolders() {
++    return search?.value.trim() || folderFilter?.value !== "all" || activeSmartFilter
++      ? snippetFilteredCollapsedFolders : snippetCollapsedFolders;
++  }
++
++  function beginSnippetGroup(parent = null) {
++    if (workspace.hidden || conflictMode || savePending) return;
++    snippetGroupForm.reset();
++    snippetGroupName.setCustomValidity("");
++    snippetGroupParent.value = parent ?? (folderFilter.value.startsWith("folder:") ? folderFilter.value.slice(7) : "");
++    snippetGroupEditor.showModal();
++    snippetGroupName.focus();
++  }
+@@ -536,0 +639 @@ export async function initializeLocalVault({
++    if (workspace.hidden || conflictMode || savePending) return;
+@@ -541,0 +645 @@ export async function initializeLocalVault({
++    if (type.value === "snippet" && folderFilter.value.startsWith("folder:")) snippetFolder.value = folderFilter.value.slice(7);
+@@ -549,0 +654 @@ export async function initializeLocalVault({
++    if (workspace.hidden || conflictMode || savePending) return;
+@@ -557,0 +663,6 @@ export async function initializeLocalVault({
++    if (record.type === "snippet") {
++      const snippet = personalSnippetEditorValues(record);
++      title.value = snippet.title;
++      secret.value = snippet.body;
++      snippetFolder.value = snippet.folder;
++    }
+@@ -581,0 +693 @@ export async function initializeLocalVault({
++    conflictMode = false;
+@@ -586,0 +699 @@ export async function initializeLocalVault({
++    for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = false;
+@@ -590,0 +704 @@ export async function initializeLocalVault({
++    conflictMode = active;
+@@ -592 +706,2 @@ export async function initializeLocalVault({
+-    for (const button of records.querySelectorAll("button")) button.disabled = active;
++    for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = active;
++    for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = active;
+@@ -600,0 +716,4 @@ export async function initializeLocalVault({
++      scopeGeneration += 1;
++      resetEditor();
++      resetSnippetBrowser({ lock: true });
++      records.replaceChildren();
+@@ -617,0 +737,7 @@ export async function initializeLocalVault({
++    documentValue.querySelector("#local-snippet-folder-label").hidden = !isSnippet;
++    documentValue.querySelector("#local-snippet-folder-field").hidden = !isSnippet;
++    snippetFolder.disabled = !isSnippet || conflictMode;
++    secret.rows = isSnippet ? 6 : 3;
++    setText(documentValue.querySelector("#local-record-secret-help"), isSnippet
++      ? "Команда и папка шифруются в Personal Vault и синхронизируются с приложением."
++      : "Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.");
+@@ -639,0 +766,17 @@ export async function initializeLocalVault({
++    const showingSnippets = activeRecordFilter === "snippet";
++    if (snippetActions) snippetActions.hidden = !showingSnippets;
++    if (snippetTreeActions) snippetTreeActions.hidden = !showingSnippets;
++    setText(documentValue.querySelector("#personal-vault-folder-label"), showingSnippets ? "Папка и вложенные" : "Папка Hosts");
++    documentValue.querySelector("#personal-vault-folder-control").hidden = !["all", "host", "snippet"].includes(activeRecordFilter);
++    search.placeholder = showingSnippets ? "Название, команда или папка" : "Название, адрес, логин или папка";
++    const snippets = current.records.filter((record) => record.type === "snippet");
++    const projections = snippets.map(personalSnippetProjection);
++    const paths = teamSnippetFolderPaths(projections);
++    const oldPaths = [...snippetFolderOptions.options].map((option) => option.value);
++    if (JSON.stringify(oldPaths) !== JSON.stringify(paths)) {
++      const parent = snippetGroupParent.value;
++      snippetFolderOptions.replaceChildren(...paths.map((path) => newOption(path)));
++      snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"), ...paths.map((path) => newOption(path)));
++      snippetGroupParent.value = paths.includes(parent) ? parent : "";
++      for (const path of [...snippetCollapsedFolders]) if (path && !paths.includes(path)) snippetCollapsedFolders.delete(path);
++    }
+@@ -642 +785 @@ export async function initializeLocalVault({
+-    const folders = [...new Set(current.records.filter((record) => record.type === "host").map(hostFolderName))]
