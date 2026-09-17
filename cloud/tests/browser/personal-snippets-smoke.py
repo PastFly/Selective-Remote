@@ -24,7 +24,7 @@ setup = """async () => {
  window.qaStored=()=>JSON.stringify(qa.controller.document());
  await qa.controller.create('synthetic browser test only');
  const id='22222222-2222-4222-8222-222222222222';
- const native={id,profileID:'11111111-1111-4111-8111-111111111111',title:'Deploy 2',command:'kubectl rollout',category:'Production/Deploy',groupID:'33333333-3333-4333-8333-333333333333',targets:[{localTerminal:{}}],isExplicitlyUngrouped:false,updatedAt:'2026-09-01T00:00:00Z',future:{keep:'yes'}};
+ const native={id,profileID:'11111111-1111-4111-8111-111111111111',title:'Deploy 2',command:'kubectl rollout',category:'Production/Deploy',groupID:'33333333-3333-4333-8333-333333333333',targets:[{kind:'localTerminal'}],isExplicitlyUngrouped:false,updatedAt:'2026-09-01T00:00:00Z',future:{keep:'yes'}};
  await qa.controller.upsert({id,type:'snippet',data:{title:native.title,body:native.command,category:native.category,template:btoa(JSON.stringify(native)),favorite:true}});
  for(const [title,category,body] of [['Deploy 10','Production/Deploy','printf deploy'],['Logs','Production/Logs','tail logs'],['Other','ProductionOther','printf other'],['Root','','pwd']]) {
   await qa.controller.upsert({type:'snippet',data:{title,category,body}});
@@ -101,7 +101,7 @@ export function createLocalVaultController(){
     assert saved['category'] == native['category'] == 'Production/Changed'
     assert saved['title'] == native['title'] == 'Updated command'
     assert saved['body'] == native['command'] == 'printf changed'
-    assert native['future'] == {'keep':'yes'} and native['targets'] == [{'localTerminal':{}}]
+    assert native['future'] == {'keep':'yes'} and native['targets'] == [{'kind':'localTerminal'}]
     assert native['groupID'] == '00000000-0000-0000-0000-000000000000'
     assert 'folder' not in saved
     # Favorite actions operate on original records, never on the folder projection.

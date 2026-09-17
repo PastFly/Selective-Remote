@@ -6,7 +6,7 @@ import { filterTeamSnippets, teamSnippetFolderPaths, renderTeamSnippetTree } fro
 const id = "22222222-2222-4222-8222-222222222222";
 const groupID = "33333333-3333-4333-8333-333333333333";
 const native = { id, profileID: "11111111-1111-4111-8111-111111111111", title: "Deploy", command: "printf old",
-  category: "Work/Deploy", groupID, targets: [{ localTerminal: {} }], targetProfileIDs: [],
+  category: "Work/Deploy", groupID, targets: [{ kind: "localTerminal" }], targetProfileIDs: [],
   isExplicitlyUngrouped: false, updatedAt: "2026-09-01T00:00:00Z", future: { untouched: true } };
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
 const decode = (value) => JSON.parse(Buffer.from(value, "base64url").toString());
