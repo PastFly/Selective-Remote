@@ -4,7 +4,7 @@ import { newestVaultConflictChoice } from "./vault-model.js";
 import {
   filterTeamSnippets, normalizeTeamSnippetFolder, renderTeamSnippetTree,
   teamSnippetFolder, teamSnippetFolderPaths, teamSnippetRecordData,
-} from "./team-snippet-browser.js?v=187";
+} from "./team-snippet-browser.js?v=188";
 import { initializeModernSelects } from "./modern-select.js?v=158";
 import {
   createIndexedDBTeamDeviceRepository,
@@ -142,6 +142,51 @@ function encodePortableRecord(value) {
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
   return btoa(binary).replace(/\+/gu, "-").replace(/\//gu, "_").replace(/=+$/u, "");
+}
+
+// Personal snippets use category + the native portable template, not Team's folder field.
+export function personalSnippetEditorValues(record) {
+  const data = record?.data ?? {};
+  let template = null;
+  try { if (data.template) template = decodePortableRecord(data.template); } catch { /* Keep outer fields readable. */ }
+  return {
+    title: String(data.title ?? template?.title ?? ""),
+    body: String(data.body ?? template?.command ?? ""),
+    folder: String(data.category ?? template?.category ?? ""),
+  };
+}
+
+export function personalSnippetProjection(record) {
+  const values = personalSnippetEditorValues(record);
+  let folder = "";
+  try { folder = normalizeTeamSnippetFolder(values.folder); } catch { /* Do not hide malformed imports. */ }
+  return { ...record, data: { ...record.data, title: values.title, body: values.body, folder } };
+}
+
+export function personalSnippetRecordData({ title, body, folder = "", recordID = null }, baseData = {}, now = new Date()) {
+  const checked = teamSnippetRecordData({ title, body, folder });
+  if (checked.folder && checked.folder.split("/").some((part) => !part.trim() || part !== part.trim())) {
+    throw new Error("invalid_snippet_folder");
+  }
+  const data = { ...baseData, title: checked.title, body: checked.body, category: checked.folder };
+  if (baseData?.template != null) {
+    const template = decodePortableRecord(baseData.template);
+    if (typeof template.id !== "string" || typeof template.profileID !== "string"
+      || typeof template.category !== "string" || typeof template.command !== "string"
+      || (recordID && template.id.toLowerCase() !== recordID.toLowerCase())) {
+      throw new Error("invalid_personal_snippet_template");
+    }
+    // The native importer reads template first: update it together with the outer fields.
+    // A move must not retain the old group's opaque ID on an already-running Mac.
+    if (template.category !== checked.folder) template.groupID = "00000000-0000-0000-0000-000000000000";
+    template.title = checked.title;
+    template.command = checked.body;
+    template.category = checked.folder;
+    template.isExplicitlyUngrouped = !checked.folder;
+    template.updatedAt = new Date(now).toISOString().replace(/\.\d{3}Z$/u, "Z");
+    data.template = encodePortableRecord(template);
+  }
+  return data;
 }
 
 export function personalHostEditorValues(record) {
@@ -509,6 +554,63 @@ export async function initializeLocalVault({
   const selectedRecordIDs = new Set();
   const recentRecordIDs = [];
   let editingRecordID = null;
+  let savePending = false;
+  let conflictMode = false;
+  let scopeGeneration = 0;
+  const snippetActions = documentValue.querySelector("#personal-snippet-actions");
+  const snippetTreeActions = documentValue.querySelector("#personal-snippet-tree-actions");
+  const snippetCount = documentValue.querySelector("#personal-snippet-count");
+  const snippetFolder = documentValue.querySelector("#local-snippet-folder");
+  const snippetFolderOptions = documentValue.querySelector("#local-snippet-folder-options");
+  const snippetGroupEditor = documentValue.querySelector("#personal-snippet-group-editor");
+  const snippetGroupForm = documentValue.querySelector("#personal-snippet-group-form");
+  const snippetGroupParent = documentValue.querySelector("#personal-snippet-group-parent");
+  const snippetGroupName = documentValue.querySelector("#personal-snippet-group-name");
+  const snippetCollapsedFolders = new Set();
+  const snippetFilteredCollapsedFolders = new Set();
+
+  function newOption(value, text = value) {
+    const option = documentValue.createElement("option");
+    option.value = value;
+    option.textContent = text;
+    if (value && !["all", "none"].includes(value)) option.setAttribute("translate", "no");
+    return option;
+  }
+
+  function resetSnippetBrowser({ lock = false } = {}) {
+    snippetGroupForm?.reset();
+    snippetGroupName?.setCustomValidity("");
+    snippetGroupEditor?.close?.();
+    if (search) search.value = "";
+    if (folderFilter) folderFilter.value = "all";
+    snippetFilteredCollapsedFolders.clear();
+    selectedRecordIDs.clear();
+    if (bulkActions) bulkActions.hidden = true;
+    if (lock) {
+      snippetCollapsedFolders.clear();
+      snippetFolderOptions?.replaceChildren();
+      snippetGroupParent?.replaceChildren(newOption("", "Без родительской папки"));
+      folderFilter?.replaceChildren(newOption("all", "Все папки"));
+      if (snippetFolder) snippetFolder.value = "";
+      setText(snippetCount, "");
+      recentRecordIDs.length = 0;
+      visibleRecordIDs = [];
+    }
+  }
+
+  function activeSnippetCollapsedFolders() {
+    return search?.value.trim() || folderFilter?.value !== "all" || activeSmartFilter
+      ? snippetFilteredCollapsedFolders : snippetCollapsedFolders;
+  }
+
+  function beginSnippetGroup(parent = null) {
+    if (workspace.hidden || conflictMode || savePending) return;
+    snippetGroupForm.reset();
+    snippetGroupName.setCustomValidity("");
+    snippetGroupParent.value = parent ?? (folderFilter.value.startsWith("folder:") ? folderFilter.value.slice(7) : "");
+    snippetGroupEditor.showModal();
+    snippetGroupName.focus();
+  }
 
   function updateCreateButton() {
     const labels = {
@@ -534,11 +636,13 @@ export async function initializeLocalVault({
   }
 
   function beginCreate() {
+    if (workspace.hidden || conflictMode || savePending) return;
     resetEditor({ hide: false });
     if (["host", "credential", "snippet", "forwarding"].includes(activeRecordFilter)) {
       type.value = activeRecordFilter;
       type.disabled = true;
     }
+    if (type.value === "snippet" && folderFilter.value.startsWith("folder:")) snippetFolder.value = folderFilter.value.slice(7);
     cancelButton.textContent = "Отменить создание";
     updateLabels();
     setText(message, "Новая запись. Заполните поля и сохраните зашифрованную версию.");
@@ -547,6 +651,7 @@ export async function initializeLocalVault({
   }
 
   function beginEdit(record) {
+    if (workspace.hidden || conflictMode || savePending) return;
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
     editorDialog?.showModal?.();
@@ -555,6 +660,12 @@ export async function initializeLocalVault({
     title.value = values.title;
     target.value = values.target;
     secret.value = values.secret;
+    if (record.type === "snippet") {
+      const snippet = personalSnippetEditorValues(record);
+      title.value = snippet.title;
+      secret.value = snippet.body;
+      snippetFolder.value = snippet.folder;
+    }
     if (record.type === "host") {
       const host = personalHostEditorValues(record);
       title.value = host.title;
@@ -579,17 +690,21 @@ export async function initializeLocalVault({
   }
 
   function clearConflictUI() {
+    conflictMode = false;
     conflictPanel.hidden = true;
     conflictForm.reset();
     conflictList.replaceChildren();
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) control.disabled = false;
     for (const button of records.querySelectorAll("button")) button.disabled = false;
+    for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = false;
     conflictResetListener();
   }
 
   function setConflictMode(active) {
+    conflictMode = active;
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) control.disabled = active;
-    for (const button of records.querySelectorAll("button")) button.disabled = active;
+    for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = active;
+    for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = active;
   }
 
   function mode(value) {
@@ -598,6 +713,10 @@ export async function initializeLocalVault({
     if (actions) actions.hidden = value !== "unlocked";
     if (overviewNotice) overviewNotice.hidden = value === "unlocked";
     if (value !== "unlocked") {
+      scopeGeneration += 1;
+      resetEditor();
+      resetSnippetBrowser({ lock: true });
+      records.replaceChildren();
       for (const recordType of ["host", "credential", "snippet", "forwarding", "sshKey"]) {
         setText(documentValue.querySelector(`#workspace-${recordType}-count`), "—");
       }
@@ -615,6 +734,13 @@ export async function initializeLocalVault({
     setText(targetLabel, targetText);
     setText(secretLabel, secretText);
     const isSnippet = type.value === "snippet";
+    documentValue.querySelector("#local-snippet-folder-label").hidden = !isSnippet;
+    documentValue.querySelector("#local-snippet-folder-field").hidden = !isSnippet;
+    snippetFolder.disabled = !isSnippet || conflictMode;
+    secret.rows = isSnippet ? 6 : 3;
+    setText(documentValue.querySelector("#local-record-secret-help"), isSnippet
+      ? "Команда и папка шифруются в Personal Vault и синхронизируются с приложением."
+      : "Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.");
     targetLabel.hidden = isSnippet;
     target.hidden = isSnippet;
     target.required = !isSnippet;
@@ -637,16 +763,35 @@ export async function initializeLocalVault({
     for (const [recordType, count] of Object.entries(counts)) {
       setText(documentValue.querySelector(`#workspace-${recordType}-count`), String(count));
     }
+    const showingSnippets = activeRecordFilter === "snippet";
+    if (snippetActions) snippetActions.hidden = !showingSnippets;
+    if (snippetTreeActions) snippetTreeActions.hidden = !showingSnippets;
+    setText(documentValue.querySelector("#personal-vault-folder-label"), showingSnippets ? "Папка и вложенные" : "Папка Hosts");
+    documentValue.querySelector("#personal-vault-folder-control").hidden = !["all", "host", "snippet"].includes(activeRecordFilter);
+    search.placeholder = showingSnippets ? "Название, команда или папка" : "Название, адрес, логин или папка";
+    const snippets = current.records.filter((record) => record.type === "snippet");
+    const projections = snippets.map(personalSnippetProjection);
+    const paths = teamSnippetFolderPaths(projections);
+    const oldPaths = [...snippetFolderOptions.options].map((option) => option.value);
+    if (JSON.stringify(oldPaths) !== JSON.stringify(paths)) {
+      const parent = snippetGroupParent.value;
+      snippetFolderOptions.replaceChildren(...paths.map((path) => newOption(path)));
+      snippetGroupParent.replaceChildren(newOption("", "Без родительской папки"), ...paths.map((path) => newOption(path)));
+      snippetGroupParent.value = paths.includes(parent) ? parent : "";
+      for (const path of [...snippetCollapsedFolders]) if (path && !paths.includes(path)) snippetCollapsedFolders.delete(path);
+    }
     const hostFolderName = personalHostFolderName;
     const selectedFolder = String(folderFilter?.value ?? "all");
-    const folders = [...new Set(current.records.filter((record) => record.type === "host").map(hostFolderName))]
+    const folders = showingSnippets ? ["none", ...paths.map((path) => `folder:${path}`)] : [...new Set(current.records.filter((record) => record.type === "host").map(hostFolderName))]
       .sort((a, b) => a.localeCompare(b));
     if (folderFilter) {
       folderFilter.replaceChildren();
       for (const value of ["all", ...folders]) {
         const option = documentValue.createElement("option");
         option.value = value;
-        option.textContent = value === "all" ? "Все папки" : value;
+        option.textContent = value === "all" ? "Все папки" : showingSnippets && value === "none" ? "Без папки"
+          : showingSnippets ? value.slice(7) : value;
+        if (value !== "all" && !(showingSnippets && value === "none")) option.setAttribute("translate", "no");
         folderFilter.append(option);
       }
       folderFilter.value = selectedFolder === "all" || folders.includes(selectedFolder) ? selectedFolder : "all";
@@ -658,8 +803,8 @@ export async function initializeLocalVault({
       .filter((record) => activeSmartFilter !== "recent" || recentRecordIDs.includes(record.id))
       .filter((record) => record.type !== "host" || folderFilter?.value === "all" || hostFolderName(record) === folderFilter?.value);
     const query = String(search?.value ?? "").trim().toLocaleLowerCase();
-    const visibleRecords = sortLocalVaultRecords(filteredRecords.filter((record) => {
-      if (!query) return true;
+    let visibleRecords = sortLocalVaultRecords(filteredRecords.filter((record) => {
+      if (!query || showingSnippets) return true;
       const data = record.data ?? {};
       const host = record.type === "host" ? personalHostEditorValues(record) : null;
       const searchable = [data.title, data.address, data.username, data.destination, data.folder,
@@ -667,6 +812,13 @@ export async function initializeLocalVault({
         ...(Array.isArray(data.tags) ? data.tags : [])];
       return searchable.some((value) => String(value ?? "").toLocaleLowerCase().includes(query));
     }), sort?.value);
+    if (showingSnippets) {
+      const original = new Map(visibleRecords.map((record) => [record.id, record]));
+      visibleRecords = filterTeamSnippets(visibleRecords.map(personalSnippetProjection), {
+        query, folder: folderFilter.value, sort: sort.value,
+      }).map((record) => original.get(record.id));
+      setText(snippetCount, `Сниппеты: ${visibleRecords.length} / ${snippets.length}`);
+    }
     if (activeRecordFilter === "host") {
       visibleRecords.sort((a, b) => hostFolderName(a).localeCompare(hostFolderName(b)));
     }
@@ -684,10 +836,18 @@ export async function initializeLocalVault({
       empty.className = "vault-empty";
       empty.textContent = current.records.length === 0
         ? "Personal Vault пока пуст. Данные появятся после первой синхронизации с Mac или ручного добавления."
+        : showingSnippets && snippets.length > 0 ? "Ничего не найдено. Измените поиск, папку или быстрый фильтр."
         : "Записей этого типа пока нет.";
       records.append(empty);
       return;
     }
+    const snippetTree = showingSnippets ? renderTeamSnippetTree({
+      documentValue, container: records, records: visibleRecords.map(personalSnippetProjection),
+      collapsed: activeSnippetCollapsedFolders(), editable: !conflictMode,
+      idPrefix: "personal-snippet-folder-content",
+      onToggle: (ids) => { visibleRecordIDs = ids; }, onCreateGroup: beginSnippetGroup,
+    }) : null;
+    if (snippetTree) visibleRecordIDs = snippetTree.visibleIDs;
     let renderedFolder = null;
     let folderContent = null;
     for (const record of visibleRecords) {
@@ -811,23 +971,32 @@ export async function initializeLocalVault({
       });
       actions.append(favorite, edit, remove);
       card.append(selector, heading, summary, metadata, actions);
-      (folderContent ?? records).append(card);
+      const snippetContainer = snippetTree?.containers.get(record.id);
+      if (snippetContainer) snippetContainer.insertBefore(card, snippetContainer.querySelector(":scope > .snippet-folder-group"));
+      else (folderContent ?? records).append(card);
     }
+    for (const button of records.querySelectorAll(".record-actions button")) button.disabled = conflictMode;
   }
 
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if (workspace.hidden || conflictMode || savePending) return;
+    const generation = scopeGeneration;
+    savePending = true;
     saveButton.disabled = true;
     try {
       const existing = editingRecordID
         ? controller.document().records.find((record) => record.id === editingRecordID)
         : null;
+      if (editingRecordID && (!existing || existing.type !== type.value)) throw new Error("record_changed");
       const data = type.value === "host"
         ? personalHostRecordData({
           title: title.value, address: target.value, protocol: hostProtocol.value,
           port: hostPort.value, username: hostUsername.value, folder: hostFolder.value,
           tags: hostTags.value, description: hostDescription.value, baseData: existing?.data,
         })
+        : type.value === "snippet"
+          ? personalSnippetRecordData({ title: title.value, body: secret.value, folder: snippetFolder.value, recordID: existing?.id }, existing?.data)
         : localVaultRecordData(
           type.value,
           { title: title.value, target: target.value, secret: secret.value },
@@ -838,18 +1007,58 @@ export async function initializeLocalVault({
         type: type.value,
         data,
       });
+      if (generation !== scopeGeneration) return;
       const wasEditing = Boolean(editingRecordID);
       resetEditor();
       clearConflictUI();
       setText(message, wasEditing ? "Изменения зашифрованы и сохранены." : "Запись локально зашифрована и сохранена.");
       render();
     } catch {
-      setText(message, "Не удалось сохранить запись. Заполните обязательные поля.");
+      if (generation === scopeGeneration) setText(message, "Не удалось сохранить запись. Проверьте поля и путь папки; исходная запись сохранена.");
     } finally {
-      saveButton.disabled = false;
+      savePending = false;
+      saveButton.disabled = conflictMode;
     }
   });
 
+  documentValue.querySelector("#personal-snippet-create")?.addEventListener("click", beginCreate);
+  documentValue.querySelector("#personal-snippet-group-create")?.addEventListener("click", () => beginSnippetGroup());
+  snippetGroupName?.addEventListener("input", () => snippetGroupName.setCustomValidity(""));
+  snippetGroupParent?.addEventListener("change", () => snippetGroupName.setCustomValidity(""));
+  documentValue.querySelector("#personal-snippet-group-cancel")?.addEventListener("click", () => { snippetGroupForm.reset(); snippetGroupEditor.close(); });
+  snippetGroupForm?.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (workspace.hidden || conflictMode || savePending) return;
+    try {
+      const name = normalizeTeamSnippetFolder(snippetGroupName.value);
+      if (!name || name.includes("/")) throw new Error("invalid_snippet_folder");
+      const path = normalizeTeamSnippetFolder([snippetGroupParent.value, name].filter(Boolean).join("/"));
+      if (teamSnippetFolderPaths(controller.document().records.filter((record) => record.type === "snippet").map(personalSnippetProjection)).includes(path)) throw new Error("snippet_folder_exists");
+      snippetGroupEditor.close();
+      beginCreate();
+      type.value = "snippet";
+      snippetFolder.value = path;
+      updateLabels();
+      title.focus();
+    } catch {
+      const error = "Укажите новое имя без /; полный путь — не более 120 символов.";
+      snippetGroupName.setCustomValidity(documentValue.defaultView?.SelectiveRemoteI18n?.t(error) ?? error);
+      snippetGroupName.reportValidity();
+    }
+  });
+  for (const button of documentValue.querySelectorAll("[data-personal-snippet-expand]")) {
+    button.addEventListener("click", () => {
+      if (workspace.hidden) return;
+      const collapsed = activeSnippetCollapsedFolders();
+      collapsed.clear();
+      if (button.dataset.personalSnippetExpand === "false") {
+        const snippets = controller.document().records.filter((record) => record.type === "snippet");
+        for (const path of ["", ...teamSnippetFolderPaths(snippets.map(personalSnippetProjection))]) collapsed.add(path);
+      }
+      render();
+    });
+  }
+  editorDialog?.addEventListener("cancel", () => resetEditor());
   type.addEventListener("change", updateLabels);
   createButton?.addEventListener("click", beginCreate);
   hostProtocol.addEventListener("change", () => {
@@ -861,12 +1070,13 @@ export async function initializeLocalVault({
     resetEditor();
     setText(message, "Изменение отменено.");
   });
-  search?.addEventListener("input", render);
+  search?.addEventListener("input", () => { snippetFilteredCollapsedFolders.clear(); render(); });
   sort?.addEventListener("change", render);
-  folderFilter?.addEventListener("change", render);
+  folderFilter?.addEventListener("change", () => { snippetFilteredCollapsedFolders.clear(); render(); });
   for (const button of filterButtons) {
     button.addEventListener("click", () => {
       resetEditor();
+      resetSnippetBrowser();
       activeRecordFilter = button.dataset.recordFilter || "all";
       activeSmartFilter = null;
       updateCreateButton();
@@ -881,6 +1091,7 @@ export async function initializeLocalVault({
   for (const button of smartFilterButtons) {
     button.addEventListener("click", () => {
       activeSmartFilter = activeSmartFilter === button.dataset.smartFilter ? null : button.dataset.smartFilter;
+      snippetFilteredCollapsedFolders.clear();
       for (const candidate of smartFilterButtons) candidate.classList.toggle("active", candidate.dataset.smartFilter === activeSmartFilter);
       if (!workspace.hidden) render();
     });
@@ -945,9 +1156,15 @@ export async function initializeLocalVault({
     setConflictMode,
     closeEditor() {
       resetEditor();
+      resetSnippetBrowser();
     },
     setFilter(value) {
       resetEditor();
+      if (value !== activeRecordFilter) {
+        resetSnippetBrowser();
+        activeSmartFilter = null;
+        for (const button of smartFilterButtons) button.classList.remove("active");
+      }
       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding", "sshKey"].includes(value) ? value : "all";
       updateCreateButton();
       for (const button of filterButtons) {

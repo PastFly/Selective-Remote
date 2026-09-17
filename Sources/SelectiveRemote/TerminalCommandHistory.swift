@@ -391,11 +391,14 @@ final class TerminalCommandHistoryStore: ObservableObject {
 
     func importTemplates(_ values: [TerminalCommandTemplate]) {
         let existing = Set(storedTemplates.map(\.id))
-        storedTemplates.append(contentsOf: values.filter { !existing.contains($0.id) })
+        let additions = values.filter { !existing.contains($0.id) }
+        storedTemplates.append(contentsOf: additions)
         if storedTemplates.count > 500 {
             storedTemplates.sort { $0.updatedAt > $1.updatedAt }
             storedTemplates = Array(storedTemplates.prefix(500))
         }
+        reconcileImportedSnippetGroups(additions)
+        migrateTemplatesToGlobalLibraryIfNeeded()
         persistTemplates()
     }
 
@@ -404,7 +407,52 @@ final class TerminalCommandHistoryStore: ObservableObject {
         let replacement = Array(values.prefix(500 - internalTemplates.count))
         guard templates() != replacement.sorted(by: { $0.updatedAt > $1.updatedAt }) else { return }
         storedTemplates = internalTemplates + replacement
+        reconcileImportedSnippetGroups(replacement)
+        migrateTemplatesToGlobalLibraryIfNeeded()
         persistTemplates()
+    }
+
+    /// Materialize downloaded groups now, retaining the incoming identity instead
+    /// of generating a different group ID on every Mac and echoing it back to Cloud.
+    private func reconcileImportedSnippetGroups(_ values: [TerminalCommandTemplate]) {
+        var handledNames: [String] = []
+        var handledIDs = Set<UUID>()
+        let before = storedSnippetGroups
+        for value in values.sorted(by: {
+            $0.updatedAt == $1.updatedAt
+                ? $0.id.uuidString < $1.id.uuidString : $0.updatedAt > $1.updatedAt
+        }) {
+            guard !isInternalTemplate(value),
+                  value.groupID != TerminalCommandTemplate.legacyUnassignedGroupID,
+                  let name = normalizedSnippetGroupName(value.category),
+                  !handledIDs.contains(value.groupID),
+                  !handledNames.contains(where: {
+                      $0.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                  })
+            else { continue }
+            handledIDs.insert(value.groupID)
+            handledNames.append(name)
+            let previous = storedSnippetGroups.first { $0.id == value.groupID }
+            let aliases = storedSnippetGroups.filter {
+                $0.id == value.groupID
+                    || $0.name.compare(name, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+            let aliasIDs = Set(aliases.map(\.id))
+            storedSnippetGroups.removeAll { aliasIDs.contains($0.id) }
+            storedSnippetGroups.append(.init(
+                id: value.groupID, profileID: Self.globalSnippetLibraryID,
+                name: name, createdAt: previous?.createdAt ?? value.updatedAt,
+                updatedAt: value.updatedAt
+            ))
+            for index in storedTemplates.indices where
+                aliasIDs.contains(storedTemplates[index].groupID)
+                    && storedTemplates[index].category.compare(
+                        name, options: [.caseInsensitive, .diacriticInsensitive]
+                    ) == .orderedSame {
+                storedTemplates[index].groupID = value.groupID
+            }
+        }
+        if storedSnippetGroups != before { persistSnippetGroups() }
     }
 
     func templates(in groupID: UUID) -> [TerminalCommandTemplate] {

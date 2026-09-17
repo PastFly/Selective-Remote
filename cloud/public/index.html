@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=187">
-  <script src="/i18n.js?v=187"></script>
+  <link rel="stylesheet" href="/styles.css?v=188">
+  <script src="/i18n.js?v=188"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -429,6 +429,11 @@
           <button type="button" data-smart-filter="recent">Недавние</button>
         </nav>
         <div class="personal-vault-browser" id="personal-vault-browser">
+          <div class="snippet-browser-actions" id="personal-snippet-actions" hidden>
+            <p id="personal-snippet-count" role="status" aria-live="polite"></p>
+            <button type="button" id="personal-snippet-create">Добавить Snippet</button>
+            <button type="button" class="secondary" id="personal-snippet-group-create">Новая группа</button>
+          </div>
           <label class="personal-vault-control" for="personal-vault-search"><span>Поиск</span>
             <input id="personal-vault-search" type="search" maxlength="120" placeholder="Название, адрес, логин или папка">
           </label>
@@ -439,10 +444,25 @@
               <option value="type-asc">По типу</option>
             </select>
           </label>
-          <label class="personal-vault-control" for="personal-vault-folder-filter"><span>Папка Hosts</span>
+          <label class="personal-vault-control" for="personal-vault-folder-filter" id="personal-vault-folder-control"><span id="personal-vault-folder-label">Папка Hosts</span>
             <select id="personal-vault-folder-filter"><option value="all">Все папки</option></select>
           </label>
         </div>
+        <div class="snippet-tree-actions" id="personal-snippet-tree-actions" hidden>
+          <button type="button" class="secondary" data-personal-snippet-expand="true">Развернуть всё</button>
+          <button type="button" class="secondary" data-personal-snippet-expand="false">Свернуть всё</button>
+        </div>
+        <dialog class="record-editor-dialog" id="personal-snippet-group-editor" aria-labelledby="personal-snippet-group-title">
+          <div class="record-editor-heading"><h3 id="personal-snippet-group-title">Новая группа</h3></div>
+          <form class="record-form" id="personal-snippet-group-form">
+            <label for="personal-snippet-group-parent">Родительская папка</label>
+            <select id="personal-snippet-group-parent"><option value="">Без родительской папки</option></select>
+            <label for="personal-snippet-group-name">Название группы</label>
+            <input id="personal-snippet-group-name" maxlength="120" required autocomplete="off" aria-describedby="personal-snippet-group-help">
+            <p class="field-help snippet-group-help" id="personal-snippet-group-help">Далее откроется первый сниппет. Группа появится после его сохранения в Personal Vault.</p>
+            <div class="record-form-actions"><button type="submit">Продолжить</button><button type="button" class="secondary" id="personal-snippet-group-cancel">Отмена</button></div>
+          </form>
+        </dialog>
         <div class="bulk-actions" id="personal-bulk-actions" hidden>
           <strong><span data-bulk-count>0</span> выбрано</strong>
           <button type="button" class="secondary" data-bulk-select-visible>Выбрать видимые</button>
@@ -467,6 +487,12 @@
           <input id="local-record-title" name="title" maxlength="120" required>
           <label for="local-record-target" id="local-record-target-label">Адрес</label>
           <input id="local-record-target" name="target" maxlength="2048">
+          <label for="local-snippet-folder" id="local-snippet-folder-label" hidden>Папка сниппета</label>
+          <div class="field-with-help" id="local-snippet-folder-field" hidden>
+            <input id="local-snippet-folder" name="snippetFolder" maxlength="120" list="local-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="local-snippet-folder-help">
+            <datalist id="local-snippet-folder-options"></datalist>
+            <small class="field-help" id="local-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small>
+          </div>
           <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
           <div class="field-with-help"><textarea id="local-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="local-record-secret-help"></textarea><small id="local-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.</small></div>
           <div class="personal-host-fields" id="personal-host-fields">
@@ -1024,6 +1050,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=187"></script>
+  <script type="module" src="/app.js?v=188"></script>
 </body>
 </html>

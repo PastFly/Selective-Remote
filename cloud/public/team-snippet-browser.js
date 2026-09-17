@@ -92,7 +92,7 @@ export function visibleTeamSnippetIDs(tree, collapsed) {
   return ids;
 }
 
-export function renderTeamSnippetTree({ documentValue, container, records, collapsed, editable, onToggle, onCreateGroup }) {
+export function renderTeamSnippetTree({ documentValue, container, records, collapsed, editable, onToggle, onCreateGroup, idPrefix = "team-snippet-folder-content" }) {
   const tree = teamSnippetTree(records);
   const containers = new Map();
   let sequence = 0;
@@ -114,7 +114,7 @@ export function renderTeamSnippetTree({ documentValue, container, records, colla
     if (node.path) name.setAttribute("translate", "no");
     count.className = "snippet-folder-count";
     count.textContent = String(node.count);
-    content.id = `team-snippet-folder-content-${++sequence}`;
+    content.id = `${idPrefix}-${++sequence}`;
     content.className = "vault-folder-content snippet-folder-content";
     content.hidden = collapsed.has(node.path);
     heading.setAttribute("aria-controls", content.id);
