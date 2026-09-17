@@ -1,0 +1,84 @@
+name: Publish verified Personal Snippet feature tree
+on:
+  push:
+    branches: [chore/publish-personal-snippets-20260917]
+permissions:
+  contents: write
+concurrency:
+  group: publish-personal-snippets-20260917
+  cancel-in-progress: false
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Read exact publication inputs
+        uses: actions/checkout@v6
+        with:
+          path: publisher
+          persist-credentials: false
+      - name: Read pinned product baseline
+        uses: actions/checkout@v6
+        with:
+          ref: a57d4789f0d9569f12c1c8c928d5480894275e9f
+          path: product
+      - name: Reconstruct the tested product tree
+        working-directory: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = a57d4789f0d9569f12c1c8c928d5480894275e9f
+          test "$(git rev-parse 'HEAD^{tree}')" = 5b6e071cdc6ce0124559d4fa9180ccfa8a0b69c9
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, shutil
+          patch = b''.join((Path('../publisher/.github') / f'personal-snippets-input-{i}.patch').read_bytes() for i in (1, 2))
+          assert hashlib.sha256(patch).hexdigest() == '693c42dd7f411b8b9439f415e8344600122cc51318c15be1075cd89bd0be9b22'
+          Path('../verified-personal.patch').write_bytes(patch)
+          files = {
+              'Tests/SelectiveRemoteTests/PersonalSnippetFolderSyncTests.swift': 'e9973b11c22f5c3b275b8928fb9a2c582a7befea',
+              'cloud/docs/personal-snippet-browser.md': 'e4c75063c6b5fd20927e50d21cd873d264d52c5b',
+              'cloud/tests/browser/personal-snippets-smoke.py': '4ef05798669aa504d4c09d8cb076365ce89a0a05',
+              'cloud/tests/personal-snippet-browser.test.mjs': '6dd26a48a9614993919844780bce6dde477b61f1',
+          }
+          for name, expected in files.items():
+              source = Path('../publisher') / name
+              data = source.read_bytes()
+              assert hashlib.sha1(f'blob {len(data)}\0'.encode() + data).hexdigest() == expected, name
+              target = Path(name)
+              assert not target.exists(), name
+              target.parent.mkdir(parents=True, exist_ok=True)
+              shutil.copyfile(source, target)
+          PY
+          git apply --unidiff-zero --check ../verified-personal.patch
+          git apply --unidiff-zero ../verified-personal.patch
+          git add -- Sources/SelectiveRemote/TerminalCommandHistory.swift Tests/SelectiveRemoteTests/PersonalSnippetFolderSyncTests.swift cloud/docs/personal-snippet-browser.md cloud/public/app.js cloud/public/i18n.js cloud/public/index.html cloud/public/styles.css cloud/public/team-snippet-browser.js cloud/tests/browser/personal-snippets-smoke.py cloud/tests/personal-snippet-browser.test.mjs cloud/tests/public-i18n.test.mjs cloud/tests/public-vault-ui.test.mjs
+          git diff --cached --check
+          test "$(git diff --cached --name-only | wc -l)" -eq 12
+          test "$(git write-tree)" = cae22bb45a1dad987e8e364cd1d56cfaad84fcde
+          test -z "$(git diff --cached --name-only -- .github cloud/migrations cloud/src cloud/package.json cloud/package-lock.json)"
+          echo EXACT_PERSONAL_SNIPPET_TREE_OK
+      - name: Use production Node version
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+      - name: Run Cloud tests
+        working-directory: product
+        run: |
+          npm --prefix cloud ci
+          npm --prefix cloud test
+      - name: Publish only the new feature branch
+        working-directory: product
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git write-tree)" = cae22bb45a1dad987e8e364cd1d56cfaad84fcde
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = a57d4789f0d9569f12c1c8c928d5480894275e9f
+          test -z "$(git ls-remote --heads origin refs/heads/feat/web-personal-snippet-folders)"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(snippets): add Personal folder browser and immediate native group import'
+          test "$(git rev-parse 'HEAD^{tree}')" = cae22bb45a1dad987e8e364cd1d56cfaad84fcde
+          git push origin HEAD:refs/heads/feat/web-personal-snippet-folders
+          printf 'PUBLISHED_HEAD=%s\n' "$(git rev-parse HEAD)"
+          printf 'PUBLISHED_TREE=%s\n' "$(git rev-parse 'HEAD^{tree}')"
