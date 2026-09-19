@@ -231,6 +231,24 @@ test("registration hides existing accounts and mail transport failures", async (
   assert.equal(duplicateDelivered, false);
 });
 
+test("registration never masks a device collision or another storage failure as accepted", async () => {
+  for (const code of ["device_conflict", "unexpected_registration_constraint"]) {
+    let delivered = false;
+    const store = new MemoryStore();
+    store.createUser = async () => { throw new Error(code); };
+    const service = new CloudService(store, config, {
+      async sendEmailVerification() { delivered = true; },
+    });
+
+    await assert.rejects(
+      service.register({ email: "new@example.com", password: "correct horse battery", device }),
+      new RegExp(code, "u"),
+    );
+    await service.waitForBackgroundTasks();
+    assert.equal(delivered, false);
+  }
+});
+
 test("login performs password verification for unknown and disabled identities", async () => {
   const calls = [];
   const verifier = async (password, encoded) => { calls.push({ password, encoded }); return false; };

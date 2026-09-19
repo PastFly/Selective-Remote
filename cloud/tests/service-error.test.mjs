@@ -30,3 +30,10 @@ test("internal database errors are never exposed as public codes", () => {
   assert.equal(publicOperationError(new Error("relation account_identities does not exist")), null);
   assert.equal(publicOperationError(Object.assign(new Error("duplicate key value"), { code: "23505" })), null);
 });
+
+test("a known browser device collision is a bounded retryable conflict", () => {
+  assert.deepEqual(publicOperationError(new Error("device_conflict")), {
+    status: 409,
+    code: "device_conflict",
+  });
+});

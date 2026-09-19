@@ -25,7 +25,11 @@ const sessionDeviceKey = "personal-session-device-key";
 const sessionUnlockKey = "personal-session-unlock";
 const sessionUnlockVersion = 1;
 const sessionUnlockContext = "selective-remote:personal-vault:browser-session:v1:";
+const accountDeviceDigestContext = "selective-remote/account-device-email/v1";
+const accountDeviceKeyPrefix = "account-device:v1:";
+const accountDeviceStateKeys = ["deviceID", "registrationAccepted"];
 const exactUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const base64URLDigest = /^[A-Za-z0-9_-]{43}$/u;
 const recordTypes = new Set(["host", "credential", "snippet", "forwarding", "sshKey"]);
 const snapshotKeys = ["deviceID", "envelope", "revision"];
 const envelopeKeys = ["authTag", "baseRevision", "ciphertext", "contentHash", "envelopeVersion", "nonce", "wrappedKey"];
@@ -65,6 +69,50 @@ function normalizedDeviceID(value) {
   const deviceID = String(value ?? "").toLowerCase();
   if (!exactUUID.test(deviceID)) throw new Error("invalid_local_device");
   return deviceID;
+}
+
+function normalizedAccountEmail(value) {
+  const email = String(value ?? "").trim().toLowerCase();
+  if (email.length < 3 || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(email)) {
+    throw new Error("invalid_email");
+  }
+  return email;
+}
+
+function bytesToBase64URL(bytes) {
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+}
+
+export async function accountDeviceStorageKey(email, cryptoValue = globalThis.crypto) {
+  if (!cryptoValue?.subtle) throw new Error("web_crypto_unavailable");
+  const input = new TextEncoder().encode(`${accountDeviceDigestContext}\0${normalizedAccountEmail(email)}`);
+  const digest = bytesToBase64URL(new Uint8Array(await cryptoValue.subtle.digest("SHA-256", input)));
+  return `${accountDeviceKeyPrefix}${digest}`;
+}
+
+function normalizedAccountDeviceKey(value) {
+  const key = String(value ?? "");
+  if (!key.startsWith(accountDeviceKeyPrefix)
+      || !base64URLDigest.test(key.slice(accountDeviceKeyPrefix.length))) {
+    throw new Error("invalid_account_device_key");
+  }
+  return key;
+}
+
+function normalizedAccountDevice(value) {
+  if (typeof value === "string") {
+    return { deviceID: normalizedDeviceID(value), registrationAccepted: false };
+  }
+  exactKeys(value, accountDeviceStateKeys, "invalid_account_device");
+  if (typeof value.registrationAccepted !== "boolean") throw new Error("invalid_account_device");
+  return {
+    deviceID: normalizedDeviceID(value.deviceID),
+    registrationAccepted: value.registrationAccepted,
+  };
 }
 
 function normalizedAccountID(value) {
@@ -175,6 +223,69 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
       const deviceID = normalizedDeviceID(value);
       await transaction(indexedDBValue, "readwrite", (store) => store.put(deviceID, deviceKey));
     },
+    async loadAccountDevice(key) {
+      const normalizedKey = normalizedAccountDeviceKey(key);
+      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(normalizedKey));
+      return value === null || value === undefined ? null : normalizedAccountDevice(value);
+    },
+    async saveAccountDeviceIfAbsent(key, value) {
+      const normalizedKey = normalizedAccountDeviceKey(key);
+      const accountDevice = normalizedAccountDevice(value);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          let committed = null;
+          const request = store.get(normalizedKey);
+          request.onerror = () => reject(new Error("local_vault_storage_failed"));
+          request.onsuccess = () => {
+            if (request.result !== null && request.result !== undefined) {
+              try { committed = normalizedAccountDevice(request.result); } catch { reject(new Error("invalid_account_device")); }
+              return;
+            }
+            const add = store.add(accountDevice, normalizedKey);
+            add.onerror = () => reject(new Error("local_vault_storage_failed"));
+            add.onsuccess = () => { committed = accountDevice; };
+          };
+          tx.onabort = () => reject(new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(committed);
+        });
+      } finally {
+        database.close();
+      }
+    },
+    async replaceAccountDevice(key, expected, replacement) {
+      const normalizedKey = normalizedAccountDeviceKey(key);
+      const expectedAccountDevice = normalizedAccountDevice(expected);
+      const replacementAccountDevice = normalizedAccountDevice(replacement);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          let committed = null;
+          const request = store.get(normalizedKey);
+          request.onerror = () => reject(new Error("local_vault_storage_failed"));
+          request.onsuccess = () => {
+            if (request.result !== null && request.result !== undefined) {
+              try { committed = normalizedAccountDevice(request.result); } catch { reject(new Error("invalid_account_device")); return; }
+              if (committed.deviceID !== expectedAccountDevice.deviceID
+                  || committed.registrationAccepted !== expectedAccountDevice.registrationAccepted) return;
+            }
+            const put = store.put(replacementAccountDevice, normalizedKey);
+            put.onerror = () => reject(new Error("local_vault_storage_failed"));
+            put.onsuccess = () => { committed = replacementAccountDevice; };
+          };
+          tx.onabort = () => reject(new Error("local_vault_storage_failed"));
+          tx.onerror = () => reject(new Error("local_vault_storage_failed"));
+          tx.oncomplete = () => resolve(committed);
+        });
+      } finally {
+        database.close();
+      }
+    },
     async loadSessionDeviceKey() {
       return transaction(indexedDBValue, "readonly", (store) => store.get(sessionDeviceKey));
     },
@@ -189,6 +300,66 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
     },
     async deleteSessionUnlock() {
       await transaction(indexedDBValue, "readwrite", (store) => store.delete(sessionUnlockKey));
+    },
+  };
+}
+
+export function createAccountDeviceCoordinator({
+  repository,
+  legacyDeviceID,
+  cryptoValue = globalThis.crypto,
+  randomUUID = () => cryptoValue.randomUUID(),
+} = {}) {
+  if (!repository
+      || typeof repository.loadAccountDevice !== "function"
+      || typeof repository.saveAccountDeviceIfAbsent !== "function"
+      || typeof repository.replaceAccountDevice !== "function"
+      || typeof legacyDeviceID !== "function") {
+    throw new Error("invalid_account_device_repository");
+  }
+
+  async function key(email) {
+    return accountDeviceStorageKey(email, cryptoValue);
+  }
+
+  return {
+    async deviceID(email) {
+      const mapped = await repository.loadAccountDevice(await key(email));
+      return mapped ? normalizedAccountDevice(mapped).deviceID : normalizedDeviceID(await legacyDeviceID());
+    },
+    async remember(email, deviceIDValue) {
+      const accountDevice = normalizedAccountDevice(await repository.saveAccountDeviceIfAbsent(
+        await key(email),
+        { deviceID: normalizedDeviceID(deviceIDValue), registrationAccepted: false },
+      ));
+      return accountDevice.deviceID;
+    },
+    async accepted(email, deviceIDValue) {
+      const storageKey = await key(email);
+      const deviceID = normalizedDeviceID(deviceIDValue);
+      const current = normalizedAccountDevice(await repository.loadAccountDevice(storageKey));
+      if (current.deviceID !== deviceID || current.registrationAccepted) return current.deviceID;
+      const committed = normalizedAccountDevice(await repository.replaceAccountDevice(
+        storageKey,
+        current,
+        { deviceID, registrationAccepted: true },
+      ));
+      return committed.deviceID;
+    },
+    async replaceAfterConflict(email, conflictingDeviceID) {
+      const storageKey = await key(email);
+      const expectedDeviceID = normalizedDeviceID(conflictingDeviceID);
+      const current = normalizedAccountDevice(await repository.loadAccountDevice(storageKey));
+      if (current.deviceID !== expectedDeviceID) {
+        return current.registrationAccepted ? null : current.deviceID;
+      }
+      if (current.registrationAccepted) return null;
+      const committed = normalizedAccountDevice(await repository.replaceAccountDevice(
+        storageKey,
+        current,
+        { deviceID: normalizedDeviceID(randomUUID()), registrationAccepted: false },
+      ));
+      return committed.registrationAccepted ? null : committed.deviceID;
     },
   };
 }

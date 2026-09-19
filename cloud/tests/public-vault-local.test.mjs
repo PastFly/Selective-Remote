@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
-import { createLocalVaultController } from "../public/vault-local.js";
+import * as vaultLocal from "../public/vault-local.js";
+
+const { createLocalVaultController } = vaultLocal;
 
 const passphrase = "correct horse battery staple for local recovery";
 const deviceID = "11111111-1111-4111-8111-111111111111";
@@ -53,6 +55,66 @@ test("new local Vault persists only an encrypted envelope", async () => {
   assert.equal(serialized.includes("tombstones"), false);
   assert.equal(repository.snapshot().revision, 1);
   assert.equal(repository.snapshot().deviceID, deviceID);
+});
+
+test("account A logout then account B in one browser keeps account-scoped devices and the Vault actor", async () => {
+  assert.equal(typeof vaultLocal.accountDeviceStorageKey, "function");
+  assert.equal(typeof vaultLocal.createAccountDeviceCoordinator, "function");
+  const mappings = new Map();
+  const repository = {
+    async loadAccountDevice(key) { return mappings.get(key) ?? null; },
+    async saveAccountDeviceIfAbsent(key, value) {
+      if (!mappings.has(key)) mappings.set(key, value);
+      return mappings.get(key);
+    },
+    async replaceAccountDevice(key, expected, replacement) {
+      const current = mappings.get(key) ?? null;
+      if (current !== null && current.deviceID !== expected.deviceID) return current;
+      mappings.set(key, replacement);
+      return replacement;
+    },
+  };
+  const replacement = "22222222-2222-4222-8222-222222222222";
+  const coordinatorForAccountA = vaultLocal.createAccountDeviceCoordinator({
+    repository,
+    legacyDeviceID: async () => deviceID,
+    cryptoValue: webcrypto,
+    randomUUID: () => replacement,
+  });
+  const key = await vaultLocal.accountDeviceStorageKey(" User@Example.COM ", webcrypto);
+
+  assert.equal(key, "account-device:v1:TH8TsPIDs1myP7WbqTNTAFGl0Z9naZWeFi4lJFMZdkM");
+  assert.equal(key.includes("user@example.com"), false);
+  assert.equal(await coordinatorForAccountA.deviceID("account-a@example.com"), deviceID);
+  assert.equal(await coordinatorForAccountA.remember("account-a@example.com", deviceID), deviceID);
+  await coordinatorForAccountA.accepted("account-a@example.com", deviceID);
+
+  // A new coordinator models the browser runtime after account A logs out.
+  let replacementCalls = 0;
+  const coordinatorForAccountB = vaultLocal.createAccountDeviceCoordinator({
+    repository,
+    legacyDeviceID: async () => deviceID,
+    cryptoValue: webcrypto,
+    randomUUID: () => {
+      replacementCalls += 1;
+      return replacementCalls === 1 ? replacement : "33333333-3333-4333-8333-333333333333";
+    },
+  });
+  assert.equal(await coordinatorForAccountB.deviceID("user@example.com"), deviceID);
+  assert.equal(await coordinatorForAccountB.remember("user@example.com", deviceID), deviceID);
+  assert.equal(await coordinatorForAccountB.replaceAfterConflict("USER@example.com", deviceID), replacement);
+  assert.equal(await coordinatorForAccountB.replaceAfterConflict("user@example.com", deviceID), replacement);
+  assert.equal(replacementCalls, 1);
+  await coordinatorForAccountB.accepted("user@example.com", replacement);
+  assert.equal(await coordinatorForAccountB.deviceID(" user@example.com "), replacement);
+  assert.equal(await coordinatorForAccountB.deviceID("account-a@example.com"), deviceID);
+  assert.equal(await coordinatorForAccountA.replaceAfterConflict("account-a@example.com", deviceID), null);
+
+  const localRepository = memoryRepository();
+  const vault = controller(localRepository);
+  await vault.create(passphrase);
+  assert.equal(await vault.deviceID(), deviceID);
+  assert.equal(localRepository.snapshot().deviceID, deviceID);
 });
 
 test("lock drops the in-memory key and wrong recovery passphrases fail closed", async () => {

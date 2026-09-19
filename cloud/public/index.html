@@ -213,13 +213,13 @@
           <input id="cloud-registration-username" name="username" minlength="3" maxlength="32" pattern="[a-z0-9][a-z0-9._-]{1,30}[a-z0-9]" autocomplete="username" placeholder="например, leonid" required>
           <p class="auth-note">Участники команд увидят имя и @логин. Электронная почта останется скрытой.</p>
           <label for="cloud-registration-email">Электронная почта</label>
-          <input id="cloud-registration-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="На неё придёт подтверждение" required>
+          <input id="cloud-registration-email" name="email" type="email" maxlength="254" autocomplete="email" placeholder="Адрес для подтверждения" required>
           <label for="cloud-registration-password">Новый пароль Selective Remote</label>
           <input id="cloud-registration-password" name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password" placeholder="Минимум 12 символов" required>
           <label for="cloud-registration-confirmation">Повторите пароль</label>
           <input id="cloud-registration-confirmation" name="confirmation" type="password" minlength="12" maxlength="1024" autocomplete="new-password" required>
           <button type="submit">Создать аккаунт</button>
-          <p class="auth-note">Мы отправим одноразовую ссылку подтверждения. Пароли по почте не отправляются и не сохраняются в браузере.</p>
+          <p class="auth-note">Если потребуется подтверждение адреса, мы отправим дальнейшие инструкции. Пароли по почте не отправляются и не сохраняются в браузере.</p>
         </form>
 
         <form class="auth-form compact" id="cloud-recovery-form" method="post" action="/v1/auth/request-password-reset" hidden>

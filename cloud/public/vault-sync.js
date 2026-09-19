@@ -464,6 +464,38 @@ async function responseJSON(response, code) {
   }
 }
 
+export async function registerWithDeviceConflictRetry({
+  input,
+  accountDevices,
+  ensureIdentity,
+  register,
+} = {}) {
+  if (!input || typeof accountDevices?.deviceID !== "function"
+      || typeof accountDevices?.remember !== "function"
+      || typeof accountDevices?.accepted !== "function"
+      || typeof accountDevices?.replaceAfterConflict !== "function"
+      || typeof ensureIdentity !== "function" || typeof register !== "function") {
+    throw new Error("invalid_registration_device_flow");
+  }
+  const email = String(input.email ?? "").trim();
+  let deviceID = await accountDevices.deviceID(email);
+  deviceID = await accountDevices.remember(email, deviceID);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const identity = await ensureIdentity(deviceID);
+    try {
+      const result = await register({ ...input, deviceID, publicKey: identity?.publicKey ?? null });
+      try { await accountDevices.accepted(email, deviceID); } catch {}
+      return result;
+    } catch (error) {
+      if (attempt !== 0 || error?.message !== "device_conflict") throw error;
+      const replacement = await accountDevices.replaceAfterConflict(email, deviceID);
+      if (replacement === null) return { verificationRequired: true };
+      deviceID = replacement;
+    }
+  }
+  throw new Error("registration_failed");
+}
+
 export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch } = {}) {
   if (typeof fetchValue !== "function") throw new Error("invalid_fetch");
   let token = null;
@@ -526,7 +558,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       });
       const result = await responseJSON(response, "registration_failed");
       if (!response.ok) {
-        const code = ["registration_disabled", "invalid_team_invitation", "rate_limited", "smtp_not_configured"].includes(result.error)
+        const code = ["registration_disabled", "invalid_team_invitation", "rate_limited", "smtp_not_configured", "device_conflict"].includes(result.error)
           ? result.error : "registration_failed";
         throw new Error(code);
       }
