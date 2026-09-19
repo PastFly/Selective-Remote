@@ -85,6 +85,15 @@ export class PostgresStore {
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))",
+        [device.id],
+      );
+      const existingDevice = await client.query(
+        "SELECT id FROM devices WHERE id = $1",
+        [device.id],
+      );
+      if (existingDevice.rows[0]) throw new Error("device_conflict");
       const userResult = await client.query(
         "INSERT INTO users (email, username, display_name) VALUES ($1, $2, $3) RETURNING id, email, username, display_name, created_at",
         [email, username, displayName],
@@ -117,7 +126,12 @@ export class PostgresStore {
       if (error?.code === "23505" && error?.constraint === "users_username_unique") {
         throw new Error("username_exists");
       }
-      if (error?.code === "23505") throw new Error("email_exists");
+      if (error?.code === "23505" && error?.constraint === "users_email_unique") {
+        throw new Error("email_exists");
+      }
+      if (error?.code === "23505" && error?.constraint === "devices_pkey") {
+        throw new Error("device_conflict");
+      }
       throw error;
     } finally {
       client.release();

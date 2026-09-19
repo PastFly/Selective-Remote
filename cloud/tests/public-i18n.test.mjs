@@ -51,6 +51,7 @@ test("every static Russian portal string has an English catalog entry", () => {
 
 test("dynamic authentication, synchronization, and Team errors have English messages", () => {
   for (const message of [
+    "Check your email. If this address requires verification, we’ll send further instructions.",
     "Incorrect email or password.",
     "The Cloud session expired. Sign in again.",
     "Synchronization is frozen until the key is rotated securely.",

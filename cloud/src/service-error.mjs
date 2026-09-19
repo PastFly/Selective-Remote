@@ -42,6 +42,7 @@ const operationStatuses = Object.freeze({
   team_invitation_not_ready: 409,
   invalid_username: 400,
   username_exists: 409,
+  device_conflict: 409,
   team_not_found: 404,
   team_access_denied: 403,
   team_member_exists: 409,

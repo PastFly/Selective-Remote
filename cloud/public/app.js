@@ -1,5 +1,13 @@
-import { createIndexedDBVaultRepository, createLocalVaultController } from "./vault-local.js";
-import { createAuthenticatedVaultClient, synchronizeVault } from "./vault-sync.js";
+import {
+  createAccountDeviceCoordinator,
+  createIndexedDBVaultRepository,
+  createLocalVaultController,
+} from "./vault-local.js";
+import {
+  createAuthenticatedVaultClient,
+  registerWithDeviceConflictRetry,
+  synchronizeVault,
+} from "./vault-sync.js";
 import { newestVaultConflictChoice } from "./vault-model.js";
 import {
   filterTeamSnippets, normalizeTeamSnippetFolder, renderTeamSnippetTree,
@@ -3526,6 +3534,10 @@ export function accountVaultPassphrase(password) {
   return `selective-remote:account-password:v1:${normalized}`;
 }
 
+export function registrationAcceptedMessage() {
+  return "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.";
+}
+
 export async function initializeCloudAccount({
   documentValue = document,
   vaultUI,
@@ -3569,6 +3581,10 @@ export async function initializeCloudAccount({
   const requestConfirmation = createConfirmationRequester({ documentValue });
   const teamWorkspace = initializeTeamWorkspace({ documentValue, client, initialInvitationToken: initialTeamInvitationToken });
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
+  const accountDevices = createAccountDeviceCoordinator({
+    repository: createIndexedDBVaultRepository(),
+    legacyDeviceID: () => vault.deviceID(),
+  });
   let activeConflicts = null;
   let backgroundSyncing = false;
   const sessionTabID = globalThis.crypto?.randomUUID?.() ?? null;
@@ -3725,7 +3741,7 @@ export async function initializeCloudAccount({
       setAccountMessage(registrationAvailable
         ? initialTeamInvitationToken
           ? "Создайте аккаунт по приглашению. После подтверждения email войдите и снова откройте ссылку приглашения."
-          : "Создайте пароль Selective Remote — на почту придёт только одноразовая ссылка подтверждения."
+          : "Создайте пароль Selective Remote. Если потребуется подтверждение адреса, дальнейшие инструкции придут по электронной почте."
         : "Регистрация временно закрыта. Уже подтверждённые аккаунты могут войти.", registrationAvailable ? null : "error");
     } else if (mode === "recovery") {
       setAccountMessage("Мы отправим одноразовую ссылку для смены пароля, если аккаунт существует.");
@@ -3815,24 +3831,23 @@ export async function initializeCloudAccount({
     }
     button.disabled = true;
     try {
-      const deviceID = await vault.deviceID();
-      let identity = null;
-      try { identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }); } catch {}
-      await client.register({
-        displayName: registrationForm.elements.displayName.value,
-        username: registrationForm.elements.username.value,
-        email: registrationForm.elements.email.value,
-        password,
-        deviceID,
-        publicKey: identity?.publicKey ?? null,
-        invitationToken: initialTeamInvitationToken,
+      await registerWithDeviceConflictRetry({
+        input: {
+          displayName: registrationForm.elements.displayName.value,
+          username: registrationForm.elements.username.value,
+          email: registrationForm.elements.email.value,
+          password,
+          invitationToken: initialTeamInvitationToken,
+        },
+        accountDevices,
+        ensureIdentity: (deviceID) => ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID }),
+        register: (input) => client.register(input),
       });
-      const email = registrationForm.elements.email.value.trim();
       registrationForm.reset();
       registrationForm.hidden = true;
       registrationSuccess.hidden = false;
-      setText(registrationSuccessMessage, `Одноразовая ссылка отправлена на ${email}. Подтвердите адрес, затем войдите с созданным паролем.`);
-      setAccountMessage("Аккаунт создан. Пароль не отправлялся по почте и не был сохранён в браузере.", "success");
+      setText(registrationSuccessMessage, registrationAcceptedMessage());
+      setAccountMessage(registrationAcceptedMessage(), "success");
     } catch (error) {
       const code = String(error?.message ?? "");
       const messages = {
@@ -3870,7 +3885,8 @@ export async function initializeCloudAccount({
     button.disabled = true;
     try {
       const password = form.elements.password.value;
-      const deviceID = await vault.deviceID();
+      const email = form.elements.email.value;
+      const deviceID = await accountDevices.remember(email, await accountDevices.deviceID(email));
       let identity = null;
       try {
         identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID });
@@ -3878,11 +3894,12 @@ export async function initializeCloudAccount({
         // Team keys are optional for personal-Vault login and fail independently.
       }
       const user = await client.login({
-        email: form.elements.email.value,
+        email,
         password,
         deviceID,
         publicKey: identity?.publicKey ?? null,
       });
+      try { await accountDevices.accepted(email, deviceID); } catch {}
       let personalVaultReady = false;
       try {
         await unlockAndSyncPersonalVault(password);

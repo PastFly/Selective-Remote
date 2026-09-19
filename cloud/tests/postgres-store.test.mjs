@@ -61,6 +61,82 @@ test("creating an unverified account stores a verification hash but no session",
   assert.equal(fixture.released(), true);
 });
 
+test("registration classifies only known unique constraints and always rolls back", async () => {
+  const cases = [
+    ["users_username_unique", "username_exists"],
+    ["users_email_unique", "email_exists"],
+    ["devices_pkey", "device_conflict"],
+  ];
+  for (const [constraint, expected] of cases) {
+    const failure = Object.assign(new Error("duplicate key value"), { code: "23505", constraint });
+    const fixture = recordingStore((sql) => {
+      if (constraint === "devices_pkey" && sql.includes("INSERT INTO users")) {
+        return { rows: [{ id: "user-1" }] };
+      }
+      if ((constraint === "devices_pkey" && sql.includes("INSERT INTO devices"))
+          || (constraint !== "devices_pkey" && sql.includes("INSERT INTO users"))) throw failure;
+      return { rows: [] };
+    });
+
+    await assert.rejects(fixture.store.createUser({
+      email: "user@example.com",
+      username: "owner",
+      displayName: "User",
+      passwordHash: "password-hash",
+      device: { id: "11111111-1111-4111-8111-111111111111", name: "Web browser", platform: "web", appVersion: "0.32", publicKey: null },
+      verificationHash: "e".repeat(64),
+      verificationExpiresAt: new Date("2030-01-02T00:00:00.000Z"),
+    }), new RegExp(expected, "u"));
+    assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+    assert.equal(fixture.queries.some(({ sql }) => sql.includes("INSERT INTO email_verification_tokens")), false);
+    assert.equal(fixture.released(), true);
+  }
+});
+
+test("registration preserves an unknown unique violation after rollback", async () => {
+  const failure = Object.assign(new Error("duplicate key value"), {
+    code: "23505",
+    constraint: "future_registration_unique",
+  });
+  const fixture = recordingStore((sql) => {
+    if (sql.includes("INSERT INTO users")) throw failure;
+    return { rows: [] };
+  });
+
+  await assert.rejects(fixture.store.createUser({
+    email: "user@example.com",
+    username: "owner",
+    displayName: "User",
+    passwordHash: "password-hash",
+    device: { id: "11111111-1111-4111-8111-111111111111", name: "Web browser", platform: "web", appVersion: "0.32", publicKey: null },
+    verificationHash: "e".repeat(64),
+    verificationExpiresAt: new Date("2030-01-02T00:00:00.000Z"),
+  }), (error) => error === failure);
+  assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+  assert.equal(fixture.released(), true);
+});
+
+test("registration checks an account-owned device before email uniqueness", async () => {
+  const fixture = recordingStore((sql) => sql.includes("SELECT id FROM devices")
+    ? { rows: [{ id: "11111111-1111-4111-8111-111111111111" }] }
+    : { rows: [] });
+
+  await assert.rejects(fixture.store.createUser({
+    email: "unknown@example.com",
+    username: "owner",
+    displayName: "User",
+    passwordHash: "password-hash",
+    device: { id: "11111111-1111-4111-8111-111111111111", name: "Web browser", platform: "web", appVersion: "0.32", publicKey: null },
+    verificationHash: "e".repeat(64),
+    verificationExpiresAt: new Date("2030-01-02T00:00:00.000Z"),
+  }), /device_conflict/u);
+  const deviceCheck = fixture.queries.findIndex(({ sql }) => sql.includes("SELECT id FROM devices"));
+  const userInsert = fixture.queries.findIndex(({ sql }) => sql.includes("INSERT INTO users"));
+  assert.ok(deviceCheck > 0);
+  assert.equal(userInsert, -1);
+  assert.equal(fixture.queries.at(-1).sql, "ROLLBACK");
+});
+
 test("password identity includes the account creation time required by the login contract", async () => {
   const createdAt = new Date("2026-09-11T00:00:00.000Z");
   const identity = {
