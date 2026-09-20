@@ -3,7 +3,11 @@ import { webcrypto } from "node:crypto";
 import test from "node:test";
 import * as vaultLocal from "../public/vault-local.js";
 
-const { createLocalVaultController } = vaultLocal;
+const {
+  accountVaultStorageKeys,
+  createLocalVaultController,
+  prepareAccountScopedVault,
+} = vaultLocal;
 
 const passphrase = "correct horse battery staple for local recovery";
 const deviceID = "11111111-1111-4111-8111-111111111111";
@@ -16,17 +20,21 @@ const recordIDs = [
 
 function memoryRepository(initial = null) {
   let value = initial;
+  let sync = null;
   let sessionDeviceKey = null;
   let sessionUnlock = null;
   return {
     async load() { return value ? structuredClone(value) : null; },
     async save(next) { value = structuredClone(next); },
+    async loadSync() { return sync ? structuredClone(sync) : null; },
+    async saveSync(next) { sync = structuredClone(next); },
     async loadSessionDeviceKey() { return sessionDeviceKey ? structuredClone(sessionDeviceKey) : null; },
     async saveSessionDeviceKey(next) { sessionDeviceKey = structuredClone(next); },
     async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
     async saveSessionUnlock(next) { sessionUnlock = structuredClone(next); },
     async deleteSessionUnlock() { sessionUnlock = null; },
     snapshot() { return value ? structuredClone(value) : null; },
+    synchronization() { return sync ? structuredClone(sync) : null; },
     rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
   };
 }
@@ -55,6 +63,102 @@ test("new local Vault persists only an encrypted envelope", async () => {
   assert.equal(serialized.includes("tombstones"), false);
   assert.equal(repository.snapshot().revision, 1);
   assert.equal(repository.snapshot().deviceID, deviceID);
+});
+
+test("Personal Vault storage keys are account-scoped by stable user ID", () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const keysA = accountVaultStorageKeys(accountA);
+  const keysB = accountVaultStorageKeys(accountB);
+
+  assert.deepEqual(Object.keys(keysA).sort(), ["backup", "sessionUnlock", "snapshot", "sync"]);
+  assert.notEqual(keysA.snapshot, keysB.snapshot);
+  assert.notEqual(keysA.sync, keysB.sync);
+  assert.notEqual(keysA.sessionUnlock, keysB.sessionUnlock);
+  assert.match(keysA.snapshot, /personal-account:v1:eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee:snapshot/u);
+  assert.doesNotMatch(JSON.stringify(keysA), /@/u);
+});
+
+test("a foreign legacy snapshot is preserved and not migrated for a new account", async () => {
+  const legacyRepository = memoryRepository();
+  const legacyVault = controller(legacyRepository);
+  await legacyVault.create("account A password is long enough");
+  const before = legacyRepository.snapshot();
+  const accountRepository = memoryRepository();
+
+  const prepared = await prepareAccountScopedVault({
+    accountID: "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    accountRepository,
+    legacyRepository,
+    passphrase: "account B password is also long enough",
+    cryptoValue: webcrypto,
+  });
+
+  assert.equal(prepared.legacyMigrated, false);
+  assert.equal(prepared.restored, false);
+  assert.equal(await prepared.vault.status(), "empty");
+  assert.equal(accountRepository.snapshot(), null);
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("a same-account legacy snapshot migrates only after successful unwrap", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const legacyRepository = memoryRepository();
+  const legacyVault = controller(legacyRepository);
+  await legacyVault.create(passphrase);
+  await legacyVault.upsert({ type: "host", data: { title: "Legacy", address: "legacy.invalid" } });
+  await legacyRepository.saveSync({ localRevision: 2, serverRevision: 2 });
+  const before = legacyRepository.snapshot();
+  const accountRepository = memoryRepository();
+
+  const prepared = await prepareAccountScopedVault({
+    accountID,
+    accountRepository,
+    legacyRepository,
+    passphrase,
+    cryptoValue: webcrypto,
+  });
+
+  assert.equal(prepared.legacyMigrated, true);
+  assert.equal(prepared.restored, true);
+  assert.equal(await prepared.vault.status(), "unlocked");
+  assert.equal(prepared.vault.document().records[0].data.address, "legacy.invalid");
+  assert.deepEqual(accountRepository.snapshot(), before);
+  assert.deepEqual(accountRepository.synchronization(), { localRevision: 2, serverRevision: 2 });
+  assert.deepEqual(legacyRepository.snapshot(), before);
+});
+
+test("remembered restore is account-bound and a wrong account leaves legacy state untouched", async () => {
+  const accountA = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const accountB = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+  const legacyRepository = memoryRepository();
+  const legacyVault = controller(legacyRepository);
+  await legacyVault.create(passphrase);
+  await legacyVault.rememberSession(accountA);
+  legacyVault.lock();
+  const rememberedBefore = legacyRepository.rememberedSession();
+
+  const wrongAccount = await prepareAccountScopedVault({
+    accountID: accountB,
+    accountRepository: memoryRepository(),
+    legacyRepository,
+    cryptoValue: webcrypto,
+  });
+  assert.equal(wrongAccount.restored, false);
+  assert.equal(await wrongAccount.vault.status(), "empty");
+  assert.deepEqual(legacyRepository.rememberedSession(), rememberedBefore);
+
+  const accountRepository = memoryRepository();
+  const sameAccount = await prepareAccountScopedVault({
+    accountID: accountA,
+    accountRepository,
+    legacyRepository,
+    cryptoValue: webcrypto,
+  });
+  assert.equal(sameAccount.legacyMigrated, true);
+  assert.equal(sameAccount.restored, true);
+  assert.equal(await sameAccount.vault.status(), "unlocked");
+  assert.equal((await sameAccount.vault.deviceID()), deviceID);
 });
 
 test("account A logout then account B in one browser keeps account-scoped devices and the Vault actor", async () => {

@@ -2,6 +2,7 @@ import {
   createAccountDeviceCoordinator,
   createIndexedDBVaultRepository,
   createLocalVaultController,
+  prepareAccountScopedVault,
 } from "./vault-local.js";
 import {
   createAuthenticatedVaultClient,
@@ -500,6 +501,9 @@ export async function initializeLocalVault({
   if (!section) return null;
   const requestConfirmation = createConfirmationRequester({ documentValue, confirmValue });
   const waiting = documentValue.querySelector("#local-vault-waiting");
+  const stateTitle = documentValue.querySelector("#local-vault-state-title");
+  const stateDescription = documentValue.querySelector("#local-vault-state-description");
+  const reauthenticateForm = documentValue.querySelector("#local-vault-reauthenticate-form");
   const workspace = documentValue.querySelector("#local-vault-workspace");
   const actions = documentValue.querySelector("#local-vault-actions");
   const overviewNotice = documentValue.querySelector("#workspace-vault-notice");
@@ -552,7 +556,7 @@ export async function initializeLocalVault({
   const filterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-record-filter]")];
   const smartFilterButtons = [...documentValue.querySelectorAll("#personal-vault-filters [data-smart-filter]")];
   const bulkActions = documentValue.querySelector("#personal-bulk-actions");
-  const controller = createLocalVaultController({ repository });
+  let controller = createLocalVaultController({ repository });
   let conflictResetListener = () => {};
   let filterChangeListener = () => {};
   let lockListener = async () => {};
@@ -715,12 +719,27 @@ export async function initializeLocalVault({
     for (const button of snippetActions?.querySelectorAll("button") ?? []) button.disabled = active;
   }
 
-  function mode(value) {
-    workspace.hidden = value !== "unlocked";
-    waiting.hidden = value === "unlocked";
-    if (actions) actions.hidden = value !== "unlocked";
-    if (overviewNotice) overviewNotice.hidden = value === "unlocked";
-    if (value !== "unlocked") {
+  function mode(value, { allowReauthentication = false } = {}) {
+    const state = value === "waiting" ? "locked" : value;
+    if (!["uninitialized", "locked", "unlocked", "restoring", "error"].includes(state)) {
+      throw new Error("invalid_personal_vault_state");
+    }
+    section.dataset.vaultState = state;
+    workspace.hidden = state !== "unlocked";
+    waiting.hidden = state === "unlocked";
+    if (actions) actions.hidden = state !== "unlocked";
+    if (overviewNotice) overviewNotice.hidden = state === "unlocked";
+    const presentation = personalVaultStatePresentation(state);
+    if (presentation) {
+      setText(stateTitle, presentation.title);
+      setText(stateDescription, presentation.description);
+      const submit = reauthenticateForm?.querySelector('button[type="submit"]');
+      if (submit && presentation.action) setText(submit, presentation.action);
+    }
+    if (reauthenticateForm) {
+      reauthenticateForm.hidden = !allowReauthentication || !presentation?.action;
+    }
+    if (state !== "unlocked") {
       scopeGeneration += 1;
       resetEditor();
       resetSnippetBrowser({ lock: true });
@@ -1157,7 +1176,8 @@ export async function initializeLocalVault({
     setText(message, "Локальное защищённое хранилище недоступно в этом браузере.");
   }
   return {
-    controller,
+    get controller() { return controller; },
+    repository,
     mode,
     render,
     clearConflictUI,
@@ -1188,6 +1208,12 @@ export async function initializeLocalVault({
     },
     setLockListener(listener) {
       lockListener = typeof listener === "function" ? listener : async () => {};
+    },
+    useController(nextController) {
+      if (!nextController || typeof nextController.status !== "function") {
+        throw new Error("invalid_local_vault");
+      }
+      controller = nextController;
     },
     async restoreModeFromLocalStatus() {
       const status = await controller.status();
@@ -3534,6 +3560,74 @@ export function accountVaultPassphrase(password) {
   return `selective-remote:account-password:v1:${normalized}`;
 }
 
+export function resolveRestoredPersonalVaultState({ localStatus, remoteRevision, restored }) {
+  if (!["empty", "locked", "unlocked"].includes(localStatus)
+      || !Number.isSafeInteger(remoteRevision) || remoteRevision < 0
+      || typeof restored !== "boolean") {
+    throw new Error("invalid_personal_vault_state");
+  }
+  if (restored || localStatus === "unlocked") return "unlocked";
+  if (localStatus === "empty" && remoteRevision === 0) return "uninitialized";
+  return "locked";
+}
+
+export function personalVaultStatePresentation(state) {
+  return ({
+    uninitialized: {
+      title: "Personal Vault ещё не создан для этого аккаунта",
+      description: "Подтвердите пароль аккаунта, чтобы создать первый зашифрованный Vault.",
+      action: "Подтвердить пароль и создать Vault",
+    },
+    locked: {
+      title: "Personal Vault заблокирован",
+      description: "Подтвердите пароль аккаунта, чтобы открыть личные подключения.",
+      action: "Подтвердить пароль и открыть Vault",
+    },
+    restoring: {
+      title: "Восстанавливаем Personal Vault",
+      description: "Проверяем локальный ключ и зашифрованную Cloud-ревизию.",
+      action: null,
+    },
+    error: {
+      title: "Personal Vault временно недоступен",
+      description: "Сессия активна. Повторите подтверждение пароля или синхронизацию.",
+      action: "Повторить подтверждение пароля",
+    },
+    unlocked: null,
+  })[state] ?? null;
+}
+
+export async function bootstrapPersonalVault({
+  vault,
+  client,
+  passphrase,
+  synchronize = ({ recoveryPassphrase = null } = {}) => synchronizeVault({
+    client,
+    vault,
+    recoveryPassphrase,
+  }),
+}) {
+  if (!vault || !client || typeof passphrase !== "string") throw new Error("invalid_personal_vault_bootstrap");
+  let status = await vault.status();
+  if (status === "locked") {
+    try {
+      await vault.unlock(passphrase);
+    } catch (unlockError) {
+      const remote = await client.getVault();
+      if (remote.revision === 0) throw unlockError;
+      await vault.replaceLockedWithRemote(remote, passphrase);
+      return { status: "downloaded", revision: remote.revision };
+    }
+    status = "unlocked";
+  }
+  let result = await synchronize({ recoveryPassphrase: passphrase });
+  if (status === "empty" && result.status === "empty") {
+    await vault.create(passphrase);
+    result = await synchronize();
+  }
+  return result;
+}
+
 export function registrationAcceptedMessage() {
   return "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.";
 }
@@ -3546,7 +3640,7 @@ export async function initializeCloudAccount({
   initialTeamInvitationToken = null,
   onSessionChange = () => {},
 } = {}) {
-  const vault = vaultUI?.controller;
+  let vault = vaultUI?.controller;
   const section = documentValue.querySelector("#cloud-account");
   if (!section || !vault) return null;
   const form = documentValue.querySelector("#cloud-login-form");
@@ -3572,6 +3666,7 @@ export async function initializeCloudAccount({
   const deleteAccountForm = documentValue.querySelector("#account-delete-form");
   const deleteAccountMessage = documentValue.querySelector("#account-delete-message");
   const syncButton = documentValue.querySelector("#cloud-vault-sync");
+  const vaultReauthenticateForm = documentValue.querySelector("#local-vault-reauthenticate-form");
   const vaultMessage = documentValue.querySelector("#local-vault-message");
   const conflictPanel = documentValue.querySelector("#local-vault-conflicts");
   const conflictForm = documentValue.querySelector("#local-vault-conflicts-form");
@@ -3605,27 +3700,29 @@ export async function initializeCloudAccount({
     message.classList.toggle("success", tone === "success");
   }
 
+  async function activateAccountVault(user, passphrase = null) {
+    if (!user?.id || typeof vaultUI.repository?.forAccount !== "function") {
+      throw new Error("account_vault_storage_unavailable");
+    }
+    const prepared = await prepareAccountScopedVault({
+      accountID: user.id,
+      accountRepository: vaultUI.repository.forAccount(user.id),
+      legacyRepository: vaultUI.repository,
+      passphrase,
+    });
+    vault = prepared.vault;
+    vaultUI.useController(vault);
+    return prepared;
+  }
+
   async function unlockAndSyncPersonalVault(password) {
     const passphrase = accountVaultPassphrase(password);
-    let status = await vault.status();
-    if (status === "locked") {
-      try {
-        await vault.unlock(passphrase);
-      } catch (unlockError) {
-        const remote = await client.getVault();
-        if (remote.revision === 0) throw unlockError;
-        await vault.replaceLockedWithRemote(remote, passphrase);
-        vaultUI.mode("unlocked");
-        vaultUI.render();
-        return { status: "downloaded", revision: remote.revision };
-      }
-      status = "unlocked";
-    }
-    let result = await synchronizePersonalVault({ recoveryPassphrase: passphrase });
-    if (status === "empty" && result.status === "empty") {
-      await vault.create(passphrase);
-      result = await synchronizePersonalVault();
-    }
+    const result = await bootstrapPersonalVault({
+      vault,
+      client,
+      passphrase,
+      synchronize: ({ recoveryPassphrase = null } = {}) => synchronizePersonalVault({ recoveryPassphrase }),
+    });
     vaultUI.mode("unlocked");
     vaultUI.render();
     return result;
@@ -3902,11 +3999,12 @@ export async function initializeCloudAccount({
       try { await accountDevices.accepted(email, deviceID); } catch {}
       let personalVaultReady = false;
       try {
+        await activateAccountVault(user, accountVaultPassphrase(password));
         await unlockAndSyncPersonalVault(password);
         personalVaultReady = true;
         try { await vault.rememberSession(user.id); } catch {}
       } catch {
-        vaultUI.mode("waiting");
+        vaultUI.mode("error", { allowReauthentication: true });
       }
       if (identity) {
         try {
@@ -3946,6 +4044,46 @@ export async function initializeCloudAccount({
       };
       setAccountMessage(messages[code] ?? "Не удалось войти. Проверьте соединение и повторите попытку.", "error");
     } finally {
+      button.disabled = false;
+    }
+  });
+
+  vaultReauthenticateForm?.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const currentUser = client.session();
+    const button = vaultReauthenticateForm.querySelector('button[type="submit"]');
+    const password = vaultReauthenticateForm.elements.password.value;
+    if (!currentUser) return;
+    button.disabled = true;
+    vaultUI.mode("restoring");
+    try {
+      let identity = null;
+      try {
+        identity = await ensureTeamDeviceIdentity({ repository: teamDeviceRepository, deviceID: client.deviceID() });
+      } catch {
+        // Team keys are independent from Personal Vault reauthentication.
+      }
+      const user = await client.login({
+        email: currentUser.email,
+        password,
+        deviceID: client.deviceID(),
+        publicKey: identity?.publicKey ?? null,
+      });
+      await activateAccountVault(user, accountVaultPassphrase(password));
+      await unlockAndSyncPersonalVault(password);
+      try { await vault.rememberSession(user.id); } catch {}
+      showSession(user);
+      if (identity) {
+        try { await teamWorkspace?.activate(identity); } catch {}
+      }
+      setText(vaultMessage, "Personal Vault открыт паролем аккаунта и синхронизируется автоматически.");
+    } catch (error) {
+      vaultUI.mode("error", { allowReauthentication: true });
+      setText(vaultMessage, String(error?.message ?? "") === "invalid_credentials"
+        ? "Пароль не подтверждён. Сессия остаётся активной; Personal Vault не изменён."
+        : "Personal Vault не изменён. Повторите подтверждение пароля позже.");
+    } finally {
+      vaultReauthenticateForm.elements.password.value = "";
       button.disabled = false;
     }
   });
@@ -4093,8 +4231,8 @@ export async function initializeCloudAccount({
         setText(vaultMessage, "Сессия истекла. Войдите снова.");
       } else if (code === "recovery_passphrase_required") {
         hideConflicts();
-        vaultUI.mode("waiting");
-        setText(vaultMessage, "Personal Vault пока недоступен. Войдите в аккаунт ещё раз.");
+        vaultUI.mode("locked", { allowReauthentication: true });
+        setText(vaultMessage, "Сессия активна, но ключ Personal Vault не восстановлен. Подтвердите пароль или откройте другую доверенную вкладку.");
       } else {
         setText(vaultMessage, "Локальные данные сохранены. Синхронизация продолжится автоматически.");
       }
@@ -4129,7 +4267,8 @@ export async function initializeCloudAccount({
   try {
     const restoredUser = await client.restoreSession();
     showSession(restoredUser);
-    let restoredVault = await vault.status() === "unlocked";
+    const prepared = await activateAccountVault(restoredUser);
+    let restoredVault = prepared.restored || await vault.status() === "unlocked";
     if (!restoredVault) restoredVault = await vault.restoreRememberedSession(restoredUser.id);
     if (restoredVault) {
       vaultUI.mode("unlocked");
@@ -4137,9 +4276,17 @@ export async function initializeCloudAccount({
       setText(vaultMessage, "Personal Vault восстановлен на этом доверенном браузере. Синхронизируем изменения…");
       await backgroundPersonalVaultSync();
     } else {
-      vaultUI.mode("waiting");
-      setText(vaultMessage, "Personal Vault заблокирован. Ищем открытую вкладку этого аккаунта…");
-      await requestUnlockedVaultFromOtherTab();
+      const remote = await client.getVault();
+      const state = resolveRestoredPersonalVaultState({
+        localStatus: await vault.status(),
+        remoteRevision: remote.revision,
+        restored: false,
+      });
+      vaultUI.mode(state, { allowReauthentication: true });
+      setText(vaultMessage, state === "uninitialized"
+        ? "Сессия активна. Подтвердите пароль, чтобы создать первый зашифрованный Personal Vault."
+        : "Сессия активна, но ключ Personal Vault не восстановлен. Подтвердите пароль или откройте другую доверенную вкладку.");
+      if (state === "locked") await requestUnlockedVaultFromOtherTab();
     }
     let identity = null;
     try {
@@ -4151,8 +4298,13 @@ export async function initializeCloudAccount({
     setAccountMessage(identity
       ? "Сессия восстановлена. Team-раздел готов к работе."
       : "Сессия восстановлена. Для Team Vault может потребоваться одобрение устройства.", "success");
-  } catch {
-    showSession(null);
+  } catch (error) {
+    if (client.session()) {
+      vaultUI.mode("error", { allowReauthentication: true });
+      setText(vaultMessage, "Сессия активна, но состояние Personal Vault не удалось проверить.");
+    } else {
+      showSession(null);
+    }
   }
   return { client, showAuth: setAuthMode, teamWorkspace };
 }
