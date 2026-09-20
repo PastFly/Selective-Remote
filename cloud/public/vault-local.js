@@ -25,6 +25,7 @@ const sessionDeviceKey = "personal-session-device-key";
 const sessionUnlockKey = "personal-session-unlock";
 const sessionUnlockVersion = 1;
 const sessionUnlockContext = "selective-remote:personal-vault:browser-session:v1:";
+const accountVaultKeyPrefix = "personal-account:v1:";
 const accountDeviceDigestContext = "selective-remote/account-device-email/v1";
 const accountDeviceKeyPrefix = "account-device:v1:";
 const accountDeviceStateKeys = ["deviceID", "registrationAccepted"];
@@ -121,6 +122,17 @@ function normalizedAccountID(value) {
   return accountID;
 }
 
+export function accountVaultStorageKeys(accountValue) {
+  const accountID = normalizedAccountID(accountValue);
+  const prefix = `${accountVaultKeyPrefix}${accountID}:`;
+  return {
+    snapshot: `${prefix}snapshot`,
+    sync: `${prefix}sync`,
+    backup: `${prefix}previous`,
+    sessionUnlock: `${prefix}session-unlock`,
+  };
+}
+
 function byteArray(value, length, code) {
   if (!ArrayBuffer.isView(value) || value.BYTES_PER_ELEMENT !== 1 || value.byteLength !== length) {
     throw new Error(code);
@@ -193,27 +205,30 @@ async function transaction(indexedDBValue, mode, operation) {
   }
 }
 
-export function createIndexedDBVaultRepository(indexedDBValue = globalThis.indexedDB) {
+export function createIndexedDBVaultRepository(indexedDBValue = globalThis.indexedDB, { accountID = null } = {}) {
+  const keys = accountID === null
+    ? { snapshot: snapshotKey, sync: syncKey, backup: backupSnapshotKey, sessionUnlock: sessionUnlockKey }
+    : accountVaultStorageKeys(accountID);
   return {
     async load() {
-      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(snapshotKey));
+      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(keys.snapshot));
       return value === null || value === undefined ? null : clone(value);
     },
     async save(value) {
       const snapshot = validatedSnapshot(value);
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), snapshotKey));
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), keys.snapshot));
     },
     async savePrevious(value) {
       const snapshot = validatedSnapshot(value);
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), backupSnapshotKey));
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(snapshot), keys.backup));
     },
     async loadSync() {
-      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(syncKey));
+      const value = await transaction(indexedDBValue, "readonly", (store) => store.get(keys.sync));
       return value === null || value === undefined ? null : validatedSyncMetadata(value);
     },
     async saveSync(value) {
       const metadata = validatedSyncMetadata(value);
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(metadata), syncKey));
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(clone(metadata), keys.sync));
     },
     async loadDeviceID() {
       const value = await transaction(indexedDBValue, "readonly", (store) => store.get(deviceKey));
@@ -293,15 +308,74 @@ export function createIndexedDBVaultRepository(indexedDBValue = globalThis.index
       await transaction(indexedDBValue, "readwrite", (store) => store.put(value, sessionDeviceKey));
     },
     async loadSessionUnlock() {
-      return transaction(indexedDBValue, "readonly", (store) => store.get(sessionUnlockKey));
+      return transaction(indexedDBValue, "readonly", (store) => store.get(keys.sessionUnlock));
     },
     async saveSessionUnlock(value) {
-      await transaction(indexedDBValue, "readwrite", (store) => store.put(value, sessionUnlockKey));
+      await transaction(indexedDBValue, "readwrite", (store) => store.put(value, keys.sessionUnlock));
     },
     async deleteSessionUnlock() {
-      await transaction(indexedDBValue, "readwrite", (store) => store.delete(sessionUnlockKey));
+      await transaction(indexedDBValue, "readwrite", (store) => store.delete(keys.sessionUnlock));
+    },
+    forAccount(accountValue) {
+      return createIndexedDBVaultRepository(indexedDBValue, { accountID: normalizedAccountID(accountValue) });
     },
   };
+}
+
+export async function prepareAccountScopedVault({
+  accountID,
+  accountRepository,
+  legacyRepository,
+  passphrase = null,
+  cryptoValue = globalThis.crypto,
+  now = () => new Date().toISOString(),
+  randomUUID = () => cryptoValue.randomUUID(),
+} = {}) {
+  const normalizedID = normalizedAccountID(accountID);
+  if (!accountRepository || !legacyRepository) throw new Error("invalid_local_vault_repository");
+  let vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID });
+  const accountStatus = await vault.status();
+  if (accountStatus !== "empty") {
+    const restored = passphrase === null
+      ? await vault.restoreRememberedSession(normalizedID)
+      : false;
+    return { vault, legacyMigrated: false, restored };
+  }
+
+  const legacySnapshot = await legacyRepository.load();
+  if (!legacySnapshot) return { vault, legacyMigrated: false, restored: false };
+  const legacyVault = createLocalVaultController({ repository: legacyRepository, cryptoValue, now, randomUUID });
+  let restored = false;
+  if (passphrase !== null) {
+    try {
+      await legacyVault.unlock(passphrase);
+      restored = true;
+    } catch {
+      return { vault, legacyMigrated: false, restored: false };
+    }
+  } else {
+    const remembered = typeof legacyRepository.loadSessionUnlock === "function"
+      ? await legacyRepository.loadSessionUnlock()
+      : null;
+    if (!remembered || String(remembered.accountID ?? "").toLowerCase() !== normalizedID) {
+      return { vault, legacyMigrated: false, restored: false };
+    }
+    restored = await legacyVault.restoreRememberedSession(normalizedID);
+    if (!restored) return { vault, legacyMigrated: false, restored: false };
+  }
+
+  await accountRepository.save(legacySnapshot);
+  if (typeof legacyRepository.loadSync === "function" && typeof accountRepository.saveSync === "function") {
+    const sync = await legacyRepository.loadSync();
+    if (sync) await accountRepository.saveSync(sync);
+  }
+  vault = createLocalVaultController({ repository: accountRepository, cryptoValue, now, randomUUID });
+  if (passphrase !== null) await vault.unlock(passphrase);
+  else {
+    await vault.unlockWithSessionKey(legacyVault.sessionKey());
+    await vault.rememberSession(normalizedID);
+  }
+  return { vault, legacyMigrated: true, restored };
 }
 
 export function createAccountDeviceCoordinator({

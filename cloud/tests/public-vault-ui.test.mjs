@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { createLocalVaultController } from "../public/vault-local.js";
 import {
   accountVaultPassphrase,
   appearancePreference,
+  bootstrapPersonalVault,
   finishPortalBootstrap,
   formatVaultSynchronizationSummary,
   formatVaultTimestamp,
@@ -15,7 +18,9 @@ import {
   localVaultRecordSummary,
   maintainAccessibleTeamVaultWrappers,
   preprovisionTeamInvitationWrappers,
+  resolveRestoredPersonalVaultState,
   parseTeamHostConnection,
+  personalVaultStatePresentation,
   personalHostEditorValues,
   personalHostFolderName,
   personalHostRecordData,
@@ -27,6 +32,116 @@ import {
   teamVaultRecoveryMode,
   vaultResourceDetail,
 } from "../public/app.js";
+
+function memoryVaultRepository() {
+  let snapshot = null;
+  let sync = null;
+  let deviceID = null;
+  return {
+    async load() { return snapshot ? structuredClone(snapshot) : null; },
+    async save(value) { snapshot = structuredClone(value); },
+    async loadSync() { return sync ? structuredClone(sync) : null; },
+    async saveSync(value) { sync = structuredClone(value); },
+    async loadDeviceID() { return deviceID; },
+    async saveDeviceID(value) { deviceID = value; },
+  };
+}
+
+function testVault(repository, ids) {
+  let index = 0;
+  return createLocalVaultController({
+    repository,
+    cryptoValue: webcrypto,
+    randomUUID: () => ids[index++],
+    now: () => "2026-09-21T00:00:00.000Z",
+  });
+}
+
+test("restored authenticated sessions distinguish uninitialized, locked, and unlocked Vaults", () => {
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "empty", remoteRevision: 0, restored: false }), "uninitialized");
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 0, restored: false }), "locked");
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 3, restored: false }), "locked");
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "unlocked", remoteRevision: 3, restored: true }), "unlocked");
+  assert.throws(
+    () => resolveRestoredPersonalVaultState({ localStatus: "empty", remoteRevision: -1, restored: false }),
+    /invalid_personal_vault_state/u,
+  );
+});
+
+test("interactive browser bootstrap creates exactly one encrypted r1 for an uninitialized account", async () => {
+  const passphrase = accountVaultPassphrase("account B password is long enough");
+  const vault = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
+  let remote = { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null };
+  let uploads = 0;
+  const client = {
+    session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() { return structuredClone(remote); },
+    async putVault(_scope, envelope) {
+      uploads += 1;
+      assert.equal(envelope.baseRevision, 0);
+      assert.equal(JSON.stringify(envelope).includes("account B password"), false);
+      remote = { ...remote, revision: 1, envelope };
+      return { conflict: false, revision: 1 };
+    },
+  };
+
+  const result = await bootstrapPersonalVault({ vault, client, passphrase });
+
+  assert.equal(result.status, "uploaded");
+  assert.equal(result.revision, 1);
+  assert.equal(uploads, 1);
+  assert.equal(await vault.status(), "unlocked");
+});
+
+test("an existing remote Vault is imported instead of being replaced with an empty r1", async () => {
+  const passphrase = accountVaultPassphrase("account B password is long enough");
+  const source = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
+  await source.create(passphrase);
+  await source.upsert({ type: "host", data: { title: "Remote", address: "remote.invalid" } });
+  const prepared = await source.prepareUpload(4);
+  const target = testVault(memoryVaultRepository(), ["22222222-2222-4222-8222-222222222222"]);
+  const client = {
+    session: () => ({ id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }),
+    async getVault() {
+      return { id: "99999999-9999-4999-8999-999999999999", revision: 5, envelope: prepared.envelope };
+    },
+    async putVault() { throw new Error("unexpected_empty_vault_upload"); },
+  };
+
+  const result = await bootstrapPersonalVault({ vault: target, client, passphrase });
+
+  assert.deepEqual(result, { status: "downloaded", revision: 5 });
+  assert.equal(target.document().records[0].data.address, "remote.invalid");
+});
+
+test("Personal Vault state copy distinguishes authentication from encryption in RU and EN", async () => {
+  const [html, i18n] = await Promise.all([
+    readFile(new URL("../public/index.html", import.meta.url), "utf8"),
+    readFile(new URL("../public/i18n.js", import.meta.url), "utf8"),
+  ]);
+  assert.match(html, /id="local-vault-state-title"/u);
+  assert.match(html, /id="local-vault-reauthenticate-form"/u);
+  assert.match(html, /Подтвердить пароль и создать Vault/u);
+  assert.deepEqual(personalVaultStatePresentation("uninitialized"), {
+    title: "Personal Vault ещё не создан для этого аккаунта",
+    description: "Подтвердите пароль аккаунта, чтобы создать первый зашифрованный Vault.",
+    action: "Подтвердить пароль и создать Vault",
+  });
+  assert.equal(personalVaultStatePresentation("unlocked"), null);
+  assert.match(i18n, /Personal Vault has not been created for this account yet/u);
+  assert.match(i18n, /Confirm password and create Vault/u);
+  assert.match(i18n, /Confirm password and open Vault/u);
+  assert.match(i18n, /Restoring Personal Vault/u);
+  assert.match(i18n, /Personal Vault is temporarily unavailable/u);
+});
+
+test("browser password change rewraps Personal Vault before changing the authentication password", {
+  todo: "password change rewrap is an approved follow-up outside this PR",
+}, async () => {
+  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const handler = application.match(/passwordForm\.addEventListener\("submit"[\s\S]*?deleteAccountForm\.addEventListener/u)?.[0] ?? "";
+  assert.match(handler, /vault\.rewrap/u);
+});
 
 test("account password is domain-separated before it unlocks Personal Vault", () => {
   assert.equal(
@@ -499,8 +614,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=188">/u);
-  assert.match(html, /\/app\.js\?v=188/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=190">/u);
+  assert.match(html, /\/app\.js\?v=190/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -670,8 +785,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=188/u);
-  assert.match(html, /app\.js\?v=188/u);
+  assert.match(html, /styles\.css\?v=190/u);
+  assert.match(html, /app\.js\?v=190/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -821,6 +936,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.ok(styles.includes(':root[data-theme="light"] .team-section-tabs button:not(.active)'));
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
   assert.match(application, /createAuthenticatedVaultClient/u);
+  assert.match(application, /prepareAccountScopedVault/u);
+  assert.match(application, /vaultUI\.repository\.forAccount\(user\.id\)/u);
+  assert.match(application, /activateAccountVault\(restoredUser\)/u);
   assert.match(application, /synchronizeVault/u);
   assert.match(application, /unlockAndSyncPersonalVault\(password\)/u);
   assert.match(application, /backgroundPersonalVaultSync/u);
@@ -838,7 +956,9 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /replaceLockedWithRemote/u);
   assert.match(application, /Personal Vault открыт паролем аккаунта/u);
   assert.doesNotMatch(application, /Legacy Personal Vault|Recovery-фраза|секретная фраза/iu);
-  assert.match(application, /vaultUI\.mode\("waiting"\)/u);
+  assert.match(application, /vaultUI\.mode\("locked", \{ allowReauthentication: true \}\)/u);
+  assert.match(html, /id="local-vault-reauthenticate-form"/u);
+  assert.match(styles, /\.vault-bootstrap-form/u);
   assert.doesNotMatch(application, /vaultUI\.showRecovery\(\)/u);
   assert.match(application, /ensureTeamDeviceIdentity/u);
   assert.match(application, /synchronizeTeamVault/u);
@@ -856,8 +976,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=188/u);
-  assert.match(html, /styles\.css\?v=188/u);
+  assert.match(html, /app\.js\?v=190/u);
+  assert.match(html, /styles\.css\?v=190/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
