@@ -79,7 +79,12 @@
     "Всё нужное — в одном защищённом пространстве": "Everything you need in one secure workspace",
     "Интерактивная демонстрация возможностей": "Interactive feature demo",
     "Личные и Team": "Personal and Team",
-    "Команды": "Commands",
+    "Команды": "Teams",
+    "Команды и скрипты": "Commands and scripts",
+    "Текст Snippet": "Snippet text",
+    "Ещё": "More",
+    "Дополнительная навигация Cloud": "Additional Cloud navigation",
+    "Язык": "Language",
     "Под вашим контролем": "Under your control",
     "Открыть": "Open",
     "← Обзор": "← Overview",
@@ -488,6 +493,7 @@
     "Запись текущего Vault": "Current Vault record",
     "В журнале пока нет событий.": "There are no activity events yet.",
     "Выберите команду.": "Select a team.",
+    "Выберите команду": "Select a team",
     "Загружаем журнал активности без содержимого секретов…": "Loading activity without secret contents…",
     "Журнал активности загружен. Содержимое Vault и секреты в него не входят.": "Activity loaded. Vault contents and secrets are not included.",
     "Не удалось загрузить журнал активности.": "Could not load the activity log.",
@@ -833,6 +839,7 @@
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.locale = value;
+      button.dataset.localeBound = "true";
       button.textContent = value.toUpperCase();
       button.setAttribute("aria-pressed", String(locale === value));
       button.addEventListener("click", () => setLocale(value));
@@ -863,6 +870,10 @@
       control.setAttribute("aria-label", locale === "ru" ? "Язык" : "Language");
       for (const button of control.querySelectorAll("[data-locale]")) {
         button.setAttribute("aria-pressed", String(button.dataset.locale === locale));
+        if (button.dataset.localeBound !== "true") {
+          button.dataset.localeBound = "true";
+          button.addEventListener("click", () => setLocale(button.dataset.locale));
+        }
       }
     }
   }

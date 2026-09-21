@@ -112,7 +112,7 @@
               <div class="hero-preview-grid" role="tablist" aria-label="Интерактивная демонстрация возможностей">
                 <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="hosts"><i>12</i><strong>Hosts</strong><small>RDP и SSH</small><b>Открыть <span aria-hidden="true">→</span></b></button>
                 <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="credentials"><i>8</i><strong>Credentials</strong><small>Личные и Team</small><b>Открыть <span aria-hidden="true">→</span></b></button>
-                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="snippets"><i>24</i><strong>Snippets</strong><small>Команды</small><b>Открыть <span aria-hidden="true">→</span></b></button>
+                <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="snippets"><i>24</i><strong>Snippets</strong><small>Команды и скрипты</small><b>Открыть <span aria-hidden="true">→</span></b></button>
                 <button type="button" role="tab" aria-selected="false" aria-controls="hero-preview-stage" data-hero-preview-scene="devices"><i>3</i><strong>Devices</strong><small>Под вашим контролем</small><b>Открыть <span aria-hidden="true">→</span></b></button>
               </div>
             </div>
@@ -483,41 +483,23 @@
             <h3 id="local-record-editor-title">Новая запись</h3>
             <p id="local-record-editor-hint">Выберите тип и заполните поля. Всё шифруется в браузере.</p>
           </div>
-          <label for="local-record-type">Тип записи</label>
-          <select id="local-record-type" name="type">
-            <option value="host">Host</option>
-            <option value="credential">Credential</option>
-            <option value="snippet">Snippet</option>
-            <option value="forwarding">Forwarding</option>
-          </select>
-          <label for="local-record-title">Название</label>
-          <input id="local-record-title" name="title" maxlength="120" required>
-          <label for="local-record-target" id="local-record-target-label">Адрес</label>
-          <input id="local-record-target" name="target" maxlength="2048">
-          <label for="local-snippet-folder" id="local-snippet-folder-label" hidden>Папка сниппета</label>
-          <div class="field-with-help" id="local-snippet-folder-field" hidden>
-            <input id="local-snippet-folder" name="snippetFolder" maxlength="120" list="local-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="local-snippet-folder-help">
-            <datalist id="local-snippet-folder-options"></datalist>
+          <div class="record-field-row"><label for="local-record-type">Тип записи</label><div class="record-control-stack"><select id="local-record-type" name="type">
+            <option value="host">Host</option><option value="credential">Credential</option><option value="snippet">Snippet</option><option value="forwarding">Forwarding</option>
+          </select></div></div>
+          <div class="record-field-row"><label for="local-record-title">Название</label><div class="record-control-stack"><input id="local-record-title" name="title" maxlength="120" required></div></div>
+          <div class="record-field-row" id="local-record-target-row" data-record-field="target"><label for="local-record-target" id="local-record-target-label">Адрес</label><div class="record-control-stack"><input id="local-record-target" name="target" maxlength="2048"></div></div>
+          <div class="record-field-row" id="local-snippet-folder-row" data-record-field="snippet-folder" hidden><label for="local-snippet-folder">Папка сниппета</label><div class="record-control-stack field-with-help" id="local-snippet-folder-field">
+            <input id="local-snippet-folder" name="snippetFolder" maxlength="120" list="local-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="local-snippet-folder-help"><datalist id="local-snippet-folder-options"></datalist>
             <small class="field-help" id="local-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small>
-          </div>
-          <label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label>
-          <div class="field-with-help"><textarea id="local-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="local-record-secret-help"></textarea><small id="local-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.</small></div>
+          </div></div>
+          <div class="record-field-row" id="local-record-secret-row" data-record-field="secret"><label for="local-record-secret" id="local-record-secret-label">Дополнительные данные не требуются</label><div class="record-control-stack field-with-help"><textarea id="local-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="local-record-secret-help"></textarea><small id="local-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.</small></div></div>
           <div class="personal-host-fields" id="personal-host-fields">
-            <label for="local-host-protocol">Протокол</label>
-            <select id="local-host-protocol" name="protocol">
-              <option value="ssh">SSH</option><option value="rdp">RDP</option>
-              <option value="telnet">Telnet</option><option value="serial">Serial</option>
-            </select>
-            <label for="local-host-port">Порт</label>
-            <input id="local-host-port" name="port" type="number" min="1" max="65535" value="22">
-            <label for="local-host-username">Логин</label>
-            <input id="local-host-username" name="username" maxlength="256" autocomplete="username">
-            <label for="local-host-folder">Папка</label>
-            <input id="local-host-folder" name="folder" maxlength="120" placeholder="Например, Работа/Production">
-            <label for="local-host-tags">Теги</label>
-            <input id="local-host-tags" name="tags" maxlength="512" placeholder="linux, production, eu-west">
-            <label for="local-host-description">Описание</label>
-            <textarea id="local-host-description" name="description" maxlength="2048" rows="3"></textarea>
+            <div class="record-field-row"><label for="local-host-protocol">Протокол</label><div class="record-control-stack"><select id="local-host-protocol" name="protocol"><option value="ssh">SSH</option><option value="rdp">RDP</option><option value="telnet">Telnet</option><option value="serial">Serial</option></select></div></div>
+            <div class="record-field-row"><label for="local-host-port">Порт</label><div class="record-control-stack"><input id="local-host-port" name="port" type="number" min="1" max="65535" value="22"></div></div>
+            <div class="record-field-row"><label for="local-host-username">Логин</label><div class="record-control-stack"><input id="local-host-username" name="username" maxlength="256" autocomplete="username"></div></div>
+            <div class="record-field-row"><label for="local-host-folder">Папка</label><div class="record-control-stack"><input id="local-host-folder" name="folder" maxlength="120" placeholder="Например, Работа/Production"></div></div>
+            <div class="record-field-row"><label for="local-host-tags">Теги</label><div class="record-control-stack"><input id="local-host-tags" name="tags" maxlength="512" placeholder="linux, production, eu-west"></div></div>
+            <div class="record-field-row"><label for="local-host-description">Описание</label><div class="record-control-stack"><textarea id="local-host-description" name="description" maxlength="2048" rows="3"></textarea></div></div>
           </div>
           <div class="record-form-actions">
             <button type="submit" id="local-record-save">Зашифровать и сохранить</button>
@@ -909,43 +891,20 @@
           <dialog class="record-editor-dialog team-record-editor" id="team-record-editor" aria-labelledby="team-record-editor-summary">
             <div class="record-editor-heading"><div><p class="eyebrow">TEAM VAULT · E2EE</p><h3 id="team-record-editor-summary">Добавить запись</h3></div></div>
           <form class="record-form" id="team-vault-record-form">
-            <label for="team-record-type">Тип записи</label>
-            <select id="team-record-type" name="type">
-              <option value="host">Host</option>
-              <option value="credential">Credential</option>
-              <option value="snippet">Snippet</option>
-              <option value="forwarding">Forwarding</option>
-            </select>
-            <label for="team-record-title">Название</label>
-            <input id="team-record-title" name="title" maxlength="120" required>
-            <label for="team-record-target" id="team-record-target-label">Адрес</label>
-            <input id="team-record-target" name="target" maxlength="2048">
-            <label for="team-snippet-folder" id="team-snippet-folder-label" hidden>Папка сниппета</label>
-            <div class="field-with-help" id="team-snippet-folder-field" hidden>
-              <input id="team-snippet-folder" name="snippetFolder" maxlength="120" list="team-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="team-snippet-folder-help">
-              <datalist id="team-snippet-folder-options"></datalist>
-              <small class="field-help" id="team-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small>
-            </div>
-            <label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label>
-            <div class="field-with-help"><textarea id="team-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="team-record-secret-help"></textarea><small id="team-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется на устройстве до отправки.</small></div>
+            <div class="record-field-row"><label for="team-record-type">Тип записи</label><div class="record-control-stack"><select id="team-record-type" name="type"><option value="host">Host</option><option value="credential">Credential</option><option value="snippet">Snippet</option><option value="forwarding">Forwarding</option></select></div></div>
+            <div class="record-field-row"><label for="team-record-title">Название</label><div class="record-control-stack"><input id="team-record-title" name="title" maxlength="120" required></div></div>
+            <div class="record-field-row" id="team-record-target-row" data-record-field="target"><label for="team-record-target" id="team-record-target-label">Адрес</label><div class="record-control-stack"><input id="team-record-target" name="target" maxlength="2048"></div></div>
+            <div class="record-field-row" id="team-snippet-folder-row" data-record-field="snippet-folder" hidden><label for="team-snippet-folder">Папка сниппета</label><div class="record-control-stack field-with-help" id="team-snippet-folder-field"><input id="team-snippet-folder" name="snippetFolder" maxlength="120" list="team-snippet-folder-options" placeholder="Например, Production/Deploy" aria-describedby="team-snippet-folder-help"><datalist id="team-snippet-folder-options"></datalist><small class="field-help" id="team-snippet-folder-help">Выберите папку или задайте вложенный путь через /. Пустое поле — без папки.</small></div></div>
+            <div class="record-field-row" id="team-record-secret-row" data-record-field="secret"><label for="team-record-secret" id="team-record-secret-label">Дополнительные данные не требуются</label><div class="record-control-stack field-with-help"><textarea id="team-record-secret" name="secret" maxlength="32768" rows="3" aria-describedby="team-record-secret-help"></textarea><small id="team-record-secret-help" class="field-help">Пароль, токен или ключ. Значение шифруется на устройстве до отправки.</small></div></div>
             <div class="team-host-fields" id="team-host-fields">
-              <label for="team-host-protocol">Протокол</label>
-              <select id="team-host-protocol" name="protocol"><option value="ssh">SSH</option><option value="rdp">RDP</option></select>
-              <label for="team-host-port">Порт</label>
-              <input id="team-host-port" name="port" type="number" min="1" max="65535" value="22" required>
-              <label for="team-host-username">Логин</label>
-              <input id="team-host-username" name="username" maxlength="256" autocomplete="username">
-              <label for="team-host-password">Пароль</label>
-              <input id="team-host-password" name="password" type="password" maxlength="16384" autocomplete="new-password" placeholder="Пусто — оставить существующий пароль">
-              <label for="team-host-remove-password">Удалить пароль</label>
-              <input id="team-host-remove-password" name="removePassword" type="checkbox">
-              <label for="team-host-folder">Папка</label>
-              <input id="team-host-folder" name="folder" maxlength="120" list="team-host-folder-options" placeholder="Например, Production">
-              <datalist id="team-host-folder-options"></datalist>
-              <label for="team-host-tags">Теги</label>
-              <input id="team-host-tags" name="tags" maxlength="512" placeholder="linux, billing, eu-west">
-              <label for="team-host-description">Описание</label>
-              <textarea id="team-host-description" name="description" maxlength="2048" rows="2" placeholder="Назначение и примечания для команды"></textarea>
+              <div class="record-field-row"><label for="team-host-protocol">Протокол</label><div class="record-control-stack"><select id="team-host-protocol" name="protocol"><option value="ssh">SSH</option><option value="rdp">RDP</option></select></div></div>
+              <div class="record-field-row"><label for="team-host-port">Порт</label><div class="record-control-stack"><input id="team-host-port" name="port" type="number" min="1" max="65535" value="22" required></div></div>
+              <div class="record-field-row"><label for="team-host-username">Логин</label><div class="record-control-stack"><input id="team-host-username" name="username" maxlength="256" autocomplete="username"></div></div>
+              <div class="record-field-row"><label for="team-host-password">Пароль</label><div class="record-control-stack"><input id="team-host-password" name="password" type="password" maxlength="16384" autocomplete="new-password" placeholder="Пусто — оставить существующий пароль"></div></div>
+              <div class="record-field-row"><label for="team-host-remove-password">Удалить пароль</label><div class="record-control-stack"><input id="team-host-remove-password" name="removePassword" type="checkbox"></div></div>
+              <div class="record-field-row"><label for="team-host-folder">Папка</label><div class="record-control-stack"><input id="team-host-folder" name="folder" maxlength="120" list="team-host-folder-options" placeholder="Например, Production"><datalist id="team-host-folder-options"></datalist></div></div>
+              <div class="record-field-row"><label for="team-host-tags">Теги</label><div class="record-control-stack"><input id="team-host-tags" name="tags" maxlength="512" placeholder="linux, billing, eu-west"></div></div>
+              <div class="record-field-row"><label for="team-host-description">Описание</label><div class="record-control-stack"><textarea id="team-host-description" name="description" maxlength="2048" rows="2" placeholder="Назначение и примечания для команды"></textarea></div></div>
             </div>
             <div class="record-form-actions">
               <button type="submit">Зашифровать локально</button>
@@ -1016,7 +975,7 @@
           <button type="button" class="active" data-workspace-target="workspace-overview" data-mobile-nav><span aria-hidden="true">⌂</span>Обзор</button>
           <button type="button" data-workspace-target="local-vault" data-record-filter="all" data-mobile-nav><span aria-hidden="true">⌁</span>Vault</button>
           <button type="button" data-workspace-target="team-vault" data-mobile-nav><span aria-hidden="true">◎</span>Команды</button>
-          <button type="button" id="workspace-mobile-account-open"><span aria-hidden="true">◉</span>Аккаунт</button>
+          <button type="button" id="workspace-mobile-account-open"><span aria-hidden="true">•••</span>Ещё</button>
         </nav>
       </div>
     </section>
@@ -1038,6 +997,12 @@
     <form method="dialog" class="mobile-account-card">
       <div class="command-palette-heading"><div><p class="eyebrow">CLOUD ACCOUNT</p><h3 id="workspace-mobile-account-title">Аккаунт</h3></div><button type="submit" class="secondary" aria-label="Закрыть">Закрыть</button></div>
       <p id="workspace-mobile-account-name"></p>
+      <nav class="mobile-account-navigation" aria-label="Дополнительная навигация Cloud">
+        <button type="button" data-workspace-target="workspace-devices"><span aria-hidden="true">◇</span>Устройства</button>
+        <button type="button" data-workspace-target="workspace-settings"><span aria-hidden="true">⚙</span>Настройки</button>
+        <button type="button" data-workspace-target="workspace-about"><span aria-hidden="true">ⓘ</span>О проекте</button>
+      </nav>
+      <div class="locale-switch" data-locale-switch="mobile-account" role="group" aria-label="Язык"><button type="button" data-locale="ru" aria-pressed="true">RU</button><button type="button" data-locale="en" aria-pressed="false">EN</button></div>
       <label class="theme-control"><span>Оформление</span><select data-theme-select aria-label="Тема оформления"><option value="graphite">Графит</option><option value="emerald">Изумруд</option><option value="light">Светлая</option></select></label>
       <button type="button" class="danger" id="workspace-mobile-logout">Выйти из Cloud</button>
     </form>
