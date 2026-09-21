@@ -111,20 +111,102 @@ export function localVaultRecordFormValues(record) {
   throw new Error("invalid_local_record");
 }
 
-export function formatVaultTimestamp(value, { locales, timeZone } = {}) {
+function activeInterfaceLocale(locale) {
+  const candidate = String(locale ?? globalThis.document?.documentElement?.lang ?? "ru").toLocaleLowerCase();
+  return candidate.startsWith("en") ? "en" : "ru";
+}
+
+export function formatVaultTimestamp(value, { locale, locales, timeZone } = {}) {
   const date = new Date(String(value ?? ""));
   if (Number.isNaN(date.getTime())) return "—";
-  return new Intl.DateTimeFormat(locales, {
+  const interfaceLocale = activeInterfaceLocale(locale ?? locales);
+  return new Intl.DateTimeFormat(locales ?? (interfaceLocale === "en" ? "en-US" : "ru-RU"), {
     dateStyle: "medium", timeStyle: "medium", ...(timeZone ? { timeZone } : {}),
   }).format(date);
 }
 
 export function formatVaultSynchronizationSummary(revision, at = new Date().toISOString(), options = {}) {
+  const locale = activeInterfaceLocale(options.locale ?? options.locales);
+  const prefix = locale === "en" ? "Last synchronized" : "Последняя синхронизация";
   const normalizedRevision = Number(revision);
   if (!Number.isSafeInteger(normalizedRevision) || normalizedRevision < 0) {
-    return "Последняя синхронизация: —";
+    return `${prefix}: —`;
   }
-  return `Последняя синхронизация: ${formatVaultTimestamp(at, options)} · r${normalizedRevision}.`;
+  return `${prefix}: ${formatVaultTimestamp(at, { ...options, locale })} · r${normalizedRevision}.`;
+}
+
+export function setVaultSynchronizationMessage(element, {
+  documentValue = element?.ownerDocument ?? globalThis.document,
+  message = "",
+  revision,
+  at = new Date().toISOString(),
+  locale,
+  timeZone,
+} = {}) {
+  setText(element, message);
+  if (!element || !Number.isSafeInteger(Number(revision)) || Number(revision) < 0) return false;
+  const summary = documentValue.createElement("span");
+  summary.dataset.vaultSyncSummary = "true";
+  summary.dataset.revision = String(revision);
+  summary.dataset.synchronizedAt = String(at);
+  if (timeZone) summary.dataset.timeZone = timeZone;
+  setText(summary, formatVaultSynchronizationSummary(revision, at, { locale, timeZone }));
+  element.append(message ? " " : "", summary);
+  return true;
+}
+
+export function refreshVaultSynchronizationMessage(element, { locale, timeZone } = {}) {
+  const summary = element?.querySelector?.("[data-vault-sync-summary]");
+  if (!summary) return false;
+  setText(summary, formatVaultSynchronizationSummary(
+    Number(summary.dataset.revision),
+    summary.dataset.synchronizedAt,
+    { locale, timeZone: timeZone ?? (summary.dataset.timeZone || undefined) },
+  ));
+  return true;
+}
+
+export function recordFormFieldVisibility(type) {
+  return {
+    target: type !== "snippet",
+    secret: type !== "host",
+    hostFields: type === "host",
+    snippetFolder: type === "snippet",
+  };
+}
+
+const WORKSPACE_COMMANDS = Object.freeze([
+  { id: "overview", route: "/app", target: "workspace-overview", labels: { ru: "Обзор", en: "Overview" }, aliases: ["обзор", "overview", "home", "главная"] },
+  { id: "personal-vault", route: "/app/personal-vault", target: "local-vault", recordFilter: "all", labels: { ru: "Personal Vault", en: "Personal Vault" }, aliases: ["personal vault", "личный vault"] },
+  { id: "hosts", route: "/app/hosts", target: "local-vault", recordFilter: "host", labels: { ru: "Хосты", en: "Hosts" }, aliases: ["хосты", "hosts", "host"] },
+  { id: "snippets", route: "/app/snippets", target: "local-vault", recordFilter: "snippet", labels: { ru: "Сниппеты", en: "Snippets" }, aliases: ["сниппеты", "snippets", "commands"] },
+  { id: "credentials", route: "/app/credentials", target: "local-vault", recordFilter: "credential", labels: { ru: "Учётные данные", en: "Credentials" }, aliases: ["учётные данные", "credentials", "логины"] },
+  { id: "forwarding", route: "/app/forwarding", target: "local-vault", recordFilter: "forwarding", labels: { ru: "Forwarding", en: "Forwarding" }, aliases: ["forwarding", "проброс"] },
+  { id: "teams", route: "/app/teams", target: "team-vault", teamView: "teams", labels: { ru: "Команды", en: "Teams" }, aliases: ["команды", "teams", "team"] },
+  { id: "team-members", route: "/app/team-members", target: "team-vault", teamView: "members", labels: { ru: "Участники команд", en: "Team members" }, aliases: ["участники", "team members", "members"] },
+  { id: "team-activity", route: "/app/team-activity", target: "team-vault", teamView: "activity", labels: { ru: "Журнал активности", en: "Activity log" }, aliases: ["журнал активности", "activity log", "audit"] },
+  { id: "devices", route: "/app/devices", target: "workspace-devices", labels: { ru: "Устройства", en: "Devices" }, aliases: ["устройства", "devices", "device"] },
+  { id: "settings", route: "/app/settings", target: "workspace-settings", labels: { ru: "Настройки", en: "Settings" }, aliases: ["настройки", "settings", "preferences"] },
+  { id: "about", route: "/app/about", target: "workspace-about", labels: { ru: "О проекте", en: "About" }, aliases: ["о проекте", "about", "information"] },
+]);
+
+export function workspaceCommands(locale = "ru") {
+  const normalizedLocale = activeInterfaceLocale(locale);
+  return WORKSPACE_COMMANDS.map((command) => ({
+    id: command.id,
+    route: command.route,
+    target: command.target,
+    recordFilter: command.recordFilter ?? null,
+    teamView: command.teamView ?? null,
+    label: command.labels[normalizedLocale],
+    aliases: [...command.aliases],
+  }));
+}
+
+export function filterWorkspaceCommands(query, locale = "ru") {
+  const normalizedQuery = String(query ?? "").trim().toLocaleLowerCase();
+  return workspaceCommands(locale).filter((command) => !normalizedQuery
+    || [command.label, ...command.aliases].join(" ").toLocaleLowerCase().includes(normalizedQuery));
 }
 
 export function sortLocalVaultRecords(records, mode = "modified-desc") {
@@ -526,6 +608,9 @@ export async function initializeLocalVault({
   const secret = documentValue.querySelector("#local-record-secret");
   const targetLabel = documentValue.querySelector("#local-record-target-label");
   const secretLabel = documentValue.querySelector("#local-record-secret-label");
+  const targetRow = documentValue.querySelector("#local-record-target-row");
+  const secretRow = documentValue.querySelector("#local-record-secret-row");
+  const snippetFolderRow = documentValue.querySelector("#local-snippet-folder-row");
   const hostFields = documentValue.querySelector("#personal-host-fields");
   const hostProtocol = documentValue.querySelector("#local-host-protocol");
   const hostPort = documentValue.querySelector("#local-host-port");
@@ -760,28 +845,25 @@ export async function initializeLocalVault({
     const [targetText, secretText] = labels[type.value] ?? labels.host;
     setText(targetLabel, targetText);
     setText(secretLabel, secretText);
-    const isSnippet = type.value === "snippet";
-    documentValue.querySelector("#local-snippet-folder-label").hidden = !isSnippet;
-    documentValue.querySelector("#local-snippet-folder-field").hidden = !isSnippet;
-    snippetFolder.disabled = !isSnippet || conflictMode;
-    secret.rows = isSnippet ? 6 : 3;
-    setText(documentValue.querySelector("#local-record-secret-help"), isSnippet
+    const visibility = recordFormFieldVisibility(type.value);
+    snippetFolderRow.hidden = !visibility.snippetFolder;
+    snippetFolder.disabled = !visibility.snippetFolder || conflictMode;
+    secret.rows = visibility.snippetFolder ? 6 : 3;
+    setText(documentValue.querySelector("#local-record-secret-help"), visibility.snippetFolder
       ? "Команда и папка шифруются в Personal Vault и синхронизируются с приложением."
       : "Пароль, токен или ключ. Значение шифруется в браузере до синхронизации.");
-    targetLabel.hidden = isSnippet;
-    target.hidden = isSnippet;
-    target.required = !isSnippet;
+    targetRow.hidden = !visibility.target;
+    target.required = visibility.target;
     secret.required = type.value === "credential" || type.value === "snippet";
-    const isHost = type.value === "host";
-    hostFields.hidden = !isHost;
-    secretLabel.hidden = isHost;
-    secret.hidden = isHost;
+    hostFields.hidden = !visibility.hostFields;
+    secretRow.hidden = !visibility.secret;
     hostPort.disabled = !["ssh", "telnet"].includes(hostProtocol.value);
     if (hostProtocol.value === "rdp") hostPort.value = "3389";
     if (hostProtocol.value === "serial") hostPort.value = "1";
   }
 
   function render() {
+    const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     const current = controller.document();
     const counts = { host: 0, credential: 0, snippet: 0, forwarding: 0, sshKey: 0 };
     for (const record of current.records) {
@@ -895,7 +977,7 @@ export async function initializeLocalVault({
       const selector = documentValue.createElement("input");
       heading.textContent = String(record.data.title ?? "Без названия");
       summary.textContent = localVaultRecordSummary(record);
-      metadata.textContent = `${record.type} · Изменено: ${formatVaultTimestamp(record.modifiedAt)}`;
+      metadata.textContent = `${record.type} · ${english ? "Modified" : "Изменено"}: ${formatVaultTimestamp(record.modifiedAt)}`;
       actions.className = "record-actions";
       edit.type = "button";
       edit.className = "secondary record-edit";
@@ -929,7 +1011,9 @@ export async function initializeLocalVault({
       favorite.type = "button";
       favorite.className = "secondary record-favorite";
       favorite.textContent = record.data?.favorite === true ? "★" : "☆";
-      favorite.setAttribute("aria-label", record.data?.favorite === true ? "Убрать из избранного" : "Добавить в избранное");
+      favorite.setAttribute("aria-label", record.data?.favorite === true
+        ? (english ? "Remove from favorites" : "Убрать из избранного")
+        : (english ? "Add to favorites" : "Добавить в избранное"));
       favorite.addEventListener("click", async (event) => {
         event.stopPropagation();
         favorite.disabled = true;
@@ -941,7 +1025,7 @@ export async function initializeLocalVault({
       selector.type = "checkbox";
       selector.className = "record-select";
       selector.checked = selectedRecordIDs.has(record.id);
-      selector.setAttribute("aria-label", `Выбрать ${heading.textContent}`);
+      selector.setAttribute("aria-label", `${english ? "Select" : "Выбрать"} ${heading.textContent}`);
       selector.addEventListener("click", (event) => event.stopPropagation());
       selector.addEventListener("change", () => {
         if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
@@ -986,7 +1070,7 @@ export async function initializeLocalVault({
         });
       };
       card.tabIndex = 0;
-      card.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      card.setAttribute("aria-label", `${english ? "Open" : "Открыть"} ${record.type} ${heading.textContent}`);
       card.addEventListener("click", (event) => {
         if (event.target.closest?.("button, input, select, textarea, a, summary, label")) return;
         openResource();
@@ -1417,6 +1501,9 @@ export function initializeTeamWorkspace({
   const recordSecret = documentValue.querySelector("#team-record-secret");
   const recordTargetLabel = documentValue.querySelector("#team-record-target-label");
   const recordSecretLabel = documentValue.querySelector("#team-record-secret-label");
+  const recordTargetRow = documentValue.querySelector("#team-record-target-row");
+  const recordSecretRow = documentValue.querySelector("#team-record-secret-row");
+  const snippetFolderRow = documentValue.querySelector("#team-snippet-folder-row");
   const records = documentValue.querySelector("#team-vault-records");
   const hostFields = documentValue.querySelector("#team-host-fields");
   const hostProtocol = documentValue.querySelector("#team-host-protocol");
@@ -1434,8 +1521,6 @@ export function initializeTeamWorkspace({
   const snippetFolderFilter = documentValue.querySelector("#team-snippet-folder-filter");
   const snippetSort = documentValue.querySelector("#team-snippet-sort");
   const snippetCount = documentValue.querySelector("#team-snippet-count");
-  const snippetFolderField = documentValue.querySelector("#team-snippet-folder-field");
-  const snippetFolderLabel = documentValue.querySelector("#team-snippet-folder-label");
   const snippetFolder = documentValue.querySelector("#team-snippet-folder");
   const snippetFolderOptions = documentValue.querySelector("#team-snippet-folder-options");
   const snippetCreate = documentValue.querySelector("#team-snippet-create");
@@ -1669,20 +1754,19 @@ export function initializeTeamWorkspace({
     const [targetText, secretText] = labels[recordType.value] ?? labels.host;
     setText(recordTargetLabel, targetText);
     setText(recordSecretLabel, secretText);
-    const isSnippet = recordType.value === "snippet";
-    if (snippetFolderField) snippetFolderField.hidden = !isSnippet;
-    if (snippetFolderLabel) snippetFolderLabel.hidden = !isSnippet;
-    if (snippetFolder) snippetFolder.disabled = !isSnippet || !canEdit();
+    const visibility = recordFormFieldVisibility(recordType.value);
+    snippetFolderRow.hidden = !visibility.snippetFolder;
+    if (snippetFolder) snippetFolder.disabled = !visibility.snippetFolder || !canEdit();
     if (snippetBrowser) snippetBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "snippet";
-    setText(documentValue.querySelector("#team-record-secret-help"), isSnippet
+    setText(documentValue.querySelector("#team-record-secret-help"), visibility.snippetFolder
       ? "Команда шифруется на устройстве и синхронизируется внутри выбранного Team Vault."
       : "Пароль, токен или ключ. Значение шифруется на устройстве до отправки.");
-    recordSecret.rows = isSnippet ? 6 : 3;
-    recordTargetLabel.hidden = isSnippet;
-    recordTarget.hidden = isSnippet;
-    recordTarget.required = !isSnippet;
+    recordSecret.rows = visibility.snippetFolder ? 6 : 3;
+    recordTargetRow.hidden = !visibility.target;
+    recordTarget.required = visibility.target;
     recordSecret.required = ["credential", "snippet"].includes(recordType.value);
-    hostFields.hidden = recordType.value !== "host";
+    hostFields.hidden = !visibility.hostFields;
+    recordSecretRow.hidden = !visibility.secret;
     hostBrowser.hidden = activeView !== "hosts" || activeRecordFilter !== "host";
     const createLabels = { all: "Добавить запись", host: "Добавить Host", credential: "Добавить Credential", snippet: "Добавить Snippet", forwarding: "Добавить Forwarding" };
     setText(recordEditorSummary, editingRecordID ? "Редактировать запись" : activeView === "hosts" ? createLabels[activeRecordFilter] : "Добавить запись");
@@ -1839,6 +1923,7 @@ export function initializeTeamWorkspace({
   }
 
   function renderRecords() {
+    const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     records.replaceChildren();
     if (!controller) return;
     const current = controller.document();
@@ -1948,7 +2033,9 @@ export function initializeTeamWorkspace({
       favorite.className = "secondary record-favorite";
       favorite.textContent = record.data?.favorite === true ? "★" : "☆";
       favorite.disabled = !canEdit();
-      favorite.setAttribute("aria-label", record.data?.favorite === true ? "Убрать из избранного" : "Добавить в избранное");
+      favorite.setAttribute("aria-label", record.data?.favorite === true
+        ? (english ? "Remove from favorites" : "Убрать из избранного")
+        : (english ? "Add to favorites" : "Добавить в избранное"));
       favorite.addEventListener("click", async (event) => {
         event.stopPropagation();
         try {
@@ -1959,7 +2046,7 @@ export function initializeTeamWorkspace({
       selector.type = "checkbox";
       selector.className = "record-select";
       selector.checked = selectedRecordIDs.has(record.id);
-      selector.setAttribute("aria-label", `Выбрать ${heading.textContent}`);
+      selector.setAttribute("aria-label", `${english ? "Select" : "Выбрать"} ${heading.textContent}`);
       selector.addEventListener("click", (event) => event.stopPropagation());
       selector.addEventListener("change", () => {
         if (selector.checked) selectedRecordIDs.add(record.id); else selectedRecordIDs.delete(record.id);
@@ -2024,7 +2111,7 @@ export function initializeTeamWorkspace({
       };
       actions.className = "record-actions";
       card.tabIndex = 0;
-      card.setAttribute("aria-label", `Открыть ${record.type} ${heading.textContent}`);
+      card.setAttribute("aria-label", `${english ? "Open" : "Открыть"} ${record.type} ${heading.textContent}`);
       card.addEventListener("click", (event) => {
         if (event.target.closest?.("button, input, select, textarea, a, summary, label")) return;
         openResource();
@@ -2070,6 +2157,7 @@ export function initializeTeamWorkspace({
 
   async function loadDevices() {
     const values = await client.listDevices();
+    const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     devices.replaceChildren();
     if (deviceOrbit) {
       deviceOrbit.querySelectorAll("i").forEach((node) => node.remove());
@@ -2083,7 +2171,7 @@ export function initializeTeamWorkspace({
         node.classList.toggle("pending", device.keyApprovedAt === null);
         node.classList.toggle("current", device.id === client.deviceID());
         node.textContent = String(device.platform || device.name || "Web").slice(0, 8);
-        node.title = `${device.name || "Без названия"}: ${device.keyApprovedAt === null ? "ожидает одобрения" : "подключено"}`;
+        node.title = `${device.name || (english ? "Unnamed" : "Без названия")}: ${device.keyApprovedAt === null ? (english ? "awaiting approval" : "ожидает одобрения") : (english ? "connected" : "подключено")}`;
         deviceOrbit.append(node);
       });
     }
@@ -2096,8 +2184,15 @@ export function initializeTeamWorkspace({
       const revoke = documentValue.createElement("button");
       const current = device.id === client.deviceID();
       const approved = device.keyApprovedAt !== null;
-      name.textContent = `${device.name || "Без названия"}${current ? " · текущее" : ""}`;
-      detail.textContent = `${device.platform || "unknown"} ${device.appVersion || ""} · ${device.revokedAt ? "отозвано" : approved ? "ключ одобрен" : device.keyRegistered ? "ожидает одобрения" : "без Team-ключа"}`;
+      name.textContent = `${device.name || (english ? "Unnamed" : "Без названия")}${current ? (english ? " · current" : " · текущее") : ""}`;
+      const deviceState = device.revokedAt
+        ? (english ? "revoked" : "отозвано")
+        : approved
+          ? (english ? "key approved" : "ключ одобрен")
+          : device.keyRegistered
+            ? (english ? "awaiting approval" : "ожидает одобрения")
+            : (english ? "no Team key" : "без Team-ключа");
+      detail.textContent = `${device.platform || "unknown"} ${device.appVersion || ""} · ${deviceState}`;
       fingerprint.className = "team-device-fingerprint";
       fingerprint.textContent = device.publicKey
         ? `SHA-256: ${await teamDevicePublicKeyFingerprint(device.publicKey)}`
@@ -3518,6 +3613,12 @@ export function initializeTeamWorkspace({
   });
   return {
     setView,
+    renderLocaleSensitive() {
+      renderOverviewSummary();
+      renderActivity();
+      renderRecords();
+      loadDevices().catch(() => {});
+    },
     async activate(nextIdentity) {
       identity = nextIdentity;
       renderOverviewSummary();
@@ -3777,7 +3878,7 @@ export async function initializeCloudAccount({
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
       if (Number.isSafeInteger(result.revision)) {
-        setText(vaultMessage, formatVaultSynchronizationSummary(result.revision));
+        setVaultSynchronizationMessage(vaultMessage, { documentValue, revision: result.revision });
       }
     } catch {
       setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
@@ -4260,10 +4361,12 @@ export async function initializeCloudAccount({
       const automaticSuffix = result.automaticallyResolved
         ? ` Автоматически разрешено конфликтов: ${result.automaticallyResolved}.`
         : "";
-      const synchronizedAt = Number.isSafeInteger(result.revision)
-        ? ` ${formatVaultSynchronizationSummary(result.revision)}`
-        : "";
-      setText(vaultMessage, `${messages[result.status] ?? "Синхронизация завершена."}${automaticSuffix}${synchronizedAt}`);
+      const synchronizationMessage = `${messages[result.status] ?? "Синхронизация завершена."}${automaticSuffix}`;
+      if (Number.isSafeInteger(result.revision)) {
+        setVaultSynchronizationMessage(vaultMessage, { documentValue, message: synchronizationMessage, revision: result.revision });
+      } else {
+        setText(vaultMessage, synchronizationMessage);
+      }
     } catch (error) {
       const code = String(error?.message ?? "");
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
@@ -4347,7 +4450,14 @@ export async function initializeCloudAccount({
       showSession(null);
     }
   }
-  return { client, showAuth: setAuthMode, teamWorkspace };
+  return {
+    client,
+    showAuth: setAuthMode,
+    teamWorkspace,
+    refreshVaultSynchronizationLocale: () => refreshVaultSynchronizationMessage(vaultMessage, {
+      locale: activeInterfaceLocale(documentValue.documentElement?.lang),
+    }),
+  };
 }
 
 export function initializeHeroPreview({ documentValue = document } = {}) {
@@ -4433,6 +4543,7 @@ export function initializePortalNavigation({
   historyValue = history,
   vaultUI = null,
   teamUI = null,
+  refreshVaultSynchronizationLocale = () => {},
   showAuthMode = () => {},
 } = {}) {
   const brand = documentValue.querySelector("#site-brand");
@@ -4629,6 +4740,7 @@ export function initializePortalNavigation({
       selectWorkspacePanel(target, recordFilter, teamView, teamRecordFilter);
       requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, teamRecordFilter);
       setPath(requestedWorkspaceRoute);
+      button.closest("dialog")?.close?.();
       if (!button.hasAttribute("data-preserve-scroll")) workspace.scrollIntoView?.({ block: "start" });
       if (button.hasAttribute("data-focus-team-invitations")) documentValue.querySelector("#team-pending-invitations")?.focus?.();
     });
@@ -4641,21 +4753,15 @@ export function initializePortalNavigation({
   const workspaceCreate = documentValue.querySelector("#workspace-create");
   const mobileAccount = documentValue.querySelector("#workspace-mobile-account");
   const syncState = documentValue.querySelector("#workspace-sync-state");
-  const staticCommands = [
-    ["Обзор", "workspace-overview", null, null], ["Personal Vault", "local-vault", "all", null],
-    ["Хосты", "local-vault", "host", null], ["Сниппеты", "local-vault", "snippet", null],
-    ["Учётные данные", "local-vault", "credential", null], ["Forwarding", "local-vault", "forwarding", null],
-    ["Команды", "team-vault", null, "teams"], ["Участники команд", "team-vault", null, "members"],
-    ["Журнал активности", "team-vault", null, "activity"], ["Устройства", "workspace-devices", null, null],
-    ["Настройки", "workspace-settings", null, null], ["О проекте", "workspace-about", null, null],
-  ];
+  const interfaceLocale = () => activeInterfaceLocale(documentValue.documentElement?.lang);
   function renderCommands() {
     if (!commandResults) return;
     const query = String(commandSearch?.value ?? "").trim().toLocaleLowerCase();
-    const entries = staticCommands.map(([label, target, recordFilter, teamView]) => ({
-      label, detail: "Раздел", run: () => {
+    const locale = interfaceLocale();
+    const entries = filterWorkspaceCommands(query, locale).map(({ label, target, recordFilter, teamView, route }) => ({
+      label, detail: locale === "en" ? "Section" : "Раздел", matchesQuery: true, run: () => {
         selectWorkspacePanel(target, recordFilter, teamView, null);
-        requestedWorkspaceRoute = routeForWorkspace(target, recordFilter, teamView, null);
+        requestedWorkspaceRoute = route;
         setPath(requestedWorkspaceRoute); commandDialog?.close?.();
       },
     }));
@@ -4664,7 +4770,7 @@ export function initializePortalNavigation({
       if (label) entries.push({ label, detail: "Запись текущего Vault", run: () => { commandDialog?.close?.(); card.click(); } });
     }
     commandResults.replaceChildren();
-    for (const entry of entries.filter((value) => !query || `${value.label} ${value.detail}`.toLocaleLowerCase().includes(query)).slice(0, 24)) {
+    for (const entry of entries.filter((value) => value.matchesQuery || !query || `${value.label} ${value.detail}`.toLocaleLowerCase().includes(query)).slice(0, 24)) {
       const button = documentValue.createElement("button");
       const label = documentValue.createElement("strong");
       const detail = documentValue.createElement("small");
@@ -4673,7 +4779,7 @@ export function initializePortalNavigation({
       button.append(label, detail); button.addEventListener("click", entry.run); commandResults.append(button);
     }
     if (!commandResults.children.length) {
-      const empty = documentValue.createElement("p"); empty.textContent = "Ничего не найдено."; commandResults.append(empty);
+      const empty = documentValue.createElement("p"); empty.textContent = locale === "en" ? "Nothing found." : "Ничего не найдено."; commandResults.append(empty);
     }
   }
   function openCommandPalette({ fromKeyboard = false } = {}) {
@@ -4713,17 +4819,27 @@ export function initializePortalNavigation({
     if (!syncState) return;
     const combined = `${documentValue.querySelector("#local-vault-message")?.textContent ?? ""} ${documentValue.querySelector("#team-vault-workspace-status")?.textContent ?? ""}`.toLocaleLowerCase();
     const state = !documentValue.defaultView?.navigator?.onLine ? "offline"
-      : /конфликт/u.test(combined) ? "conflict"
-        : /ошиб|не удалось|поврежд/u.test(combined) ? "error"
-          : /синхрониз|загружа|обновля/u.test(combined) ? "syncing" : "synced";
+      : /конфликт|conflict/u.test(combined) ? "conflict"
+        : /ошиб|не удалось|поврежд|error|failed|corrupt/u.test(combined) ? "error"
+          : /синхрониз|загружа|обновля|synchroniz|upload|refresh/u.test(combined) ? "syncing" : "synced";
     syncState.dataset.state = state;
-    setText(syncState.querySelector("span"), ({ offline: "Офлайн", conflict: "Конфликт", error: "Ошибка", syncing: "Синхронизация…", synced: "Синхронизировано" })[state]);
+    const labels = interfaceLocale() === "en"
+      ? { offline: "Offline", conflict: "Conflict", error: "Error", syncing: "Synchronizing…", synced: "Synchronized" }
+      : { offline: "Офлайн", conflict: "Конфликт", error: "Ошибка", syncing: "Синхронизация…", synced: "Синхронизировано" };
+    setText(syncState.querySelector("span"), labels[state]);
   }
   for (const target of [documentValue.querySelector("#local-vault-message"), documentValue.querySelector("#team-vault-workspace-status")].filter(Boolean)) {
     new MutationObserver(updateSyncState).observe(target, { childList: true, characterData: true, subtree: true });
   }
   documentValue.defaultView?.addEventListener("online", updateSyncState);
   documentValue.defaultView?.addEventListener("offline", updateSyncState);
+  documentValue.addEventListener("selective-remote:locale-changed", () => {
+    updateSyncState();
+    vaultUI?.render?.();
+    teamUI?.renderLocaleSensitive?.();
+    refreshVaultSynchronizationLocale();
+    if (commandDialog?.open) renderCommands();
+  });
   updateSyncState();
 
   const view = {
@@ -4873,6 +4989,7 @@ export async function initializePortal({
     historyValue,
     vaultUI,
     teamUI: account?.teamWorkspace,
+    refreshVaultSynchronizationLocale: account?.refreshVaultSynchronizationLocale,
     showAuthMode: account?.showAuth,
   });
   navigation?.sessionChanged(account?.client.session());

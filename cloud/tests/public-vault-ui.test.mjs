@@ -9,8 +9,10 @@ import {
   bootstrapPersonalVault,
   completeInteractivePersonalVaultLogin,
   finishPortalBootstrap,
+  filterWorkspaceCommands,
   formatVaultSynchronizationSummary,
   formatVaultTimestamp,
+  refreshVaultSynchronizationMessage,
   initializeAppearance,
   initializeHeroPreview,
   localVaultConflictSideSummary,
@@ -19,6 +21,8 @@ import {
   localVaultRecordSummary,
   maintainAccessibleTeamVaultWrappers,
   preprovisionTeamInvitationWrappers,
+  recordFormFieldVisibility,
+  setVaultSynchronizationMessage,
   resolveRestoredPersonalVaultState,
   parseTeamHostConnection,
   personalVaultStatePresentation,
@@ -32,6 +36,7 @@ import {
   teamHostRecordData,
   teamVaultRecoveryMode,
   vaultResourceDetail,
+  workspaceCommands,
 } from "../public/app.js";
 
 function memoryVaultRepository() {
@@ -484,6 +489,111 @@ test("Vault timestamps render in the viewer time zone instead of raw UTC", () =>
   assert.equal(formatVaultSynchronizationSummary(-1), "Последняя синхронизация: —");
 });
 
+test("RU and EN synchronization metadata use the active locale", () => {
+  const at = "2026-09-11T15:17:30.000Z";
+  assert.match(formatVaultSynchronizationSummary(23, at, { locale: "ru", timeZone: "UTC" }), /^Последняя синхронизация:/u);
+  assert.match(formatVaultSynchronizationSummary(23, at, { locale: "en", timeZone: "UTC" }), /^Last synchronized:/u);
+  assert.equal(formatVaultSynchronizationSummary(-1, at, { locale: "en" }), "Last synchronized: —");
+});
+
+test("workspace synchronization state recognizes RU and EN status messages", async () => {
+  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  assert.match(application, /конфликт\|conflict/u);
+  assert.match(application, /ошиб\|не удалось\|поврежд\|error\|failed\|corrupt/u);
+  assert.match(application, /синхрониз\|загружа\|обновля\|synchroniz\|upload\|refresh/u);
+});
+
+test("a rendered synchronization timestamp switches locale without a new sync", () => {
+  let summary = null;
+  const documentValue = { documentElement: { lang: "ru" }, createElement: () => ({ dataset: {}, textContent: "" }) };
+  const message = {
+    textContent: "",
+    append(_separator, node) { summary = node; },
+    querySelector(selector) { return selector === "[data-vault-sync-summary]" ? summary : null; },
+  };
+  setVaultSynchronizationMessage(message, {
+    documentValue, message: "Готово.", revision: 7, at: "2026-09-11T15:17:30.000Z", timeZone: "UTC",
+  });
+  assert.match(summary.textContent, /^Последняя синхронизация:/u);
+  documentValue.documentElement.lang = "en";
+  assert.equal(refreshVaultSynchronizationMessage(message, { locale: "en", timeZone: "UTC" }), true);
+  assert.match(summary.textContent, /^Last synchronized: Sep/u);
+});
+
+test("record editor visibility hides the complete secret row for Hosts", () => {
+  assert.deepEqual(recordFormFieldVisibility("host"), {
+    target: true, secret: false, hostFields: true, snippetFolder: false,
+  });
+  assert.deepEqual(recordFormFieldVisibility("credential"), {
+    target: true, secret: true, hostFields: false, snippetFolder: false,
+  });
+  assert.deepEqual(recordFormFieldVisibility("snippet"), {
+    target: false, secret: true, hostFields: false, snippetFolder: true,
+  });
+});
+
+test("Quick Search has stable routes and bilingual aliases", () => {
+  const commands = workspaceCommands("en");
+  assert.equal(commands.find(({ id }) => id === "overview")?.route, "/app");
+  assert.equal(commands.find(({ id }) => id === "devices")?.route, "/app/devices");
+  assert.equal(filterWorkspaceCommands("Overview", "en")[0]?.id, "overview");
+  assert.equal(filterWorkspaceCommands("Обзор", "en")[0]?.id, "overview");
+  assert.equal(filterWorkspaceCommands("Devices", "ru")[0]?.id, "devices");
+  assert.equal(filterWorkspaceCommands("Устройства", "ru")[0]?.id, "devices");
+});
+
+test("Quick Search labels follow RU and EN without changing command IDs", () => {
+  const ru = workspaceCommands("ru");
+  const en = workspaceCommands("en");
+  assert.deepEqual(ru.map(({ id }) => id), en.map(({ id }) => id));
+  assert.equal(ru.find(({ id }) => id === "teams")?.label, "Команды");
+  assert.equal(en.find(({ id }) => id === "teams")?.label, "Teams");
+});
+
+test("record forms use explicit rows for Personal and Team create/edit fields", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  for (const formID of ["local-vault-record-form", "team-vault-record-form"]) {
+    const form = html.slice(html.indexOf(`id="${formID}"`), html.indexOf("</form>", html.indexOf(`id="${formID}"`)));
+    assert.match(form, /class="record-field-row"/u);
+    assert.match(form, /data-record-field="secret"/u);
+    assert.match(form, /class="record-control-stack"/u);
+  }
+});
+
+test("mobile More exposes all secondary destinations and preferences", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const dialog = html.slice(html.indexOf('id="workspace-mobile-account"'), html.indexOf("</dialog>", html.indexOf('id="workspace-mobile-account"')));
+  assert.match(html, /id="workspace-mobile-account-open"[\s\S]*>Ещё</u);
+  for (const target of ["workspace-devices", "workspace-settings", "workspace-about"]) {
+    assert.match(dialog, new RegExp(`data-workspace-target="${target}"`, "u"));
+  }
+  assert.match(dialog, /data-locale-switch="mobile-account"/u);
+  assert.match(dialog, /data-theme-select/u);
+  assert.match(dialog, /id="workspace-mobile-logout"/u);
+});
+
+test("Light theme covers Devices cards and fixed mobile navigation", async () => {
+  const styles = await readFile(new URL("../public/styles.css", import.meta.url), "utf8");
+  assert.match(styles, /:root\[data-theme="light"\] \.device-vault-map \.team-devices article/u);
+  assert.match(styles, /:root\[data-theme="light"\] \.workspace-mobile-nav/u);
+});
+
+test("Teams terminology and selector placeholder are consistent in English", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
+  assert.match(i18n, /"Команды": "Teams"/u);
+  assert.match(i18n, /"Выберите команду": "Select a team"/u);
+  assert.match(html, /<strong>Snippets<\/strong><small>Команды и скрипты<\/small>/u);
+  assert.match(i18n, /"Команды и скрипты": "Commands and scripts"/u);
+});
+
+test("dialog navigation controls retain semantic buttons and accessible names", async () => {
+  const html = await readFile(new URL("../public/index.html", import.meta.url), "utf8");
+  assert.match(html, /<dialog class="mobile-account-dialog"[^>]*aria-labelledby="workspace-mobile-account-title"/u);
+  assert.match(html, /data-workspace-target="workspace-devices"[^>]*>[^<]*<span[^>]*aria-hidden="true"/u);
+  assert.match(html, /id="workspace-mobile-logout"/u);
+});
+
 test("Personal Vault catalog sorting is deterministic and does not mutate the document", () => {
   const records = [
     { id: "b", type: "host", modifiedAt: "2026-09-10T00:00:00Z", data: { title: "Beta" } },
@@ -749,8 +859,10 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /save\.className = "team-member-action-button"/u);
   assert.match(application, /admitDevices\.className = "team-member-action-button"/u);
   assert.doesNotMatch(application, /Не используется/u);
-  assert.match(application, /targetLabel\.hidden = isSnippet;\s*target\.hidden = isSnippet;/u);
-  assert.match(application, /recordTargetLabel\.hidden = isSnippet;\s*recordTarget\.hidden = isSnippet;/u);
+  assert.match(application, /targetRow\.hidden = !visibility\.target;/u);
+  assert.match(application, /secretRow\.hidden = !visibility\.secret;/u);
+  assert.match(application, /recordTargetRow\.hidden = !visibility\.target;/u);
+  assert.match(application, /recordSecretRow\.hidden = !visibility\.secret;/u);
   assert.match(application, /try \{\s*initializeAppearance\(\);\s*initializeModernSelects\(\);\s*await initializePortal\(\);\s*\} finally \{\s*finishPortalBootstrap\(\);/u);
   assert.match(html, /id="cloud-workspace"[^>]*hidden/u);
   assert.match(html, /data-open-auth="login"/u);
@@ -1027,8 +1139,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /setFilterChangeListener/u);
   assert.match(application, /renderOverviewSummary/u);
   assert.match(application, /formatVaultTimestamp\(record\.modifiedAt\)/u);
-  assert.match(application, /Изменено: \$\{formatVaultTimestamp\(record\.modifiedAt\)\}/u);
-  assert.match(application, /formatVaultSynchronizationSummary\(result\.revision\)/u);
+  assert.match(application, /english \? "Modified" : "Изменено"/u);
+  assert.match(application, /setVaultSynchronizationMessage\(vaultMessage, \{ documentValue, revision: result\.revision \}\)/u);
   assert.match(application, /const hostFolderName = personalHostFolderName/u);
   assert.match(application, /localVaultRecordFormValues\(record\)/u);
   assert.match(application, /editingRecordID/u);

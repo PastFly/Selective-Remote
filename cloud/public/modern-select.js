@@ -84,7 +84,6 @@ export function enhanceModernSelect(select, {
   const chevron = documentValue.createElement("span");
   const menu = documentValue.createElement("div");
   const listboxID = `modern-select-${++modernSelectSequence}`;
-  const accessibleName = selectAccessibleName(select);
   let open = false;
   let activeIndex = -1;
   let typeahead = "";
@@ -234,9 +233,9 @@ export function enhanceModernSelect(select, {
   function sync() {
     const entries = options();
     const selected = entries.find((entry) => entry.selected) ?? entries.find((entry) => !entry.disabled);
-    value.textContent = selected?.label || "Выберите…";
+    value.textContent = selected?.label || (documentValue.documentElement?.lang === "en" ? "Select…" : "Выберите…");
     trigger.disabled = Boolean(select.disabled) || !selected;
-    trigger.setAttribute("aria-label", `${accessibleName}: ${value.textContent}`);
+    trigger.setAttribute("aria-label", `${selectAccessibleName(select)}: ${value.textContent}`);
     activeIndex = selected?.index ?? -1;
     renderOptions(entries);
     if (open) schedule(documentValue, positionMenu);
@@ -365,6 +364,11 @@ export function initializeModernSelects({
     });
     observer.observe(documentValue.documentElement, { childList: true, subtree: true });
     modernSelectDocumentObservers.set(documentValue, observer);
+    documentValue.addEventListener?.("selective-remote:locale-changed", () => {
+      for (const select of documentValue.querySelectorAll("select[data-modern-select-enhanced='true']")) {
+        modernSelectControllers.get(select)?.sync();
+      }
+    });
   }
 
   return controllers;
