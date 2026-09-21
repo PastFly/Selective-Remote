@@ -7,6 +7,7 @@ import {
   accountVaultPassphrase,
   appearancePreference,
   bootstrapPersonalVault,
+  completeInteractivePersonalVaultLogin,
   finishPortalBootstrap,
   formatVaultSynchronizationSummary,
   formatVaultTimestamp,
@@ -37,6 +38,8 @@ function memoryVaultRepository() {
   let snapshot = null;
   let sync = null;
   let deviceID = null;
+  let sessionDeviceKey = null;
+  let sessionUnlock = null;
   return {
     async load() { return snapshot ? structuredClone(snapshot) : null; },
     async save(value) { snapshot = structuredClone(value); },
@@ -44,6 +47,12 @@ function memoryVaultRepository() {
     async saveSync(value) { sync = structuredClone(value); },
     async loadDeviceID() { return deviceID; },
     async saveDeviceID(value) { deviceID = value; },
+    async loadSessionDeviceKey() { return sessionDeviceKey ? structuredClone(sessionDeviceKey) : null; },
+    async saveSessionDeviceKey(value) { sessionDeviceKey = structuredClone(value); },
+    async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
+    async saveSessionUnlock(value) { sessionUnlock = structuredClone(value); },
+    async deleteSessionUnlock() { sessionUnlock = null; },
+    rememberedSession() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
   };
 }
 
@@ -57,10 +66,10 @@ function testVault(repository, ids) {
   });
 }
 
-test("restored authenticated sessions distinguish uninitialized, locked, and unlocked Vaults", () => {
+test("restored authenticated sessions distinguish uninitialized, reauthentication-required, and unlocked Vaults", () => {
   assert.equal(resolveRestoredPersonalVaultState({ localStatus: "empty", remoteRevision: 0, restored: false }), "uninitialized");
-  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 0, restored: false }), "locked");
-  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 3, restored: false }), "locked");
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 0, restored: false }), "reauthentication_required");
+  assert.equal(resolveRestoredPersonalVaultState({ localStatus: "locked", remoteRevision: 3, restored: false }), "reauthentication_required");
   assert.equal(resolveRestoredPersonalVaultState({ localStatus: "unlocked", remoteRevision: 3, restored: true }), "unlocked");
   assert.throws(
     () => resolveRestoredPersonalVaultState({ localStatus: "empty", remoteRevision: -1, restored: false }),
@@ -91,6 +100,104 @@ test("interactive browser bootstrap creates exactly one encrypted r1 for an unin
   assert.equal(result.revision, 1);
   assert.equal(uploads, 1);
   assert.equal(await vault.status(), "unlocked");
+});
+
+test("fresh-account interactive login uses one credential flow, persists trusted unlock, and restores after reload", async () => {
+  let credentialUses = 0;
+  const password = {
+    toString() {
+      credentialUses += 1;
+      return "account B password is long enough";
+    },
+  };
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const repository = memoryVaultRepository();
+  const vault = testVault(repository, ["11111111-1111-4111-8111-111111111111"]);
+  let activeVault = vault;
+  let remote = { id: "99999999-9999-4999-8999-999999999999", revision: 0, envelope: null };
+  const client = {
+    session: () => ({ id: accountID }),
+    async getVault() { return structuredClone(remote); },
+    async putVault(_scope, envelope) {
+      remote = { ...remote, revision: 1, envelope };
+      return { conflict: false, revision: 1 };
+    },
+  };
+  const calls = [];
+
+  const result = await completeInteractivePersonalVaultLogin({
+    user: { id: accountID },
+    password,
+    activateAccountVault: async (_user, passphrase) => { calls.push(["activate", passphrase]); },
+    unlockAndSyncPersonalVault: async (passphrase) => {
+      calls.push(["unlock", passphrase]);
+      return bootstrapPersonalVault({ vault: activeVault, client, passphrase });
+    },
+    rememberSession: async (id) => {
+      calls.push(["remember", id]);
+      return activeVault.rememberSession(id);
+    },
+  });
+
+  assert.equal(credentialUses, 1);
+  assert.deepEqual(calls.map(([name]) => name), ["activate", "unlock", "remember"]);
+  assert.equal(calls[0][1], "selective-remote:account-password:v1:account B password is long enough");
+  assert.equal(calls[1][1], calls[0][1]);
+  assert.deepEqual(result, { result: { status: "uploaded", revision: 1 }, remembered: true });
+  assert.equal(await activeVault.status(), "unlocked");
+  assert.ok(repository.rememberedSession());
+
+  activeVault = testVault(repository, ["22222222-2222-4222-8222-222222222222"]);
+  assert.equal(await activeVault.restoreRememberedSession(accountID), true);
+  assert.equal(await activeVault.status(), "unlocked");
+  assert.equal(credentialUses, 1);
+});
+
+test("existing-account interactive login unlocks with the same one-time login credential flow", async () => {
+  const password = "account B password is long enough";
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const source = testVault(memoryVaultRepository(), ["11111111-1111-4111-8111-111111111111"]);
+  const passphrase = accountVaultPassphrase(password);
+  await source.create(passphrase);
+  const prepared = await source.prepareUpload(4);
+  const repository = memoryVaultRepository();
+  const target = testVault(repository, ["22222222-2222-4222-8222-222222222222"]);
+  const client = {
+    session: () => ({ id: accountID }),
+    async getVault() { return { id: "99999999-9999-4999-8999-999999999999", revision: 5, envelope: prepared.envelope }; },
+    async putVault() { throw new Error("unexpected_empty_vault_upload"); },
+  };
+  const result = await completeInteractivePersonalVaultLogin({
+    user: { id: accountID },
+    password,
+    activateAccountVault: async () => {},
+    unlockAndSyncPersonalVault: (derived) => bootstrapPersonalVault({ vault: target, client, passphrase: derived }),
+    rememberSession: (id) => target.rememberSession(id),
+  });
+
+  assert.deepEqual(result, { result: { status: "downloaded", revision: 5 }, remembered: true });
+  assert.equal(await target.status(), "unlocked");
+  assert.ok(repository.rememberedSession());
+});
+
+test("interactive login stays unlocked but reports when trusted-browser persistence does not commit", async () => {
+  const result = await completeInteractivePersonalVaultLogin({
+    user: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+    password: "account B password is long enough",
+    activateAccountVault: async () => {},
+    unlockAndSyncPersonalVault: async () => ({ status: "downloaded", revision: 1 }),
+    rememberSession: async () => false,
+  });
+  assert.deepEqual(result, { result: { status: "downloaded", revision: 1 }, remembered: false });
+
+  const rejectedPersistence = await completeInteractivePersonalVaultLogin({
+    user: { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" },
+    password: "account B password is long enough",
+    activateAccountVault: async () => {},
+    unlockAndSyncPersonalVault: async () => ({ status: "downloaded", revision: 1 }),
+    rememberSession: async () => { throw new Error("local_vault_storage_failed"); },
+  });
+  assert.deepEqual(rejectedPersistence, { result: { status: "downloaded", revision: 1 }, remembered: false });
 });
 
 test("an existing remote Vault is imported instead of being replaced with an empty r1", async () => {
@@ -127,10 +234,17 @@ test("Personal Vault state copy distinguishes authentication from encryption in 
     description: "Подтвердите пароль аккаунта, чтобы создать первый зашифрованный Vault.",
     action: "Подтвердить пароль и создать Vault",
   });
+  assert.deepEqual(personalVaultStatePresentation("reauthentication_required"), {
+    title: "Требуется восстановление доступа к Personal Vault",
+    description: "Сессия аккаунта активна, но доверенный ключ этого браузера недоступен. Подтвердите пароль аккаунта, чтобы восстановить доступ.",
+    action: "Восстановить доступ",
+  });
   assert.equal(personalVaultStatePresentation("unlocked"), null);
   assert.match(i18n, /Personal Vault has not been created for this account yet/u);
   assert.match(i18n, /Confirm password and create Vault/u);
   assert.match(i18n, /Confirm password and open Vault/u);
+  assert.match(i18n, /Restore access to Personal Vault/u);
+  assert.match(i18n, /the trusted-browser key could not be saved/u);
   assert.match(i18n, /Restoring Personal Vault/u);
   assert.match(i18n, /Personal Vault is temporarily unavailable/u);
 });
@@ -832,6 +946,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /BroadcastChannel\("selective-remote\.personal-vault\.session\.v1"\)/u);
   assert.match(application, /restoreRememberedSession\(restoredUser\.id\)/u);
   assert.match(application, /vault\.rememberSession\(user\.id\)/u);
+  assert.doesNotMatch(application, /try \{ await vault\.rememberSession\(user\.id\); \} catch \{\}/u);
   assert.match(application, /vault\.forgetRememberedSession\(\)/u);
   assert.match(application, /visibilitychange/u);
   assert.doesNotMatch(html, /<div class="vault-toolbar">\s*<div><h3>Личный Vault/u);
@@ -940,7 +1055,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /vaultUI\.repository\.forAccount\(user\.id\)/u);
   assert.match(application, /activateAccountVault\(restoredUser\)/u);
   assert.match(application, /synchronizeVault/u);
-  assert.match(application, /unlockAndSyncPersonalVault\(password\)/u);
+  assert.match(application, /completeInteractivePersonalVaultLogin/u);
   assert.match(application, /backgroundPersonalVaultSync/u);
   assert.match(application, /newestVaultConflictChoice/u);
   assert.match(application, /async function synchronizePersonalVault/u);
