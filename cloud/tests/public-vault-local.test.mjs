@@ -18,18 +18,17 @@ const recordIDs = [
   "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
 ];
 
-function memoryRepository(initial = null) {
+function memoryRepository(initial = null, sharedSessionDevice = { key: null }) {
   let value = initial;
   let sync = null;
-  let sessionDeviceKey = null;
   let sessionUnlock = null;
   return {
     async load() { return value ? structuredClone(value) : null; },
     async save(next) { value = structuredClone(next); },
     async loadSync() { return sync ? structuredClone(sync) : null; },
     async saveSync(next) { sync = structuredClone(next); },
-    async loadSessionDeviceKey() { return sessionDeviceKey ? structuredClone(sessionDeviceKey) : null; },
-    async saveSessionDeviceKey(next) { sessionDeviceKey = structuredClone(next); },
+    async loadSessionDeviceKey() { return sharedSessionDevice.key ? structuredClone(sharedSessionDevice.key) : null; },
+    async saveSessionDeviceKey(next) { sharedSessionDevice.key = structuredClone(next); },
     async loadSessionUnlock() { return sessionUnlock ? structuredClone(sessionUnlock) : null; },
     async saveSessionUnlock(next) { sessionUnlock = structuredClone(next); },
     async deleteSessionUnlock() { sessionUnlock = null; },
@@ -159,6 +158,52 @@ test("remembered restore is account-bound and a wrong account leaves legacy stat
   assert.equal(sameAccount.restored, true);
   assert.equal(await sameAccount.vault.status(), "unlocked");
   assert.equal((await sameAccount.vault.deviceID()), deviceID);
+});
+
+test("same-account remembered migration persists an account-scoped unlock for the next page lifecycle", async () => {
+  const accountID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+  const sharedSessionDevice = { key: null };
+  const legacyRepository = memoryRepository(null, sharedSessionDevice);
+  const accountRepository = memoryRepository(null, sharedSessionDevice);
+  const legacyVault = controller(legacyRepository);
+  await legacyVault.create(passphrase);
+  assert.equal(await legacyVault.rememberSession(accountID), true);
+  legacyVault.lock();
+  const legacyRemembered = legacyRepository.rememberedSession();
+
+  const migratedPage = await prepareAccountScopedVault({
+    accountID,
+    accountRepository,
+    legacyRepository,
+    cryptoValue: webcrypto,
+  });
+
+  assert.equal(migratedPage.restored, true);
+  assert.equal(await migratedPage.vault.status(), "unlocked");
+  assert.equal(migratedPage.vault.sessionKey().extractable, false);
+  assert.deepEqual(accountRepository.rememberedSession(), legacyRemembered);
+  assert.deepEqual(legacyRepository.rememberedSession(), legacyRemembered);
+
+  const reloadedPage = await prepareAccountScopedVault({
+    accountID,
+    accountRepository,
+    legacyRepository,
+    cryptoValue: webcrypto,
+  });
+  assert.equal(reloadedPage.restored, true);
+  assert.equal(await reloadedPage.vault.status(), "unlocked");
+
+  await reloadedPage.vault.forgetRememberedSession();
+  reloadedPage.vault.lock();
+  const afterLogout = await prepareAccountScopedVault({
+    accountID,
+    accountRepository,
+    legacyRepository,
+    cryptoValue: webcrypto,
+  });
+  assert.equal(afterLogout.restored, false);
+  assert.equal(await afterLogout.vault.status(), "locked");
+  assert.deepEqual(legacyRepository.rememberedSession(), legacyRemembered);
 });
 
 test("account A logout then account B in one browser keeps account-scoped devices and the Vault actor", async () => {

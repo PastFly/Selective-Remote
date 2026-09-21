@@ -346,6 +346,7 @@ export async function prepareAccountScopedVault({
   if (!legacySnapshot) return { vault, legacyMigrated: false, restored: false };
   const legacyVault = createLocalVaultController({ repository: legacyRepository, cryptoValue, now, randomUUID });
   let restored = false;
+  let remembered = null;
   if (passphrase !== null) {
     try {
       await legacyVault.unlock(passphrase);
@@ -354,7 +355,7 @@ export async function prepareAccountScopedVault({
       return { vault, legacyMigrated: false, restored: false };
     }
   } else {
-    const remembered = typeof legacyRepository.loadSessionUnlock === "function"
+    remembered = typeof legacyRepository.loadSessionUnlock === "function"
       ? await legacyRepository.loadSessionUnlock()
       : null;
     if (!remembered || String(remembered.accountID ?? "").toLowerCase() !== normalizedID) {
@@ -373,7 +374,10 @@ export async function prepareAccountScopedVault({
   if (passphrase !== null) await vault.unlock(passphrase);
   else {
     await vault.unlockWithSessionKey(legacyVault.sessionKey());
-    await vault.rememberSession(normalizedID);
+    if (typeof accountRepository.saveSessionUnlock !== "function") {
+      throw new Error("local_vault_storage_unavailable");
+    }
+    await accountRepository.saveSessionUnlock(validatedSessionUnlock(remembered, normalizedID));
   }
   return { vault, legacyMigrated: true, restored };
 }
