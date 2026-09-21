@@ -14,7 +14,7 @@ import {
   filterTeamSnippets, normalizeTeamSnippetFolder, renderTeamSnippetTree,
   teamSnippetFolder, teamSnippetFolderPaths, teamSnippetRecordData,
 } from "./team-snippet-browser.js?v=188";
-import { initializeModernSelects } from "./modern-select.js?v=158";
+import { initializeModernSelects } from "./modern-select.js?v=193";
 import {
   createIndexedDBTeamDeviceRepository,
   ensureTeamDeviceIdentity,
@@ -751,7 +751,6 @@ export async function initializeLocalVault({
     if (workspace.hidden || conflictMode || savePending) return;
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
-    editorDialog?.showModal?.();
     type.value = record.type;
     type.disabled = true;
     title.value = values.title;
@@ -782,6 +781,7 @@ export async function initializeLocalVault({
       ? "Основные поля и организация Host синхронизируются с приложением. Расширенные SSH/RDP-параметры сохраняются без изменений."
       : "Измените нужные поля и сохраните новую зашифрованную версию записи.");
     updateLabels();
+    editorDialog?.showModal?.();
     title.focus?.();
     setText(message, `Редактирование: ${String(record.data?.title ?? "Без названия")}.`);
   }

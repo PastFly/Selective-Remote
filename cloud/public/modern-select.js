@@ -27,6 +27,8 @@ export function modernSelectMenuPlacement({
   triggerRect,
   viewportWidth,
   viewportHeight,
+  viewportTop = 0,
+  viewportBottom = viewportHeight,
   menuHeight,
   contentWidth = 0,
   gap = 8,
@@ -37,8 +39,8 @@ export function modernSelectMenuPlacement({
     Math.max(triggerRect.width, Math.min(contentWidth, 420), 170),
     availableWidth,
   );
-  const below = Math.max(0, viewportHeight - triggerRect.bottom - gap - edge);
-  const above = Math.max(0, triggerRect.top - gap - edge);
+  const below = Math.max(0, viewportBottom - triggerRect.bottom - gap - edge);
+  const above = Math.max(0, triggerRect.top - viewportTop - gap - edge);
   const preferredHeight = Math.min(menuHeight, 300);
   const openUp = below < preferredHeight && above > below;
   const maxHeight = Math.max(48, Math.min(300, openUp ? above : below));
@@ -48,10 +50,14 @@ export function modernSelectMenuPlacement({
     Math.max(edge, viewportWidth - edge - width),
   );
   const top = openUp
-    ? Math.max(edge, triggerRect.top - gap - renderedHeight)
-    : Math.min(viewportHeight - edge, triggerRect.bottom + gap);
+    ? Math.max(viewportTop + edge, triggerRect.top - gap - renderedHeight)
+    : Math.min(viewportBottom - edge, triggerRect.bottom + gap);
 
   return { left, top, width, maxHeight, openUp };
+}
+
+export function modernSelectPortalRoot(select, documentValue = select?.ownerDocument) {
+  return select?.closest?.("dialog[open]") ? select.parentNode : documentValue?.body ?? null;
 }
 
 function selectAccessibleName(select) {
@@ -111,6 +117,7 @@ export function enhanceModernSelect(select, {
   select.tabIndex = -1;
   select.setAttribute("aria-hidden", "true");
   select.dataset.modernSelectEnhanced = "true";
+  const hostDialog = select.closest?.("dialog") ?? null;
 
   function options() {
     return modernSelectOptionSnapshot(select);
@@ -119,16 +126,21 @@ export function enhanceModernSelect(select, {
   function positionMenu() {
     if (!open) return;
     const windowValue = documentValue.defaultView;
+    const triggerRect = trigger.getBoundingClientRect();
+    const dialogRect = select.closest?.("dialog[open]")?.getBoundingClientRect();
     const placement = modernSelectMenuPlacement({
-      triggerRect: trigger.getBoundingClientRect(),
+      triggerRect,
       viewportWidth: windowValue?.innerWidth ?? documentValue.documentElement?.clientWidth ?? 0,
       viewportHeight: windowValue?.innerHeight ?? documentValue.documentElement?.clientHeight ?? 0,
+      viewportTop: dialogRect?.top ?? 0,
+      viewportBottom: dialogRect?.bottom ?? windowValue?.innerHeight ?? documentValue.documentElement?.clientHeight ?? 0,
       menuHeight: menu.scrollHeight,
       contentWidth: menu.scrollWidth,
     });
+    const localToWrapper = menu.parentNode === wrapper;
     menu.classList.toggle("open-up", placement.openUp);
-    menu.style.left = `${placement.left}px`;
-    menu.style.top = `${placement.top}px`;
+    menu.style.left = `${placement.left - (localToWrapper ? triggerRect.left : 0)}px`;
+    menu.style.top = `${placement.top - (localToWrapper ? triggerRect.top : 0)}px`;
     menu.style.width = `${placement.width}px`;
     menu.style.maxHeight = `${placement.maxHeight}px`;
   }
@@ -138,6 +150,7 @@ export function enhanceModernSelect(select, {
     const item = items.find((candidate) => Number(candidate.dataset.index) === index && !candidate.disabled);
     if (!item) return;
     activeIndex = index;
+    for (const candidate of items) candidate.classList.toggle("active", candidate === item);
     item.focus({ preventScroll: true });
     item.scrollIntoView({ block: "nearest" });
   }
@@ -149,6 +162,7 @@ export function enhanceModernSelect(select, {
     trigger.setAttribute("aria-expanded", "false");
     menu.hidden = true;
     menu.classList.remove("open-up");
+    menu.querySelector(".modern-select-option.active")?.classList.remove("active");
     menu.removeAttribute("style");
     if (menu.parentNode !== wrapper) wrapper.append(menu);
     if (restoreFocus) trigger.focus({ preventScroll: true });
@@ -210,6 +224,7 @@ export function enhanceModernSelect(select, {
       const label = documentValue.createElement("span");
       option.type = "button";
       option.className = "modern-select-option";
+      option.id = `${listboxID}-option-${entry.index}`;
       option.dataset.index = String(entry.index);
       option.setAttribute("role", "option");
       option.setAttribute("aria-selected", String(entry.selected));
@@ -247,7 +262,7 @@ export function enhanceModernSelect(select, {
     open = true;
     wrapper.classList.add("open");
     trigger.setAttribute("aria-expanded", "true");
-    documentValue.body.append(menu);
+    modernSelectPortalRoot(select, documentValue)?.append(menu);
     menu.hidden = false;
     schedule(documentValue, () => {
       positionMenu();
@@ -265,6 +280,11 @@ export function enhanceModernSelect(select, {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
       if (!open) openMenu(event.key === "ArrowDown" ? 1 : -1);
+      return;
+    }
+    if ((event.key === "Enter" || event.key === " ") && !open) {
+      event.preventDefault();
+      openMenu();
       return;
     }
     if (event.key === "Escape" && open) {
@@ -288,6 +308,7 @@ export function enhanceModernSelect(select, {
     if (open && !wrapper.contains(event.target) && !menu.contains(event.target)) closeMenu();
   };
   documentValue.addEventListener("pointerdown", closeFromOutsidePointer);
+  hostDialog?.addEventListener("close", closeMenu);
   documentValue.defaultView?.addEventListener("resize", positionMenu);
   documentValue.defaultView?.addEventListener("scroll", positionMenu, true);
 
@@ -327,6 +348,7 @@ export function enhanceModernSelect(select, {
       closeMenu();
       observer?.disconnect();
       documentValue.removeEventListener("pointerdown", closeFromOutsidePointer);
+      hostDialog?.removeEventListener("close", closeMenu);
       documentValue.defaultView?.removeEventListener("resize", positionMenu);
       documentValue.defaultView?.removeEventListener("scroll", positionMenu, true);
       for (const property of observedProperties) delete select[property];
