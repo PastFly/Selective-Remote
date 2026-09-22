@@ -532,6 +532,16 @@ test("record editor visibility hides the complete secret row for Hosts", () => {
   });
 });
 
+test("Personal record edit populates its layout before the dialog becomes visible", async () => {
+  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const start = application.indexOf("function beginEdit(record)");
+  const end = application.indexOf("function clearConflictUI()", start);
+  const beginEdit = application.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.ok(beginEdit.indexOf("updateLabels();") < beginEdit.indexOf("editorDialog?.showModal?.();"));
+});
+
 test("Quick Search has stable routes and bilingual aliases", () => {
   const commands = workspaceCommands("en");
   assert.equal(commands.find(({ id }) => id === "overview")?.route, "/app");
@@ -838,8 +848,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=190">/u);
-  assert.match(html, /\/app\.js\?v=190/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=193">/u);
+  assert.match(html, /\/app\.js\?v=193/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -855,7 +865,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /@keyframes modern-select-in-light/u);
   assert.match(styles, /@keyframes preview-float-light/u);
   assert.match(application, /export function finishPortalBootstrap/u);
-  assert.match(application, /modern-select\.js\?v=158/u);
+  assert.match(application, /modern-select\.js\?v=193/u);
   assert.match(application, /save\.className = "team-member-action-button"/u);
   assert.match(application, /admitDevices\.className = "team-member-action-button"/u);
   assert.doesNotMatch(application, /Не используется/u);
@@ -1011,8 +1021,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=190/u);
-  assert.match(html, /app\.js\?v=190/u);
+  assert.match(html, /styles\.css\?v=193/u);
+  assert.match(html, /app\.js\?v=193/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -1203,8 +1213,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=190/u);
-  assert.match(html, /styles\.css\?v=190/u);
+  assert.match(html, /app\.js\?v=193/u);
+  assert.match(html, /styles\.css\?v=193/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

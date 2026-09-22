@@ -6,6 +6,7 @@ import {
   modernSelectMenuPlacement,
   modernSelectNextIndex,
   modernSelectOptionSnapshot,
+  modernSelectPortalRoot,
 } from "../public/modern-select.js";
 
 test("modern selects enhance controls added after initial render", () => {
@@ -84,6 +85,24 @@ test("modern select menu opens downward with a bounded height when space is avai
   });
 });
 
+test("modern select menu respects the visible bounds of a containing dialog", () => {
+  assert.deepEqual(modernSelectMenuPlacement({
+    triggerRect: { left: 42, top: 480, right: 348, bottom: 524, width: 306 },
+    viewportWidth: 390,
+    viewportHeight: 844,
+    viewportTop: 240,
+    viewportBottom: 600,
+    menuHeight: 150,
+    contentWidth: 240,
+  }), {
+    left: 42,
+    top: 322,
+    width: 306,
+    maxHeight: 216,
+    openUp: true,
+  });
+});
+
 test("modern select snapshots labels and selected state from a native select", () => {
   const select = {
     selectedIndex: 1,
@@ -110,4 +129,19 @@ test("modern select keyboard navigation wraps and skips disabled options", () =>
   assert.equal(modernSelectNextIndex(options, 2, 1), 0);
   assert.equal(modernSelectNextIndex(options, 0, -1), 2);
   assert.equal(modernSelectNextIndex([{ disabled: true }], 0, 1), -1);
+});
+
+test("modern select keeps its menu in the local stacking context of an open dialog", () => {
+  const body = { id: "body" };
+  const openDialog = { id: "dialog" };
+  const wrapper = { id: "wrapper" };
+  const documentValue = { body };
+  const selectInDialog = {
+    parentNode: wrapper,
+    closest: (selector) => selector === "dialog[open]" ? openDialog : null,
+  };
+  const selectOnPage = { closest: () => null };
+
+  assert.equal(modernSelectPortalRoot(selectInDialog, documentValue), wrapper);
+  assert.equal(modernSelectPortalRoot(selectOnPage, documentValue), body);
 });
