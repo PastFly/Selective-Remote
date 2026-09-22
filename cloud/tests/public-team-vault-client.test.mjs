@@ -53,6 +53,45 @@ test("username invitation preserves a safe rotation-required response", async ()
   );
 });
 
+test("Team archive preserves only actionable public error codes", async () => {
+  const { identity } = await fixture();
+  for (const [status, code, expected] of [
+    [401, "invalid_credentials", /invalid_credentials/u],
+    [409, "team_name_mismatch", /team_name_mismatch/u],
+    [500, "internal_database_detail", /team_archive_failed/u],
+  ]) {
+    const client = createAuthenticatedVaultClient({
+      async fetchValue(path, options = {}) {
+        if (path === "/v1/auth/login") {
+          return jsonResponse(200, {
+            token: "t".repeat(43),
+            user: { id: userID, email: "owner@example.invalid", username: "owner", displayName: "Owner" },
+            deviceID,
+          });
+        }
+        if (path === `/v1/teams/${teamID}` && options.method === "DELETE") {
+          return jsonResponse(status, { error: code });
+        }
+        throw new Error(`unexpected_request:${path}`);
+      },
+    });
+    await client.login({
+      email: "owner@example.invalid",
+      password: "synthetic-password",
+      deviceID,
+      publicKey: identity.publicKey,
+    });
+    await assert.rejects(client.archiveTeam({
+      teamID,
+      expectedName: "Operations",
+      password: "synthetic-password",
+    }), expected);
+    if (code === "invalid_credentials") {
+      assert.equal(client.session()?.id, userID, "wrong reauthentication password must not clear the valid session");
+    }
+  }
+});
+
 async function fixture() {
   const identity = await generateTeamDeviceIdentity(webcrypto);
   const vaultKey = await generateVaultKey(webcrypto);

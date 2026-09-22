@@ -7,7 +7,7 @@ const css = await readFile(new URL("../public/styles.css", import.meta.url), "ut
 const i18n = await readFile(new URL("../public/i18n.js", import.meta.url), "utf8");
 
 test("public portal exposes a persistent RU and EN locale switch", () => {
-  assert.match(html, /\/i18n\.js\?v=190/);
+  assert.match(html, /\/i18n\.js\?v=194/);
   assert.match(i18n, /selective-remote\.locale\.v1/);
   assert.match(i18n, /navigator\.language/);
   assert.match(i18n, /URLSearchParams\(location\.search\)/);
@@ -58,5 +58,11 @@ test("dynamic authentication, synchronization, and Team errors have English mess
     "This device has not been approved for Team Vault yet.",
     "The invitation is invalid, used, revoked, or expired.",
     "The email service is temporarily unavailable.",
+    "The current password is incorrect. Enter your current account password and try again.",
+    "The name does not match. Enter the exact Team name and try again.",
+    "Owner",
+    "Administrator",
+    "Editor",
+    "Viewer",
   ]) assert.match(i18n, new RegExp(message.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"));
 });

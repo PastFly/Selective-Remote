@@ -502,7 +502,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   let user = null;
   let currentDeviceID = null;
 
-  async function authorizedRequest(path, options = {}) {
+  async function authorizedRequest(path, options = {}, { reauthenticationErrors = [] } = {}) {
     const response = await fetchValue(path, {
       ...options,
       headers: {
@@ -516,6 +516,8 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       referrerPolicy: "no-referrer",
     });
     if (response.status === 401) {
+      const result = await response.clone().json().catch(() => null);
+      if (reauthenticationErrors.includes(result?.error)) return response;
       token = null;
       user = null;
       currentDeviceID = null;
@@ -801,9 +803,14 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
           expectedName: confirmedTeamName(expectedName),
           password: normalizedPassword(password),
         }),
-      });
+      }, { reauthenticationErrors: ["invalid_credentials"] });
       const result = await responseJSON(response, "team_archive_failed");
-      if (!response.ok || result.archived !== true
+      if (!response.ok) {
+        const code = ["invalid_credentials", "team_name_mismatch"].includes(result.error)
+          ? result.error : "team_archive_failed";
+        throw new Error(code);
+      }
+      if (result.archived !== true
         || normalizedUUID(result.teamID, "team_archive_failed") !== normalizedTeamID) {
         throw new Error("team_archive_failed");
       }
