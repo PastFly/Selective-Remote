@@ -1200,7 +1200,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(styles, /\.team-host-browser \{ display:grid; grid-template-columns:repeat\(2,minmax\(0,1fr\)\)/u);
   assert.match(styles, /\.record-form input\[type="checkbox"\] \{ width:auto/u);
   assert.match(styles, /\.team-section-tabs,\.host-scope-switcher/u);
-  assert.ok(styles.includes('.brand-actions button:not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
+  assert.ok(styles.includes('.brand-actions button:not([data-locale]):not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
   assert.ok(styles.includes(':not([data-team-view]):not([data-record-filter])'));
   assert.ok(styles.includes(':not(.team-member-action-button)'));
   assert.match(styles, /:root\[data-theme="light"\] \.team-member-action-button \{[^}]*color:var\(--text-primary\)/u);
