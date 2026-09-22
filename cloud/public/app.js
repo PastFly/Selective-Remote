@@ -1422,13 +1422,24 @@ export async function preprovisionTeamInvitationWrappers({
   });
 }
 
-function teamRoleLabel(role) {
-  return {
-    owner: "Владелец",
-    admin: "Администратор",
-    editor: "Редактор",
-    viewer: "Просмотр",
-  }[role] ?? String(role ?? "");
+export function teamRoleLabel(role, locale = activeInterfaceLocale()) {
+  const labels = {
+    ru: { owner: "Владелец", admin: "Администратор", editor: "Редактор", viewer: "Просмотр" },
+    en: { owner: "Owner", admin: "Administrator", editor: "Editor", viewer: "Viewer" },
+  };
+  return labels[activeInterfaceLocale(locale)][role] ?? String(role ?? "");
+}
+
+export function teamArchiveErrorMessage(error, remotelyArchived = false) {
+  if (remotelyArchived) return "Team архивирована, но локальную очистку или обновление списка не удалось завершить.";
+  const code = String(error?.message ?? "");
+  if (code === "invalid_credentials") {
+    return "Текущий пароль неверен. Введите пароль текущего аккаунта и повторите.";
+  }
+  if (code === "team_name_mismatch") {
+    return "Название не совпадает. Введите точное название Team и повторите.";
+  }
+  return "Team не архивирована. Проверьте полномочия Owner и повторите попытку.";
 }
 
 export function initializeTeamWorkspace({
@@ -1479,6 +1490,7 @@ export function initializeTeamWorkspace({
   const transferOwnershipForm = documentValue.querySelector("#team-ownership-transfer-form");
   const transferOwnershipMember = documentValue.querySelector("#team-ownership-member");
   const archiveTeamForm = documentValue.querySelector("#team-archive-form");
+  const archiveTeamMessage = documentValue.querySelector("#team-archive-message");
   const createVaultForm = documentValue.querySelector("#team-vault-create-form");
   const vaultDirectoryView = documentValue.querySelector("#team-vault-directory-view");
   const vaultSelect = documentValue.querySelector("#team-vault-select");
@@ -2938,6 +2950,7 @@ export function initializeTeamWorkspace({
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam.role !== "owner";
     renameTeamForm.elements.name.value = selectedTeam.name;
     archiveTeamForm.reset();
+    setText(archiveTeamMessage, "");
     transferOwnershipForm.reset();
     const loadedTeamID = selectedTeam.id;
     ownershipMembers = [];
@@ -3240,6 +3253,7 @@ export function initializeTeamWorkspace({
     const button = archiveTeamForm.querySelector("button");
     let remotelyArchived = false;
     button.disabled = true;
+    setText(archiveTeamMessage, "");
     try {
       if (!await requestConfirmation({
         title: "Архивировать Team?",
@@ -3262,10 +3276,10 @@ export function initializeTeamWorkspace({
       setText(message, failed === 0
         ? "Team архивирована; локальные зашифрованные снимки удалены."
         : `Team архивирована, но ${failed} локальных зашифрованных снимков не удалось удалить.`);
-    } catch {
-      setText(message, remotelyArchived
-        ? "Team архивирована, но локальную очистку или обновление списка не удалось завершить."
-        : "Team не архивирована: точное название, пароль или полномочия Owner не подтверждены.");
+    } catch (error) {
+      const feedback = teamArchiveErrorMessage(error, remotelyArchived);
+      setText(archiveTeamMessage, feedback);
+      setText(message, feedback);
     } finally {
       archiveTeamForm.elements.password.value = "";
       button.disabled = false;
@@ -3614,6 +3628,16 @@ export function initializeTeamWorkspace({
   return {
     setView,
     renderLocaleSensitive() {
+      const locale = activeInterfaceLocale(documentValue.documentElement?.lang);
+      for (const option of teamSelect.options) {
+        const team = teams.find((value) => value.id === option.value);
+        if (team) option.textContent = `${team.name} · ${teamRoleLabel(team.role, locale)}`;
+      }
+      if (selectedTeam) teamRole.textContent = `${selectedTeam.name} · ${teamRoleLabel(selectedTeam.role, locale)}`;
+      renderMembers(teamMembers);
+      renderPendingInvitations();
+      renderTeamInvitations();
+      if (ownershipMembers.length > 0) renderOwnershipMembers(ownershipMembers);
       renderOverviewSummary();
       renderActivity();
       renderRecords();

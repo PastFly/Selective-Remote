@@ -30,6 +30,8 @@ import {
   personalHostFolderName,
   personalHostRecordData,
   teamHostOrganizationValues,
+  teamArchiveErrorMessage,
+  teamRoleLabel,
   sortLocalVaultRecords,
   shouldFocusCommandPaletteSearch,
   teamHostConnectionData,
@@ -38,6 +40,39 @@ import {
   vaultResourceDetail,
   workspaceCommands,
 } from "../public/app.js";
+
+test("Team role labels follow the active RU and EN locale", () => {
+  assert.deepEqual(
+    ["owner", "admin", "editor", "viewer"].map((role) => teamRoleLabel(role, "ru")),
+    ["Владелец", "Администратор", "Редактор", "Просмотр"],
+  );
+  assert.deepEqual(
+    ["owner", "admin", "editor", "viewer"].map((role) => teamRoleLabel(role, "en")),
+    ["Owner", "Administrator", "Editor", "Viewer"],
+  );
+});
+
+test("Team archive failures provide specific actionable feedback", () => {
+  assert.equal(
+    teamArchiveErrorMessage(new Error("invalid_credentials")),
+    "Текущий пароль неверен. Введите пароль текущего аккаунта и повторите.",
+  );
+  assert.equal(
+    teamArchiveErrorMessage(new Error("team_name_mismatch")),
+    "Название не совпадает. Введите точное название Team и повторите.",
+  );
+  assert.match(teamArchiveErrorMessage(new Error("team_archive_failed")), /Team не архивирована/u);
+  assert.match(teamArchiveErrorMessage(new Error("local_cleanup_failed"), true), /Team архивирована/u);
+});
+
+test("Team locale rerender refreshes pending invitations and Team switches clear archive feedback", async () => {
+  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
+  const localeRerender = application.match(/renderLocaleSensitive\(\) \{([\s\S]*?)\n    \},\n    async activate/u)?.[1] ?? "";
+  assert.match(localeRerender, /renderPendingInvitations\(\)/u);
+
+  const selectedTeamLoad = application.match(/async function loadSelectedTeam\(\) \{([\s\S]*?)\n  async function loadTeams/u)?.[1] ?? "";
+  assert.match(selectedTeamLoad, /archiveTeamForm\.reset\(\);\s*setText\(archiveTeamMessage, ""\)/u);
+});
 
 function memoryVaultRepository() {
   let snapshot = null;
@@ -848,8 +883,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=193">/u);
-  assert.match(html, /\/app\.js\?v=193/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=194">/u);
+  assert.match(html, /\/app\.js\?v=194/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -1021,8 +1056,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=193/u);
-  assert.match(html, /app\.js\?v=193/u);
+  assert.match(html, /styles\.css\?v=194/u);
+  assert.match(html, /app\.js\?v=194/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -1168,7 +1203,7 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.ok(styles.includes('.brand-actions button:not(.secondary):not(.modern-select-trigger):not(.modern-select-option)'));
   assert.ok(styles.includes(':not([data-team-view]):not([data-record-filter])'));
   assert.ok(styles.includes(':not(.team-member-action-button)'));
-  assert.match(styles, /:root\[data-theme="light"\] \.team-member-action-button \{[^}]*color:var\(--ink\)/u);
+  assert.match(styles, /:root\[data-theme="light"\] \.team-member-action-button \{[^}]*color:var\(--text-primary\)/u);
   assert.ok(styles.includes(':root[data-theme="light"] :is(input:not([type="checkbox"]):not([type="radio"]),textarea,select)'));
   assert.ok(styles.includes(':root[data-theme="light"] .team-section-tabs button:not(.active)'));
   assert.match(server, /\^\\\/app\(\?:\\\/\[\^\/\]\+\)\?\$/u);
@@ -1213,8 +1248,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=193/u);
-  assert.match(html, /styles\.css\?v=193/u);
+  assert.match(html, /app\.js\?v=194/u);
+  assert.match(html, /styles\.css\?v=194/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);
