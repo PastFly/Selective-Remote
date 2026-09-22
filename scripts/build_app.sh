@@ -4,11 +4,11 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="0.31.0"
+VERSION="0.32.0"
 # CFBundleVersion is an internal monotonically increasing identifier required
 # by macOS and the update comparator. It is deliberately not shown as part of
 # the public application version.
-BUILD_NUMBER="162"
+BUILD_NUMBER="163"
 APP_NAME="Selective Remote"
 ARTIFACT_NAME="SelectiveRemote"
 EXECUTABLE_NAME="SelectiveRemote"
@@ -40,6 +40,8 @@ SESSION_ENTITLEMENTS="$ROOT/Resources/SelectiveRemoteSession.entitlements"
 LICENSES_DIR="$RES_DIR/ThirdPartyLicenses"
 UPDATE_FEED_URL="${SELECTIVEREMOTE_UPDATE_FEED_URL:-https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json}"
 NOTARY_PROFILE="${SELECTIVEREMOTE_NOTARY_PROFILE:-}"
+RELEASE_MODE="${SELECTIVEREMOTE_RELEASE_MODE:-}"
+EXPECTED_TEAM_ID="${SELECTIVEREMOTE_EXPECTED_TEAM_ID:-}"
 
 DMG_MOUNTED=false
 DMG_MOUNT=""
@@ -161,33 +163,41 @@ if ! command -v brew >/dev/null 2>&1; then
     exit 1
 fi
 
+case "$RELEASE_MODE" in
+    official)
+        SIGN_IDENTITY="${SELECTIVEREMOTE_CODESIGN_IDENTITY:-}"
+        if [[ "$SIGN_IDENTITY" != Developer\ ID\ Application:* ]]; then
+            echo "Ошибка: official release требует exact Developer ID Application identity" >&2
+            exit 1
+        fi
+        if [[ ! "$EXPECTED_TEAM_ID" =~ ^[A-Z0-9]{10}$ ]]; then
+            echo "Ошибка: official release требует exact 10-character TeamIdentifier" >&2
+            exit 1
+        fi
+        if [[ "$SIGN_IDENTITY" != *"($EXPECTED_TEAM_ID)" ]]; then
+            echo "Ошибка: Developer ID Application identity не совпадает с expected TeamIdentifier" >&2
+            exit 1
+        fi
+        if [[ -z "$NOTARY_PROFILE" ]]; then
+            echo "Ошибка: official release требует notarization Keychain profile" >&2
+            exit 1
+        fi
+        ;;
+    community)
+        SIGN_IDENTITY="-"
+        if [[ -n "$NOTARY_PROFILE" || -n "$EXPECTED_TEAM_ID" ]]; then
+            echo "Ошибка: community build не может использовать official publisher metadata" >&2
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Ошибка: задайте SELECTIVEREMOTE_RELEASE_MODE=official или community" >&2
+        exit 1
+        ;;
+esac
+
 swift test
 swift build -c release
-
-SIGN_IDENTITY="${SELECTIVEREMOTE_CODESIGN_IDENTITY:-}"
-if [[ -z "$SIGN_IDENTITY" ]]; then
-    SIGN_IDENTITY="$(
-        security find-identity -v -p codesigning 2>/dev/null \
-            | awk -F'"' '/"Developer ID Application:/{print $2; exit}' \
-            || true
-    )"
-fi
-if [[ -z "$SIGN_IDENTITY" ]]; then
-    SIGN_IDENTITY="$(
-        security find-identity -v -p codesigning 2>/dev/null \
-            | awk -F'"' '/"Apple Development:/{print $2; exit}' \
-            || true
-    )"
-fi
-if [[ -z "$SIGN_IDENTITY" ]]; then
-    SIGN_IDENTITY="-"
-fi
-
-if [[ "$SIGN_IDENTITY" == Developer\ ID\ Application:* ]]; then
-    DISTRIBUTION_SIGNING=true
-else
-    DISTRIBUTION_SIGNING=false
-fi
 
 if [[ -d "$APP" ]]; then
     rm -rf "$APP"
@@ -712,6 +722,9 @@ chmod +x "$SESSION_BIN"
 /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Selective Remote показывает доступные камеры для выбора в профиле; захват выполняет только «Selective Remote Session» после подключения." "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSCameraUseContinuityCameraDeviceType bool true" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :SelectiveRemoteBuildArchitecture string $BUILD_ARCH" "$APP/Contents/Info.plist"
+if [[ "$RELEASE_MODE" == "official" ]]; then
+    /usr/libexec/PlistBuddy -c "Add :SelectiveRemoteExpectedTeamIdentifier string $EXPECTED_TEAM_ID" "$APP/Contents/Info.plist"
+fi
 if [[ -n "$UPDATE_FEED_URL" ]]; then
     if [[ "$UPDATE_FEED_URL" != https://* ]]; then
         echo "Ошибка: SELECTIVEREMOTE_UPDATE_FEED_URL должен начинаться с https://" >&2
@@ -1269,6 +1282,11 @@ sign_code "$SSH_PROXY_HELPER"
 sign_code "$TERMINAL_BRIDGE_HELPER"
 sign_code "$APP" --entitlements "$APP_ENTITLEMENTS"
 codesign --verify --deep --strict --verbose=2 "$APP"
+if [[ "$RELEASE_MODE" == "official" ]]; then
+    PUBLISHER_REQUIREMENT="=anchor apple generic and identifier \"local.selectiveremote\" and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = \"$EXPECTED_TEAM_ID\""
+    codesign --verify --deep --strict -R "$PUBLISHER_REQUIREMENT" "$APP"
+    codesign -d --verbose=4 "$APP" 2>&1 | grep -Fx "TeamIdentifier=$EXPECTED_TEAM_ID"
+fi
 
 verify_signed_entitlement() {
     local bundle="$1"
@@ -1475,23 +1493,13 @@ fi
 detach_dmg
 echo "Drag & Drop DMG layout test passed"
 
-if [[ "$SIGN_IDENTITY" != "-" ]]; then
+if [[ "$RELEASE_MODE" == "official" ]]; then
     codesign --force --timestamp --sign "$SIGN_IDENTITY" "$DMG"
     codesign --verify --verbose=2 "$DMG"
 fi
 
-if [[ -n "$NOTARY_PROFILE" ]]; then
-    if [[ "$DISTRIBUTION_SIGNING" != "true" ]]; then
-        echo "Ошибка: notarization требует сертификат Developer ID Application" >&2
-        exit 1
-    fi
-    xcrun notarytool submit "$DMG" \
-        --keychain-profile "$NOTARY_PROFILE" \
-        --wait
-    xcrun stapler staple "$DMG"
-    xcrun stapler validate "$DMG"
-    spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
-    echo "Notarization и stapling завершены"
+if [[ "$RELEASE_MODE" == "official" ]]; then
+    "$ROOT/scripts/notarize_official_release.sh" "$DMG"
 fi
 
 (
@@ -1499,14 +1507,11 @@ fi
     shasum -a 256 "$(basename "$DMG")" >"$(basename "$DMG_HASH")"
 )
 
-if [[ "$SIGN_IDENTITY" == "-" ]]; then
-    echo "Примечание: эта сборка использует временную ad-hoc подпись."
+if [[ "$RELEASE_MODE" == "community" ]]; then
+    echo "Community/Test artifact: эта сборка использует временную ad-hoc подпись."
     echo "Получателю потребуется один раз явно разрешить запуск в macOS."
-elif [[ "$DISTRIBUTION_SIGNING" == "true" ]]; then
-    echo "Подпись для распространения: $SIGN_IDENTITY"
 else
-    echo "Подпись для локальной разработки: $SIGN_IDENTITY"
-    echo "Получателю всё равно потребуется явно разрешить первый запуск."
+    echo "Подпись для распространения: $SIGN_IDENTITY"
 fi
 echo "Homebrew, FreeRDP и SDL3 нужны только на Mac сборщика, не у получателя."
 echo "Приложение: $APP"

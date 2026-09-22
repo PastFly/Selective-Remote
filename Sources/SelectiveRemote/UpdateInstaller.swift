@@ -99,6 +99,8 @@ enum UpdateInstallerError: LocalizedError, Sendable {
     case applicationMissing
     case invalidApplicationSignature
     case bundleIdentifierMismatch
+    case missingPublisherIdentity
+    case invalidPublisherIdentity
     case translocatedApplication
     case installationRequiresManualReplacement
     case installerLaunchFailed
@@ -123,6 +125,10 @@ enum UpdateInstallerError: LocalizedError, Sendable {
             UpdateLocalization.text(ru: "Проверка подписи приложения из DMG завершилась ошибкой.", en: "The application signature in the DMG failed verification.")
         case .bundleIdentifierMismatch:
             UpdateLocalization.text(ru: "Bundle identifier приложения в DMG не совпадает с установленным Selective Remote.", en: "The application bundle identifier in the DMG does not match the installed Selective Remote app.")
+        case .missingPublisherIdentity:
+            UpdateLocalization.text(ru: "Эта сборка не содержит доверенную identity официального издателя и не может устанавливать обновления автоматически.", en: "This build does not contain a trusted official publisher identity and cannot install updates automatically.")
+        case .invalidPublisherIdentity:
+            UpdateLocalization.text(ru: "Издатель приложения в DMG не совпадает с официальным издателем Selective Remote. Установка остановлена.", en: "The application publisher in the DMG does not match the official Selective Remote publisher. Installation was stopped.")
         case .translocatedApplication:
             UpdateLocalization.text(ru: "Приложение запущено из App Translocation. Откройте установленную копию Selective Remote и повторите обновление.", en: "The app is running from App Translocation. Open the installed copy of Selective Remote and try again.")
         case .installationRequiresManualReplacement:
@@ -137,6 +143,7 @@ struct MountedSelectiveRemoteUpdate: Sendable {
     let dmgURL: URL
     let mountURL: URL
     let appURL: URL
+    let publisherRequirement: String
 }
 
 private final class UpdateDownloadOperation: @unchecked Sendable {
@@ -289,23 +296,29 @@ enum UpdateInstaller {
             appURL = candidate
         }
 
-        do {
-            _ = try runAndCapture(
-                "/usr/bin/codesign",
-                arguments: ["--verify", "--deep", "--strict", appURL.path]
-            )
-        } catch {
-            try? detach(mountURL)
-            throw UpdateInstallerError.invalidApplicationSignature
-        }
         let currentIdentifier = Bundle.main.bundleIdentifier
         let candidateIdentifier = Bundle(url: appURL)?.bundleIdentifier
         guard currentIdentifier != nil, candidateIdentifier == currentIdentifier else {
             try? detach(mountURL)
             throw UpdateInstallerError.bundleIdentifierMismatch
         }
-
-        return MountedSelectiveRemoteUpdate(dmgURL: dmgURL, mountURL: mountURL, appURL: appURL)
+        do {
+            let publisher = try UpdatePublisherIdentity.official(from: .main)
+            try UpdatePublisherVerifier.verifyApplication(
+                at: Bundle.main.bundleURL,
+                expected: publisher
+            )
+            try UpdatePublisherVerifier.verifyApplication(at: appURL, expected: publisher)
+            return MountedSelectiveRemoteUpdate(
+                dmgURL: dmgURL,
+                mountURL: mountURL,
+                appURL: appURL,
+                publisherRequirement: publisher.requirementArgument
+            )
+        } catch {
+            try? detach(mountURL)
+            throw error
+        }
     }
 
     static func defaultDownloadDirectoryURL(
@@ -342,40 +355,7 @@ enum UpdateInstaller {
 
         let scriptURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("selective-remote-update-\(UUID().uuidString).sh")
-        let script = #"""
-#!/bin/sh
-set -eu
-PID="$1"
-SRC="$2"
-DST="$3"
-MOUNT="$4"
-DMG="$5"
-CLEANUP_DMG="$6"
-while /bin/kill -0 "$PID" 2>/dev/null; do
-    /bin/sleep 0.2
-done
-BACKUP="${DST}.selective-remote-backup.$$"
-/bin/rm -rf "$BACKUP"
-if ! /bin/mv "$DST" "$BACKUP"; then
-    /usr/bin/open "$DST" >/dev/null 2>&1 || true
-    /usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-    exit 1
-fi
-if /usr/bin/ditto "$SRC" "$DST" && /usr/bin/codesign --verify --deep --strict "$DST"; then
-    /bin/rm -rf "$BACKUP"
-    /usr/bin/open "$DST"
-else
-    /bin/rm -rf "$DST"
-    /bin/mv "$BACKUP" "$DST"
-    /usr/bin/open "$DST"
-    exit 1
-fi
-/usr/bin/hdiutil detach "$MOUNT" >/dev/null 2>&1 || true
-if [ "$CLEANUP_DMG" = "1" ]; then
-    /bin/rm -f "$DMG"
-fi
-/bin/rm -f "$0"
-"""#
+        let script = UpdateInstallationScript.make()
         do {
             try script.write(to: scriptURL, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes(
@@ -391,7 +371,8 @@ fi
                 destination.path,
                 mounted.mountURL.path,
                 mounted.dmgURL.path,
-                retention.removesDMG ? "1" : "0"
+                retention.removesDMG ? "1" : "0",
+                mounted.publisherRequirement,
             ]
             process.standardOutput = FileHandle.nullDevice
             process.standardError = FileHandle.nullDevice

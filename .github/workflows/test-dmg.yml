@@ -20,6 +20,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.2.app/Contents/Developer
       SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
+      SELECTIVEREMOTE_RELEASE_MODE: community
     steps:
       - name: Checkout
         uses: actions/checkout@v6

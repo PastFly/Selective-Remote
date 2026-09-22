@@ -6,7 +6,7 @@ SOURCE_APP="$ROOT/dist/Selective Remote.app"
 TARGET_APP="/Applications/Selective Remote.app"
 
 chmod +x "$ROOT/scripts/build_app.sh"
-"$ROOT/scripts/build_app.sh"
+SELECTIVEREMOTE_RELEASE_MODE=community "$ROOT/scripts/build_app.sh"
 
 if [[ ! -d "$SOURCE_APP" ]]; then
     echo "Ошибка: сборка не создала $SOURCE_APP" >&2
