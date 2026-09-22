@@ -57,6 +57,9 @@ struct UpdateExperienceTests {
     func manualUpdateDestinationAndProgressRegression() throws {
         let model = try repositorySource("Sources/SelectiveRemote/AppModel.swift")
         let installer = try repositorySource("Sources/SelectiveRemote/UpdateInstaller.swift")
+        let installationScript = try repositorySource(
+            "Sources/SelectiveRemote/UpdatePublisherVerification.swift"
+        )
         let view = try repositorySource("Sources/SelectiveRemote/UpdateExperienceView.swift")
         let app = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
         let strings = try repositorySource("Resources/en.lproj/Localizable.strings")
@@ -75,7 +78,7 @@ struct UpdateExperienceTests {
         #expect(view.contains("Место автоматической загрузки"))
         #expect(view.contains("Использовать системный каталог"))
         #expect(model.contains("retention: downloadedUpdateUsesCustomDestination"))
-        #expect(installer.contains("if [ \"$CLEANUP_DMG\" = \"1\" ]; then"))
+        #expect(installationScript.contains("if [ \"$CLEANUP_DMG\" = \"1\" ]; then"))
         #expect(app.contains("preventsClosing: model.isUpdateOperationInProgress"))
         for key in [
             "Автоматически загружать найденные обновления",

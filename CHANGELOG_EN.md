@@ -1,3 +1,14 @@
+## 0.32.0
+
+- Cloud Personal Vault now uses account-scoped browser state with safe first-time bootstrap and automatic restore after a normal login or reload without a second password prompt.
+- Team Vaults now cover Hosts, Credentials, and Snippets with nested folders, roles, invitations, new-device admission, and separate device identities isolated from Personal Vault.
+- Personal and Team Hosts share one navigation, search, sorting, list/grid, and folder interaction model while Team actions remain role-aware and isolated from Personal Keychain credentials.
+- Sync and recovery are more resilient to concurrent edits, deletions, causal-history conflicts, missing wrappers, and trusted browser/macOS session restoration.
+- Web management adds complete team and device administration, privacy-safe registration behavior, protected team archiving, and verified email workflows.
+- RU/EN, Graphite/Light, and desktop/narrow interfaces are more consistent, including forms, selectors, keyboard/focus navigation, mobile navigation, and semantic light-theme contrast.
+- macOS improves Cloud/session integration, Personal/Team navigation, Credentials/Snippets synchronization, and protected SSH/SFTP use with Team Hosts.
+- Release security is fail-closed: the official DMG requires Developer ID, the exact TeamIdentifier, notarization and stapling, while the updater verifies publisher identity before installation and after transactional copy without weakening rollback.
+
 ## 0.31.0
 
 - Added full encrypted Selective Remote backups in the `.srbackup` format, including connections, groups, Snippets, settings, and local workspace data.
