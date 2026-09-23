@@ -68,6 +68,88 @@ func newLocalTerminalProductionPathPreservesLegacyAndRerenders() throws {
     #expect(restored.tabs.map(\.title) == [legacyTitle, "Терминал 1", "My terminal"])
 }
 
+@Test("Fresh primary and command-created local tabs retain numbered, locale-reactive provenance")
+@MainActor
+func freshLocalTerminalProductionPathHasDistinctGeneratedNumbers() throws {
+    let suiteName = "FreshLocalTerminalProductionPath.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    language.selection = .russian
+    let profileID = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .local(workingDirectory: "/tmp"),
+        defaults: defaults,
+        language: language
+    )
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1"])
+    #expect(workspace.tabs.map(\.generatedTitleNumber) == [1])
+    let initialCommandTab = try #require(workspace.tabForNewLocalTerminalCommand(workingDirectory: "/tmp"))
+    #expect(initialCommandTab.id == workspace.tabs[0].id)
+    let additional = try #require(workspace.addTab(connection: .local(workingDirectory: "/tmp")))
+    #expect(additional.generatedTitleNumber == 2)
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1", "Терминал 2"])
+
+    language.selection = .english
+    #expect(workspace.tabs.map(\.title) == ["Terminal 1", "Terminal 2"])
+    let restored = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .local(workingDirectory: "/tmp"),
+        defaults: defaults,
+        language: language
+    )
+    #expect(restored.tabs.map(\.generatedTitleNumber) == [1, 2])
+    #expect(restored.tabs.map(\.title) == ["Terminal 1", "Terminal 2"])
+    language.selection = .russian
+    #expect(restored.tabs.map(\.title) == ["Терминал 1", "Терминал 2"])
+}
+
+@Test("New local terminal startup banner uses the application locale at session creation")
+@MainActor
+func localTerminalStartupBannerUsesApplicationLanguage() throws {
+    let suiteName = "LocalTerminalBanner.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    for (selection, expected) in [
+        (AppLanguage.russian, "Selective Remote · Локальный терминал"),
+        (.english, "Selective Remote · Local Terminal")
+    ] {
+        language.selection = selection
+        let session = TerminalSessionModel()
+        // A nonexistent executable exercises banner generation without starting a shell.
+        #expect(throws: (any Error).self) {
+            try session.start(
+                executable: "/nonexistent/selective-remote-test-shell",
+                arguments: [],
+                title: language.localized("terminal.local.accessibility")
+            )
+        }
+        var output = Data()
+        let observer = session.addOutputObserver { output.append($0) }
+        defer { session.removeOutputObserver(observer) }
+        #expect(String(decoding: output, as: UTF8.self).contains(expected))
+    }
+
+    let source = try String(
+        contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
+        encoding: .utf8
+    )
+    let localConnection = try #require(
+        source.components(separatedBy: "func connectLocalTerminal(").dropFirst().first?
+            .components(separatedBy: "private func beginTerminalSessionLog(").first
+    )
+    #expect(localConnection.contains("title: AppLanguageStore.shared.localized(\"terminal.local.accessibility\")"))
+    #expect(!localConnection.contains("title: \"Локальный терминал\""))
+}
+
 @Test("Выбранный язык приложения сохраняется между запусками")
 @MainActor
 func persistsApplicationLanguage() throws {

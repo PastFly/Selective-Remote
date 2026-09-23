@@ -3944,14 +3944,15 @@ final class AppModel: NSObject, ObservableObject {
         session: TerminalSessionModel
     ) {
         guard connection.kind == .local else {
-            errorMessage = "Локальная вкладка содержит неверный тип подключения"
+            errorMessage = AppLanguageStore.shared.localized("terminal.local.invalid_connection")
             return
         }
         guard !session.isRunning else {
-            statusMessage = "Этот локальный терминал уже запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.already_running")
             return
         }
 
+        let localTerminalTitle = AppLanguageStore.shared.localized("terminal.local.accessibility")
         let environment = ProcessInfo.processInfo.environment
         let configuredShell = environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shell = configuredShell?.isEmpty == false ? configuredShell! : "/bin/zsh"
@@ -3961,7 +3962,7 @@ final class AppModel: NSObject, ObservableObject {
             try session.start(
                 executable: shell,
                 arguments: ["-l"],
-                title: "Локальный терминал",
+                title: AppLanguageStore.shared.localized("terminal.local.accessibility"),
                 environment: environment,
                 workingDirectory: directory
             ) { [weak self] exitCode in
@@ -3972,8 +3973,8 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 self?.terminalStartedAt.removeValue(forKey: tabID)
                 self?.statusMessage = exitCode == 0
-                    ? "Локальный терминал завершён"
-                    : "Локальный терминал завершился с кодом \(exitCode)"
+                    ? AppLanguageStore.shared.localized("terminal.local.finished")
+                    : "\(AppLanguageStore.shared.localized("terminal.local.finished_with_code")) \(exitCode)"
                 self?.objectWillChange.send()
             }
             beginTerminalSessionLog(
@@ -3981,15 +3982,15 @@ final class AppModel: NSObject, ObservableObject {
                 session: session,
                 kind: .local,
                 profileID: nil,
-                profileName: "Локальный терминал",
+                profileName: localTerminalTitle,
                 target: directory
             )
             terminalStartedAt[tabID] = Date()
-            statusMessage = "Локальный терминал запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.started")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
-            statusMessage = "Локальный терминал не запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.not_started")
         }
     }
 
