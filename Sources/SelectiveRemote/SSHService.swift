@@ -62,7 +62,10 @@ struct SSHConnectionSettings: Equatable, Sendable {
     let proxyUsername: String
     let jumpHostDestination: String?
     let jumpHostProfileID: UUID?
-    let jumpHostPromptTokens: [String]
+    let jumpHostName: String?
+    let jumpHostPort: Int?
+    let jumpHostUsername: String?
+    let jumpHostKeyPolicy: SSHHostKeyPolicy?
     let hostKeyPolicy: SSHHostKeyPolicy
     let initialDirectory: String
     let compression: Bool
@@ -119,15 +122,17 @@ struct SSHConnectionSettings: Equatable, Sendable {
                 ? "\(userPrefix)\(jumpHostName)"
                 : "\(userPrefix)\(jumpHostName):\(jumpHost.sshPort)"
             jumpHostProfileID = jumpHost.id
-            var promptTokens = [jumpHostName]
-            if !jumpUser.isEmpty {
-                promptTokens.append("\(jumpUser)@\(jumpHostName)")
-            }
-            jumpHostPromptTokens = promptTokens
+            self.jumpHostName = jumpHostName
+            jumpHostPort = jumpHost.sshPort
+            jumpHostUsername = jumpUser
+            jumpHostKeyPolicy = jumpHost.sshHostKeyPolicy
         } else {
             jumpHostDestination = nil
             jumpHostProfileID = nil
-            jumpHostPromptTokens = []
+            jumpHostName = nil
+            jumpHostPort = nil
+            jumpHostUsername = nil
+            jumpHostKeyPolicy = nil
         }
         if proxyMode != .none {
             try SSHService.validateHost(proxyHost)
@@ -148,6 +153,15 @@ struct SSHConnectionSettings: Equatable, Sendable {
         compression = profile.sshCompression
         keepAliveSeconds = min(max(profile.sshKeepAliveSeconds, 0), 3_600)
         agentForwarding = profile.sshAgentForwarding
+    }
+
+    var destinationCredentialIdentity: String {
+        "destination|\(profileID.uuidString)|\(username)@\(host):\(port)"
+    }
+
+    var jumpCredentialIdentity: String? {
+        guard let jumpHostProfileID, let jumpHostDestination else { return nil }
+        return "jump|\(jumpHostProfileID.uuidString)|\(jumpHostDestination)"
     }
 }
 
@@ -455,10 +469,26 @@ enum SSHService {
     }
 
     static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
-        guard settings.proxyMode != .none, settings.jumpHostDestination == nil else { return [] }
         let helper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers", isDirectory: true)
             .appendingPathComponent("SelectiveRemoteSSHProxy")
+        if let jumpHostName = settings.jumpHostName,
+           let jumpHostPort = settings.jumpHostPort,
+           let jumpHostUsername = settings.jumpHostUsername,
+           let jumpIdentity = settings.jumpCredentialIdentity,
+           let jumpHostKeyPolicy = settings.jumpHostKeyPolicy {
+            let parts = [
+                shellEscaped(helper.path), "jump",
+                shellEscaped(jumpHostName), String(jumpHostPort),
+                "%h", "%p", shellEscaped(jumpHostUsername),
+                "\"${SELECTIVEREMOTE_JUMP_SECRET_FILE:-}\"",
+                shellEscaped(jumpIdentity),
+                shellEscaped(jumpHostKeyPolicy.openSSHValue),
+                "''"
+            ]
+            return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
+        }
+        guard settings.proxyMode != .none else { return [] }
         let mode = settings.proxyMode == .http ? "http" : "socks5"
         let secret = "${SELECTIVEREMOTE_PROXY_SECRET_FILE:-}"
         let parts = [
@@ -508,9 +538,6 @@ enum SSHService {
         }
         arguments += authenticationArguments(settings: settings)
         arguments += proxyArguments(settings: settings)
-        if let jumpHostDestination = settings.jumpHostDestination {
-            arguments += ["-J", jumpHostDestination]
-        }
         if let identity = settings.identity, settings.authenticationMode != .password, settings.authenticationMode != .agent {
             arguments += ["-i", identity.privateKeyPath]
             if let certificateURL = SSHKeyService.certificateURL(for: identity) {
@@ -585,9 +612,6 @@ enum SSHService {
             arguments += ["-o", "User=\(settings.username)"]
         }
         arguments += proxyArguments(settings: settings)
-        if let jumpHostDestination = settings.jumpHostDestination {
-            arguments += ["-J", jumpHostDestination]
-        }
         arguments += [settings.host, remoteCommand]
         return arguments
     }
@@ -612,9 +636,6 @@ enum SSHService {
             arguments += ["-o", "User=\(settings.username)"]
         }
         arguments += proxyArguments(settings: settings)
-        if let jumpHostDestination = settings.jumpHostDestination {
-            arguments += ["-J", jumpHostDestination]
-        }
         return arguments + [settings.host]
     }
 
@@ -699,6 +720,7 @@ enum SSHService {
             + forwarding
             + [settings.host]
         process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+            settings: settings,
             passwordCredential: passwordCredential,
             proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                 profileID: settings.profileID,
@@ -706,8 +728,7 @@ enum SSHService {
             ),
             jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                 KeychainService.credentialReference(profileID: $0, kind: .ssh)
-            },
-            jumpHostPromptTokens: settings.jumpHostPromptTokens
+            }
         )
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = logHandle
@@ -955,10 +976,10 @@ enum SSHKeyService {
     }
 
     static func backgroundAuthenticationEnvironment(
+        settings: SSHConnectionSettings? = nil,
         passwordCredential: KeychainCredentialReference? = nil,
         proxyPasswordCredential: KeychainCredentialReference? = nil,
         jumpHostPasswordCredential: KeychainCredentialReference? = nil,
-        jumpHostPromptTokens: [String] = [],
         requiresUserPresence: Bool = true,
         terminalPasswordAttempt: Bool = false
     ) throws -> [String: String] {
@@ -972,10 +993,19 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_PROXY_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_SECRET_FILE")
-        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PROMPT_TOKENS")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_OWNER_PID")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_TARGET_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE")
-        if !jumpHostPromptTokens.isEmpty {
-            environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"] = jumpHostPromptTokens.joined(separator: "\n")
+        if let settings {
+            environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"] = settings.destinationCredentialIdentity
+            environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] = String(Darwin.getpid())
+            if let jumpIdentity = settings.jumpCredentialIdentity {
+                environment["SELECTIVEREMOTE_JUMP_TARGET_IDENTITY"] = jumpIdentity
+            }
         }
 
         if let passwordCredential {
@@ -988,9 +1018,10 @@ enum SSHKeyService {
             }
             if let password = try KeychainService.readPassword(
                 reference: passwordCredential
-            ), !password.isEmpty {
+            ), !password.isEmpty, let settings {
                 let secretURL = try makeAskPassSecretFile(password)
                 environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = secretURL.path
+                environment["SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY"] = settings.destinationCredentialIdentity
             }
         }
         if let jumpHostPasswordCredential {
@@ -1003,9 +1034,10 @@ enum SSHKeyService {
             }
             if let jumpPassword = try KeychainService.readPassword(
                 reference: jumpHostPasswordCredential
-            ), !jumpPassword.isEmpty {
+            ), !jumpPassword.isEmpty, let jumpIdentity = settings?.jumpCredentialIdentity {
                 let secretURL = try makeSecretFile(jumpPassword, prefix: "jump")
                 environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"] = secretURL.path
+                environment["SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY"] = jumpIdentity
             }
         }
         if let proxyPasswordCredential,
@@ -1016,6 +1048,10 @@ enum SSHKeyService {
         }
         if terminalPasswordAttempt {
             try prepareTerminalPasswordAttempt(environment: &environment)
+        }
+        if settings?.jumpCredentialIdentity != nil {
+            let stateURL = try makeSecretFile("0,0", prefix: "jump-password-state")
+            environment["SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE"] = stateURL.path
         }
         return environment
     }
@@ -1030,6 +1066,7 @@ enum SSHKeyService {
             "SELECTIVEREMOTE_ASKPASS_SECRET_FILE",
             "SELECTIVEREMOTE_PROXY_SECRET_FILE",
             "SELECTIVEREMOTE_JUMP_SECRET_FILE",
+            "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE",
             "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"
         ] {
             if let path = environment[key] {

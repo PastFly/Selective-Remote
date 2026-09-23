@@ -285,6 +285,7 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 ? KeychainService.credentialReference(profileID: settings.profileID, kind: .ssh)
                 : nil
             process.environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+                settings: settings,
                 passwordCredential: passwordCredential,
                 proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                     profileID: settings.profileID,
@@ -292,8 +293,7 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 ),
                 jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                     KeychainService.credentialReference(profileID: $0, kind: .ssh)
-                },
-                jumpHostPromptTokens: settings.jumpHostPromptTokens
+                }
             )
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice

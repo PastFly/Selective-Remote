@@ -747,7 +747,7 @@
 "Нет ECDSA Touch ID Key. Создайте новый ключ — обычные Ed25519/RSA здесь намеренно не предлагаются." = "No ECDSA Touch ID Key is available. Create one; regular Ed25519/RSA keys are intentionally not offered here.";
 "Маршрут SSH" = "SSH Route";
 "Для bastion-сценария выберите другой сохранённый SSH-профиль. Его адрес и пользователь используются как ProxyJump." = "For a bastion setup, select another saved SSH profile. Its address and user are used as ProxyJump.";
-"Подключение выполняется системным OpenSSH через -J. Настройки HTTP/SOCKS proxy целевого профиля при этом не применяются." = "The connection uses the system OpenSSH client with -J. The target profile's HTTP/SOCKS proxy settings do not apply.";
+"Подключение через Jump Host использует отдельный SSH-процесс. Настройки HTTP/SOCKS proxy целевого профиля при этом не применяются." = "The Jump Host connection uses a separate SSH process. The target profile's HTTP/SOCKS proxy settings do not apply.";
 "Параметры OpenSSH" = "OpenSSH Options";
 "Проверка host key" = "Host Key Verification";
 "Включить SSH compression" = "Enable SSH Compression";

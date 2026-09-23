@@ -4516,7 +4516,7 @@ struct ContentView: View {
                     .background(Color.accentColor.opacity(0.055), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
 
                     Label(
-                        "Подключение выполняется системным OpenSSH через -J. Настройки HTTP/SOCKS proxy целевого профиля при этом не применяются.",
+                        "Подключение через Jump Host использует отдельный SSH-процесс. Настройки HTTP/SOCKS proxy целевого профиля при этом не применяются.",
                         systemImage: "info.circle"
                     )
                     .font(.caption)

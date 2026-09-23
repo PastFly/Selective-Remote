@@ -168,6 +168,23 @@ func terminalPasswordAttemptStateLifecycle() throws {
     #expect(!FileManager.default.fileExists(atPath: path))
 }
 
+@Test("Jump and destination identities stay distinct for the same user and hostname")
+func hostBoundJumpAuthenticationIdentity() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "internal.example.com"
+    destination.username = "same-user"
+    destination.sshAuthenticationMode = .password
+    var jump = ConnectionProfile(connectionType: .ssh)
+    jump.host = "internal.example.com"
+    jump.username = "same-user"
+    jump.sshPort = 2222
+    jump.sshAuthenticationMode = .password
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil, jumpHost: jump)
+    #expect(settings.destinationCredentialIdentity != settings.jumpCredentialIdentity)
+    #expect(settings.destinationCredentialIdentity.hasPrefix("destination|\(destination.id.uuidString)|"))
+    #expect(settings.jumpCredentialIdentity?.hasPrefix("jump|\(jump.id.uuidString)|") == true)
+}
+
 @Test("Saved SSH password resolves by profile after a fresh Terminal connection is reconstructed")
 func savedSSHPasswordReferenceIsStableAcrossReconnect() throws {
     var profile = ConnectionProfile(connectionType: .ssh)
@@ -197,14 +214,39 @@ func exportTerminalPasswordArgumentsForSyntheticEndpoint() throws {
     guard let path = environment["SR_TEST_SSH_ARGUMENTS_FILE"] else { return }
     let port = try #require(Int(environment["SR_TEST_SSH_PORT"] ?? ""))
     var profile = ConnectionProfile(connectionType: .ssh)
+    profile.id = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
     profile.host = "127.0.0.1"
-    profile.username = "synthetic-user"
+    profile.username = "synthetic"
     profile.sshPort = port
     profile.sshAuthenticationMode = .password
-    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
-    let arguments = environment["SR_TEST_SSH_ARGUMENT_KIND"] == "sftp"
-        ? SFTPService.persistentMasterArguments(settings: settings)
-        : SSHService.interactiveSSHArguments(settings: settings)
+    var jump: ConnectionProfile?
+    if let jumpPort = Int(environment["SR_TEST_JUMP_PORT"] ?? "") {
+        profile.sshHostKeyPolicy = .strict
+        var value = ConnectionProfile(connectionType: .ssh)
+        value.id = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
+        value.host = "127.0.0.1"
+        value.username = "synthetic"
+        value.sshPort = jumpPort
+        value.sshHostKeyPolicy = .strict
+        jump = value
+    }
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil, jumpHost: jump)
+    let arguments: [String]
+    switch environment["SR_TEST_SSH_ARGUMENT_KIND"] {
+    case "sftp":
+        arguments = SFTPService.persistentMasterArguments(settings: settings)
+    case "forwarding":
+        let forwardPort = try #require(Int(environment["SR_TEST_FORWARD_PORT"] ?? ""))
+        arguments = SSHService.commonSSHArguments(
+            settings: settings, batchMode: false, multiplexing: false
+        ) + [
+            "-N", "-T", "-o", "ExitOnForwardFailure=yes",
+            "-o", "NumberOfPasswordPrompts=1",
+            "-L", "127.0.0.1:\(forwardPort):127.0.0.1:9", settings.host
+        ]
+    default:
+        arguments = SSHService.interactiveSSHArguments(settings: settings)
+    }
     let data = try JSONSerialization.data(withJSONObject: arguments)
     try data.write(to: URL(fileURLWithPath: path))
 }

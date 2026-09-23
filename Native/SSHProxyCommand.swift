@@ -108,6 +108,9 @@ func bridge(_ socketFD: Int32) -> Never {
 struct SSHProxyCommandMain {
     static func main() {
         let args = CommandLine.arguments
+        if args.count == 11, args[1] == "jump" {
+            runJump(args)
+        }
         // mode proxyHost proxyPort targetHost targetPort username secretFile
         if args.count != 8 { die("invalid arguments") }
         let mode = args[1]
@@ -165,5 +168,51 @@ struct SSHProxyCommandMain {
         } else { die("unknown proxy mode") }
 
         bridge(fd)
+    }
+
+    private static func runJump(_ args: [String]) -> Never {
+        guard let jumpPort = Int(args[3]), (1...65_535).contains(jumpPort),
+              let targetPort = Int(args[5]), (1...65_535).contains(targetPort),
+              let expectedIdentity = ProcessInfo.processInfo.environment["SELECTIVEREMOTE_JUMP_TARGET_IDENTITY"],
+              expectedIdentity == args[8], expectedIdentity.hasPrefix("jump|") else {
+            die("jump authentication context unavailable")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = [
+            "-p", String(jumpPort),
+            "-o", "NumberOfPasswordPrompts=1",
+            "-o", "StrictHostKeyChecking=\(args[9])",
+            "-o", "ProxyJump=none",
+            "-o", "ProxyCommand=none",
+            "-o", "ClearAllForwardings=yes",
+            "-W", "\(args[4]):\(targetPort)"
+        ] + (args[10].isEmpty ? [] : ["-o", "UserKnownHostsFile=\(args[10])"])
+          + (args[6].isEmpty ? [] : ["-l", args[6]]) + [args[2]]
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE")
+        environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"] = expectedIdentity
+        environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] = String(getpid())
+        if environment["SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY"] == expectedIdentity,
+           !args[7].isEmpty {
+            environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = args[7]
+            environment["SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY"] = expectedIdentity
+        }
+        if let state = environment["SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE"] {
+            environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"] = state
+        }
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_TARGET_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY")
+        process.environment = environment
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do { try process.run() } catch { die("jump transport unavailable") }
+        process.waitUntilExit()
+        exit(process.terminationStatus)
     }
 }
