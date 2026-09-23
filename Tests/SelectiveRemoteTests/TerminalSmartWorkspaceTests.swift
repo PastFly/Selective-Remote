@@ -12,8 +12,12 @@ func newLocalTerminalCommandUsesGeneratedCreationPath() throws {
             .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
         encoding: .utf8
     )
-    let action = try #require(source.components(separatedBy: "private func openNewLocalTerminalTab()").last?
-        .components(separatedBy: "private func openConnectionCenterSource").first)
+    let afterActionName = try #require(
+        source.components(separatedBy: "private func openNewLocalTerminalTab()").dropFirst().first
+    )
+    let action = try #require(
+        afterActionName.components(separatedBy: "private func openConnectionCenterSource").first
+    )
     #expect(action.contains("workspace.tabForNewLocalTerminalCommand("))
     #expect(!action.contains("workspace.selectedTabID = primary.id"))
 }
