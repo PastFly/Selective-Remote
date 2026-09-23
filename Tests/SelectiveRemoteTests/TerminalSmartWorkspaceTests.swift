@@ -869,8 +869,8 @@ func remoteContextProbePreservesSSHAuthenticationAndJumpHost() throws {
     #expect(arguments.contains("PreferredAuthentications=keyboard-interactive,password"))
     #expect(arguments.contains("PubkeyAuthentication=no"))
     #expect(arguments.contains("2200"))
-    #expect(arguments.contains("-J"))
-    #expect(arguments.contains("jump@jump.example.test:2222"))
+    #expect(!arguments.contains("-J"))
+    #expect(arguments.contains(where: { $0.hasPrefix("ProxyCommand=") && $0.contains("jump.example.test") }))
     #expect(arguments.contains("target.example.test"))
     #expect(arguments.contains("-T"))
 }

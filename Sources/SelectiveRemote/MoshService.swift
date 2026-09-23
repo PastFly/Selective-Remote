@@ -75,7 +75,13 @@ enum MoshService {
             arguments.append("--server=\(serverPath)")
         }
         arguments.append(settings.host)
-        return MoshLaunchConfiguration(executable: resolvedExecutable, arguments: arguments)
+        let helper = Bundle.main.bundleURL
+            .appendingPathComponent("Contents/Helpers", isDirectory: true)
+            .appendingPathComponent("SelectiveRemoteSSHProxy")
+        return MoshLaunchConfiguration(
+            executable: helper.path,
+            arguments: ["mosh-launch", resolvedExecutable] + arguments
+        )
     }
 
     static func userFacingFailure(output: String, exitCode: Int32) -> String? {

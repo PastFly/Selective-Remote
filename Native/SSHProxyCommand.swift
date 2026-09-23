@@ -108,6 +108,12 @@ func bridge(_ socketFD: Int32) -> Never {
 struct SSHProxyCommandMain {
     static func main() {
         let args = CommandLine.arguments
+        if args.count >= 4, args[1] == "mosh-launch" {
+            runMosh(args)
+        }
+        if args.count == 11, args[1] == "jump" {
+            runJump(args)
+        }
         // mode proxyHost proxyPort targetHost targetPort username secretFile
         if args.count != 8 { die("invalid arguments") }
         let mode = args[1]
@@ -165,5 +171,83 @@ struct SSHProxyCommandMain {
         } else { die("unknown proxy mode") }
 
         bridge(fd)
+    }
+
+    private static func runJump(_ args: [String]) -> Never {
+        guard let jumpPort = Int(args[3]), (1...65_535).contains(jumpPort),
+              let targetPort = Int(args[5]), (1...65_535).contains(targetPort),
+              let expectedIdentity = ProcessInfo.processInfo.environment["SELECTIVEREMOTE_JUMP_TARGET_IDENTITY"],
+              expectedIdentity == args[8], expectedIdentity.hasPrefix("jump|") else {
+            die("jump authentication context unavailable")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        var childArguments = [
+            "-p", String(jumpPort),
+            "-o", "NumberOfPasswordPrompts=1",
+            "-o", "StrictHostKeyChecking=\(args[9])",
+            "-o", "ProxyJump=none",
+            "-o", "ProxyCommand=none",
+            "-o", "ClearAllForwardings=yes",
+            "-W", "\(args[4]):\(targetPort)"
+        ]
+        if !args[10].isEmpty {
+            childArguments.append("-o")
+            childArguments.append("UserKnownHostsFile=\(args[10])")
+        }
+        if !args[6].isEmpty {
+            childArguments.append("-l")
+            childArguments.append(args[6])
+        }
+        childArguments.append(args[2])
+        process.arguments = childArguments
+        var environment = ProcessInfo.processInfo.environment
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE")
+        environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"] = expectedIdentity
+        environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] = String(getpid())
+        if environment["SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY"] == expectedIdentity,
+           !args[7].isEmpty {
+            environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = args[7]
+            environment["SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY"] = expectedIdentity
+        }
+        if let state = environment["SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE"] {
+            environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"] = state
+        }
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_SECRET_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_TARGET_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH")
+        process.environment = environment
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do { try process.run() } catch { die("jump transport unavailable") }
+        process.waitUntilExit()
+        exit(process.terminationStatus)
+    }
+
+    private static func runMosh(_ args: [String]) -> Never {
+        let environment = ProcessInfo.processInfo.environment
+        guard let target = environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"],
+              target.hasPrefix("destination|"),
+              environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] == String(getppid()) else {
+            die("mosh authentication context unavailable")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: args[2])
+        process.arguments = Array(args.dropFirst(3))
+        var scopedEnvironment = environment
+        scopedEnvironment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] = String(getpid())
+        scopedEnvironment["SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH"] = "mosh"
+        process.environment = scopedEnvironment
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do { try process.run() } catch { die("mosh client unavailable") }
+        process.waitUntilExit()
+        exit(process.terminationStatus)
     }
 }

@@ -37,6 +37,9 @@ jobs:
       - name: Build ad-hoc signed DMG
         run: ./scripts/build_app.sh
 
+      - name: Test packaged managed Jump Host transport
+        run: python3 Tests/SSHPasswordE2E/run_managed_transport.py "dist/Selective Remote.app/Contents/Helpers/SelectiveRemoteSSHProxy"
+
       - name: Upload test DMG
         uses: actions/upload-artifact@v4
         with:

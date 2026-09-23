@@ -138,6 +138,8 @@ def case(name, mode, saved=None, answer="correct", expected=(0, 1, 1, 0), sftp=F
             DISPLAY=":0",
             SSH_ASKPASS=str(ASKPASS),
             SSH_ASKPASS_REQUIRE="force",
+            SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY="destination|synthetic-profile|synthetic-user@127.0.0.1",
+            SELECTIVEREMOTE_ASKPASS_OWNER_PID=str(os.getpid()),
             SR_TEST_ASKPASS_COUNT_FILE=str(count_file),
             SR_TEST_ASKPASS_RESPONSES=answer,
         )
@@ -150,6 +152,7 @@ def case(name, mode, saved=None, answer="correct", expected=(0, 1, 1, 0), sftp=F
             secret_file.write_text("synthetic-correct" if saved == "correct" else "synthetic-wrong")
             secret_file.chmod(0o600)
             environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"] = str(secret_file)
+            environment["SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY"] = environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"]
         thread.start()
         result = subprocess.run(
             ["/usr/bin/ssh", *arguments],
@@ -187,7 +190,7 @@ case("mixed_saved_correct", "both", saved="correct", expected=(0, 1, 1, 0))
 case("mixed_saved_reused", "interactive-fallback", saved="correct", expected=(0, 2, 2, 0))
 case("password_saved_wrong", "password", saved="wrong", expected=(255, 1, 1, 0))
 case("mixed_rejection_one_visible", "reject", answer="wrong", expected=(255, 2, 0, 1))
-case("jump_prompt_does_not_use_destination_secret", "password", saved="correct", jump_token="127.0.0.1", expected=(0, 1, 0, 0))
+case("misleading_jump_text_uses_destination_secret", "password", saved="correct", jump_token="127.0.0.1", expected=(0, 1, 1, 0))
 case("sftp_master_cancel", "password", answer="cancel", expected=(255, 1, 0, 0), sftp=True)
 case("sftp_master_wrong", "password", answer="wrong", expected=(255, 1, 0, 0), sftp=True)
 print("SSH_PASSWORD_SYNTHETIC_E2E=PASS")

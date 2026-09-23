@@ -13,19 +13,18 @@ struct SSHKeychainAskPass {
         let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
         let environment = ProcessInfo.processInfo.environment
         let terminalPasswordAttempt = isPasswordPrompt
-            && !isJumpHostPrompt(prompt: prompt, environment: environment)
-            ? environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"]
-            : nil
+            ? environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"] : nil
+        let preparedSecretIsInScope = hasTrustedCredentialScope(environment)
 
         // SSH password retrieval happens in the signed main application. The
         // helper receives only a random path to a short-lived 0600 file. This
         // avoids a second executable asking macOS Keychain for the same item,
         // which otherwise produces legacy “Always Allow” ACL dialogs on macOS.
         if let terminalPasswordAttempt {
-            let prepared = readPreparedSecret(
+            let prepared = preparedSecretIsInScope ? readPreparedSecret(
                 path: environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"],
                 removeAfterRead: false
-            )
+            ) : nil
             switch claimTerminalPasswordInteraction(
                 statePath: terminalPasswordAttempt,
                 hasPreparedPassword: prepared != nil
@@ -39,8 +38,8 @@ struct SSHKeychainAskPass {
             case .manual:
                 break
             }
-        } else if isPasswordPrompt,
-                  let password = preparedPasswordFromEnvironment(prompt: prompt) {
+        } else if isPasswordPrompt, preparedSecretIsInScope,
+                  let password = readPreparedSecret(path: environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"]) {
             FileHandle.standardOutput.write(Data((password + "\n").utf8))
             return
         }
@@ -185,27 +184,31 @@ struct SSHKeychainAskPass {
         return decision
     }
 
-    private static func isJumpHostPrompt(
-        prompt: String,
-        environment: [String: String]
-    ) -> Bool {
-        let normalizedPrompt = prompt.lowercased()
-        let jumpTokens = environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"]?
-            .split(separator: "\n")
-            .map { String($0).lowercased() }
-            .filter { !$0.isEmpty } ?? []
-        return jumpTokens.contains { normalizedPrompt.contains($0) }
-    }
-
-    private static func preparedPasswordFromEnvironment(prompt: String) -> String? {
-        let environment = ProcessInfo.processInfo.environment
-        if isJumpHostPrompt(prompt: prompt, environment: environment) {
-            return readPreparedSecret(path: environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"])
-        }
-
-        return readPreparedSecret(
-            path: environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"]
-        )
+    private static func hasTrustedCredentialScope(_ environment: [String: String]) -> Bool {
+        guard let target = environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"],
+              let credential = environment["SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY"],
+              let ownerText = environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"],
+              let ownerPID = Int32(ownerText), ownerPID > 1,
+              !target.isEmpty, target == credential,
+              target.hasPrefix("destination|") || target.hasPrefix("jump|") else { return false }
+        // A ProxyJump from an unmanaged SSH config inherits the outer process's
+        // environment. Its nested ssh is not a direct child of the process that
+        // prepared this target's credential, so it must request manual input.
+        var process = kinfo_proc()
+        var identifiers: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getppid()]
+        var length = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&identifiers, u_int(identifiers.count), &process, &length, nil, 0) == 0,
+              length == MemoryLayout<kinfo_proc>.stride else { return false }
+        if process.kp_eproc.e_ppid == ownerPID { return true }
+        guard environment["SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH"] == "mosh" else { return false }
+        // Mosh forks once before exec'ing SSH. The scoped launcher is the
+        // parent of that Mosh process; an additional SSH ProxyCommand child
+        // sits one level deeper and remains outside this credential scope.
+        identifiers[3] = process.kp_eproc.e_ppid
+        length = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&identifiers, u_int(identifiers.count), &process, &length, nil, 0) == 0,
+              length == MemoryLayout<kinfo_proc>.stride else { return false }
+        return process.kp_eproc.e_ppid == ownerPID
     }
 
     private static func readPreparedSecret(

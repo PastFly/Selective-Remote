@@ -37,8 +37,8 @@ func parsesConcreteSSHConfigHosts() throws {
     #expect(prod.port == 22)
 }
 
-@Test("ProxyJump добавляется в аргументы системного OpenSSH")
-func buildsProxyJumpArguments() throws {
+@Test("Jump Host uses a separate proxy process instead of inheriting destination AskPass context")
+func buildsHostBoundJumpArguments() throws {
     var target = ConnectionProfile(connectionType: .ssh)
     target.host = "internal.example.com"
     target.username = "root"
@@ -55,8 +55,11 @@ func buildsProxyJumpArguments() throws {
     )
     let arguments = SSHService.interactiveSSHArguments(settings: settings)
 
-    let index = try #require(arguments.firstIndex(of: "-J"))
-    #expect(arguments[index + 1] == "admin@bastion.example.com:2222")
+    #expect(!arguments.contains("-J"))
+    let command = try #require(arguments.first(where: { $0.hasPrefix("ProxyCommand=") }))
+    #expect(command.contains("SelectiveRemoteSSHProxy"))
+    #expect(command.contains("bastion.example.com"))
+    #expect(command.contains("2222"))
     #expect(arguments.last == "internal.example.com")
 }
 
@@ -79,9 +82,11 @@ func jumpHostCarriesCredentialRoutingMetadata() throws {
     )
 
     #expect(settings.jumpHostProfileID == jump.id)
-    #expect(settings.jumpHostPromptTokens.contains("bastion.example.com"))
-    #expect(settings.jumpHostPromptTokens.contains("admin@bastion.example.com"))
+    #expect(settings.jumpHostName == "bastion.example.com")
+    #expect(settings.jumpHostPort == 2222)
+    #expect(settings.jumpHostUsername == "admin")
     #expect(settings.jumpHostDestination == "admin@bastion.example.com:2222")
+    #expect(settings.jumpCredentialIdentity?.hasPrefix("jump|\(jump.id.uuidString)|") == true)
 }
 
 @Test("Jump Host имеет приоритет над HTTP/SOCKS proxy целевого профиля")
@@ -98,6 +103,6 @@ func proxyJumpSuppressesTargetProxyCommand() throws {
     let settings = try SSHConnectionSettings(profile: target, identity: nil, jumpHost: jump)
     let arguments = SSHService.interactiveSSHArguments(settings: settings)
 
-    #expect(arguments.contains("-J"))
-    #expect(!arguments.contains(where: { $0.hasPrefix("ProxyCommand=") }))
+    #expect(!arguments.contains("-J"))
+    #expect(arguments.contains(where: { $0.hasPrefix("ProxyCommand=") && $0.contains("SelectiveRemoteSSHProxy") }))
 }

@@ -3043,6 +3043,7 @@ final class AppModel: NSObject, ObservableObject {
                 ),
                 title: UpdateLocalization.text(ru: "Установка ключа «\(key.name)»", en: "Installing key “\(key.name)”"),
                 environment: try SSHKeyService.backgroundAuthenticationEnvironment(
+                    settings: settings,
                     passwordCredential: KeychainService.credentialReference(
                         profileID: settings.profileID,
                         kind: .ssh
@@ -3053,8 +3054,7 @@ final class AppModel: NSObject, ObservableObject {
                     ),
                     jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                         KeychainService.credentialReference(profileID: $0, kind: .ssh)
-                    },
-                    jumpHostPromptTokens: settings.jumpHostPromptTokens
+                    }
                 )
             ) { [weak self] exitCode in
                 guard let self else { return }
@@ -3853,6 +3853,7 @@ final class AppModel: NSObject, ObservableObject {
             let logKind: TerminalSessionLogKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
             let activityKind: ConnectionActivityKind = settings.terminalProtocol == .mosh ? .mosh : .ssh
             var authenticationEnvironment = try SSHKeyService.backgroundAuthenticationEnvironment(
+                settings: settings,
                 passwordCredential: credential,
                 proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                     profileID: settings.profileID,
@@ -3861,7 +3862,6 @@ final class AppModel: NSObject, ObservableObject {
                 jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                     KeychainService.credentialReference(profileID: $0, kind: .ssh)
                 },
-                jumpHostPromptTokens: settings.jumpHostPromptTokens,
                 terminalPasswordAttempt: settings.terminalProtocol == .ssh
                     && settings.authenticationMode == .password
             )
@@ -4596,6 +4596,7 @@ final class AppModel: NSObject, ObservableObject {
         }
 
         let environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+            settings: settings,
             passwordCredential: passwordCredential,
             proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
                 profileID: settings.profileID,
@@ -4604,7 +4605,6 @@ final class AppModel: NSObject, ObservableObject {
             jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                 KeychainService.credentialReference(profileID: $0, kind: .ssh)
             },
-            jumpHostPromptTokens: settings.jumpHostPromptTokens,
             requiresUserPresence: false
         )
         let snapshot = try await TerminalRemoteContextService.discover(
