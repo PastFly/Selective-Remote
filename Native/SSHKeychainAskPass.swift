@@ -5,19 +5,57 @@ import Foundation
 struct SSHKeychainAskPass {
     @MainActor
     static func main() {
+        #if SSH_ASKPASS_TESTING
+        let testInvocation = recordSyntheticInvocation()
+        #endif
         let prompt = CommandLine.arguments.dropFirst().first
             ?? "Введите пароль или passphrase для SSH-подключения."
         let isPasswordPrompt = prompt.localizedCaseInsensitiveContains("password")
+        let environment = ProcessInfo.processInfo.environment
+        let terminalPasswordAttempt = isPasswordPrompt
+            && !isJumpHostPrompt(prompt: prompt, environment: environment)
+            ? environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"]
+            : nil
 
         // SSH password retrieval happens in the signed main application. The
         // helper receives only a random path to a short-lived 0600 file. This
         // avoids a second executable asking macOS Keychain for the same item,
         // which otherwise produces legacy “Always Allow” ACL dialogs on macOS.
-        if isPasswordPrompt,
-           let password = preparedPasswordFromEnvironment(prompt: prompt) {
+        if let terminalPasswordAttempt {
+            let prepared = readPreparedSecret(
+                path: environment["SELECTIVEREMOTE_ASKPASS_SECRET_FILE"],
+                removeAfterRead: false
+            )
+            switch claimTerminalPasswordInteraction(
+                statePath: terminalPasswordAttempt,
+                hasPreparedPassword: prepared != nil
+            ) {
+            case .saved:
+                guard let prepared else { exit(1) }
+                FileHandle.standardOutput.write(Data((prepared + "\n").utf8))
+                return
+            case .denied:
+                exit(1)
+            case .manual:
+                break
+            }
+        } else if isPasswordPrompt,
+                  let password = preparedPasswordFromEnvironment(prompt: prompt) {
             FileHandle.standardOutput.write(Data((password + "\n").utf8))
             return
         }
+
+        #if SSH_ASKPASS_TESTING
+        if let response = syntheticResponse(invocation: testInvocation) {
+            if response == "cancel" {
+                cancelTerminalAttempt(terminalPasswordAttempt != nil)
+                exit(1)
+            }
+            let answer = response == "correct" ? "synthetic-correct" : "synthetic-wrong"
+            FileHandle.standardOutput.write(Data((answer + "\n").utf8))
+            return
+        }
+        #endif
 
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
@@ -56,23 +94,113 @@ struct SSHKeychainAskPass {
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
 
-        guard alert.runModal() == .alertFirstButtonReturn else { exit(1) }
+        guard alert.runModal() == .alertFirstButtonReturn,
+              !field.stringValue.isEmpty else {
+            cancelTerminalAttempt(terminalPasswordAttempt != nil)
+            exit(1)
+        }
         FileHandle.standardOutput.write(Data((field.stringValue + "\n").utf8))
     }
 
-    private static func preparedPasswordFromEnvironment(prompt: String) -> String? {
-        let environment = ProcessInfo.processInfo.environment
+    private static func cancelTerminalAttempt(_ isTerminalPasswordAttempt: Bool) {
+        guard isTerminalPasswordAttempt else { return }
+        // Terminal SSH runs as the PTY process-group leader. Stop only
+        // that process when the user cancels its password prompt.
+        let parent = getppid()
+        if parent > 1, getpgrp() == parent {
+            _ = kill(parent, SIGTERM)
+        }
+    }
+
+    #if SSH_ASKPASS_TESTING
+    private static func recordSyntheticInvocation() -> Int {
+        guard let path = ProcessInfo.processInfo.environment["SR_TEST_ASKPASS_COUNT_FILE"] else {
+            return 1
+        }
+        let url = URL(fileURLWithPath: path)
+        let previous = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        try? (previous + "x").write(to: url, atomically: true, encoding: .utf8)
+        return previous.count + 1
+    }
+
+    private static func syntheticResponse(invocation: Int) -> String? {
+        let responses = ProcessInfo.processInfo.environment["SR_TEST_ASKPASS_RESPONSES"]?
+            .split(separator: ",")
+            .map(String.init) ?? []
+        guard !responses.isEmpty else { return nil }
+        return responses[min(invocation - 1, responses.count - 1)]
+    }
+    #endif
+
+    private enum TerminalPasswordInteraction {
+        case saved
+        case manual
+        case denied
+    }
+
+    private static func claimTerminalPasswordInteraction(
+        statePath: String,
+        hasPreparedPassword: Bool
+    ) -> TerminalPasswordInteraction {
+        let descriptor = open(statePath, O_RDWR | O_NOFOLLOW | O_CLOEXEC)
+        guard descriptor >= 0 else { return .denied }
+        defer { close(descriptor) }
+        var metadata = stat()
+        guard fstat(descriptor, &metadata) == 0,
+              metadata.st_uid == getuid(),
+              metadata.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG),
+              metadata.st_mode & 0o077 == 0,
+              flock(descriptor, LOCK_EX) == 0 else { return .denied }
+        defer { _ = flock(descriptor, LOCK_UN) }
+
+        var buffer = [UInt8](repeating: 0, count: 32)
+        let count = read(descriptor, &buffer, buffer.count)
+        guard count > 0,
+              let state = String(bytes: buffer.prefix(count), encoding: .utf8) else {
+            return .denied
+        }
+        let components = state.split(separator: ",", omittingEmptySubsequences: false)
+        guard components.count == 2,
+              var savedUses = Int(components[0]),
+              var manualUses = Int(components[1]),
+              (0...2).contains(savedUses),
+              (0...1).contains(manualUses) else { return .denied }
+
+        let decision: TerminalPasswordInteraction
+        if hasPreparedPassword, savedUses < 2 {
+            savedUses += 1
+            decision = .saved
+        } else if manualUses == 0 {
+            manualUses += 1
+            decision = .manual
+        } else {
+            return .denied
+        }
+        let updated = Array("\(savedUses),\(manualUses)".utf8)
+        guard lseek(descriptor, 0, SEEK_SET) == 0,
+              ftruncate(descriptor, 0) == 0,
+              write(descriptor, updated, updated.count) == updated.count else {
+            return .denied
+        }
+        return decision
+    }
+
+    private static func isJumpHostPrompt(
+        prompt: String,
+        environment: [String: String]
+    ) -> Bool {
         let normalizedPrompt = prompt.lowercased()
         let jumpTokens = environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"]?
             .split(separator: "\n")
             .map { String($0).lowercased() }
             .filter { !$0.isEmpty } ?? []
+        return jumpTokens.contains { normalizedPrompt.contains($0) }
+    }
 
-        if jumpTokens.contains(where: { normalizedPrompt.contains($0) }),
-           let password = readPreparedSecret(
-               path: environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"]
-           ) {
-            return password
+    private static func preparedPasswordFromEnvironment(prompt: String) -> String? {
+        let environment = ProcessInfo.processInfo.environment
+        if isJumpHostPrompt(prompt: prompt, environment: environment) {
+            return readPreparedSecret(path: environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"])
         }
 
         return readPreparedSecret(
@@ -80,7 +208,10 @@ struct SSHKeychainAskPass {
         )
     }
 
-    private static func readPreparedSecret(path: String?) -> String? {
+    private static func readPreparedSecret(
+        path: String?,
+        removeAfterRead: Bool = true
+    ) -> String? {
         guard let path,
               !path.isEmpty,
               let attributes = try? FileManager.default.attributesOfItem(atPath: path),
@@ -90,7 +221,9 @@ struct SSHKeychainAskPass {
               let password = String(data: data, encoding: .utf8),
               !password.isEmpty
         else { return nil }
-        try? FileManager.default.removeItem(atPath: path)
+        if removeAfterRead {
+            try? FileManager.default.removeItem(atPath: path)
+        }
         return password
     }
 }
