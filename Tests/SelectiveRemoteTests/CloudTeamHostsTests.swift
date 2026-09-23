@@ -222,6 +222,8 @@ struct CloudTeamHostsTests {
         #expect(source.contains("synchronizeConfiguredAccountNow()"))
         #expect(!source.contains("onShowDiagnostics()"))
         #expect(!source.contains(".frame(minWidth: 520, minHeight: 340)"))
+        #expect(source.contains(".onChange(of: store.materializationIssues.count)"))
+        #expect(source.contains("if count == 0 { dismiss() }"))
         #expect(source.contains("nextHosts += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)"))
         #expect(source.contains("} catch {\n                invalid += 1"))
     }

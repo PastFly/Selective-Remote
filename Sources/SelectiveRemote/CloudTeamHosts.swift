@@ -707,6 +707,9 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
         }
         .padding(22)
         .frame(width: 520)
+        .onChange(of: store.materializationIssues.count) { _, count in
+            if count == 0 { dismiss() }
+        }
     }
 
     private var issueRows: some View {
