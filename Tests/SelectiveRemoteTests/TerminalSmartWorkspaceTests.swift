@@ -142,9 +142,11 @@ func localTerminalStartupBannerUsesApplicationLanguage() throws {
             .appendingPathComponent("Sources/SelectiveRemote/AppModel.swift"),
         encoding: .utf8
     )
+    let afterFunctionName = try #require(
+        source.components(separatedBy: "func connectLocalTerminal(").dropFirst().first
+    )
     let localConnection = try #require(
-        source.components(separatedBy: "func connectLocalTerminal(").dropFirst().first?
-            .components(separatedBy: "private func beginTerminalSessionLog(").first
+        afterFunctionName.components(separatedBy: "private func beginTerminalSessionLog(").first
     )
     #expect(localConnection.contains("title: AppLanguageStore.shared.localized(\"terminal.local.accessibility\")"))
     #expect(!localConnection.contains("title: \"Локальный терминал\""))
