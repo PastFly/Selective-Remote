@@ -119,6 +119,7 @@ private struct SFTPWorkspaceSidebarStatus: View {
 
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
+    @ObservedObject private var language = AppLanguageStore.shared
     @EnvironmentObject private var appAppearance: AppAppearanceStore
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
@@ -258,7 +259,8 @@ struct ContentView: View {
         } message: {
             Text(model.errorMessage ?? "Неизвестная ошибка")
         }
-        .alert("Обновления \(AppBrand.name)", isPresented: Binding(
+        .alert(UpdateLocalization.formatted("updates.alert.title",
+            english: language.selection.usesEnglish, AppBrand.name), isPresented: Binding(
             get: { model.updateMessage != nil },
             set: { if !$0 { model.updateMessage = nil } }
         )) {
@@ -938,7 +940,9 @@ struct ContentView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .help(selected ? "Убрать тег из фильтра" : "Фильтровать по тегу «\(tag)»")
+                        .help(selected
+                            ? UpdateLocalization.text(ru: "Убрать тег из фильтра", en: "Remove tag from filter")
+                            : UpdateLocalization.text(ru: "Фильтровать по тегу «\(tag)»", en: "Filter by tag ‘\(tag)’"))
                     }
                 }
                 .padding(.horizontal, 14)
@@ -1931,8 +1935,8 @@ struct ContentView: View {
         } else {
             Button(
                 item.connectionType == .rdp
-                    ? "Подключить RDP"
-                    : "Подключить \(item.connectionType.title)",
+                    ? UpdateLocalization.text(ru: "Подключить RDP", en: "Connect RDP")
+                    : UpdateLocalization.text(ru: "Подключить \(item.connectionType.title)", en: "Connect \(item.connectionType.title)"),
                 systemImage: item.connectionType == .rdp ? "play.fill" : "terminal"
             ) {
                 model.selectProfile(item.id)
@@ -1986,7 +1990,9 @@ struct ContentView: View {
                         options: [.caseInsensitive, .diacriticInsensitive]
                     ) == .orderedSame
                 }
-                Button(assigned ? "Убрать «\(tag)»" : "Добавить «\(tag)»") {
+                Button(assigned
+                    ? UpdateLocalization.text(ru: "Убрать «\(tag)»", en: "Remove ‘\(tag)’")
+                    : UpdateLocalization.text(ru: "Добавить «\(tag)»", en: "Add ‘\(tag)’")) {
                     if assigned {
                         model.removeProfileTag(tag, from: item.id)
                     } else {
@@ -3704,7 +3710,10 @@ struct ContentView: View {
             connection: connection,
             title: connection.displayLabel(profiles: sortedSSHProfiles)
         ) else {
-            model.errorMessage = "Достигнут лимит вкладок Terminal Workspace"
+            model.errorMessage = UpdateLocalization.text(
+                ru: "Достигнут лимит вкладок Terminal Workspace",
+                en: "Terminal Workspace tab limit reached"
+            )
             return
         }
         model.connectSSHTerminal(
@@ -3812,18 +3821,7 @@ struct ContentView: View {
     private func openNewLocalTerminalTab() {
         let workspace = model.localTerminalWorkspace()
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let tab: TerminalWorkspaceTab?
-        if workspace.displayedTabs.count == 1,
-           let primary = workspace.displayedTabs.first,
-           !primary.session.isRunning {
-            workspace.selectedTabID = primary.id
-            tab = primary
-        } else {
-            tab = workspace.addTab(
-                connection: .local(workingDirectory: home),
-                title: "Terminal \(workspace.displayedTabs.count + 1)"
-            )
-        }
+        let tab = workspace.tabForNewLocalTerminalCommand(workingDirectory: home)
         if let tab {
             model.connectLocalTerminal(
                 connection: tab.connection,
@@ -4141,7 +4139,7 @@ struct ContentView: View {
                 }
             }
             GridRow {
-                Text("Baud rate")
+                Text(UpdateLocalization.text(ru: "Скорость (бод)", en: "Baud rate"))
                 Picker("", selection: profileBinding.serialBaudRate) {
                     ForEach([300, 1_200, 2_400, 4_800, 9_600, 19_200, 38_400, 57_600, 115_200], id: \.self) {
                         Text("\($0)").tag($0)
@@ -4157,7 +4155,7 @@ struct ContentView: View {
                         ForEach([5, 6, 7, 8], id: \.self) { Text("\($0)").tag($0) }
                     }
                     Picker(UpdateLocalization.text(ru: "Чётность", en: "Parity"), selection: profileBinding.serialParity) {
-                        ForEach(SerialParity.allCases) { Text($0.title).tag($0) }
+                        ForEach(SerialParity.allCases) { Text($0.localizedTitle()).tag($0) }
                     }
                     Picker(UpdateLocalization.text(ru: "Стоп-биты", en: "Stop bits"), selection: profileBinding.serialStopBits) {
                         ForEach([1, 2], id: \.self) { Text("\($0)").tag($0) }
@@ -4167,7 +4165,7 @@ struct ContentView: View {
             GridRow {
                 Text(UpdateLocalization.text(ru: "Управление потоком", en: "Flow control"))
                 Picker("", selection: profileBinding.serialFlowControl) {
-                    ForEach(SerialFlowControl.allCases) { Text($0.title).tag($0) }
+                    ForEach(SerialFlowControl.allCases) { Text($0.localizedTitle()).tag($0) }
                 }
                 .labelsHidden()
             }
@@ -4195,7 +4193,10 @@ struct ContentView: View {
         GridRow(alignment: .top) {
             Text("Terminal").padding(.top, 7)
             VStack(alignment: .leading, spacing: 9) {
-                Picker("Terminal protocol", selection: profileBinding.sshTerminalProtocol) {
+                Picker(
+                    UpdateLocalization.text(ru: "Протокол терминала", en: "Terminal protocol"),
+                    selection: profileBinding.sshTerminalProtocol
+                ) {
                     ForEach(SSHTerminalProtocol.allCases) { terminalProtocol in
                         Label(terminalProtocol.title, systemImage: terminalProtocol.systemImage)
                             .tag(terminalProtocol)
@@ -4248,15 +4249,15 @@ struct ContentView: View {
     private var authModeHint: String {
         switch profileBinding.wrappedValue.sshAuthenticationMode {
         case .automatic:
-            "OpenSSH попробует выбранный ключ, ssh-agent и затем пароль. Удобно для совместимости."
+            UpdateLocalization.key("hosts.auth.automatic.help")
         case .password:
-            "Используется только SSH-пароль. Public key authentication отключена."
+            UpdateLocalization.key("hosts.auth.password.help")
         case .key:
-            "Используется только выбранный SSH-ключ. Пароль не будет fallback-вариантом."
+            UpdateLocalization.key("hosts.auth.key.help")
         case .touchIDKey:
-            "Touch ID Key — отдельный тип входа: используется только ECDSA-ключ и перед каждым использованием требуется Touch ID. На сервер устанавливается обычный публичный ECDSA-ключ."
+            UpdateLocalization.key("hosts.auth.touch_id.help")
         case .agent:
-            "Используются только системный ssh-agent и ~/.ssh/config."
+            UpdateLocalization.key("hosts.auth.agent.help")
         }
     }
 
@@ -4445,7 +4446,7 @@ struct ContentView: View {
 
                 if profileBinding.wrappedValue.sshAuthenticationMode == .agent {
                     Label(
-                        "Selective Remote использует системный ssh-agent и ~/.ssh/config. Пароль и выбранный SSH ID профиля не передаются OpenSSH.",
+                        UpdateLocalization.key("hosts.auth.agent.detail"),
                         systemImage: "terminal.fill"
                     )
                     .font(.caption)
@@ -4583,8 +4584,8 @@ struct ContentView: View {
                     }
                     Label(
                         profileBinding.wrappedValue.sshProxyMode == .http
-                            ? "HTTP CONNECT: Basic-аутентификация выполняется защищённым helper-процессом; пароль не попадает в аргументы OpenSSH."
-                            : "SOCKS5: поддерживаются анонимный режим и username/password; пароль хранится в Keychain и передаётся helper-процессу через временный файл 0600.",
+                            ? UpdateLocalization.key("hosts.proxy.http.help")
+                            : UpdateLocalization.key("hosts.proxy.socks.help"),
                         systemImage: "lock.shield"
                     )
                     .font(.caption)
@@ -5170,7 +5171,10 @@ struct ContentView: View {
             } else {
                 GroupBox("Проверка SSH-сервера") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Picker("Host key", selection: profileBinding.sshHostKeyPolicy) {
+                        Picker(
+                            UpdateLocalization.text(ru: "Ключ хоста", en: "Host key"),
+                            selection: profileBinding.sshHostKeyPolicy
+                        ) {
                             ForEach(SSHHostKeyPolicy.allCases) { policy in
                                 Text(policy.title).tag(policy)
                             }
@@ -5260,14 +5264,17 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(
                     model.isSelectedSessionRunning
-                        ? "Сессия активна"
+                        ? UpdateLocalization.text(ru: "Сессия активна", en: "Session Active")
                         : model.isSelectedSSHTerminalRunning
-                            ? "\(profile.connectionType.title)-терминал активен"
+                            ? UpdateLocalization.text(
+                                ru: "\(profile.connectionType.title)-терминал активен",
+                                en: "\(profile.connectionType.title) Terminal Active"
+                            )
                         : profile.connectionType == .ssh
                             ? model.selectedProfileHasActiveTunnels
-                                ? "SSH-туннель активен"
-                                : "Готово к SSH"
-                            : "Готово к подключению"
+                                ? UpdateLocalization.text(ru: "SSH-туннель активен", en: "SSH Tunnel Active")
+                                : UpdateLocalization.text(ru: "Готово к SSH", en: "Ready for SSH")
+                            : UpdateLocalization.text(ru: "Готово к подключению", en: "Ready to Connect")
                 )
                     .font(.caption.bold())
                     .foregroundStyle(.secondary)
@@ -5313,8 +5320,8 @@ struct ContentView: View {
                 } label: {
                     Label(
                         profile.connectionType == .rdp
-                            ? "Подключиться"
-                            : "Открыть \(profile.connectionType.title)",
+                            ? UpdateLocalization.text(ru: "Подключиться", en: "Connect")
+                            : UpdateLocalization.text(ru: "Открыть \(profile.connectionType.title)", en: "Open \(profile.connectionType.title)"),
                         systemImage: profile.connectionType != .rdp
                             ? "terminal"
                             : "arrow.right.circle.fill"
@@ -5629,9 +5636,9 @@ private struct ProfileRow: View {
                 Text(
                     session?.phase.rawValue
                         ?? (hasActiveSSH
-                            ? "SSH-сессия активна"
+                            ? UpdateLocalization.text(ru: "SSH-сессия активна", en: "SSH session active")
                             : activeTunnelCount > 0
-                            ? "Туннелей: \(activeTunnelCount)"
+                            ? UpdateLocalization.text(ru: "Туннелей: \(activeTunnelCount)", en: "Tunnels: \(activeTunnelCount)")
                             : inactiveProfileSubtitle)
                 )
                     .font(.caption)
@@ -5670,7 +5677,9 @@ private struct ProfileRow: View {
                 ? UpdateLocalization.text(ru: "Устройство не выбрано", en: "No device selected")
                 : profile.serialDevicePath
         }
-        guard !profile.host.isEmpty else { return "Hostname не указан" }
+        guard !profile.host.isEmpty else {
+            return UpdateLocalization.text(ru: "Hostname не указан", en: "Hostname Not Set")
+        }
         guard profile.connectionType == .ssh,
               !profile.detectedOperatingSystem.isEmpty
         else { return profile.host }
@@ -5711,8 +5720,12 @@ private struct ProfileGridCard: View {
                 .lineLimit(2)
             Text(
                 profile.connectionType == .serial
-                    ? (profile.serialDevicePath.isEmpty ? "Устройство не выбрано" : profile.serialDevicePath)
-                    : (profile.host.isEmpty ? "Hostname не указан" : profile.host)
+                    ? (profile.serialDevicePath.isEmpty
+                        ? UpdateLocalization.text(ru: "Устройство не выбрано", en: "No device selected")
+                        : profile.serialDevicePath)
+                    : (profile.host.isEmpty
+                        ? UpdateLocalization.text(ru: "Hostname не указан", en: "Hostname Not Set")
+                        : profile.host)
             )
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
@@ -5738,8 +5751,10 @@ private struct ProfileGridCard: View {
                     .frame(width: 6, height: 6)
                 Text(
                     connectionActive
-                        ? "Подключено"
-                        : activeTunnelCount > 0 ? "Туннель активен" : profile.connectionType.title
+                        ? UpdateLocalization.text(ru: "Подключено", en: "Connected")
+                        : activeTunnelCount > 0
+                            ? UpdateLocalization.text(ru: "Туннель активен", en: "Tunnel Active")
+                            : profile.connectionType.title
                 )
                 .font(.caption2)
                 .foregroundStyle(.secondary)

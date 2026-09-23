@@ -54,6 +54,7 @@ enum TerminalSnippetRootGroupSorter {
 }
 
 struct TerminalSnippetsLibraryView: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     @ObservedObject var store: TerminalCommandHistoryStore
     @ObservedObject var teamStore: SelectiveRemoteTeamSnippetStore
     @ObservedObject var model: AppModel
@@ -195,7 +196,8 @@ struct TerminalSnippetsLibraryView: View {
             }
             Button("Отмена", role: .cancel) { deleteSnippet = nil }
         } message: { snippet in
-            Text("«\(snippet.title)» будет удалён из общей библиотеки Snippets.")
+            Text(UpdateLocalization.formatted("terminal.snippets.delete.confirm",
+                english: language.selection.usesEnglish, snippet.title))
         }
         .alert("Отключить SSH Targets?", isPresented: $showsDisconnectConfirmation) {
             Button("Отключить", role: .destructive) {
@@ -445,7 +447,8 @@ struct TerminalSnippetsLibraryView: View {
                     .frame(width: 38)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(groupDisplayName(group.name)).font(.headline)
-                    Text("\(recursiveSnippetCount(in: group)) сниппетов")
+                    Text(UpdateLocalization.formatted("terminal.snippets.count",
+                        english: language.selection.usesEnglish, recursiveSnippetCount(in: group)))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -466,7 +469,8 @@ struct TerminalSnippetsLibraryView: View {
                     .foregroundStyle(Color.accentColor)
                 Spacer(minLength: 8)
                 Text(groupDisplayName(group.name)).font(.headline).lineLimit(2)
-                Text("\(recursiveSnippetCount(in: group)) сниппетов")
+                Text(UpdateLocalization.formatted("terminal.snippets.count",
+                    english: language.selection.usesEnglish, recursiveSnippetCount(in: group)))
                     .font(.caption).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, minHeight: 118, alignment: .leading)
@@ -691,7 +695,8 @@ struct TerminalSnippetsLibraryView: View {
                 Button {
                     _ = model.runTerminalSnippet(snippet)
                 } label: {
-                    Label("Запустить на \(snippet.targets.count) Targets", systemImage: "play.fill")
+                    Label(UpdateLocalization.formatted("terminal.snippets.run_targets",
+                        english: language.selection.usesEnglish, snippet.targets.count), systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -834,7 +839,8 @@ struct TerminalSnippetsLibraryView: View {
             )
             .foregroundStyle(failed > 0 ? Color.orange : (connecting > 0 ? Color.blue : Color.green))
             VStack(alignment: .leading, spacing: 3) {
-                Text("Последний запуск · \(summary.title)")
+                Text(UpdateLocalization.formatted("terminal.snippets.last_run",
+                    english: language.selection.usesEnglish, summary.title))
                     .font(.subheadline.weight(.semibold))
                 Text(summary.startedAt, style: .time)
                     .font(.caption)
@@ -842,15 +848,18 @@ struct TerminalSnippetsLibraryView: View {
             }
             Spacer()
             if sent > 0 {
-                Label("Отправлено: \(sent)", systemImage: "paperplane.fill")
+                Label(UpdateLocalization.formatted("terminal.snippets.sent",
+                    english: language.selection.usesEnglish, sent), systemImage: "paperplane.fill")
                     .foregroundStyle(.green)
             }
             if connecting > 0 {
-                Label("Подключение: \(connecting)", systemImage: "arrow.triangle.2.circlepath")
+                Label(UpdateLocalization.formatted("terminal.snippets.connecting",
+                    english: language.selection.usesEnglish, connecting), systemImage: "arrow.triangle.2.circlepath")
                     .foregroundStyle(.blue)
             }
             if failed > 0 {
-                Label("Ошибки: \(failed)", systemImage: "xmark.octagon.fill")
+                Label(UpdateLocalization.formatted("terminal.snippets.errors",
+                    english: language.selection.usesEnglish, failed), systemImage: "xmark.octagon.fill")
                     .foregroundStyle(.orange)
             }
             Button("Отключить SSH Targets") {

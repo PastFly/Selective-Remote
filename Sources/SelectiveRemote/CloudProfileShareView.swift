@@ -133,7 +133,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
                             HStack {
                                 Label(team.name, systemImage: "person.3.fill")
                                 Spacer()
-                                Text(team.role.rawValue.capitalized)
+                                Text(team.role.displayRoleTitle())
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }

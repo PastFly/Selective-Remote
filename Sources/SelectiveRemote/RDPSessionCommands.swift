@@ -15,12 +15,12 @@ enum RDPSessionCommand: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .windows: "Windows"
-        case .language: "Сменить язык"
+        case .language: UpdateLocalization.key("menu.rdp.language")
         case .controlAltDelete: "Ctrl+Alt+Delete"
         case .altTab: "Alt+Tab"
         case .printScreen: "Print Screen"
-        case .fullScreen: "Полный экран / окно"
-        case .disconnect: "Отключить"
+        case .fullScreen: UpdateLocalization.key("menu.rdp.full_screen")
+        case .disconnect: UpdateLocalization.key("menu.rdp.disconnect")
         }
     }
 

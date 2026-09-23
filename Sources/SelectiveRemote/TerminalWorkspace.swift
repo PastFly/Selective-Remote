@@ -7,6 +7,9 @@ enum SerialParity: String, Codable, CaseIterable, Identifiable {
     case odd
 
     var id: String { rawValue }
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        UpdateLocalization.key("terminal.serial.parity.\(rawValue)", english: english)
+    }
     var title: String {
         switch self {
         case .none: "Нет"
@@ -22,6 +25,9 @@ enum SerialFlowControl: String, Codable, CaseIterable, Identifiable {
     case software
 
     var id: String { rawValue }
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        UpdateLocalization.key("terminal.serial.flow.\(rawValue)", english: english)
+    }
     var title: String {
         switch self {
         case .none: "Нет"
@@ -38,6 +44,38 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     case grid
 
     var id: String { rawValue }
+
+    var localizedTitle: String {
+        title(forEnglish: UpdateLocalization.usesEnglish)
+    }
+
+    private func title(forEnglish english: Bool) -> String {
+        switch self {
+        case .single: english ? "Single pane" : "Одна панель"
+        case .splitHorizontal: english ? "Split left to right" : "Разделить слева направо"
+        case .splitVertical: english ? "Split top to bottom" : "Разделить сверху вниз"
+        case .grid: english ? "Grid of up to four panes" : "Сетка до четырёх панелей"
+        }
+    }
+
+    func localizedSummary(tabCount: Int, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let layout = title(forEnglish: english)
+        if english {
+            return "\(tabCount) \(tabCount == 1 ? "tab" : "tabs") · \(layout)"
+        }
+        let lastTwo = tabCount % 100
+        let noun: String
+        if (11...14).contains(lastTwo) {
+            noun = "вкладок"
+        } else {
+            switch tabCount % 10 {
+            case 1: noun = "вкладка"
+            case 2...4: noun = "вкладки"
+            default: noun = "вкладок"
+            }
+        }
+        return "\(tabCount) \(noun) · \(layout)"
+    }
 
     var title: String {
         switch self {
@@ -65,6 +103,24 @@ enum TerminalWorkspaceSessionState: Equatable {
     case stopping
     case disconnected
     case error(Int32)
+
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let suffix: String
+        switch self {
+        case .connecting: suffix = "connecting"
+        case .connected: suffix = "connected"
+        case .reconnecting: suffix = "reconnecting"
+        case .stopping: suffix = "stopping"
+        case .disconnected: suffix = "disconnected"
+        case .error: suffix = "error"
+        }
+        return UpdateLocalization.key("terminal.state.\(suffix)", english: english)
+    }
+
+    func localizedDetail(english: Bool = UpdateLocalization.usesEnglish) -> String? {
+        guard case let .error(code) = self else { return nil }
+        return UpdateLocalization.formatted("terminal.state.exitCode", english: english, code)
+    }
 
     static func resolve(
         phase: EmbeddedTerminalPhase,
@@ -106,12 +162,7 @@ enum TerminalWorkspaceSessionState: Equatable {
     }
 
     var detail: String? {
-        switch self {
-        case let .error(code):
-            "Exit code \(code)"
-        default:
-            nil
-        }
+        localizedDetail()
     }
 
     var systemImage: String {
@@ -343,6 +394,7 @@ struct TerminalTabConnection: Codable, Equatable {
 struct TerminalWorkspaceTab: Identifiable {
     let id: UUID
     var title: String
+    var generatedTitleNumber: Int?
     let session: TerminalSessionModel
     var isPrimary: Bool
     var connection: TerminalTabConnection
@@ -355,6 +407,7 @@ struct TerminalWorkspaceTab: Identifiable {
     init(
         id: UUID,
         title: String,
+        generatedTitleNumber: Int? = nil,
         session: TerminalSessionModel,
         isPrimary: Bool,
         connection: TerminalTabConnection,
@@ -365,6 +418,7 @@ struct TerminalWorkspaceTab: Identifiable {
     ) {
         self.id = id
         self.title = title
+        self.generatedTitleNumber = generatedTitleNumber
         self.session = session
         self.isPrimary = isPrimary
         self.connection = connection
@@ -390,6 +444,7 @@ private struct StoredTerminalWorkspace: Codable {
     struct Tab: Codable {
         let id: UUID
         var title: String
+        var generatedTitleNumber: Int?
         let isPrimary: Bool
         var connection: TerminalTabConnection?
         var isPinned: Bool?
@@ -406,6 +461,7 @@ struct TerminalWorkspaceSnapshot: Codable, Equatable, Sendable {
     struct Tab: Codable, Equatable, Sendable {
         let id: UUID
         var title: String
+        var generatedTitleNumber: Int?
         var isPrimary: Bool
         var connection: TerminalTabConnection
         var isPinned: Bool
@@ -436,6 +492,8 @@ final class TerminalWorkspaceModel: ObservableObject {
     let profileID: UUID
 
     private let defaults: UserDefaults
+    private let language: AppLanguageStore
+    private var languageObserver: AnyCancellable?
     private var sessionObservers: [UUID: AnyCancellable] = [:]
     private var sessionPhaseObservers: [UUID: AnyCancellable] = [:]
     private var appearanceObservers: [UUID: AnyCancellable] = [:]
@@ -448,10 +506,12 @@ final class TerminalWorkspaceModel: ObservableObject {
         profileID: UUID,
         primarySession: TerminalSessionModel,
         primaryConnection: TerminalTabConnection? = nil,
-        defaults: UserDefaults = .standard
+        defaults: UserDefaults = .standard,
+        language: AppLanguageStore = .shared
     ) {
         self.profileID = profileID
         self.defaults = defaults
+        self.language = language
 
         let initialStorageKey = "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
         let stored = defaults.data(forKey: initialStorageKey)
@@ -460,7 +520,8 @@ final class TerminalWorkspaceModel: ObservableObject {
             ?? stored?.tabs.first
             ?? StoredTerminalWorkspace.Tab(
                 id: UUID(),
-                title: "Терминал 1",
+                title: Self.generatedTitle(1, language: language.selection),
+                generatedTitleNumber: 1,
                 isPrimary: true,
                 connection: nil,
                 isPinned: false,
@@ -469,7 +530,10 @@ final class TerminalWorkspaceModel: ObservableObject {
         var restoredTabs = [
             TerminalWorkspaceTab(
                 id: primaryMetadata.id,
-                title: Self.normalizedTitle(primaryMetadata.title, fallback: "Терминал 1"),
+                title: primaryMetadata.generatedTitleNumber.map {
+                    Self.generatedTitle($0, language: language.selection)
+                } ?? primaryMetadata.title,
+                generatedTitleNumber: primaryMetadata.generatedTitleNumber,
                 session: primarySession,
                 isPrimary: true,
                 connection: primaryMetadata.connection
@@ -487,10 +551,10 @@ final class TerminalWorkspaceModel: ObservableObject {
             restoredTabs.append(
                 TerminalWorkspaceTab(
                     id: metadata.id,
-                    title: Self.normalizedTitle(
-                        metadata.title,
-                        fallback: "Терминал \(restoredTabs.count + 1)"
-                    ),
+                    title: metadata.generatedTitleNumber.map {
+                        Self.generatedTitle($0, language: language.selection)
+                    } ?? metadata.title,
+                    generatedTitleNumber: metadata.generatedTitleNumber,
                     session: TerminalSessionModel(),
                     isPrimary: false,
                     connection: metadata.connection ?? .savedProfile(profileID),
@@ -519,6 +583,9 @@ final class TerminalWorkspaceModel: ObservableObject {
         }
         layout = stored?.layout ?? .single
         observeSessions()
+        languageObserver = language.$selection.dropFirst().sink { [weak self] selection in
+            self?.refreshGeneratedTitles(for: selection)
+        }
         isRestoring = false
         normalizeSelectionAndPersist()
     }
@@ -559,6 +626,20 @@ final class TerminalWorkspaceModel: ObservableObject {
         return tabs.filter { visibleIDs.contains($0.id) }
     }
 
+    /// The menu command may reuse only a proven generated, dormant primary tab.
+    /// A persisted title without provenance might be user-defined, even when its
+    /// text resembles a default title, so opening a new tab must preserve it.
+    func tabForNewLocalTerminalCommand(workingDirectory: String) -> TerminalWorkspaceTab? {
+        if displayedTabs.count == 1,
+           let primary = displayedTabs.first,
+           primary.generatedTitleNumber != nil,
+           !primary.session.isRunning {
+            selectedTabID = primary.id
+            return primary
+        }
+        return addTab(connection: .local(workingDirectory: workingDirectory))
+    }
+
     func moveTab(_ draggedID: UUID, to targetID: UUID) {
         guard draggedID != targetID,
               let sourceIndex = tabs.firstIndex(where: { $0.id == draggedID }),
@@ -580,11 +661,13 @@ final class TerminalWorkspaceModel: ObservableObject {
     ) -> TerminalWorkspaceTab? {
         if isEmptyState {
             let resolvedConnection = connection ?? .savedProfile(profileID)
+            let generated = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
             tabs[0].connection = resolvedConnection
             tabs[0].title = Self.normalizedTitle(
-                title ?? "Терминал 1",
-                fallback: "Терминал 1"
+                title ?? Self.generatedTitle(1, language: language.selection),
+                fallback: Self.generatedTitle(1, language: language.selection)
             )
+            tabs[0].generatedTitleNumber = generated ? 1 : nil
             tabs[0].isEphemeral = ephemeral
             selectedTabID = tabs[0].id
             persist()
@@ -592,12 +675,15 @@ final class TerminalWorkspaceModel: ObservableObject {
             return tabs[0]
         }
         guard tabs.count < 8 else { return nil }
+        let number = (tabs.compactMap(\.generatedTitleNumber).max() ?? 0) + 1
+        let generated = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         let tab = TerminalWorkspaceTab(
             id: UUID(),
             title: Self.normalizedTitle(
-                title ?? "Терминал \(tabs.count + 1)",
-                fallback: "Терминал \(tabs.count + 1)"
+                title ?? Self.generatedTitle(number, language: language.selection),
+                fallback: Self.generatedTitle(number, language: language.selection)
             ),
+            generatedTitleNumber: generated ? number : nil,
             session: TerminalSessionModel(),
             isPrimary: false,
             connection: connection ?? .savedProfile(profileID),
@@ -652,7 +738,8 @@ final class TerminalWorkspaceModel: ObservableObject {
         if tabs.count == 1 {
             tabs[0].session.stop()
             remoteContexts[id] = nil
-            tabs[0].title = "Новый терминал"
+            tabs[0].title = Self.generatedTitle(0, language: language.selection)
+            tabs[0].generatedTitleNumber = 0
             tabs[0].connection = .custom(host: "", username: "")
             tabs[0].isPrimary = true
             tabs[0].isEphemeral = false
@@ -684,8 +771,10 @@ final class TerminalWorkspaceModel: ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == id }) else { return }
         tabs[index].title = Self.normalizedTitle(
             rawTitle,
-            fallback: "Терминал \(index + 1)"
+            fallback: Self.generatedTitle(index + 1, language: language.selection)
         )
+        tabs[index].generatedTitleNumber = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? index + 1 : nil
         persist()
         objectWillChange.send()
     }
@@ -701,10 +790,13 @@ final class TerminalWorkspaceModel: ObservableObject {
         else { return false }
         tabs[index].connection = connection
         remoteContexts[tabID] = nil
+        let generatedNumber = suggestedTitle == tabs[index].title
+            ? tabs[index].generatedTitleNumber : nil
         tabs[index].title = Self.normalizedTitle(
             suggestedTitle,
-            fallback: "Терминал \(index + 1)"
+            fallback: Self.generatedTitle(index + 1, language: language.selection)
         )
+        tabs[index].generatedTitleNumber = generatedNumber
         persist()
         objectWillChange.send()
         return true
@@ -761,6 +853,7 @@ final class TerminalWorkspaceModel: ObservableObject {
                 TerminalWorkspaceSnapshot.Tab(
                     id: tab.id,
                     title: tab.title,
+                    generatedTitleNumber: tab.generatedTitleNumber,
                     isPrimary: tab.isPrimary,
                     connection: tab.connection,
                     isPinned: tab.isPinned,
@@ -799,10 +892,13 @@ final class TerminalWorkspaceModel: ObservableObject {
         remoteContexts.removeAll()
 
         var restored: [TerminalWorkspaceTab] = []
-        for (index, item) in metadata.enumerated() {
+        for item in metadata {
             let tab = TerminalWorkspaceTab(
                 id: item.id,
-                title: Self.normalizedTitle(item.title, fallback: "Терминал \(index + 1)"),
+                title: item.generatedTitleNumber.map {
+                    Self.generatedTitle($0, language: language.selection)
+                } ?? item.title,
+                generatedTitleNumber: item.generatedTitleNumber,
                 session: item.isPrimary ? reusablePrimarySession : TerminalSessionModel(),
                 isPrimary: item.isPrimary,
                 connection: item.connection,
@@ -898,6 +994,7 @@ final class TerminalWorkspaceModel: ObservableObject {
                 StoredTerminalWorkspace.Tab(
                     id: $0.id,
                     title: $0.title,
+                    generatedTitleNumber: $0.generatedTitleNumber,
                     isPrimary: $0.isPrimary,
                     connection: $0.connection,
                     isPinned: $0.isPinned,
@@ -917,5 +1014,24 @@ final class TerminalWorkspaceModel: ObservableObject {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return fallback }
         return String(trimmed.prefix(40))
+    }
+
+    private static func generatedTitle(_ number: Int, language: AppLanguage) -> String {
+        if number == 0 {
+            return language.usesEnglish ? "New Terminal" : "Новый терминал"
+        }
+        return "\(language.usesEnglish ? "Terminal" : "Терминал") \(number)"
+    }
+
+    private func refreshGeneratedTitles(for selection: AppLanguage) {
+        var changed = false
+        for index in tabs.indices {
+            guard let number = tabs[index].generatedTitleNumber else { continue }
+            let title = Self.generatedTitle(number, language: selection)
+            guard tabs[index].title != title else { continue }
+            tabs[index].title = title
+            changed = true
+        }
+        if changed { persist() }
     }
 }

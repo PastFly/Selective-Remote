@@ -65,7 +65,8 @@ func rdpDNSFailurePresentation() {
     #expect(failure.kind == .dns)
     #expect(!failure.retryable)
     #expect(failure.technicalCode == "ERRCONNECT_DNS_NAME_NOT_FOUND")
-    #expect(failure.message.contains("Проверьте hostname, DNS и подключение к VPN"))
+    #expect(failure.message.contains("Проверьте hostname, DNS и подключение к VPN") ||
+            failure.message.contains("Check the hostname, DNS, and VPN connection"))
     #expect(failure.message.contains("ERRCONNECT_DNS_NAME_NOT_FOUND"))
 }
 
@@ -101,8 +102,9 @@ func smartReconnectProgressFormatsRuntimeState() {
         nextAttemptAt: now.addingTimeInterval(4),
         reason: "Network drop"
     )
-    #expect(progress.attemptLabel == "Попытка 2/3")
-    #expect(progress.countdownText(now: now) == "Следующая попытка через 4 с")
+    #expect(progress.attemptLabel == "Попытка 2/3" || progress.attemptLabel == "Attempt 2/3")
+    #expect(progress.countdownText(now: now) == "Следующая попытка через 4 с" ||
+            progress.countdownText(now: now) == "Next attempt in 4 sec")
 }
 
 @Test("Phase 4 подключён к Terminal, Forwarding и RDP без отдельного session manager")

@@ -444,6 +444,7 @@ private extension String {
 
 struct DiagnosticsCenterView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var language = AppLanguageStore.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Pane: String, CaseIterable, Identifiable {
@@ -615,7 +616,7 @@ struct DiagnosticsCenterView: View {
         HStack(spacing: 10) {
             Picker("Раздел", selection: $selectedPane) {
                 ForEach(Pane.allCases) { pane in
-                    Text(LocalizedStringKey(pane.title)).tag(pane)
+                    Text(language.localized("diagnostics.pane.\(pane.rawValue)")).tag(pane)
                 }
             }
             .frame(width: 210)
@@ -1024,7 +1025,7 @@ struct DiagnosticsCenterView: View {
     private func exportDiagnostic() {
         let report = report
         let panel = NSSavePanel()
-        panel.title = String(localized: "Экспорт диагностики")
+        panel.title = UpdateLocalization.key("diagnostics.export.title")
         panel.nameFieldStringValue = exportFilename(report.generatedAt)
         panel.allowedContentTypes = [.plainText]
         panel.canCreateDirectories = true

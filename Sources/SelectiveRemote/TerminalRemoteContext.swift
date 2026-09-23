@@ -55,13 +55,13 @@ enum TerminalRemoteContextError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableUnavailable:
-            "Системный /usr/bin/ssh недоступен"
+            UpdateLocalization.text(ru: "Системный /usr/bin/ssh недоступен", en: "The system /usr/bin/ssh is unavailable")
         case .timedOut:
-            "Сервер не ответил за 10 секунд"
+            UpdateLocalization.text(ru: "Сервер не ответил за 10 секунд", en: "The server did not respond within 10 seconds")
         case let .commandFailed(message):
             message.isEmpty
-                ? "Не удалось получить сведения о сервере"
-                : "Не удалось получить сведения: \(message)"
+                ? UpdateLocalization.text(ru: "Не удалось получить сведения о сервере", en: "Could not retrieve server information")
+                : UpdateLocalization.text(ru: "Не удалось получить сведения: \(message)", en: "Could not retrieve server information: \(message)")
         }
     }
 }

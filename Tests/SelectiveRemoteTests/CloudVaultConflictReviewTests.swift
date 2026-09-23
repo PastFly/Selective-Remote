@@ -17,7 +17,7 @@ struct CloudVaultConflictReviewTests {
         }
         let rendered = summaries.map { "\($0.title) \($0.metadata)" }.joined(separator: " ")
         #expect(rendered.contains("Production SSH"))
-        #expect(rendered.contains("credential"))
+        #expect(rendered.localizedCaseInsensitiveContains("credential") || rendered.contains("Учётные данные"))
         #expect(rendered.contains("must-not-render") == false)
         #expect(summaries.contains { $0.isDeletion })
     }

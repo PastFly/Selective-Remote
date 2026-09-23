@@ -1,6 +1,43 @@
 import AppKit
 import SwiftUI
 
+enum SelectiveRemoteCloudTeamStatus: Equatable {
+    case teamCreated
+    case usernameInvited
+    case linkCreated
+    case emailInvited
+    case invitationAccepted
+    case invitationRevoked
+    case vaultCreated
+    case synchronized(received: Int, uploaded: Int, granted: Int)
+    case vaultRenamed
+
+    func message(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        switch self {
+        case .teamCreated:
+            english ? "Team created." : "Team создана."
+        case .usernameInvited:
+            english ? "The @username invitation is active for 48 hours." : "Приглашение по @username создано на 48 часов."
+        case .linkCreated:
+            english ? "A 48-hour single-use link was created." : "Одноразовая ссылка создана на 48 часов."
+        case .emailInvited:
+            english ? "The email invitation was sent and is active for 48 hours." : "Приглашение отправлено по email и действует 48 часов."
+        case .invitationAccepted:
+            english ? "Invitation accepted." : "Приглашение принято."
+        case .invitationRevoked:
+            english ? "Invitation revoked." : "Приглашение отозвано."
+        case .vaultCreated:
+            english ? "Shared Vault created." : "Shared Vault создан."
+        case let .synchronized(received, uploaded, granted):
+            english
+                ? "Team Vaults synchronized: \(received) received, \(uploaded) uploaded, \(granted) access grants."
+                : "Team Vaults синхронизированы: получено \(received), отправлено \(uploaded), предоставлено доступов \(granted)."
+        case .vaultRenamed:
+            english ? "The Team Vault was renamed." : "Team Vault переименован."
+        }
+    }
+}
+
 struct SelectiveRemoteCloudTeamManagementView: View {
     let endpoint: URL
     let client: SelectiveRemoteCloudAPIClient
@@ -27,7 +64,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var latestInvitationURL: String?
     @State private var newVaultName = ""
     @State private var isBusy = false
-    @State private var statusMessage: String?
+    @State private var statusMessage: SelectiveRemoteCloudTeamStatus?
     @State private var errorMessage: String?
     @State private var synchronizingVaultID: UUID?
     @State private var renamingVaultID: UUID?
@@ -161,7 +198,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             .padding()
 
             if let statusMessage {
-                Label(statusMessage, systemImage: "checkmark.circle.fill")
+                Label(statusMessage.message(), systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .padding(.horizontal)
             }
@@ -392,7 +429,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(invitationTitle(invitation))
-                            Text("\(roleTitle(invitation.role)) · \(invitation.expiresAt)")
+                            Text("\(roleTitle(invitation.role)) · \(UpdateLocalization.cloudTimestamp(invitation.expiresAt))")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -620,7 +657,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             do {
                 let team = try await client.createTeam(endpoint: endpoint, name: name)
                 newTeamName = ""
-                statusMessage = UpdateLocalization.text(ru: "Team создана.", en: "Team created.")
+                statusMessage = .teamCreated
                 onInventoryChanged()
                 await loadTeams(preferredID: team.id)
             } catch {
@@ -645,10 +682,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 )
                 invitationUsername = ""
                 latestInvitationURL = nil
-                statusMessage = UpdateLocalization.text(
-                    ru: "Приглашение по @username создано на 48 часов.",
-                    en: "The @username invitation is active for 48 hours."
-                )
+                statusMessage = .usernameInvited
                 await loadSelectedTeam()
             } catch {
                 errorMessage = error.localizedDescription
@@ -671,10 +705,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     throw SelectiveRemoteCloudError.invalidResponse
                 }
                 latestInvitationURL = url
-                statusMessage = UpdateLocalization.text(
-                    ru: "Одноразовая ссылка создана на 48 часов.",
-                    en: "A 48-hour single-use link was created."
-                )
+                statusMessage = .linkCreated
                 await loadSelectedTeam()
             } catch {
                 errorMessage = error.localizedDescription
@@ -692,7 +723,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             do {
                 _ = try await client.inviteTeamMember(endpoint: endpoint, teamID: team.id, email: email, role: invitationRole)
                 invitationEmail = ""
-                statusMessage = UpdateLocalization.text(ru: "Приглашение отправлено по email и действует 48 часов.", en: "The email invitation was sent and is active for 48 hours.")
+                statusMessage = .emailInvited
                 await loadSelectedTeam()
             } catch { errorMessage = error.localizedDescription }
             isBusy = false
@@ -705,7 +736,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = nil
             do {
                 _ = try await client.acceptTeamInvitation(endpoint: endpoint, invitationID: invitation.id)
-                statusMessage = UpdateLocalization.text(ru: "Приглашение принято.", en: "Invitation accepted.")
+                statusMessage = .invitationAccepted
                 onInventoryChanged()
                 await loadTeams(preferredID: invitation.teamID)
             } catch {
@@ -726,7 +757,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     invitationID: invitation.id
                 )
                 if invitation.type == .link { latestInvitationURL = nil }
-                statusMessage = UpdateLocalization.text(ru: "Приглашение отозвано.", en: "Invitation revoked.")
+                statusMessage = .invitationRevoked
                 await loadSelectedTeam()
             } catch {
                 errorMessage = error.localizedDescription
@@ -760,7 +791,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             do {
                 _ = try await client.createSharedVault(endpoint: endpoint, teamID: team.id, name: name)
                 newVaultName = ""
-                statusMessage = UpdateLocalization.text(ru: "Shared Vault создан.", en: "Shared Vault created.")
+                statusMessage = .vaultCreated
                 onInventoryChanged()
                 await loadSelectedTeam()
             } catch {
@@ -800,9 +831,10 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                         en: "Synchronization was incomplete: \(report.failures) failures, \(report.pendingWrappers) pending wrappers, \(report.rotations) rotations required."
                     ) + detail
                 } else {
-                    statusMessage = UpdateLocalization.text(
-                        ru: "Team Vaults синхронизированы: получено \(report.synchronizedVaults), отправлено \(report.uploadedVaults), выдано wrappers \(report.wrappersGranted).",
-                        en: "Team Vaults synchronized: \(report.synchronizedVaults) received, \(report.uploadedVaults) uploaded, \(report.wrappersGranted) wrappers granted."
+                    statusMessage = .synchronized(
+                        received: report.synchronizedVaults,
+                        uploaded: report.uploadedVaults,
+                        granted: report.wrappersGranted
                     )
                 }
                 await loadSelectedTeam()
@@ -830,10 +862,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 )
                 renamingVaultID = nil
                 vaultNameDraft = ""
-                statusMessage = UpdateLocalization.text(
-                    ru: "Team Vault переименован.",
-                    en: "The Team Vault was renamed."
-                )
+                statusMessage = .vaultRenamed
                 onInventoryChanged()
                 await loadSelectedTeam()
             } catch {
@@ -848,11 +877,6 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
-        switch role {
-        case .owner: UpdateLocalization.text(ru: "Владелец", en: "Owner")
-        case .admin: UpdateLocalization.text(ru: "Администратор", en: "Admin")
-        case .editor: UpdateLocalization.text(ru: "Редактор", en: "Editor")
-        case .viewer: UpdateLocalization.text(ru: "Читатель", en: "Viewer")
-        }
+        role.displayRoleTitle()
     }
 }

@@ -13,8 +13,8 @@ enum CapturePermissionKind: Sendable {
 
     var title: String {
         switch self {
-        case .camera: "Камера"
-        case .microphone: "Микрофон"
+        case .camera: UpdateLocalization.key("capture.permission.camera")
+        case .microphone: UpdateLocalization.key("capture.permission.microphone")
         }
     }
 
@@ -52,11 +52,11 @@ enum CapturePermissionState: Equatable, Sendable {
 
     var title: String {
         switch self {
-        case .notDetermined: "Ещё не запрашивалось"
-        case .authorized: "Разрешено"
-        case .denied: "Запрещено"
-        case .restricted: "Ограничено системой"
-        case .unknown: "Неизвестно"
+        case .notDetermined: UpdateLocalization.key("capture.permissionState.notDetermined")
+        case .authorized: UpdateLocalization.key("capture.permissionState.authorized")
+        case .denied: UpdateLocalization.key("capture.permissionState.denied")
+        case .restricted: UpdateLocalization.key("capture.permissionState.restricted")
+        case .unknown: UpdateLocalization.key("capture.permissionState.unknown")
         }
     }
 
@@ -99,17 +99,17 @@ enum CameraPreviewFailure: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .missingUsageDescription:
-            "В этой копии приложения отсутствует описание доступа к камере. Соберите полный пакет через scripts/build_app.sh."
+            UpdateLocalization.text(ru: "В этой копии приложения отсутствует описание доступа к камере. Соберите полный пакет через scripts/build_app.sh.", en: "This app build is missing its camera usage description. Build the complete app bundle with scripts/build_app.sh.")
         case .permissionDenied:
-            "macOS не разрешила доступ к камере. Включите его в системных настройках."
+            UpdateLocalization.text(ru: "macOS не разрешила доступ к камере. Включите его в системных настройках.", en: "macOS denied camera access. Enable it in System Settings.")
         case .noCamera:
-            "Подходящая камера не обнаружена. Подключите устройство и обновите список."
+            UpdateLocalization.text(ru: "Подходящая камера не обнаружена. Подключите устройство и обновите список.", en: "No suitable camera was found. Connect one and refresh the list.")
         case let .inputCreation(message):
-            "Не удалось открыть камеру: \(message)"
+            UpdateLocalization.text(ru: "Не удалось открыть камеру: \(message)", en: "Could not open camera: \(message)")
         case .inputRejected:
-            "AVFoundation не смогла добавить выбранную камеру в сеанс предпросмотра."
+            UpdateLocalization.text(ru: "AVFoundation не смогла добавить выбранную камеру в сеанс предпросмотра.", en: "AVFoundation could not add the selected camera to the preview session.")
         case .startFailed:
-            "AVFoundation настроила камеру, но не смогла запустить предпросмотр."
+            UpdateLocalization.text(ru: "AVFoundation настроила камеру, но не смогла запустить предпросмотр.", en: "AVFoundation configured the camera but could not start the preview.")
         }
     }
 }
@@ -384,6 +384,7 @@ final class CaptureDiagnosticsModel: ObservableObject {
 
 struct CaptureDiagnosticsView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     @StateObject private var diagnostics = CaptureDiagnosticsModel()
 
     let cameraSelectionMode: CameraSelectionMode
@@ -472,7 +473,8 @@ struct CaptureDiagnosticsView: View {
 
                 VStack(alignment: .leading, spacing: 5) {
                     Label(cameraSelectionDescription, systemImage: "video.fill")
-                    Text("Камер обнаружено: \(cameraCount) · \(cameraQuality.details)")
+                    Text(UpdateLocalization.formatted("capture.cameras.found",
+                        english: language.selection.usesEnglish, cameraCount, cameraQuality.details))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                     if let info = diagnostics.previewInfo {

@@ -8,11 +8,11 @@ enum ProfileTransferError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedFormat:
-            "Неподдерживаемый формат профилей"
+            UpdateLocalization.text(ru: "Неподдерживаемый формат профилей", en: "Unsupported profile format")
         case .emptyDocument:
-            "Файл не содержит профилей"
+            UpdateLocalization.text(ru: "Файл не содержит профилей", en: "The file contains no profiles")
         case .invalidRDPFile:
-            "Не удалось прочитать параметры из файла .rdp"
+            UpdateLocalization.text(ru: "Не удалось прочитать параметры из файла .rdp", en: "Could not read settings from the .rdp file")
         }
     }
 }

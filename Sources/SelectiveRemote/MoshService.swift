@@ -13,11 +13,11 @@ enum MoshServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .clientNotInstalled:
-            "Mosh не установлен на этом Mac. Установите клиент командой «brew install mosh» и повторите подключение."
+            UpdateLocalization.text(ru: "Mosh не установлен на этом Mac. Установите клиент командой «brew install mosh» и повторите подключение.", en: "Mosh is not installed on this Mac. Install the client with ‘brew install mosh’ and reconnect.")
         case .invalidUDPPort:
-            "UDP-порт Mosh должен быть 0 (автоматически) или находиться в диапазоне 1…65535."
+            UpdateLocalization.text(ru: "UDP-порт Mosh должен быть 0 (автоматически) или находиться в диапазоне 1…65535.", en: "The Mosh UDP port must be 0 (automatic) or between 1 and 65535.")
         case .invalidServerPath:
-            "Путь к mosh-server не должен содержать перевод строки."
+            UpdateLocalization.text(ru: "Путь к mosh-server не должен содержать перевод строки.", en: "The mosh-server path must not contain a newline.")
         }
     }
 }

@@ -45,7 +45,9 @@ struct UXReliability0219Tests {
     @Test("Справка содержит постоянный пункт Что нового")
     func helpMenuContainsPermanentWhatsNew() throws {
         let app = try source("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
-        #expect(app.contains("Button(\"Что нового…\", systemImage: \"sparkles\")"))
+        #expect(app.contains("Button(UpdateLocalization.key(\"menu.whats_new\"), systemImage: \"sparkles\")"))
+        #expect(UpdateLocalization.key("menu.whats_new", english: false) == "Что нового…")
+        #expect(UpdateLocalization.key("menu.whats_new", english: true) == "What's New…")
         #expect(app.contains("model.openInstalledReleaseNotes()"))
         #expect(app.contains("model.presentWhatsNewAfterUpgradeIfNeeded()"))
     }

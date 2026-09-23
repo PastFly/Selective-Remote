@@ -7,13 +7,15 @@ struct SmartReconnectProgress: Equatable, Sendable {
     let reason: String
 
     var attemptLabel: String {
-        "Попытка \(attempt)/\(maximumAttempts)"
+        UpdateLocalization.text(ru: "Попытка \(attempt)/\(maximumAttempts)", en: "Attempt \(attempt)/\(maximumAttempts)")
     }
 
     func countdownText(now: Date = Date()) -> String? {
         guard let nextAttemptAt else { return nil }
         let seconds = max(0, Int(ceil(nextAttemptAt.timeIntervalSince(now))))
-        return seconds == 0 ? "Повторное подключение…" : "Следующая попытка через \(seconds) с"
+        return seconds == 0
+            ? UpdateLocalization.text(ru: "Повторное подключение…", en: "Reconnecting…")
+            : UpdateLocalization.text(ru: "Следующая попытка через \(seconds) с", en: "Next attempt in \(seconds) sec")
     }
 }
 
@@ -69,10 +71,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .authentication,
-                message: "Учётная запись Windows заблокирована. Разблокируйте её или обратитесь к администратору домена.",
+                message: UpdateLocalization.text(ru: "Учётная запись Windows заблокирована. Разблокируйте её или обратитесь к администратору домена.", en: "The Windows account is locked. Unlock it or contact your domain administrator."),
                 code: "ERRCONNECT_ACCOUNT_LOCKED_OUT",
                 retryable: false,
-                reason: "Учётная запись Windows заблокирована"
+                reason: UpdateLocalization.text(ru: "Учётная запись Windows заблокирована", en: "The Windows account is locked")
             )
         }
         if containsAny(text, [
@@ -81,10 +83,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .authentication,
-                message: "Срок действия RDP-пароля истёк. Смените пароль и повторите подключение.",
+                message: UpdateLocalization.text(ru: "Срок действия RDP-пароля истёк. Смените пароль и повторите подключение.", en: "The RDP password has expired. Change it and reconnect."),
                 code: "ERRCONNECT_PASSWORD_EXPIRED",
                 retryable: false,
-                reason: "Срок действия RDP-пароля истёк"
+                reason: UpdateLocalization.text(ru: "Срок действия RDP-пароля истёк", en: "The RDP password has expired")
             )
         }
         if containsAny(text, [
@@ -93,10 +95,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .authentication,
-                message: "Срок действия учётной записи Windows истёк. Проверьте состояние учётной записи.",
+                message: UpdateLocalization.text(ru: "Срок действия учётной записи Windows истёк. Проверьте состояние учётной записи.", en: "The Windows account has expired. Check the account status."),
                 code: "ERRCONNECT_ACCOUNT_EXPIRED",
                 retryable: false,
-                reason: "Срок действия учётной записи Windows истёк"
+                reason: UpdateLocalization.text(ru: "Срок действия учётной записи Windows истёк", en: "The Windows account has expired")
             )
         }
         if containsAny(text, [
@@ -105,10 +107,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .authentication,
-                message: "Сервер отклонил имя пользователя или RDP-пароль. Проверьте домен, логин и пароль.",
+                message: UpdateLocalization.text(ru: "Сервер отклонил имя пользователя или RDP-пароль. Проверьте домен, логин и пароль.", en: "The server rejected the username or RDP password. Check the domain, username, and password."),
                 code: "ERRCONNECT_LOGON_FAILURE",
                 retryable: false,
-                reason: "Сервер отклонил RDP-учётные данные"
+                reason: UpdateLocalization.text(ru: "Сервер отклонил RDP-учётные данные", en: "The server rejected the RDP credentials")
             )
         }
         if containsAny(text, [
@@ -119,10 +121,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .dns,
-                message: "Не удалось найти RDP-сервер по имени. Проверьте hostname, DNS и подключение к VPN.",
+                message: UpdateLocalization.text(ru: "Не удалось найти RDP-сервер по имени. Проверьте hostname, DNS и подключение к VPN.", en: "Could not resolve the RDP server name. Check the hostname, DNS, and VPN connection."),
                 code: symbolicCode(in: text) ?? "ERRCONNECT_DNS_NAME_NOT_FOUND",
                 retryable: false,
-                reason: "Не удалось разрешить имя RDP-сервера"
+                reason: UpdateLocalization.text(ru: "Не удалось разрешить имя RDP-сервера", en: "Could not resolve the RDP server name")
             )
         }
         if containsAny(text, [
@@ -132,10 +134,10 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .gateway,
-                message: "Не удалось подключиться через RD Gateway. Проверьте адрес Gateway, сеть и учётные данные.",
+                message: UpdateLocalization.text(ru: "Не удалось подключиться через RD Gateway. Проверьте адрес Gateway, сеть и учётные данные.", en: "Could not connect through RD Gateway. Check the gateway address, network, and credentials."),
                 code: symbolicCode(in: text),
                 retryable: false,
-                reason: "Не удалось подключиться через RD Gateway"
+                reason: UpdateLocalization.text(ru: "Не удалось подключиться через RD Gateway", en: "Could not connect through RD Gateway")
             )
         }
         if containsAny(text, [
@@ -146,37 +148,37 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .certificate,
-                message: "Не удалось установить защищённое RDP-соединение. Проверьте сертификат сервера и параметры TLS/NLA.",
+                message: UpdateLocalization.text(ru: "Не удалось установить защищённое RDP-соединение. Проверьте сертификат сервера и параметры TLS/NLA.", en: "Could not establish a secure RDP connection. Check the server certificate and TLS/NLA settings."),
                 code: symbolicCode(in: text),
                 retryable: false,
-                reason: "Ошибка сертификата или защищённого RDP-соединения"
+                reason: UpdateLocalization.text(ru: "Ошибка сертификата или защищённого RDP-соединения", en: "Certificate or secure RDP connection error")
             )
         }
         if containsAny(text, ["network is unreachable", "no route to host"]) {
             return item(
                 kind: .unreachable,
-                message: "Сеть или маршрут до RDP-сервера недоступны. Проверьте сеть, VPN и маршрутизацию.",
+                message: UpdateLocalization.text(ru: "Сеть или маршрут до RDP-сервера недоступны. Проверьте сеть, VPN и маршрутизацию.", en: "The network or route to the RDP server is unavailable. Check the network, VPN, and routing."),
                 code: symbolicCode(in: text),
                 retryable: true,
-                reason: "Сеть или маршрут до RDP-сервера недоступны"
+                reason: UpdateLocalization.text(ru: "Сеть или маршрут до RDP-сервера недоступны", en: "The network or route to the RDP server is unavailable")
             )
         }
         if containsAny(text, ["connection timed out", "operation timed out"]) {
             return item(
                 kind: .timeout,
-                message: "RDP-сервер не ответил вовремя. Проверьте сеть, VPN и доступность порта 3389.",
+                message: UpdateLocalization.text(ru: "RDP-сервер не ответил вовремя. Проверьте сеть, VPN и доступность порта 3389.", en: "The RDP server did not respond in time. Check the network, VPN, and port 3389."),
                 code: symbolicCode(in: text),
                 retryable: true,
-                reason: "RDP-соединение потеряно по тайм-ауту"
+                reason: UpdateLocalization.text(ru: "RDP-соединение потеряно по тайм-ауту", en: "The RDP connection timed out")
             )
         }
         if text.contains("connection refused") {
             return item(
                 kind: .refused,
-                message: "RDP-сервер отклонил соединение. Проверьте, запущена ли служба RDP и доступен ли порт 3389.",
+                message: UpdateLocalization.text(ru: "RDP-сервер отклонил соединение. Проверьте, запущена ли служба RDP и доступен ли порт 3389.", en: "The RDP server refused the connection. Check that the RDP service is running and port 3389 is reachable."),
                 code: symbolicCode(in: text),
                 retryable: true,
-                reason: "RDP-сервер временно отклонил соединение"
+                reason: UpdateLocalization.text(ru: "RDP-сервер временно отклонил соединение", en: "The RDP server temporarily refused the connection")
             )
         }
         if containsAny(text, [
@@ -187,30 +189,30 @@ enum RDPFailureClassifier {
         ]) {
             return item(
                 kind: .transport,
-                message: "Не удалось установить или сохранить сетевое RDP-соединение. Проверьте hostname, VPN и порт 3389.",
+                message: UpdateLocalization.text(ru: "Не удалось установить или сохранить сетевое RDP-соединение. Проверьте hostname, VPN и порт 3389.", en: "Could not establish or maintain the RDP network connection. Check the hostname, VPN, and port 3389."),
                 code: symbolicCode(in: text) ?? "ERRCONNECT_CONNECT_TRANSPORT_FAILED",
                 retryable: true,
                 reason: text.contains("connection reset")
-                    ? "RDP-соединение было неожиданно разорвано"
-                    : "Временный сбой RDP-транспорта"
+                    ? UpdateLocalization.text(ru: "RDP-соединение было неожиданно разорвано", en: "The RDP connection was unexpectedly reset")
+                    : UpdateLocalization.text(ru: "Временный сбой RDP-транспорта", en: "Temporary RDP transport failure")
             )
         }
         if text.contains("errconnect_connect_cancelled") || text.contains("connection aborted by user") {
             return item(
                 kind: .cancelled,
-                message: "RDP-подключение было отменено. Если вы не отключали сессию вручную, повторите подключение и проверьте журнал.",
+                message: UpdateLocalization.text(ru: "RDP-подключение было отменено. Если вы не отключали сессию вручную, повторите подключение и проверьте журнал.", en: "The RDP connection was cancelled. If you did not disconnect manually, reconnect and check the log."),
                 code: "ERRCONNECT_CONNECT_CANCELLED",
                 retryable: false,
-                reason: "RDP-подключение было отменено"
+                reason: UpdateLocalization.text(ru: "RDP-подключение было отменено", en: "The RDP connection was cancelled")
             )
         }
 
         return item(
             kind: .unknown,
-            message: "RDP-сессия неожиданно завершилась. Откройте журнал для диагностики. Код процесса: \(status).",
+            message: UpdateLocalization.text(ru: "RDP-сессия неожиданно завершилась. Откройте журнал для диагностики. Код процесса: \(status).", en: "The RDP session ended unexpectedly. Open the log for diagnostics. Process code: \(status)."),
             code: symbolicCode(in: text),
             retryable: false,
-            reason: "Неизвестный сбой RDP"
+            reason: UpdateLocalization.text(ru: "Неизвестный сбой RDP", en: "Unknown RDP failure")
         )
     }
 
@@ -221,7 +223,12 @@ enum RDPFailureClassifier {
         retryable: Bool,
         reason: String
     ) -> RDPFailurePresentation {
-        let decorated = code.map { "\(message)\nКод FreeRDP: \($0)." } ?? message
+        let decorated = code.map {
+            UpdateLocalization.text(
+                ru: "\(message)\nКод FreeRDP: \($0).",
+                en: "\(message)\nFreeRDP code: \($0)."
+            )
+        } ?? message
         return RDPFailurePresentation(
             kind: kind,
             message: decorated,
@@ -296,21 +303,21 @@ enum SmartReconnectClassifier {
     static func sshReason(output: String) -> String {
         let text = output.lowercased()
         if text.contains("could not resolve hostname") || text.contains("name resolution") {
-            return "Не удалось разрешить имя SSH-сервера"
+            return UpdateLocalization.text(ru: "Не удалось разрешить имя SSH-сервера", en: "Could not resolve the SSH server name")
         }
         if text.contains("network is unreachable") || text.contains("no route to host") {
-            return "Сеть или маршрут до SSH-сервера недоступны"
+            return UpdateLocalization.text(ru: "Сеть или маршрут до SSH-сервера недоступны", en: "The network or route to the SSH server is unavailable")
         }
         if text.contains("timed out") {
-            return "SSH-соединение потеряно по тайм-ауту"
+            return UpdateLocalization.text(ru: "SSH-соединение потеряно по тайм-ауту", en: "The SSH connection timed out")
         }
         if text.contains("broken pipe") || text.contains("connection reset") {
-            return "SSH-соединение было неожиданно разорвано"
+            return UpdateLocalization.text(ru: "SSH-соединение было неожиданно разорвано", en: "The SSH connection was unexpectedly reset")
         }
         if text.contains("connection refused") {
-            return "SSH-сервер временно отклонил соединение"
+            return UpdateLocalization.text(ru: "SSH-сервер временно отклонил соединение", en: "The SSH server temporarily refused the connection")
         }
-        return "Временный сбой SSH-транспорта"
+        return UpdateLocalization.text(ru: "Временный сбой SSH-транспорта", en: "Temporary SSH transport failure")
     }
 
     static func rdpReason(log: String) -> String {

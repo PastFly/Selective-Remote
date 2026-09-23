@@ -7,6 +7,13 @@ enum TerminalWorkspaceInspectorMode: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    var localizedTitle: String {
+        switch self {
+        case .history: UpdateLocalization.text(ru: "История", en: "History")
+        case .snippets: UpdateLocalization.text(ru: "Сниппеты", en: "Snippets")
+        }
+    }
+
     var systemImage: String {
         switch self {
         case .history: "clock.arrow.circlepath"
@@ -22,6 +29,57 @@ private enum TerminalWorkspaceInspectorHistorySection: String, CaseIterable, Ide
     case favorites = "Избранное"
 
     var id: String { rawValue }
+
+    var localizedTitle: String {
+        switch self {
+        case .history: UpdateLocalization.text(ru: "История", en: "History")
+        case .catalog: UpdateLocalization.text(ru: "Общие", en: "Common")
+        case .server: UpdateLocalization.text(ru: "Сервер", en: "Server")
+        case .favorites: UpdateLocalization.text(ru: "Избранное", en: "Favorites")
+        }
+    }
+}
+
+enum TerminalWorkspaceInspectorCopy {
+    static var favoriteDescription: String {
+        UpdateLocalization.text(ru: "Сохранённая команда", en: "Saved command")
+    }
+
+    static func commandSent(to terminalTitle: String) -> String {
+        UpdateLocalization.text(
+            ru: "Команда отправлена в \(terminalTitle)",
+            en: "Command sent to \(terminalTitle)"
+        )
+    }
+}
+
+private enum TerminalWorkspaceInspectorFeedback {
+    case connectFirst
+    case inserted
+    case sent(String)
+    case copied
+    case snippet(TerminalSnippetRunResult)
+
+    var text: String {
+        switch self {
+        case .connectFirst:
+            UpdateLocalization.text(ru: "Сначала подключите активную SSH-панель", en: "Connect the active SSH pane first")
+        case .inserted:
+            UpdateLocalization.text(ru: "Команда вставлена — её можно изменить перед запуском", en: "Command inserted — edit it before running")
+        case let .sent(title):
+            TerminalWorkspaceInspectorCopy.commandSent(to: title)
+        case .copied:
+            UpdateLocalization.text(ru: "Команда скопирована", en: "Command copied")
+        case let .snippet(result):
+            switch result {
+            case .success: UpdateLocalization.text(ru: "Сниппет отправлен на Targets", en: "Snippet sent to Targets")
+            case .connecting: UpdateLocalization.text(ru: "Подключаем Targets — команда выполнится после входа", en: "Connecting Targets — the command will run after sign-in")
+            case .noTargets: UpdateLocalization.text(ru: "У сниппета нет доступных Targets", en: "The Snippet has no available Targets")
+            case .inactiveSession: UpdateLocalization.text(ru: "SSH-сессия недоступна", en: "The SSH session is unavailable")
+            case .invalidSnippet: UpdateLocalization.text(ru: "Сниппет больше недоступен", en: "The Snippet is no longer available")
+            }
+        }
+    }
 }
 
 struct TerminalWorkspaceInspector: View {
@@ -42,7 +100,7 @@ struct TerminalWorkspaceInspector: View {
     let openSnippetLibrary: () -> Void
 
     @State private var query = ""
-    @State private var feedback = ""
+    @State private var feedback: TerminalWorkspaceInspectorFeedback?
     @State private var historySection: TerminalWorkspaceInspectorHistorySection = .history
 
     private var normalizedQuery: String {
@@ -173,7 +231,7 @@ struct TerminalWorkspaceInspector: View {
             set: { selectMode($0) }
         )) {
             ForEach(TerminalWorkspaceInspectorMode.allCases) { item in
-                Label(item.rawValue, systemImage: item.systemImage).tag(item)
+                Label(item.localizedTitle, systemImage: item.systemImage).tag(item)
             }
         }
         .pickerStyle(.segmented)
@@ -185,7 +243,7 @@ struct TerminalWorkspaceInspector: View {
     private var historySectionPicker: some View {
         Picker("Команды", selection: $historySection) {
             ForEach(TerminalWorkspaceInspectorHistorySection.allCases) { section in
-                Text(section.rawValue).tag(section)
+                Text(section.localizedTitle).tag(section)
             }
         }
         .pickerStyle(.segmented)
@@ -212,8 +270,8 @@ struct TerminalWorkspaceInspector: View {
             case .catalog:
                 commandList(
                     catalogEntries,
-                    emptyTitle: "Команды не найдены",
-                    emptyMessage: "Измените запрос или выберите другой раздел."
+                    emptyTitle: UpdateLocalization.text(ru: "Команды не найдены", en: "No commands found"),
+                    emptyMessage: UpdateLocalization.text(ru: "Измените запрос или выберите другой раздел.", en: "Change the search or choose another section.")
                 )
             case .server:
                 remoteCommandList
@@ -228,8 +286,8 @@ struct TerminalWorkspaceInspector: View {
             LazyVStack(spacing: 7) {
                 if historyEntries.isEmpty {
                     emptyState(
-                        title: "История пока пуста",
-                        message: "Выполненные команды выбранной панели появятся здесь."
+                        title: UpdateLocalization.text(ru: "История пока пуста", en: "History is empty"),
+                        message: UpdateLocalization.text(ru: "Выполненные команды выбранной панели появятся здесь.", en: "Commands run in the selected pane will appear here.")
                     )
                 } else {
                     ForEach(historyEntries) { entry in
@@ -324,7 +382,7 @@ struct TerminalWorkspaceInspector: View {
             LazyVStack(spacing: 7) {
                 if remoteEntries.isEmpty {
                     emptyState(
-                        title: "Команды сервера пока недоступны",
+                        title: UpdateLocalization.text(ru: "Команды сервера пока недоступны", en: "Server commands are not available yet"),
                         message: remoteContext.message
                     )
                     Button("Обновить контекст сервера", systemImage: "arrow.clockwise") {
@@ -351,15 +409,15 @@ struct TerminalWorkspaceInspector: View {
             LazyVStack(spacing: 7) {
                 if favoriteEntries.isEmpty {
                     emptyState(
-                        title: "В избранном пока пусто",
-                        message: "Добавьте команду через контекстное меню."
+                        title: UpdateLocalization.text(ru: "В избранном пока пусто", en: "No favorites yet"),
+                        message: UpdateLocalization.text(ru: "Добавьте команду через контекстное меню.", en: "Add a command from the context menu.")
                     )
                 } else {
                     ForEach(favoriteEntries) { entry in
                         commandRow(
                             command: entry.command,
-                            description: "Сохранённая команда",
-                            category: "Избранное"
+                            description: TerminalWorkspaceInspectorCopy.favoriteDescription,
+                            category: UpdateLocalization.text(ru: "Избранное", en: "Favorites")
                         )
                     }
                 }
@@ -412,10 +470,10 @@ struct TerminalWorkspaceInspector: View {
             LazyVStack(alignment: .leading, spacing: 12) {
                 if snippets.isEmpty {
                     emptyState(
-                        title: "Сниппеты не найдены",
+                        title: UpdateLocalization.text(ru: "Сниппеты не найдены", en: "No Snippets found"),
                         message: normalizedQuery.isEmpty
-                            ? "Создайте команду в общей библиотеке."
-                            : "Измените поисковый запрос."
+                            ? UpdateLocalization.text(ru: "Создайте команду в общей библиотеке.", en: "Create a command in the shared library.")
+                            : UpdateLocalization.text(ru: "Измените поисковый запрос.", en: "Change the search query.")
                     )
                 } else {
                     ForEach(store.snippetGroups()) { group in
@@ -506,8 +564,8 @@ struct TerminalWorkspaceInspector: View {
 
     private var footer: some View {
         VStack(spacing: 7) {
-            if !feedback.isEmpty {
-                Text(feedback)
+            if let feedback {
+                Text(feedback.text)
                     .font(.caption.weight(.medium))
                     .foregroundStyle(Color.accentColor)
                     .transition(.opacity)
@@ -528,17 +586,19 @@ struct TerminalWorkspaceInspector: View {
     }
 
     private var headerTitle: String {
-        guard mode == .history else { return mode.rawValue }
+        guard mode == .history else { return mode.localizedTitle }
         switch historySection {
-        case .history: return "История"
-        case .catalog: return "Общие команды"
-        case .server: return "Команды сервера"
-        case .favorites: return "Избранное"
+        case .history: return UpdateLocalization.text(ru: "История", en: "History")
+        case .catalog: return UpdateLocalization.text(ru: "Общие команды", en: "Common Commands")
+        case .server: return UpdateLocalization.text(ru: "Команды сервера", en: "Server Commands")
+        case .favorites: return UpdateLocalization.text(ru: "Избранное", en: "Favorites")
         }
     }
 
     private var searchPlaceholder: String {
-        mode == .snippets ? "Поиск сниппетов" : "Поиск команд"
+        mode == .snippets
+            ? UpdateLocalization.text(ru: "Поиск сниппетов", en: "Search Snippets")
+            : UpdateLocalization.text(ru: "Поиск команд", en: "Search Commands")
     }
 
     private func matchesQuery(_ entry: TerminalBuiltInCommand) -> Bool {
@@ -551,35 +611,29 @@ struct TerminalWorkspaceInspector: View {
 
     private func insertCommand(_ command: String) {
         guard sessionIsRunning else {
-            feedback = "Сначала подключите активную SSH-панель"
+            feedback = .connectFirst
             return
         }
         insert(command)
-        feedback = "Команда вставлена — её можно изменить перед запуском"
+        feedback = .inserted
     }
 
     private func runCommand(_ command: String) {
         guard sessionIsRunning else {
-            feedback = "Сначала подключите активную SSH-панель"
+            feedback = .connectFirst
             return
         }
         runHere(command)
-        feedback = "Команда отправлена в \(terminalTitle)"
+        feedback = .sent(terminalTitle)
     }
 
     private func copy(_ command: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(command, forType: .string)
-        feedback = "Команда скопирована"
+        feedback = .copied
     }
 
     private func report(_ result: TerminalSnippetRunResult) {
-        feedback = switch result {
-        case .success: "Сниппет отправлен на Targets"
-        case .connecting: "Подключаем Targets — команда выполнится после входа"
-        case .noTargets: "У сниппета нет доступных Targets"
-        case .inactiveSession: "SSH-сессия недоступна"
-        case .invalidSnippet: "Сниппет больше недоступен"
-        }
+        feedback = .snippet(result)
     }
 }

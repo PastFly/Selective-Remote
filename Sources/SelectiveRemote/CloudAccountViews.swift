@@ -530,11 +530,6 @@ struct SelectiveRemoteCloudTeamInventoryView: View {
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
-        switch role {
-        case .owner: UpdateLocalization.text(ru: "Владелец", en: "Owner")
-        case .admin: UpdateLocalization.text(ru: "Администратор", en: "Admin")
-        case .editor: UpdateLocalization.text(ru: "Редактор", en: "Editor")
-        case .viewer: UpdateLocalization.text(ru: "Читатель", en: "Viewer")
-        }
+        role.displayRoleTitle()
     }
 }

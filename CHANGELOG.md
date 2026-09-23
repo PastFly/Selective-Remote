@@ -1,13 +1,10 @@
 ## 0.32.0
 
-- Cloud Personal Vault получил account-scoped browser state, безопасное первичное развёртывание и автоматическое восстановление после обычного входа и перезагрузки без второго запроса пароля.
-- Team Vaults получили полноценные Hosts, Credentials и Snippets, вложенные папки, роли, приглашения, admission новых устройств и отдельные device identities без смешивания с Personal Vault.
-- Personal и Team Hosts используют единый язык навигации, поиска, сортировки, списка/плитки и папок; Team-действия остаются role-aware и изолированы от личных Keychain credentials.
-- Синхронизация и recovery стали устойчивее к параллельным изменениям, удалениям, конфликтам causal history, отсутствующим wrappers и восстановлению доверенных browser/macOS sessions.
-- Web management дополнен управлением командами и устройствами, privacy-safe registration flow, безопасными архивированием команды и verification-сценариями.
-- Интерфейсы RU/EN, Graphite/Light и desktop/narrow унифицированы; исправлены формы, селекторы, keyboard/focus navigation, mobile navigation и semantic contrast светлой темы.
-- В macOS улучшены Cloud/session integration, Personal/Team navigation, синхронизация Credentials/Snippets и защищённая работа SSH/SFTP с Team Hosts.
-- Усилена release security: официальный DMG требует Developer ID, точный TeamIdentifier, notarization/stapling, а updater проверяет publisher identity до установки и после transactional copy с сохранением rollback.
+- **Selective Remote Cloud** — впервые в публичном релизе: работайте с подключениями на Mac и в браузере. Локальный режим без аккаунта остаётся доступным.
+- **Personal Vault** — Hosts, Credentials и Snippets защищены сквозным шифрованием и синхронизируются между доверенными устройствами.
+- **Team Vaults** — общие Hosts, Credentials и Snippets для команд с ролями и приглашениями; доступ устройств контролируется.
+- **Браузер и устройства** — управляйте личными данными, командами и устройствами в браузере; изменения синхронизируются с Mac.
+- **Удобнее каждый день** — согласованные Personal/Team Hosts: папки, поиск, сортировка, список и плитка. Улучшены формы, клавиатура, мобильный экран, RU/EN и светлая тема; официальные обновления проверяют издателя.
 
 ## 0.31.0
 

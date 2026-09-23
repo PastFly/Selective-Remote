@@ -17,11 +17,11 @@ enum TerminalTransportServiceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .helperUnavailable:
-            "В сборке отсутствует Terminal Transport Helper. Переустановите Selective Remote."
+            UpdateLocalization.text(ru: "В сборке отсутствует Terminal Transport Helper. Переустановите Selective Remote.", en: "Terminal Transport Helper is missing from the app. Reinstall Selective Remote.")
         case .invalidTelnetEndpoint:
-            "Укажите корректный адрес и порт Telnet."
+            UpdateLocalization.text(ru: "Укажите корректный адрес и порт Telnet.", en: "Enter a valid Telnet address and port.")
         case .invalidSerialConfiguration:
-            "Выберите доступное устройство /dev/cu.* и корректные параметры Serial."
+            UpdateLocalization.text(ru: "Выберите доступное устройство /dev/cu.* и корректные параметры Serial.", en: "Select an available /dev/cu.* device and valid serial settings.")
         }
     }
 }
@@ -115,13 +115,13 @@ enum TerminalTransportService {
         let normalized = output.lowercased()
         switch connection.kind {
         case .telnet where normalized.contains("telnet: cannot resolve"):
-            return "Не удалось разрешить адрес Telnet-сервера. Проверьте hostname или IP."
+            return UpdateLocalization.text(ru: "Не удалось разрешить адрес Telnet-сервера. Проверьте hostname или IP.", en: "Could not resolve the Telnet server address. Check the hostname or IP address.")
         case .telnet where normalized.contains("telnet: cannot connect"):
-            return "Telnet-сервер недоступен. Проверьте адрес, порт и сетевой доступ."
+            return UpdateLocalization.text(ru: "Telnet-сервер недоступен. Проверьте адрес, порт и сетевой доступ.", en: "The Telnet server is unavailable. Check the address, port, and network access.")
         case .serial where normalized.contains("already in use"):
-            return "Serial-устройство уже используется другим приложением."
+            return UpdateLocalization.text(ru: "Serial-устройство уже используется другим приложением.", en: "The serial device is already in use by another app.")
         case .serial where normalized.contains("serial: cannot open"):
-            return "Не удалось открыть Serial-устройство. Проверьте подключение и права доступа."
+            return UpdateLocalization.text(ru: "Не удалось открыть Serial-устройство. Проверьте подключение и права доступа.", en: "Could not open the serial device. Check the connection and permissions.")
         default:
             return nil
         }

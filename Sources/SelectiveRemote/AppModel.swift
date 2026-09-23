@@ -18,19 +18,19 @@ private enum SelectiveRemoteAppError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .rdpPasswordRequired:
-            "Введите пароль RDP. Чтобы использовать пустое поле в дальнейшем, сначала нажмите «Сохранить»."
+            UpdateLocalization.text(ru: "Введите пароль RDP. Чтобы использовать пустое поле в дальнейшем, сначала нажмите «Сохранить».", en: "Enter the RDP password. To use an empty password later, press Save first.")
         case .savedPasswordMissing:
-            "Отметка о сохранённом RDP-пароле есть, но Keychain не вернул пароль. Введите его заново и нажмите «Сохранить»."
+            UpdateLocalization.text(ru: "Отметка о сохранённом RDP-пароле есть, но Keychain не вернул пароль. Введите его заново и нажмите «Сохранить».", en: "An RDP password is marked as saved, but Keychain did not return it. Enter it again and press Save.")
         case .savedGatewayPasswordMissing:
-            "Отметка о сохранённом пароле RD Gateway есть, но Keychain не вернул пароль. Введите его заново и нажмите «Сохранить»."
+            UpdateLocalization.text(ru: "Отметка о сохранённом пароле RD Gateway есть, но Keychain не вернул пароль. Введите его заново и нажмите «Сохранить».", en: "An RD Gateway password is marked as saved, but Keychain did not return it. Enter it again and press Save.")
         case let .selectedDisplaysUnavailable(count):
-            "Недоступно выбранных дисплеев: \(count). Подключите их или измените профиль перед запуском."
+            UpdateLocalization.text(ru: "Недоступно выбранных дисплеев: \(count). Подключите их или измените профиль перед запуском.", en: "\(count) selected display(s) unavailable. Connect them or update the profile before starting.")
         case .overlappingDisplays:
-            "В ручной виртуальной схеме мониторы перекрываются. Разведите их перед подключением."
+            UpdateLocalization.text(ru: "В ручной виртуальной схеме мониторы перекрываются. Разведите их перед подключением.", en: "Monitors overlap in the manual virtual layout. Separate them before connecting.")
         case .profileAlreadyRunning:
-            "Этот профиль уже подключён. Можно одновременно запускать другие профили."
+            UpdateLocalization.text(ru: "Этот профиль уже подключён. Можно одновременно запускать другие профили.", en: "This profile is already connected. You can run other profiles at the same time.")
         case .activeProfileDeletion:
-            "Сначала отключите активную RDP/SSH-сессию и остановите SSH-туннели этого профиля."
+            UpdateLocalization.text(ru: "Сначала отключите активную RDP/SSH-сессию и остановите SSH-туннели этого профиля.", en: "Disconnect the active RDP/SSH session and stop this profile’s SSH tunnels first.")
         }
     }
 }
@@ -490,7 +490,9 @@ final class AppModel: NSObject, ObservableObject {
         } else if let data = UserDefaults.standard.data(forKey: legacyProfileKey),
                   let legacy = try? JSONDecoder().decode(LegacyConnectionProfile.self, from: data) {
             var migrated = ConnectionProfile()
-            migrated.friendlyName = legacy.host.isEmpty ? "Первое подключение" : legacy.host
+            migrated.friendlyName = legacy.host.isEmpty
+                ? UpdateLocalization.text(ru: "Первое подключение", en: "First Connection")
+                : legacy.host
             migrated.host = legacy.host
             migrated.username = legacy.username
             migrated.selectedDisplayIDs = legacy.selectedDisplayIDs
@@ -857,11 +859,11 @@ final class AppModel: NSObject, ObservableObject {
             case .fixedWindow:
                 resolution = "\(session.windowWidth) × \(session.windowHeight)"
             case .dynamicWindow:
-                resolution = "Динамическое окно"
+                resolution = UpdateLocalization.text(ru: "Динамическое окно", en: "Dynamic window")
             case .fullScreen:
                 resolution = session.selectedDisplayIDs.isEmpty
-                    ? "Полный экран"
-                    : "Полный экран · \(session.selectedDisplayIDs.count) диспл."
+                    ? UpdateLocalization.text(ru: "Полный экран", en: "Full screen")
+                    : UpdateLocalization.text(ru: "Полный экран · \(session.selectedDisplayIDs.count) диспл.", en: "Full screen · \(session.selectedDisplayIDs.count) displays")
             }
             let gateway = session.gatewayHost.trimmingCharacters(in: .whitespacesAndNewlines)
             let state: ConnectionCenterState
@@ -874,7 +876,7 @@ final class AppModel: NSObject, ObservableObject {
                 case .disconnecting: .stopping
                 }
             }
-            var routeRows = [ConnectionCenterDetailRow(label: "Тип", value: gateway.isEmpty ? "Direct" : "RD Gateway")]
+            var routeRows = [ConnectionCenterDetailRow(label: "Тип", value: gateway.isEmpty ? UpdateLocalization.text(ru: "Прямое", en: "Direct") : "RD Gateway")]
             if !gateway.isEmpty {
                 routeRows.append(ConnectionCenterDetailRow(label: "Gateway", value: gateway))
             }
@@ -887,7 +889,7 @@ final class AppModel: NSObject, ObservableObject {
                     userHost: connectionCenterUserHost(username: session.username, host: session.host),
                     port: port,
                     route: gateway.isEmpty ? nil : gateway,
-                    authentication: "Password",
+                    authentication: UpdateLocalization.text(ru: "Пароль", en: "Password"),
                     state: state,
                     startedAt: session.startedAt,
                     errorMessage: rdpReconnectProgress[session.id]?.reason,
@@ -906,7 +908,7 @@ final class AppModel: NSObject, ObservableObject {
                         ConnectionCenterDetailSection(
                             title: "Аутентификация",
                             rows: [
-                                ConnectionCenterDetailRow(label: "Метод", value: "Password"),
+                                ConnectionCenterDetailRow(label: "Метод", value: UpdateLocalization.text(ru: "Пароль", en: "Password")),
                                 ConnectionCenterDetailRow(label: "Пользователь", value: session.username.isEmpty ? "—" : session.username)
                             ]
                         ),
@@ -933,7 +935,7 @@ final class AppModel: NSObject, ObservableObject {
             var rows = [
                 ConnectionCenterDetailRow(label: "Профиль", value: profile.friendlyName),
                 ConnectionCenterDetailRow(label: "Host", value: profile.host),
-                ConnectionCenterDetailRow(label: "State", value: "Reconnecting"),
+                ConnectionCenterDetailRow(label: "State", value: UpdateLocalization.text(ru: "Переподключение", en: "Reconnecting")),
                 ConnectionCenterDetailRow(label: "Попытка", value: "\(progress.attempt)/\(progress.maximumAttempts)")
             ]
             if let countdown = progress.countdownText() {
@@ -947,7 +949,7 @@ final class AppModel: NSObject, ObservableObject {
                     userHost: connectionCenterUserHost(username: profile.username, host: profile.host),
                     port: connectionCenterRDPPort(for: profile.host),
                     route: gateway.isEmpty ? nil : gateway,
-                    authentication: "Password",
+                    authentication: UpdateLocalization.text(ru: "Пароль", en: "Password"),
                     state: .reconnecting,
                     startedAt: nil,
                     errorMessage: progress.reason,
@@ -1108,7 +1110,7 @@ final class AppModel: NSObject, ObservableObject {
                             rows: [
                                 ConnectionCenterDetailRow(label: "Имя", value: tunnel.ruleName),
                                 ConnectionCenterDetailRow(label: "Тип", value: tunnel.rule.kind.title),
-                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? "Independent" : "Profile"),
+                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? UpdateLocalization.text(ru: "Независимый", en: "Independent") : UpdateLocalization.text(ru: "Профиль", en: "Profile")),
                                 ConnectionCenterDetailRow(label: "SSH-профиль", value: tunnel.profileName),
                                 ConnectionCenterDetailRow(label: "SSH-host", value: tunnel.host)
                             ]
@@ -1159,7 +1161,7 @@ final class AppModel: NSObject, ObservableObject {
                 "\(tunnel.rule.destinationHost):\(tunnel.rule.destinationPort)"
             }
             var reconnectRows = [
-                ConnectionCenterDetailRow(label: "State", value: "Reconnecting"),
+                ConnectionCenterDetailRow(label: "State", value: UpdateLocalization.text(ru: "Переподключение", en: "Reconnecting")),
                 ConnectionCenterDetailRow(label: "Попытка", value: "\(progress.attempt)/\(progress.maximumAttempts)"),
                 ConnectionCenterDetailRow(label: "Причина", value: progress.reason)
             ]
@@ -1184,7 +1186,7 @@ final class AppModel: NSObject, ObservableObject {
                             rows: [
                                 ConnectionCenterDetailRow(label: "Имя", value: tunnel.ruleName),
                                 ConnectionCenterDetailRow(label: "Тип", value: tunnel.rule.kind.title),
-                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? "Independent" : "Profile"),
+                                ConnectionCenterDetailRow(label: "Ownership", value: independent ? UpdateLocalization.text(ru: "Независимый", en: "Independent") : UpdateLocalization.text(ru: "Профиль", en: "Profile")),
                                 ConnectionCenterDetailRow(label: "SSH-host", value: tunnel.host),
                                 ConnectionCenterDetailRow(label: "Назначение", value: destination)
                             ]
@@ -1205,7 +1207,71 @@ final class AppModel: NSObject, ObservableObject {
             if lhsDate != rhsDate { return lhsDate > rhsDate }
             return $0.profileName.localizedCaseInsensitiveCompare($1.profileName) == .orderedAscending
         }
-        return ConnectionCenterSnapshot(items: items)
+        return ConnectionCenterSnapshot(items: items.map(localizeConnectionCenterItem))
+    }
+
+    private func localizeConnectionCenterItem(_ item: ConnectionCenterItem) -> ConnectionCenterItem {
+        ConnectionCenterItem(
+            source: item.source,
+            kind: item.kind,
+            profileName: item.profileName,
+            userHost: item.userHost,
+            port: item.port,
+            route: item.route,
+            authentication: item.authentication,
+            state: item.state,
+            startedAt: item.startedAt,
+            errorMessage: item.errorMessage,
+            detailSections: item.detailSections.map { section in
+                ConnectionCenterDetailSection(
+                    title: connectionCenterLabel(section.title),
+                    rows: section.rows.map { row in
+                        ConnectionCenterDetailRow(
+                            label: connectionCenterLabel(row.label),
+                            value: row.value
+                        )
+                    }
+                )
+            }
+        )
+    }
+
+    private func connectionCenterLabel(_ label: String) -> String {
+        switch label {
+        case "Основное": UpdateLocalization.text(ru: "Основное", en: "General")
+        case "Аутентификация": UpdateLocalization.text(ru: "Аутентификация", en: "Authentication")
+        case "Маршрут": UpdateLocalization.text(ru: "Маршрут", en: "Route")
+        case "Сессия": UpdateLocalization.text(ru: "Сессия", en: "Session")
+        case "Тип": UpdateLocalization.text(ru: "Тип", en: "Type")
+        case "Профиль": UpdateLocalization.text(ru: "Профиль", en: "Profile")
+        case "Протокол": UpdateLocalization.text(ru: "Протокол", en: "Protocol")
+        case "Режим": UpdateLocalization.text(ru: "Режим", en: "Mode")
+        case "Разрешение": UpdateLocalization.text(ru: "Разрешение", en: "Resolution")
+        case "Метод": UpdateLocalization.text(ru: "Метод", en: "Method")
+        case "Пользователь": UpdateLocalization.text(ru: "Пользователь", en: "User")
+        case "Запущено": UpdateLocalization.text(ru: "Запущено", en: "Started")
+        case "Лог": UpdateLocalization.text(ru: "Лог", en: "Log")
+        case "Попытка": UpdateLocalization.text(ru: "Попытка", en: "Attempt")
+        case "Следующая": UpdateLocalization.text(ru: "Следующая", en: "Next attempt")
+        case "Вкладка": UpdateLocalization.text(ru: "Вкладка", en: "Tab")
+        case "Имя": UpdateLocalization.text(ru: "Имя", en: "Name")
+        case "Назначение": UpdateLocalization.text(ru: "Назначение", en: "Destination")
+        case "SSH-профиль": UpdateLocalization.text(ru: "SSH-профиль", en: "SSH profile")
+        case "SSH-host": UpdateLocalization.text(ru: "SSH-host", en: "SSH host")
+        case "Причина": UpdateLocalization.text(ru: "Причина", en: "Reason")
+        case "Панель": UpdateLocalization.text(ru: "Панель", en: "Pane")
+        case "Путь": UpdateLocalization.text(ru: "Путь", en: "Path")
+        case "State": UpdateLocalization.text(ru: "Состояние", en: "State")
+        case "Ownership": UpdateLocalization.text(ru: "Принадлежность", en: "Ownership")
+        case "Transfers": UpdateLocalization.text(ru: "Передачи", en: "Transfers")
+        case "Target": UpdateLocalization.text(ru: "Цель", en: "Target")
+        case "Port": UpdateLocalization.text(ru: "Порт", en: "Port")
+        case "Gateway": UpdateLocalization.text(ru: "Шлюз", en: "Gateway")
+        case "Bind": UpdateLocalization.text(ru: "Привязка", en: "Bind")
+        case "Terminal": UpdateLocalization.text(ru: "Терминал", en: "Terminal")
+        case "Smart Reconnect": UpdateLocalization.text(ru: "Умное переподключение", en: "Smart Reconnect")
+        default: label
+        }
     }
 
     func refreshConnectionCenterRuntimeState() {
@@ -1252,7 +1318,7 @@ final class AppModel: NSObject, ObservableObject {
                     }
                     try? await Task.sleep(for: .milliseconds(50))
                 }
-                self.errorMessage = "SSH-сессия не успела завершиться для reconnect"
+                self.errorMessage = UpdateLocalization.text(ru: "SSH-сессия не успела завершиться для повторного подключения", en: "The SSH session did not stop in time to reconnect")
             }
         case let .profileTunnel(profileID, ruleID):
             restartProfileSSHTunnel(ruleID: ruleID, profileID: profileID)
@@ -1395,7 +1461,7 @@ final class AppModel: NSObject, ObservableObject {
                 host: tab.connection.normalizedHost,
                 username: "",
                 port: tab.connection.port,
-                authentication: "Без шифрования",
+                authentication: UpdateLocalization.text(ru: "Без шифрования", en: "Unencrypted"),
                 identityName: nil,
                 route: "Telnet",
                 jumpHost: nil,
@@ -1626,7 +1692,7 @@ final class AppModel: NSObject, ObservableObject {
             rows.append(ConnectionCenterDetailRow(label: "Jump Host", value: jumpHost))
         }
         if rows.isEmpty {
-            rows.append(ConnectionCenterDetailRow(label: "Маршрут", value: "Direct"))
+            rows.append(ConnectionCenterDetailRow(label: "Маршрут", value: UpdateLocalization.text(ru: "Прямое", en: "Direct")))
         }
         return rows
     }
@@ -1732,7 +1798,7 @@ final class AppModel: NSObject, ObservableObject {
         profiles[index].tags.sort {
             $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
         }
-        statusMessage = "Тег «\(name)» добавлен"
+        statusMessage = UpdateLocalization.text(ru: "Тег «\(name)» добавлен", en: "Tag “\(name)” added")
         return true
     }
 
@@ -1750,7 +1816,7 @@ final class AppModel: NSObject, ObservableObject {
                 ) == .orderedSame
             }
         })
-        statusMessage = "Тег «\(name)» удалён из профиля"
+        statusMessage = UpdateLocalization.text(ru: "Тег «\(name)» удалён из профиля", en: "Tag “\(name)” removed from profile")
     }
 
     func renameProfileTag(_ oldName: String, to rawNewName: String) {
@@ -1776,7 +1842,7 @@ final class AppModel: NSObject, ObservableObject {
             profileTagFilter.remove(oldName)
             profileTagFilter.insert(newName)
         }
-        statusMessage = "Тег «\(oldName)» переименован в «\(newName)»"
+        statusMessage = UpdateLocalization.text(ru: "Тег «\(oldName)» переименован в «\(newName)»", en: "Tag “\(oldName)” renamed to “\(newName)”")
     }
 
     func deleteProfileTag(_ name: String) {
@@ -1787,7 +1853,7 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
         profileTagFilter.remove(name)
-        statusMessage = "Тег «\(name)» удалён"
+        statusMessage = UpdateLocalization.text(ru: "Тег «\(name)» удалён", en: "Tag “\(name)” deleted")
     }
 
     func toggleProfileTagFilter(_ name: String) {
@@ -1894,17 +1960,31 @@ final class AppModel: NSObject, ObservableObject {
                     || profile.connectionType.title.localizedCaseInsensitiveContains(query)
             }
         }
-        let grouped = Dictionary(grouping: filtered) { profile in
+        let grouped = Dictionary(grouping: filtered) { profile -> ProfileGroupSection.ID in
             let value = profile.group.trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? "Без группы" : value
+            return value.isEmpty ? .ungrouped : .named(value)
         }
         return grouped.keys.sorted { lhs, rhs in
-            if lhs == rhs { return false }
-            if lhs == "Без группы" { return true }
-            if rhs == "Без группы" { return false }
-            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+            switch (lhs, rhs) {
+            case (.ungrouped, .ungrouped):
+                return false
+            case (.ungrouped, _):
+                return true
+            case (_, .ungrouped):
+                return false
+            case let (.named(left), .named(right)):
+                let comparison = left.localizedCaseInsensitiveCompare(right)
+                return comparison == .orderedSame ? left < right : comparison == .orderedAscending
+            }
         }.map { group in
-            ProfileGroupSection(name: group, profiles: sortProfiles(grouped[group] ?? []))
+            let name: String
+            switch group {
+            case .ungrouped:
+                name = UpdateLocalization.text(ru: "Без группы", en: "No Group")
+            case let .named(value):
+                name = value
+            }
+            return ProfileGroupSection(id: group, name: name, profiles: sortProfiles(grouped[group] ?? []))
         }
     }
 
@@ -1938,9 +2018,13 @@ final class AppModel: NSObject, ObservableObject {
     func selectProfile(_ id: UUID) {
         selectedProfileID = id
         if let session = sessions[id] {
-            statusMessage = session.phase.rawValue
+            statusMessage = switch session.phase {
+            case .starting: UpdateLocalization.text(ru: "Запускается", en: "Starting")
+            case .connected: UpdateLocalization.text(ru: "Подключено", en: "Connected")
+            case .disconnecting: UpdateLocalization.text(ru: "Отключается", en: "Disconnecting")
+            }
         } else if let profile = profiles.first(where: { $0.id == id }) {
-            statusMessage = "\(profile.connectionType.title)-профиль выбран"
+            statusMessage = UpdateLocalization.text(ru: "\(profile.connectionType.title)-профиль выбран", en: "\(profile.connectionType.title) profile selected")
         }
     }
 
@@ -1952,7 +2036,7 @@ final class AppModel: NSObject, ObservableObject {
         }
         profiles.append(profile)
         selectedProfileID = profile.id
-        statusMessage = "Создан новый \(connectionType.title)-профиль"
+        statusMessage = UpdateLocalization.text(ru: "Создан новый \(connectionType.title)-профиль", en: "New \(connectionType.title) profile created")
     }
 
     @discardableResult
@@ -1964,7 +2048,7 @@ final class AppModel: NSObject, ObservableObject {
                 && $0.host.caseInsensitiveCompare(alias) == .orderedSame
         }) {
             selectedProfileID = existing.id
-            statusMessage = "SSH Host «\(alias)» уже есть в подключениях"
+            statusMessage = UpdateLocalization.text(ru: "SSH Host «\(alias)» уже есть в подключениях", en: "SSH Host “\(alias)” is already in Connections")
             return existing.id
         }
 
@@ -1978,7 +2062,7 @@ final class AppModel: NSObject, ObservableObject {
         profile.sshAuthenticationMode = .agent
         profiles.append(profile)
         selectedProfileID = profile.id
-        statusMessage = "Импортирован SSH Host «\(alias)» из ~/.ssh/config"
+        statusMessage = UpdateLocalization.text(ru: "Импортирован SSH Host «\(alias)» из ~/.ssh/config", en: "SSH Host “\(alias)” imported from ~/.ssh/config")
         errorMessage = nil
         return profile.id
     }
@@ -1987,8 +2071,8 @@ final class AppModel: NSObject, ObservableObject {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[index].isFavorite.toggle()
         statusMessage = profiles[index].isFavorite
-            ? "«\(profiles[index].friendlyName)» добавлен в избранное"
-            : "«\(profiles[index].friendlyName)» удалён из избранного"
+            ? UpdateLocalization.text(ru: "«\(profiles[index].friendlyName)» добавлен в избранное", en: "“\(profiles[index].friendlyName)” added to Favorites")
+            : UpdateLocalization.text(ru: "«\(profiles[index].friendlyName)» удалён из избранного", en: "“\(profiles[index].friendlyName)” removed from Favorites")
     }
 
     @discardableResult
@@ -2001,7 +2085,7 @@ final class AppModel: NSObject, ObservableObject {
     ) -> UUID? {
         let normalizedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedHost.isEmpty, (1...65535).contains(port) else {
-            errorMessage = "Укажите корректный SSH-адрес и порт"
+            errorMessage = UpdateLocalization.text(ru: "Укажите корректный SSH-адрес и порт", en: "Enter a valid SSH address and port")
             return nil
         }
         let normalizedUser = username.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2027,7 +2111,7 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
 
-        statusMessage = "SSH-подключение «\(profile.friendlyName)» сохранено"
+        statusMessage = UpdateLocalization.text(ru: "SSH-подключение «\(profile.friendlyName)» сохранено", en: "SSH connection “\(profile.friendlyName)” saved")
         errorMessage = nil
         return profile.id
     }
@@ -2036,7 +2120,7 @@ final class AppModel: NSObject, ObservableObject {
     func saveQuickConnectSSHProfile(_ request: QuickConnectSSHRequest) -> UUID? {
         let target = request.target
         guard !target.host.isEmpty, (1...65_535).contains(target.port) else {
-            errorMessage = "Укажите корректный SSH-адрес и порт"
+            errorMessage = UpdateLocalization.text(ru: "Укажите корректный SSH-адрес и порт", en: "Enter a valid SSH address and port")
             return nil
         }
         do {
@@ -2048,24 +2132,24 @@ final class AppModel: NSObject, ObservableObject {
         }
         if (request.authenticationMode == .key || request.authenticationMode == .touchIDKey),
            request.identityID == nil {
-            errorMessage = "Для выбранного способа входа укажите SSH ID"
+            errorMessage = UpdateLocalization.text(ru: "Для выбранного способа входа укажите SSH ID", en: "Select an SSH ID for this authentication method")
             return nil
         }
         if request.authenticationMode == .touchIDKey,
            let identityID = request.identityID,
            let identity = sshKeys.first(where: { $0.id == identityID }),
            !SSHKeyService.isTouchIDCompatible(identity) {
-            errorMessage = "Touch ID Key использует только ECDSA-ключи"
+            errorMessage = UpdateLocalization.text(ru: "Touch ID Key использует только ECDSA-ключи", en: "Touch ID Key supports ECDSA keys only")
             return nil
         }
         if let identityID = request.identityID,
            !sshKeys.contains(where: { $0.id == identityID }) {
-            errorMessage = "Выбранный SSH ID больше недоступен"
+            errorMessage = UpdateLocalization.text(ru: "Выбранный SSH ID больше недоступен", en: "The selected SSH ID is no longer available")
             return nil
         }
         if let jumpID = request.jumpHostProfileID,
            !profiles.contains(where: { $0.id == jumpID && $0.connectionType == .ssh }) {
-            errorMessage = "Выбранный Jump Host больше недоступен"
+            errorMessage = UpdateLocalization.text(ru: "Выбранный Jump Host больше недоступен", en: "The selected Jump Host is no longer available")
             return nil
         }
 
@@ -2094,7 +2178,7 @@ final class AppModel: NSObject, ObservableObject {
         }
 
         selectedProfileID = profile.id
-        statusMessage = "SSH-подключение «\(profile.friendlyName)» сохранено"
+        statusMessage = UpdateLocalization.text(ru: "SSH-подключение «\(profile.friendlyName)» сохранено", en: "SSH connection “\(profile.friendlyName)” saved")
         errorMessage = nil
         return profile.id
     }
@@ -2113,7 +2197,7 @@ final class AppModel: NSObject, ObservableObject {
         }
         profiles.append(copy)
         selectedProfileID = copy.id
-        statusMessage = "Профиль скопирован без паролей"
+        statusMessage = UpdateLocalization.text(ru: "Профиль скопирован без паролей", en: "Profile copied without passwords")
     }
 
     func deleteSelectedProfile() {
@@ -2145,7 +2229,7 @@ final class AppModel: NSObject, ObservableObject {
             profiles = [replacement]
         }
         selectedProfileID = profiles.first?.id
-        statusMessage = "Профиль удалён"
+        statusMessage = UpdateLocalization.text(ru: "Профиль удалён", en: "Profile deleted")
     }
 
     func toggleFavorite() {
@@ -2180,7 +2264,7 @@ final class AppModel: NSObject, ObservableObject {
                 profile.cameraDeviceName = device.name
             }
         }
-        statusMessage = "Камера: \(cameraSelectionDescription)"
+        statusMessage = UpdateLocalization.text(ru: "Камера: \(cameraSelectionDescription)", en: "Camera: \(cameraSelectionDescription)")
     }
 
     func forgetUnavailableDisplays() {
@@ -2198,7 +2282,7 @@ final class AppModel: NSObject, ObservableObject {
             }
         }
         reconnectCandidateProfileIDs.remove(selectedProfile.id)
-        statusMessage = "Недоступные мониторы удалены из профиля"
+        statusMessage = UpdateLocalization.text(ru: "Недоступные мониторы удалены из профиля", en: "Unavailable monitors removed from profile")
     }
 
     func toggleSelection(_ display: DisplayDescriptor) {
@@ -2360,7 +2444,7 @@ final class AppModel: NSObject, ObservableObject {
         do {
             try KeychainService.savePassword(proxyPassword, profileID: selectedProfile.id, kind: .proxy)
             proxyPassword = ""
-            statusMessage = "Пароль прокси сохранён в Keychain"
+            statusMessage = UpdateLocalization.text(ru: "Пароль прокси сохранён в Keychain", en: "Proxy password saved in Keychain")
             errorMessage = nil
             objectWillChange.send()
         } catch { errorMessage = error.localizedDescription }
@@ -2370,7 +2454,7 @@ final class AppModel: NSObject, ObservableObject {
         do {
             try KeychainService.deletePassword(profileID: selectedProfile.id, kind: .proxy)
             proxyPassword = ""
-            statusMessage = "Пароль прокси удалён из Keychain"
+            statusMessage = UpdateLocalization.text(ru: "Пароль прокси удалён из Keychain", en: "Proxy password removed from Keychain")
             errorMessage = nil
             objectWillChange.send()
         } catch { errorMessage = error.localizedDescription }
@@ -2412,8 +2496,8 @@ final class AppModel: NSObject, ObservableObject {
         )
         if announce {
             statusMessage = enabled
-                ? "Для использования SSH-ключа требуется Touch ID"
-                : "Touch ID перед использованием SSH-ключа отключён"
+                ? UpdateLocalization.text(ru: "Для использования SSH-ключа требуется Touch ID", en: "Touch ID is required to use the SSH key")
+                : UpdateLocalization.text(ru: "Touch ID перед использованием SSH-ключа отключён", en: "Touch ID protection for the SSH key disabled")
         }
         errorMessage = nil
     }
@@ -2434,7 +2518,7 @@ final class AppModel: NSObject, ObservableObject {
             if profileID == selectedProfile.id {
                 sshPassword = ""
             }
-            statusMessage = "SSH-пароль удалён из Keychain"
+            statusMessage = UpdateLocalization.text(ru: "SSH-пароль удалён из Keychain", en: "SSH password removed from Keychain")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2457,7 +2541,7 @@ final class AppModel: NSObject, ObservableObject {
             if profileID == selectedProfile.id {
                 sshPassword = ""
             }
-            statusMessage = "Проблемная запись SSH-пароля удалена. Откройте профиль и сохраните пароль заново."
+            statusMessage = UpdateLocalization.text(ru: "Проблемная запись SSH-пароля удалена. Откройте профиль и сохраните пароль заново.", en: "Invalid SSH password entry removed. Open the profile and save the password again.")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2473,7 +2557,7 @@ final class AppModel: NSObject, ObservableObject {
                 forwardingPasswordUserPresenceIDs.sorted(),
                 forKey: forwardingPasswordUserPresenceIDsKey
             )
-            statusMessage = "Проблемная запись пароля туннеля удалена. Сохраните SSH-пароль заново."
+            statusMessage = UpdateLocalization.text(ru: "Проблемная запись пароля туннеля удалена. Сохраните SSH-пароль заново.", en: "Invalid tunnel password entry removed. Save the SSH password again.")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2490,7 +2574,7 @@ final class AppModel: NSObject, ObservableObject {
                 requiresUserPresence: forwardingPasswordRequiresUserPresence(tunnelID)
             )
             setForwardingPasswordStored(true, tunnelID: tunnelID)
-            statusMessage = "SSH-пароль туннеля сохранён в Keychain"
+            statusMessage = UpdateLocalization.text(ru: "SSH-пароль туннеля сохранён в Keychain", en: "SSH tunnel password saved in Keychain")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2506,7 +2590,7 @@ final class AppModel: NSObject, ObservableObject {
             try KeychainService.deletePassword(profileID: tunnelID, kind: .forwarding)
             setForwardingPasswordStored(false, tunnelID: tunnelID)
             setForwardingPasswordUserPresencePreference(false, tunnelID: tunnelID)
-            statusMessage = "Сохранённый SSH-пароль туннеля удалён"
+            statusMessage = UpdateLocalization.text(ru: "Сохранённый SSH-пароль туннеля удалён", en: "Saved SSH tunnel password removed")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2523,7 +2607,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func importSSHKey(assignToProfileID profileID: UUID?) {
         let panel = NSOpenPanel()
-        panel.title = "Выберите приватный SSH-ключ"
+        panel.title = UpdateLocalization.text(ru: "Выберите приватный SSH-ключ", en: "Choose a Private SSH Key")
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -2540,10 +2624,10 @@ final class AppModel: NSObject, ObservableObject {
             )
             if result.wasExisting {
                 statusMessage = profileID == nil
-                    ? "SSH-ключ уже зарегистрирован"
-                    : "SSH-ключ уже зарегистрирован и выбран"
+                    ? UpdateLocalization.text(ru: "SSH-ключ уже зарегистрирован", en: "SSH key is already registered")
+                    : UpdateLocalization.text(ru: "SSH-ключ уже зарегистрирован и выбран", en: "SSH key is already registered and selected")
             } else {
-                statusMessage = "SSH-ключ «\(result.key.name)» добавлен"
+                statusMessage = UpdateLocalization.text(ru: "SSH-ключ «\(result.key.name)» добавлен", en: "SSH key “\(result.key.name)” added")
             }
             errorMessage = nil
         } catch {
@@ -2557,7 +2641,7 @@ final class AppModel: NSObject, ObservableObject {
         session: TerminalSessionModel
     ) -> Bool {
         guard selectedProfile.connectionType == .ssh else {
-            errorMessage = "Создайте или выберите SSH-профиль перед генерацией ключа"
+            errorMessage = UpdateLocalization.text(ru: "Создайте или выберите SSH-профиль перед генерацией ключа", en: "Create or select an SSH profile before generating a key")
             return false
         }
         return generateSSHKey(
@@ -2581,7 +2665,7 @@ final class AppModel: NSObject, ObservableObject {
         profileID: UUID?
     ) -> Bool {
         guard !session.isRunning else {
-            errorMessage = "Дождитесь завершения текущей генерации SSH-ключа"
+            errorMessage = UpdateLocalization.text(ru: "Дождитесь завершения текущей генерации SSH-ключа", en: "Wait for the current SSH key generation to finish")
             return false
         }
 
@@ -2590,7 +2674,7 @@ final class AppModel: NSObject, ObservableObject {
             try session.start(
                 executable: SSHKeyService.sshKeygenPath,
                 arguments: command.arguments,
-                title: "Генерация \(request.algorithm.title)"
+                title: UpdateLocalization.text(ru: "Генерация \(request.algorithm.title)", en: "Generating \(request.algorithm.title)")
             ) { [weak self] exitCode in
                 guard let self else { return }
                 if exitCode == 0 {
@@ -2613,22 +2697,22 @@ final class AppModel: NSObject, ObservableObject {
                         }
                         if profileID == nil {
                             statusMessage = result.wasExisting
-                                ? "Созданный SSH-ключ уже зарегистрирован"
-                                : "SSH-ключ «\(result.key.name)» создан. Назначьте его SSH-профилю для использования Touch ID."
+                                ? UpdateLocalization.text(ru: "Созданный SSH-ключ уже зарегистрирован", en: "The generated SSH key is already registered")
+                                : UpdateLocalization.text(ru: "SSH-ключ «\(result.key.name)» создан. Назначьте его SSH-профилю для использования Touch ID.", en: "SSH key “\(result.key.name)” created. Assign it to an SSH profile to use Touch ID.")
                         } else {
                             statusMessage = result.wasExisting
-                                ? "Созданный SSH-ключ выбран"
-                                : "SSH-ключ «\(result.key.name)» создан и выбран"
+                                ? UpdateLocalization.text(ru: "Созданный SSH-ключ выбран", en: "The generated SSH key is selected")
+                                : UpdateLocalization.text(ru: "SSH-ключ «\(result.key.name)» создан и выбран", en: "SSH key “\(result.key.name)” created and selected")
                         }
                         errorMessage = nil
                     } catch {
                         errorMessage = error.localizedDescription
                     }
                 } else {
-                    statusMessage = "Генерация SSH-ключа не завершена"
+                    statusMessage = UpdateLocalization.text(ru: "Генерация SSH-ключа не завершена", en: "SSH key generation did not finish")
                 }
             }
-            statusMessage = "Введите passphrase нового ключа в отдельном терминале"
+            statusMessage = UpdateLocalization.text(ru: "Введите passphrase нового ключа в отдельном терминале", en: "Enter the new key passphrase in the separate terminal")
             errorMessage = nil
             return true
         } catch {
@@ -2677,7 +2761,7 @@ final class AppModel: NSObject, ObservableObject {
             else { return false }
             return profile.sshIdentityID == keyID
         }) {
-            errorMessage = "Сначала остановите SSH-туннель «\(activeRule.ruleName)»"
+            errorMessage = UpdateLocalization.text(ru: "Сначала остановите SSH-туннель «\(activeRule.ruleName)»", en: "Stop SSH tunnel “\(activeRule.ruleName)” first")
             return
         }
         try? SSHKeyService.removeFromAgentAndKeychain(key)
@@ -2690,7 +2774,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             return updated
         }
-        statusMessage = "Ключ удалён из \(AppBrand.name); исходный файл не изменён"
+        statusMessage = UpdateLocalization.text(ru: "Ключ удалён из \(AppBrand.name); исходный файл не изменён", en: "Key removed from \(AppBrand.name); the original file was not changed")
         errorMessage = nil
     }
 
@@ -2699,7 +2783,7 @@ final class AppModel: NSObject, ObservableObject {
         do {
             try SSHKeyService.removeFromAgentAndKeychain(key)
             setSSHKeyPassphraseStored(false, keyID: keyID)
-            statusMessage = "SSH-ключ удалён из ssh-agent и Keychain OpenSSH"
+            statusMessage = UpdateLocalization.text(ru: "SSH-ключ удалён из ssh-agent и Keychain OpenSSH", en: "SSH key removed from ssh-agent and OpenSSH Keychain")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2714,7 +2798,7 @@ final class AppModel: NSObject, ObservableObject {
                 useStoredPassphrase: hasSavedSSHKeyPassphrase(keyID: keyID)
             )
             setSSHKeyPassphraseStored(true, keyID: keyID)
-            statusMessage = "SSH-ключ «\(key.name)» добавлен в ssh-agent"
+            statusMessage = UpdateLocalization.text(ru: "SSH-ключ «\(key.name)» добавлен в ssh-agent", en: "SSH key “\(key.name)” added to ssh-agent")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2725,7 +2809,7 @@ final class AppModel: NSObject, ObservableObject {
         guard let key = sshKeys.first(where: { $0.id == keyID }) else { return }
         do {
             try SSHKeyService.removeFromAgent(key)
-            statusMessage = "SSH-ключ «\(key.name)» удалён из ssh-agent"
+            statusMessage = UpdateLocalization.text(ru: "SSH-ключ «\(key.name)» удалён из ssh-agent", en: "SSH key “\(key.name)” removed from ssh-agent")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2738,7 +2822,7 @@ final class AppModel: NSObject, ObservableObject {
             let value = try SSHKeyService.publicKeyText(for: key)
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(value, forType: .string)
-            statusMessage = "Публичный SSH-ключ скопирован"
+            statusMessage = UpdateLocalization.text(ru: "Публичный SSH-ключ скопирован", en: "Public SSH key copied")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2754,7 +2838,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func openKeychainAccess() {
         errorMessage = nil
-        statusMessage = "Секретами Selective Remote нужно управлять из карточки подключения; приложение «Пароли» не показывает generic-password записи и SSH-файлы."
+        statusMessage = UpdateLocalization.text(ru: "Секретами Selective Remote нужно управлять из карточки подключения; приложение «Пароли» не показывает generic-password записи и SSH-файлы.", en: "Manage Selective Remote secrets from the connection details; the Passwords app does not show generic-password entries or SSH files.")
     }
 
     func effectiveSSHProfile(_ source: ConnectionProfile) -> ConnectionProfile {
@@ -2801,13 +2885,13 @@ final class AppModel: NSObject, ObservableObject {
             sshKeys.first(where: { $0.id == keyID })
         }
         if profile.sshIdentityID != nil, identity == nil {
-            errorMessage = "Выбранный SSH-ключ больше недоступен. Выберите другой ключ."
+            errorMessage = UpdateLocalization.text(ru: "Выбранный SSH-ключ больше недоступен. Выберите другой ключ.", en: "The selected SSH key is no longer available. Choose another key.")
             return nil
         }
         if profile.sshAuthenticationMode == .touchIDKey,
            let identity,
            !SSHKeyService.isTouchIDCompatible(identity) {
-            errorMessage = "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый."
+            errorMessage = UpdateLocalization.text(ru: "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый.", en: "Touch ID Key supports ECDSA keys only. Select an ECDSA Touch ID Key or create a new one.")
             return nil
         }
         do {
@@ -2858,7 +2942,7 @@ final class AppModel: NSObject, ObservableObject {
                             || sshKeyUserPresenceProfileIDs.contains(jumpProfile.id.uuidString)) {
                         try KeychainService.authorizeSSHKeyUse(
                             profileID: jumpProfile.id,
-                            reason: "Подтвердите Touch ID для Jump Host «\(jumpProfile.friendlyName)»"
+                            reason: UpdateLocalization.text(ru: "Подтвердите Touch ID для Jump Host «\(jumpProfile.friendlyName)»", en: "Confirm Touch ID for Jump Host “\(jumpProfile.friendlyName)”")
                         )
                     }
                     if jumpProfile.sshAuthenticationMode != .agent {
@@ -2882,7 +2966,7 @@ final class AppModel: NSObject, ObservableObject {
                         && sshKeyUserPresenceProfileIDs.contains(profileID.uuidString))) {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
-                    reason: "Подтвердите Touch ID для использования SSH-ключа «\(key.name)»"
+                    reason: UpdateLocalization.text(ru: "Подтвердите Touch ID для использования SSH-ключа «\(key.name)»", en: "Confirm Touch ID to use SSH key “\(key.name)”")
                 )
             }
             if (settings.authenticationMode == .automatic || settings.authenticationMode == .key),
@@ -2907,7 +2991,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func installSelectedSSHPublicKey() {
         guard let keyID = selectedProfile.sshIdentityID else {
-            errorMessage = "Выберите SSH-ключ, который нужно установить на сервер"
+            errorMessage = UpdateLocalization.text(ru: "Выберите SSH-ключ, который нужно установить на сервер", en: "Select the SSH key to install on the server")
             return
         }
         installSSHPublicKey(keyID: keyID, profileID: selectedProfile.id)
@@ -2917,7 +3001,7 @@ final class AppModel: NSObject, ObservableObject {
         guard var profile = profiles.first(where: {
             $0.id == profileID && $0.connectionType == .ssh
         }), let key = sshKeys.first(where: { $0.id == keyID }) else {
-            errorMessage = "Выберите SSH-профиль и ключ, который нужно установить на сервер"
+            errorMessage = UpdateLocalization.text(ru: "Выберите SSH-профиль и ключ, который нужно установить на сервер", en: "Select an SSH profile and the key to install on the server")
             return
         }
         guard let publicKeyPath = key.publicKeyPath else {
@@ -2938,7 +3022,7 @@ final class AppModel: NSObject, ObservableObject {
         }
         let session = terminalSession(profileID: profileID)
         guard !session.isRunning else {
-            errorMessage = "Сначала завершите текущую SSH-сессию"
+            errorMessage = UpdateLocalization.text(ru: "Сначала завершите текущую SSH-сессию", en: "End the current SSH session first")
             return
         }
         guard FileManager.default.isExecutableFile(atPath: SSHService.sshPath) else {
@@ -2957,7 +3041,7 @@ final class AppModel: NSObject, ObservableObject {
                     settings: settings,
                     publicKeyText: publicKeyText
                 ),
-                title: "Установка ключа «\(key.name)»",
+                title: UpdateLocalization.text(ru: "Установка ключа «\(key.name)»", en: "Installing key “\(key.name)”"),
                 environment: try SSHKeyService.backgroundAuthenticationEnvironment(
                     passwordCredential: KeychainService.credentialReference(
                         profileID: settings.profileID,
@@ -2975,13 +3059,13 @@ final class AppModel: NSObject, ObservableObject {
             ) { [weak self] exitCode in
                 guard let self else { return }
                 statusMessage = exitCode == 0
-                    ? "Публичный SSH-ключ установлен на сервер"
-                    : "Установка SSH-ключа завершилась с кодом \(exitCode)"
+                    ? UpdateLocalization.text(ru: "Публичный SSH-ключ установлен на сервер", en: "Public SSH key installed on the server")
+                    : UpdateLocalization.text(ru: "Установка SSH-ключа завершилась с кодом \(exitCode)", en: "SSH key installation exited with code \(exitCode)")
             }
             requestedSSHConsoleProfileID = settings.profileID
             statusMessage = hasSavedSSHPassword(profileID: profileID)
-                ? "Ключ безопасно добавляется в authorized_keys с сохранённым SSH-паролем"
-                : "Ключ будет добавлен в authorized_keys без удаления существующих ключей; при необходимости введите пароль сервера"
+                ? UpdateLocalization.text(ru: "Ключ безопасно добавляется в authorized_keys с сохранённым SSH-паролем", en: "Adding the key to authorized_keys using the saved SSH password")
+                : UpdateLocalization.text(ru: "Ключ будет добавлен в authorized_keys без удаления существующих ключей; при необходимости введите пароль сервера", en: "The key will be added to authorized_keys without removing existing keys; enter the server password if prompted")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -2999,7 +3083,7 @@ final class AppModel: NSObject, ObservableObject {
         }) else { return nil }
         let rule = PortForwardRule(kind: kind)
         profiles[index].portForwards.append(rule)
-        statusMessage = "Добавлено правило: \(kind.title)"
+        statusMessage = UpdateLocalization.text(ru: "Добавлено правило: \(kind.title)", en: "Rule added: \(kind.title)")
         return rule.id
     }
 
@@ -3019,7 +3103,7 @@ final class AppModel: NSObject, ObservableObject {
         independentPortForwards.append(
             IndependentPortForward(connection: connection, kind: kind)
         )
-        statusMessage = "Добавлен независимый SSH-туннель"
+        statusMessage = UpdateLocalization.text(ru: "Добавлен независимый SSH-туннель", en: "Independent SSH tunnel added")
     }
 
     @discardableResult
@@ -3031,7 +3115,7 @@ final class AppModel: NSObject, ObservableObject {
         copy.rule.id = newID
         copy.rule.name += " — копия"
         independentPortForwards.append(copy)
-        statusMessage = "Туннель скопирован"
+        statusMessage = UpdateLocalization.text(ru: "Туннель скопирован", en: "Tunnel copied")
         return newID
     }
 
@@ -3047,7 +3131,7 @@ final class AppModel: NSObject, ObservableObject {
     func removeIndependentPortForward(_ id: UUID) {
         cancelSSHTunnelSmartReconnect(id)
         guard !isIndependentSSHTunnelRunning(tunnelID: id) else {
-            errorMessage = "Сначала остановите этот SSH-туннель"
+            errorMessage = UpdateLocalization.text(ru: "Сначала остановите этот SSH-туннель", en: "Stop this SSH tunnel first")
             return
         }
         independentPortForwards.removeAll { $0.id == id }
@@ -3072,7 +3156,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            self.errorMessage = "Не удалось перезапустить туннель: предыдущий процесс ещё завершается"
+            self.errorMessage = UpdateLocalization.text(ru: "Не удалось перезапустить туннель: предыдущий процесс ещё завершается", en: "Unable to restart the tunnel: the previous process is still stopping")
         }
     }
 
@@ -3108,7 +3192,7 @@ final class AppModel: NSObject, ObservableObject {
                     || sshKeyUserPresenceProfileIDs.contains(profileID.uuidString)) {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: profileID,
-                    reason: "Подтвердите Touch ID для SSH-туннеля и ключа «\(identity.name)»"
+                    reason: UpdateLocalization.text(ru: "Подтвердите Touch ID для SSH-туннеля и ключа «\(identity.name)»", en: "Confirm Touch ID for the SSH tunnel and key “\(identity.name)”")
                 )
             }
             if settings.authenticationMode != .touchIDKey,
@@ -3173,7 +3257,7 @@ final class AppModel: NSObject, ObservableObject {
                     attempt: smartReconnectAttempt,
                     maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                     nextAttemptAt: nil,
-                    reason: "Восстановление SSH-туннеля"
+                    reason: UpdateLocalization.text(ru: "Восстановление SSH-туннеля", en: "Reconnecting SSH tunnel")
                 )
                 markSSHTunnelReconnectEstablishedAfterGrace(
                     id,
@@ -3186,15 +3270,15 @@ final class AppModel: NSObject, ObservableObject {
             }
             startSSHTunnelMonitorIfNeeded()
             statusMessage = smartReconnectAttempt == nil
-                ? "Независимый SSH-туннель «\(item.rule.name)» запущен"
-                : "SSH-туннель «\(item.rule.name)» восстанавливается"
+                ? UpdateLocalization.text(ru: "Независимый SSH-туннель «\(item.rule.name)» запущен", en: "Independent SSH tunnel “\(item.rule.name)” started")
+                : UpdateLocalization.text(ru: "SSH-туннель «\(item.rule.name)» восстанавливается", en: "SSH tunnel “\(item.rule.name)” is reconnecting")
             errorMessage = nil
         } catch {
             let message = error.localizedDescription
             sshTunnelLastErrors[id] = message
             cancelSSHTunnelSmartReconnect(id)
             errorMessage = message
-            statusMessage = "SSH-туннель не запущен"
+            statusMessage = UpdateLocalization.text(ru: "SSH-туннель не запущен", en: "SSH tunnel did not start")
         }
     }
 
@@ -3205,14 +3289,14 @@ final class AppModel: NSObject, ObservableObject {
     func removePortForward(_ ruleID: UUID, profileID: UUID) {
         cancelSSHTunnelSmartReconnect(ruleID)
         guard !isProfileSSHTunnelRunning(ruleID: ruleID, profileID: profileID) else {
-            errorMessage = "Сначала остановите этот SSH-туннель"
+            errorMessage = UpdateLocalization.text(ru: "Сначала остановите этот SSH-туннель", en: "Stop this SSH tunnel first")
             return
         }
         guard let profileIndex = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[profileIndex].portForwards.removeAll { $0.id == ruleID }
         lastSSHTunnelLogURLs.removeValue(forKey: ruleID)
         sshTunnelLastErrors.removeValue(forKey: ruleID)
-        statusMessage = "Правило forwarding удалено"
+        statusMessage = UpdateLocalization.text(ru: "Правило forwarding удалено", en: "Forwarding rule deleted")
     }
 
     func startSSHTunnel(_ ruleID: UUID) {
@@ -3295,7 +3379,7 @@ final class AppModel: NSObject, ObservableObject {
                     attempt: smartReconnectAttempt,
                     maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                     nextAttemptAt: nil,
-                    reason: "Восстановление SSH-туннеля"
+                    reason: UpdateLocalization.text(ru: "Восстановление SSH-туннеля", en: "Reconnecting SSH tunnel")
                 )
                 markSSHTunnelReconnectEstablishedAfterGrace(
                     ruleID,
@@ -3308,15 +3392,15 @@ final class AppModel: NSObject, ObservableObject {
             }
             startSSHTunnelMonitorIfNeeded()
             statusMessage = smartReconnectAttempt == nil
-                ? "SSH-туннель «\(rule.name)» запущен"
-                : "SSH-туннель «\(rule.name)» восстанавливается"
+                ? UpdateLocalization.text(ru: "SSH-туннель «\(rule.name)» запущен", en: "SSH tunnel “\(rule.name)” started")
+                : UpdateLocalization.text(ru: "SSH-туннель «\(rule.name)» восстанавливается", en: "SSH tunnel “\(rule.name)” is reconnecting")
             errorMessage = nil
         } catch {
             let message = error.localizedDescription
             sshTunnelLastErrors[ruleID] = message
             cancelSSHTunnelSmartReconnect(ruleID)
             errorMessage = message
-            statusMessage = "SSH-туннель не запущен"
+            statusMessage = UpdateLocalization.text(ru: "SSH-туннель не запущен", en: "SSH tunnel did not start")
         }
     }
 
@@ -3335,7 +3419,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
                 try? await Task.sleep(for: .milliseconds(100))
             }
-            self.errorMessage = "Не удалось перезапустить туннель: предыдущий процесс ещё завершается"
+            self.errorMessage = UpdateLocalization.text(ru: "Не удалось перезапустить туннель: предыдущий процесс ещё завершается", en: "Unable to restart the tunnel: the previous process is still stopping")
         }
     }
 
@@ -3367,7 +3451,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func chooseFolder() {
         let panel = NSOpenPanel()
-        panel.title = "Выберите папку для удалённой сессии"
+        panel.title = UpdateLocalization.text(ru: "Выберите папку для удалённой сессии", en: "Choose a Folder for the Remote Session")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -3385,7 +3469,7 @@ final class AppModel: NSObject, ObservableObject {
 
     func importProfiles() {
         let panel = NSOpenPanel()
-        panel.title = "Импорт подключений"
+        panel.title = UpdateLocalization.text(ru: "Импорт подключений", en: "Import Connections")
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
         panel.allowedContentTypes = ["rdp", "selectiveremote", "json"].compactMap {
@@ -3429,7 +3513,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             profiles.append(contentsOf: imported)
             selectedProfileID = imported.first?.id
-            statusMessage = "Импортировано профилей: \(imported.count). Пароли и SSH-ключи не импортировались."
+            statusMessage = UpdateLocalization.text(ru: "Импортировано профилей: \(imported.count). Пароли и SSH-ключи не импортировались.", en: "Profiles imported: \(imported.count). Passwords and SSH keys were not imported.")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -3439,12 +3523,12 @@ final class AppModel: NSObject, ObservableObject {
     func exportAllProfiles() {
         do {
             let panel = NSSavePanel()
-            panel.title = "Экспорт профилей без паролей и SSH-ключей"
+            panel.title = UpdateLocalization.text(ru: "Экспорт профилей без паролей и SSH-ключей", en: "Export Profiles Without Passwords or SSH Keys")
             panel.nameFieldStringValue = "Selective-Remote-Profiles.selectiveremote"
             panel.allowedContentTypes = [UTType(filenameExtension: "selectiveremote") ?? .json]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try SelectiveRemoteProfileCodec.encode(profiles).write(to: url, options: .atomic)
-            statusMessage = "Профили экспортированы без паролей и SSH-ключей"
+            statusMessage = UpdateLocalization.text(ru: "Профили экспортированы без паролей и SSH-ключей", en: "Profiles exported without passwords or SSH keys")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -3452,17 +3536,17 @@ final class AppModel: NSObject, ObservableObject {
 
     func exportSelectedRDP() {
         guard selectedProfile.connectionType == .rdp else {
-            errorMessage = "Формат .rdp доступен только для RDP-профилей"
+            errorMessage = UpdateLocalization.text(ru: "Формат .rdp доступен только для RDP-профилей", en: "The .rdp format is available for RDP profiles only")
             return
         }
         do {
             let panel = NSSavePanel()
-            panel.title = "Экспорт подключения .rdp без паролей"
+            panel.title = UpdateLocalization.text(ru: "Экспорт подключения .rdp без паролей", en: "Export .rdp Connection Without Passwords")
             panel.nameFieldStringValue = "\(safeFilename(selectedProfile.friendlyName)).rdp"
             panel.allowedContentTypes = [UTType(filenameExtension: "rdp") ?? .data]
             guard panel.runModal() == .OK, let url = panel.url else { return }
             try RDPFileCodec.encode(selectedProfile).write(to: url, options: .atomic)
-            statusMessage = "Файл .rdp экспортирован без паролей"
+            statusMessage = UpdateLocalization.text(ru: "Файл .rdp экспортирован без паролей", en: ".rdp file exported without passwords")
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -3536,7 +3620,7 @@ final class AppModel: NSObject, ObservableObject {
         switch connection.kind {
         case .savedProfile:
             guard let profileID = connection.profileID else {
-                errorMessage = "Сохранённый SSH-профиль больше недоступен"
+                errorMessage = UpdateLocalization.text(ru: "Сохранённый SSH-профиль больше недоступен", en: "The saved SSH profile is no longer available")
                 return nil
             }
             return sshConnectionSettings(profileID: profileID)
@@ -3557,13 +3641,13 @@ final class AppModel: NSObject, ObservableObject {
                 sshKeys.first(where: { $0.id == keyID })
             }
             if connection.identityID != nil, identity == nil {
-                errorMessage = "Выбранный SSH-ключ больше недоступен. Выберите другой ключ."
+                errorMessage = UpdateLocalization.text(ru: "Выбранный SSH-ключ больше недоступен. Выберите другой ключ.", en: "The selected SSH key is no longer available. Choose another key.")
                 return nil
             }
             if profile.sshAuthenticationMode == .touchIDKey,
                let identity,
                !SSHKeyService.isTouchIDCompatible(identity) {
-                errorMessage = "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый."
+                errorMessage = UpdateLocalization.text(ru: "Touch ID Key использует только ECDSA-ключи. Выберите ECDSA Touch ID Key или создайте новый.", en: "Touch ID Key supports ECDSA keys only. Select an ECDSA Touch ID Key or create a new one.")
                 return nil
             }
             do {
@@ -3579,7 +3663,7 @@ final class AppModel: NSObject, ObservableObject {
                 return nil
             }
         case .telnet, .serial, .local:
-            errorMessage = "Для выбранного Terminal-транспорта SSH-настройки не используются"
+            errorMessage = UpdateLocalization.text(ru: "Для выбранного Terminal-транспорта SSH-настройки не используются", en: "SSH settings are not used by the selected Terminal transport")
             return nil
         }
     }
@@ -3647,7 +3731,7 @@ final class AppModel: NSObject, ObservableObject {
     ) {
         cancelTerminalSmartReconnect(tabID: tabID, session: session)
         guard !session.isRunning else {
-            statusMessage = "Эта вкладка Terminal уже подключена"
+            statusMessage = UpdateLocalization.text(ru: "Эта вкладка Terminal уже подключена", en: "This Terminal tab is already connected")
             return
         }
         do {
@@ -3675,8 +3759,8 @@ final class AppModel: NSObject, ObservableObject {
                     )
                 }
                 statusMessage = requested || exitCode == 0
-                    ? "\(connection.kind.title)-сессия завершена"
-                    : (failure ?? "\(connection.kind.title)-сессия завершилась с кодом \(exitCode)")
+                    ? UpdateLocalization.text(ru: "\(connection.kind.title)-сессия завершена", en: "\(connection.kind.title) session ended")
+                    : (failure ?? UpdateLocalization.text(ru: "\(connection.kind.title)-сессия завершилась с кодом \(exitCode)", en: "\(connection.kind.title) session exited with code \(exitCode)"))
                 objectWillChange.send()
             }
             beginTerminalSessionLog(
@@ -3694,7 +3778,7 @@ final class AppModel: NSObject, ObservableObject {
                 target: launch.target
             )
             terminalStartedAt[tabID] = Date()
-            statusMessage = "\(connection.kind.title) подключается: \(launch.target)"
+            statusMessage = UpdateLocalization.text(ru: "\(connection.kind.title) подключается: \(launch.target)", en: "\(connection.kind.title) connecting: \(launch.target)")
             errorMessage = nil
         } catch {
             connectionActivity.recordFailure(
@@ -3705,7 +3789,7 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage: error.localizedDescription
             )
             errorMessage = error.localizedDescription
-            statusMessage = "\(connection.kind.title) не запущен"
+            statusMessage = UpdateLocalization.text(ru: "\(connection.kind.title) не запущен", en: "\(connection.kind.title) did not start")
         }
     }
 
@@ -3724,7 +3808,7 @@ final class AppModel: NSObject, ObservableObject {
             tabID: tabID
         ) else { return }
         guard !session.isRunning else {
-            statusMessage = "Эта вкладка Terminal уже подключена"
+            statusMessage = UpdateLocalization.text(ru: "Эта вкладка Terminal уже подключена", en: "This Terminal tab is already connected")
             return
         }
         do {
@@ -3744,7 +3828,7 @@ final class AppModel: NSObject, ObservableObject {
                let identity = settings.identity {
                 try KeychainService.authorizeSSHKeyUse(
                     profileID: authorizationProfileID,
-                    reason: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»"
+                    reason: UpdateLocalization.text(ru: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»", en: "Confirm Touch ID for the SSH session and key “\(identity.name)”")
                 )
             }
             let credential: KeychainCredentialReference?
@@ -3857,8 +3941,8 @@ final class AppModel: NSObject, ObservableObject {
                 } else {
                     cancelTerminalSmartReconnect(tabID: tabID, session: session)
                     statusMessage = terminationRequested || exitCode == 0
-                        ? "\(terminalProtocolTitle)-сессия завершена"
-                        : (moshFailure ?? "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)")
+                        ? UpdateLocalization.text(ru: "\(terminalProtocolTitle)-сессия завершена", en: "\(terminalProtocolTitle) session ended")
+                        : (moshFailure ?? UpdateLocalization.text(ru: "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)", en: "\(terminalProtocolTitle) session exited with code \(exitCode)"))
                 }
                 objectWillChange.send()
             }
@@ -3898,7 +3982,7 @@ final class AppModel: NSObject, ObservableObject {
                         attempt: smartReconnectAttempt,
                         maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                         nextAttemptAt: nil,
-                        reason: "Проверяем восстановленное SSH-соединение"
+                        reason: UpdateLocalization.text(ru: "Проверяем восстановленное SSH-соединение", en: "Verifying the reconnected SSH session")
                     )
                 )
                 markTerminalReconnectEstablishedAfterGrace(
@@ -3906,9 +3990,9 @@ final class AppModel: NSObject, ObservableObject {
                     session: session,
                     attempt: smartReconnectAttempt
                 )
-                statusMessage = "SSH: проверяем reconnect \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
+                statusMessage = UpdateLocalization.text(ru: "SSH: проверяем повторное подключение \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "SSH: verifying reconnect \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)")
             } else {
-                statusMessage = "\(terminalProtocolTitle) подключается к \(settings.host)"
+                statusMessage = UpdateLocalization.text(ru: "\(terminalProtocolTitle) подключается к \(settings.host)", en: "\(terminalProtocolTitle) connecting to \(settings.host)")
             }
             if connection.kind == .savedProfile,
                let profileID = connection.profileID,
@@ -3934,7 +4018,7 @@ final class AppModel: NSObject, ObservableObject {
                 errorMessage: error.localizedDescription
             )
             errorMessage = error.localizedDescription
-            statusMessage = "\(settings.terminalProtocol.title) не запущен"
+            statusMessage = UpdateLocalization.text(ru: "\(settings.terminalProtocol.title) не запущен", en: "\(settings.terminalProtocol.title) did not start")
         }
     }
 
@@ -3944,14 +4028,15 @@ final class AppModel: NSObject, ObservableObject {
         session: TerminalSessionModel
     ) {
         guard connection.kind == .local else {
-            errorMessage = "Локальная вкладка содержит неверный тип подключения"
+            errorMessage = AppLanguageStore.shared.localized("terminal.local.invalid_connection")
             return
         }
         guard !session.isRunning else {
-            statusMessage = "Этот локальный терминал уже запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.already_running")
             return
         }
 
+        let localTerminalTitle = AppLanguageStore.shared.localized("terminal.local.accessibility")
         let environment = ProcessInfo.processInfo.environment
         let configuredShell = environment["SHELL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let shell = configuredShell?.isEmpty == false ? configuredShell! : "/bin/zsh"
@@ -3961,7 +4046,7 @@ final class AppModel: NSObject, ObservableObject {
             try session.start(
                 executable: shell,
                 arguments: ["-l"],
-                title: "Локальный терминал",
+                title: AppLanguageStore.shared.localized("terminal.local.accessibility"),
                 environment: environment,
                 workingDirectory: directory
             ) { [weak self] exitCode in
@@ -3972,8 +4057,8 @@ final class AppModel: NSObject, ObservableObject {
                 )
                 self?.terminalStartedAt.removeValue(forKey: tabID)
                 self?.statusMessage = exitCode == 0
-                    ? "Локальный терминал завершён"
-                    : "Локальный терминал завершился с кодом \(exitCode)"
+                    ? AppLanguageStore.shared.localized("terminal.local.finished")
+                    : "\(AppLanguageStore.shared.localized("terminal.local.finished_with_code")) \(exitCode)"
                 self?.objectWillChange.send()
             }
             beginTerminalSessionLog(
@@ -3981,15 +4066,15 @@ final class AppModel: NSObject, ObservableObject {
                 session: session,
                 kind: .local,
                 profileID: nil,
-                profileName: "Локальный терминал",
+                profileName: localTerminalTitle,
                 target: directory
             )
             terminalStartedAt[tabID] = Date()
-            statusMessage = "Локальный терминал запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.started")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
-            statusMessage = "Локальный терминал не запущен"
+            statusMessage = AppLanguageStore.shared.localized("terminal.local.not_started")
         }
     }
 
@@ -4091,7 +4176,7 @@ final class AppModel: NSObject, ObservableObject {
                 updateSnippetRun(
                     id: runID,
                     profileID: profileID,
-                    state: .failed("Не удалось подготовить вкладку терминала")
+                    state: .failed(UpdateLocalization.text(ru: "Не удалось подготовить вкладку терминала", en: "Unable to prepare the Terminal tab"))
                 )
                 continue
             }
@@ -4124,8 +4209,8 @@ final class AppModel: NSObject, ObservableObject {
         }
         guard acceptedTargets > 0 else { return .noTargets }
         statusMessage = startedConnection
-            ? "Snippets: подключаем Targets и готовим выполнение"
-            : "Snippets: команда отправлена на \(acceptedTargets) Targets"
+            ? UpdateLocalization.text(ru: "Snippets: подключаем Targets и готовим выполнение", en: "Snippets: connecting Targets and preparing to run")
+            : UpdateLocalization.text(ru: "Snippets: команда отправлена на \(acceptedTargets) Targets", en: "Snippets: command sent to \(acceptedTargets) Targets")
         return startedConnection ? .connecting : .success
     }
 
@@ -4153,7 +4238,7 @@ final class AppModel: NSObject, ObservableObject {
         case .localTerminal:
             return TerminalSnippetTargetRunStatus(
                 profileID: Self.localTerminalWorkspaceID,
-                name: "Локальный терминал",
+                name: UpdateLocalization.text(ru: "Локальный терминал", en: "Local Terminal"),
                 state: .connecting
             )
         }
@@ -4221,10 +4306,10 @@ final class AppModel: NSObject, ObservableObject {
                         if profile.sshStartupSnippetMode == .ask {
                             let alert = NSAlert()
                             alert.alertStyle = .informational
-                            alert.messageText = "Выполнить Startup Snippet?"
+                            alert.messageText = UpdateLocalization.text(ru: "Выполнить Startup Snippet?", en: "Run Startup Snippet?")
                             alert.informativeText = "\(profile.friendlyName)\n\n\(snippet.title)\n\(command)"
-                            alert.addButton(withTitle: "Выполнить")
-                            alert.addButton(withTitle: "Пропустить")
+                            alert.addButton(withTitle: UpdateLocalization.text(ru: "Выполнить", en: "Run"))
+                            alert.addButton(withTitle: UpdateLocalization.text(ru: "Пропустить", en: "Skip"))
                             guard alert.runModal() == .alertFirstButtonReturn else { return }
                         }
                         _ = TerminalCommandHistoryStore.shared.record(
@@ -4232,7 +4317,7 @@ final class AppModel: NSObject, ObservableObject {
                             profileID: profileID
                         )
                         session.sendInput(input)
-                        self.statusMessage = "Startup Snippet «\(snippet.title)» выполнен"
+                        self.statusMessage = UpdateLocalization.text(ru: "Startup Snippet «\(snippet.title)» выполнен", en: "Startup Snippet “\(snippet.title)” ran")
                         return
                     }
                 } else {
@@ -4276,9 +4361,9 @@ final class AppModel: NSObject, ObservableObject {
                     self.updateSnippetRun(
                         id: runID,
                         profileID: profileID,
-                        state: .failed("SSH-сессия завершилась до отправки команды")
+                        state: .failed(UpdateLocalization.text(ru: "SSH-сессия завершилась до отправки команды", en: "The SSH session ended before the command was sent"))
                     )
-                    self.errorMessage = "Snippets: SSH-подключение к Target завершилось до выполнения команды"
+                    self.errorMessage = UpdateLocalization.text(ru: "Snippets: SSH-подключение к Target завершилось до выполнения команды", en: "Snippets: the SSH connection to the Target ended before the command ran")
                     return
                 }
                 try? await Task.sleep(for: .milliseconds(100))
@@ -4286,9 +4371,9 @@ final class AppModel: NSObject, ObservableObject {
             self?.updateSnippetRun(
                 id: runID,
                 profileID: profileID,
-                state: .failed("SSH не подключился за 40 секунд")
+                state: .failed(UpdateLocalization.text(ru: "SSH не подключился за 40 секунд", en: "SSH did not connect within 40 seconds"))
             )
-            self?.errorMessage = "Snippets: SSH-подключение к Target не завершилось за 40 секунд"
+            self?.errorMessage = UpdateLocalization.text(ru: "Snippets: SSH-подключение к Target не завершилось за 40 секунд", en: "Snippets: SSH connection to the Target did not complete within 40 seconds")
         }
     }
 
@@ -4358,8 +4443,8 @@ final class AppModel: NSObject, ObservableObject {
             stoppedCount += 1
         }
         statusMessage = stoppedCount == 0
-            ? "Snippets: активных SSH-сессий Targets нет"
-            : "Snippets: отключаем SSH-сессии Targets — \(stoppedCount)"
+            ? UpdateLocalization.text(ru: "Snippets: активных SSH-сессий Targets нет", en: "Snippets: no active Target SSH sessions")
+            : UpdateLocalization.text(ru: "Snippets: отключаем SSH-сессии Targets — \(stoppedCount)", en: "Snippets: disconnecting \(stoppedCount) Target SSH sessions")
     }
 
     private func canAutomaticallyReconnectSSH(
@@ -4393,7 +4478,7 @@ final class AppModel: NSObject, ObservableObject {
     ) {
         guard attempt <= SmartReconnectPolicy.maximumAttempts else {
             cancelTerminalSmartReconnect(tabID: tabID, session: session)
-            statusMessage = "SSH не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток"
+            statusMessage = UpdateLocalization.text(ru: "SSH не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток", en: "SSH did not reconnect after \(SmartReconnectPolicy.maximumAttempts) attempts")
             errorMessage = reason
             return
         }
@@ -4406,7 +4491,7 @@ final class AppModel: NSObject, ObservableObject {
             reason: reason
         )
         session.setReconnectProgress(progress)
-        statusMessage = "SSH: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+        statusMessage = UpdateLocalization.text(ru: "SSH: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "SSH: reconnecting, attempt \(attempt)/\(SmartReconnectPolicy.maximumAttempts)")
 
         terminalReconnectTasks[tabID] = Task { @MainActor [weak self, weak session] in
             do {
@@ -4458,7 +4543,7 @@ final class AppModel: NSObject, ObservableObject {
             else { return }
             session.setReconnectProgress(nil)
             self.terminalReconnectTasks[tabID] = nil
-            self.statusMessage = "SSH восстановлен: попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+            self.statusMessage = UpdateLocalization.text(ru: "SSH восстановлен: попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "SSH reconnected on attempt \(attempt)/\(SmartReconnectPolicy.maximumAttempts)")
             self.objectWillChange.send()
         }
     }
@@ -4477,7 +4562,7 @@ final class AppModel: NSObject, ObservableObject {
     ) async throws -> TerminalRemoteContextSnapshot {
         guard isRunningTerminalTab(connection: connection, tabID: tabID) else {
             throw TerminalRemoteContextError.commandFailed(
-                "активная SSH-сессия этой вкладки уже завершена"
+                UpdateLocalization.text(ru: "активная SSH-сессия этой вкладки уже завершена", en: "this tab’s active SSH session has already ended")
             )
         }
         guard let settings = prepareSSHConnection(
@@ -4487,7 +4572,7 @@ final class AppModel: NSObject, ObservableObject {
             reuseRunningTerminalAuthorization: true
         ) else {
             throw TerminalRemoteContextError.commandFailed(
-                errorMessage ?? "подключение SSH больше недоступно"
+                errorMessage ?? UpdateLocalization.text(ru: "подключение SSH больше недоступно", en: "the SSH connection is no longer available")
             )
         }
 
@@ -4588,7 +4673,7 @@ final class AppModel: NSObject, ObservableObject {
                 command,
                 to: runtime.connection.commandPipeURL
             )
-            statusMessage = "Команда «\(command.title)» отправлена в «\(runtime.profileName)»"
+            statusMessage = UpdateLocalization.text(ru: "Команда «\(command.title)» отправлена в «\(runtime.profileName)»", en: "Command “\(command.title)” sent to “\(runtime.profileName)”")
             errorMessage = nil
         } catch {
             errorMessage = error.localizedDescription
@@ -4602,19 +4687,19 @@ final class AppModel: NSObject, ObservableObject {
     func setMicrophoneEnabled(_ enabled: Bool, profileID: UUID) {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[index].redirectMicrophone = enabled
-        statusMessage = "Настройка микрофона сохранена; переподключите RDP для применения"
+        statusMessage = UpdateLocalization.text(ru: "Настройка микрофона сохранена; переподключите RDP для применения", en: "Microphone setting saved; reconnect RDP to apply it")
     }
 
     func setCameraEnabled(_ enabled: Bool, profileID: UUID) {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[index].redirectCamera = enabled
-        statusMessage = "Настройка камеры сохранена; переподключите RDP для применения"
+        statusMessage = UpdateLocalization.text(ru: "Настройка камеры сохранена; переподключите RDP для применения", en: "Camera setting saved; reconnect RDP to apply it")
     }
 
     func setSoundEnabled(_ enabled: Bool, profileID: UUID) {
         guard let index = profiles.firstIndex(where: { $0.id == profileID }) else { return }
         profiles[index].audioMode = enabled ? .local : .muted
-        statusMessage = "Настройка звука сохранена; переподключите RDP для применения"
+        statusMessage = UpdateLocalization.text(ru: "Настройка звука сохранена; переподключите RDP для применения", en: "Audio setting saved; reconnect RDP to apply it")
     }
 
     func reconnect(profileID: UUID) {
@@ -4632,7 +4717,7 @@ final class AppModel: NSObject, ObservableObject {
                 }
                 try? await Task.sleep(for: .milliseconds(200))
             }
-            self.errorMessage = "RDP не успел завершиться; повторите переподключение"
+            self.errorMessage = UpdateLocalization.text(ru: "RDP не успел завершиться; повторите переподключение", en: "RDP did not stop in time; try reconnecting again")
         }
     }
 
@@ -4645,10 +4730,10 @@ final class AppModel: NSObject, ObservableObject {
         if isSSHTerminalRunning(profileID: profileID) {
             if let workspace = terminalWorkspaces[profileID] {
                 workspace.stopAll()
-                statusMessage = "Завершаем SSH-сессии профиля…"
+                statusMessage = UpdateLocalization.text(ru: "Завершаем SSH-сессии профиля…", en: "Ending the profile’s SSH sessions…")
             } else {
                 sshTerminalSessions[profileID]?.stop()
-                statusMessage = "Завершаем SSH-сессию…"
+                statusMessage = UpdateLocalization.text(ru: "Завершаем SSH-сессию…", en: "Ending the SSH session…")
             }
         } else {
             requestDisconnect(profileID: profileID, interruptionReason: nil)
@@ -5302,16 +5387,16 @@ final class AppModel: NSObject, ObservableObject {
                     attempt: smartReconnectAttempt,
                     maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                     nextAttemptAt: nil,
-                    reason: "Восстановление RDP-сессии"
+                    reason: UpdateLocalization.text(ru: "Восстановление RDP-сессии", en: "Reconnecting RDP session")
                 )
             }
             startSessionMonitorIfNeeded()
             if let smartReconnectAttempt {
-                statusMessage = "RDP: переподключение, попытка \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)"
+                statusMessage = UpdateLocalization.text(ru: "RDP: переподключение, попытка \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "RDP: reconnecting, attempt \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)")
             } else if missingCount > 0 {
-                statusMessage = "FreeRDP запущен; недоступные мониторы временно пропущены: \(missingCount)"
+                statusMessage = UpdateLocalization.text(ru: "FreeRDP запущен; недоступные мониторы временно пропущены: \(missingCount)", en: "FreeRDP started; \(missingCount) unavailable monitors temporarily skipped")
             } else {
-                statusMessage = "FreeRDP запущен для «\(profile.friendlyName)», ожидаем окно…"
+                statusMessage = UpdateLocalization.text(ru: "FreeRDP запущен для «\(profile.friendlyName)», ожидаем окно…", en: "FreeRDP started for “\(profile.friendlyName)”; waiting for the window…")
             }
             errorMessage = nil
         } catch {
@@ -5320,7 +5405,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             if !automatic || selectedProfileID == profileID {
                 errorMessage = error.localizedDescription
-                statusMessage = "Подключение не запущено"
+                statusMessage = UpdateLocalization.text(ru: "Подключение не запущено", en: "Connection did not start")
             }
             connectionActivity.recordFailure(
                 kind: .rdp,
@@ -5375,7 +5460,7 @@ final class AppModel: NSObject, ObservableObject {
             reconnectCandidateProfileIDs.insert(profileID)
             statusMessage = interruptionReason
         } else {
-            statusMessage = "Завершаем «\(runtime.profileName)»…"
+            statusMessage = UpdateLocalization.text(ru: "Завершаем «\(runtime.profileName)»…", en: "Ending “\(runtime.profileName)”…")
         }
 
         let process = runtime.connection.process
@@ -5383,7 +5468,7 @@ final class AppModel: NSObject, ObservableObject {
             finishSession(profileID: profileID, status: process.terminationStatus)
             return
         }
-        let reason = interruptionReason ?? "Отключение запрошено пользователем"
+        let reason = interruptionReason ?? UpdateLocalization.text(ru: "Отключение запрошено пользователем", en: "Disconnect requested by the user")
         if let marker = "\n[SelectiveRemote Host] SIGTERM: \(reason)\n".data(using: .utf8) {
             try? runtime.connection.logHandle.write(contentsOf: marker)
         }
@@ -5394,7 +5479,7 @@ final class AppModel: NSObject, ObservableObject {
                   self.managedSessions[profileID]?.connection.process === process
             else { return }
             Darwin.kill(process.processIdentifier, SIGKILL)
-            self.statusMessage = "Сессия «\(runtime.profileName)» принудительно остановлена"
+            self.statusMessage = UpdateLocalization.text(ru: "Сессия «\(runtime.profileName)» принудительно остановлена", en: "Session “\(runtime.profileName)” was force stopped")
         }
     }
 
@@ -5469,14 +5554,17 @@ final class AppModel: NSObject, ObservableObject {
 
         if requested {
             cancelSSHTunnelSmartReconnect(ruleID)
-            statusMessage = "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен"
+            statusMessage = UpdateLocalization.text(ru: "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен", en: "SSH tunnel “\(summary?.ruleName ?? "Untitled")” stopped")
             return
         }
 
         let log = (try? String(contentsOf: running.logURL, encoding: .utf8)) ?? ""
         let details = log.trimmingCharacters(in: .whitespacesAndNewlines)
+        let localizedTermination = running.process.terminationReason == .exit
+            ? UpdateLocalization.text(ru: "код \(status)", en: "code \(status)")
+            : UpdateLocalization.text(ru: "сигнал \(status)", en: "signal \(status)")
         let message = details.isEmpty
-            ? "процесс завершился: \(termination)"
+            ? UpdateLocalization.text(ru: "процесс завершился: \(localizedTermination)", en: "process exited: \(localizedTermination)")
             : String(details.suffix(3_000))
         sshTunnelLastErrors[ruleID] = message
 
@@ -5498,9 +5586,9 @@ final class AppModel: NSObject, ObservableObject {
         cancelSSHTunnelSmartReconnect(ruleID)
         if summary?.profileID == selectedProfileID
             || summary?.profileID == Self.globalForwardingProfileID {
-            errorMessage = "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен:\n\(message)"
+            errorMessage = UpdateLocalization.text(ru: "SSH-туннель «\(summary?.ruleName ?? "Без названия")» остановлен:\n\(message)", en: "SSH tunnel “\(summary?.ruleName ?? "Untitled")” stopped:\n\(message)")
         }
-        statusMessage = "SSH-туннель неожиданно завершён"
+        statusMessage = UpdateLocalization.text(ru: "SSH-туннель неожиданно завершён", en: "SSH tunnel ended unexpectedly")
     }
 
     private func canAutomaticallyReconnectSSHTunnel(_ summary: SSHTunnelSummary) -> Bool {
@@ -5542,8 +5630,8 @@ final class AppModel: NSObject, ObservableObject {
         let ruleID = summary.id
         guard attempt <= SmartReconnectPolicy.maximumAttempts else {
             cancelSSHTunnelSmartReconnect(ruleID)
-            statusMessage = "SSH-туннель «\(summary.ruleName)» не восстановлен"
-            errorMessage = "\(reason). Исчерпаны \(SmartReconnectPolicy.maximumAttempts) попытки переподключения."
+            statusMessage = UpdateLocalization.text(ru: "SSH-туннель «\(summary.ruleName)» не восстановлен", en: "SSH tunnel “\(summary.ruleName)” did not reconnect")
+            errorMessage = UpdateLocalization.text(ru: "\(reason). Исчерпаны \(SmartReconnectPolicy.maximumAttempts) попытки переподключения.", en: "\(reason). All \(SmartReconnectPolicy.maximumAttempts) reconnect attempts were exhausted.")
             return
         }
 
@@ -5556,7 +5644,7 @@ final class AppModel: NSObject, ObservableObject {
             nextAttemptAt: SmartReconnectPolicy.nextAttemptDate(for: attempt),
             reason: reason
         )
-        statusMessage = "SSH-туннель «\(summary.ruleName)»: переподключение \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+        statusMessage = UpdateLocalization.text(ru: "SSH-туннель «\(summary.ruleName)»: переподключение \(attempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "SSH tunnel “\(summary.ruleName)”: reconnecting \(attempt)/\(SmartReconnectPolicy.maximumAttempts)")
 
         sshTunnelReconnectTasks[ruleID] = Task { @MainActor [weak self] in
             do {
@@ -5615,7 +5703,7 @@ final class AppModel: NSObject, ObservableObject {
             self.sshTunnelReconnectSummaries.removeValue(forKey: ruleID)
             self.sshTunnelReconnectTasks[ruleID] = nil
             self.sshTunnelLastErrors.removeValue(forKey: ruleID)
-            self.statusMessage = "SSH-туннель восстановлен"
+            self.statusMessage = UpdateLocalization.text(ru: "SSH-туннель восстановлен", en: "SSH tunnel reconnected")
         }
     }
 
@@ -5644,8 +5732,10 @@ final class AppModel: NSObject, ObservableObject {
             if let permission = SessionLogClassifier.pendingCapturePermission(log) {
                 runtime.startupWarningShown = false
                 if selectedProfileID == runtime.profileID {
-                    let name = permission == .microphone ? "микрофону" : "камере"
-                    statusMessage = "Ожидаем разрешение macOS на доступ к \(name)…"
+                    let name = permission == .microphone
+                        ? UpdateLocalization.text(ru: "микрофону", en: "microphone")
+                        : UpdateLocalization.text(ru: "камере", en: "camera")
+                    statusMessage = UpdateLocalization.text(ru: "Ожидаем разрешение macOS на доступ к \(name)…", en: "Waiting for macOS permission to access the \(name)…")
                     errorMessage = nil
                 }
                 return
@@ -5655,7 +5745,7 @@ final class AppModel: NSObject, ObservableObject {
                SessionLogClassifier.hasCompletedCapturePermissionPreflight(log) {
                 runtime.privacyReadyAt = Date()
                 if selectedProfileID == runtime.profileID {
-                    statusMessage = "Проверка разрешений завершена, запускаем FreeRDP…"
+                    statusMessage = UpdateLocalization.text(ru: "Проверка разрешений завершена, запускаем FreeRDP…", en: "Permissions checked; starting FreeRDP…")
                 }
             }
         }
@@ -5672,7 +5762,7 @@ final class AppModel: NSObject, ObservableObject {
         else { return }
         runtime.startupWarningShown = true
         if selectedProfileID == runtime.profileID {
-            statusMessage = "FreeRDP запускается дольше обычного — процесс остаётся активным"
+            statusMessage = UpdateLocalization.text(ru: "FreeRDP запускается дольше обычного — процесс остаётся активным", en: "FreeRDP is taking longer than usual to start; the process is still active")
         }
     }
 
@@ -5703,12 +5793,14 @@ final class AppModel: NSObject, ObservableObject {
             )) ?? ""
             let disabled = SessionLogClassifier.disabledCapturePermissions(log)
             if disabled.isEmpty {
-                statusMessage = "RDP подключён — верхний край или правый ⇧ + D завершают сессию"
+                statusMessage = UpdateLocalization.text(ru: "RDP подключён — верхний край или правый ⇧ + D завершают сессию", en: "RDP connected — use the top edge or Right ⇧ + D to end the session")
             } else {
                 let names = disabled.map {
-                    $0 == .microphone ? "микрофон" : "камера"
-                }.joined(separator: " и ")
-                statusMessage = "RDP подключён; \(names) не передаются из-за разрешений macOS"
+                    $0 == .microphone
+                        ? UpdateLocalization.text(ru: "микрофон", en: "microphone")
+                        : UpdateLocalization.text(ru: "камера", en: "camera")
+                }.joined(separator: UpdateLocalization.text(ru: " и ", en: " and "))
+                statusMessage = UpdateLocalization.text(ru: "RDP подключён; \(names) не передаются из-за разрешений macOS", en: "RDP connected; \(names) unavailable because of macOS permissions")
             }
             if runtime.startupWarningShown {
                 errorMessage = nil
@@ -5772,7 +5864,7 @@ final class AppModel: NSObject, ObservableObject {
                 scheduleRDPSmartReconnect(
                     profileID: profileID,
                     attempt: (previousReconnectAttempt ?? 0) + 1,
-                    reason: "Конфигурация мониторов изменилась",
+                    reason: UpdateLocalization.text(ru: "Конфигурация мониторов изменилась", en: "Monitor configuration changed"),
                     fastTopologyRecovery: true
                 )
                 if selectedProfileID == profileID {
@@ -5782,7 +5874,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             cancelRDPSmartReconnect(profileID)
             if selectedProfileID == profileID {
-                statusMessage = "Монитор отключён — подключитесь повторно, чтобы использовать доступные дисплеи"
+                statusMessage = UpdateLocalization.text(ru: "Монитор отключён — подключитесь повторно, чтобы использовать доступные дисплеи", en: "Monitor disconnected — reconnect to use the available displays")
                 errorMessage = nil
             }
             return
@@ -5808,10 +5900,10 @@ final class AppModel: NSObject, ObservableObject {
         cancelRDPSmartReconnect(profileID)
         if selectedProfileID == profileID {
             if endedNormally {
-                statusMessage = runtime.interruptionReason ?? "RDP-сессия завершена"
+                statusMessage = runtime.interruptionReason ?? UpdateLocalization.text(ru: "RDP-сессия завершена", en: "RDP session ended")
                 errorMessage = nil
             } else {
-                statusMessage = "FreeRDP завершился с кодом \(status)"
+                statusMessage = UpdateLocalization.text(ru: "FreeRDP завершился с кодом \(status)", en: "FreeRDP exited with code \(status)")
                 errorMessage = sessionFailureMessage(log: log, status: status)
             }
         }
@@ -5826,7 +5918,7 @@ final class AppModel: NSObject, ObservableObject {
         guard attempt <= SmartReconnectPolicy.maximumAttempts else {
             cancelRDPSmartReconnect(profileID)
             reconnectCandidateProfileIDs.insert(profileID)
-            statusMessage = "RDP не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток"
+            statusMessage = UpdateLocalization.text(ru: "RDP не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток", en: "RDP did not reconnect after \(SmartReconnectPolicy.maximumAttempts) attempts")
             if selectedProfileID == profileID {
                 errorMessage = reason
             }
@@ -5856,7 +5948,7 @@ final class AppModel: NSObject, ObservableObject {
             nextAttemptAt: reconnectDate,
             reason: reason
         )
-        statusMessage = "RDP: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)"
+        statusMessage = UpdateLocalization.text(ru: "RDP: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "RDP: reconnecting, attempt \(attempt)/\(SmartReconnectPolicy.maximumAttempts)")
 
         rdpReconnectTasks[profileID] = Task { @MainActor [weak self] in
             do {
@@ -5897,15 +5989,15 @@ final class AppModel: NSObject, ObservableObject {
         if log.contains("__TCC_CRASHING_DUE_TO_PRIVACY_VIOLATION__") {
             switch SessionLogClassifier.deniedCapturePermission(log) {
             case .microphone:
-                return "macOS аварийно остановила доступ к микрофону. Переустановите полную сборку приложения и повторите подключение."
+                return UpdateLocalization.text(ru: "macOS аварийно остановила доступ к микрофону. Переустановите полную сборку приложения и повторите подключение.", en: "macOS stopped microphone access unexpectedly. Reinstall the full app build and reconnect.")
             case .camera:
-                return "macOS аварийно остановила доступ к камере. Переустановите полную сборку приложения и повторите подключение."
+                return UpdateLocalization.text(ru: "macOS аварийно остановила доступ к камере. Переустановите полную сборку приложения и повторите подключение.", en: "macOS stopped camera access unexpectedly. Reinstall the full app build and reconnect.")
             case nil:
                 break
             }
         }
         if status == SIGTERM || status == SIGKILL {
-            return "RDP-процесс был остановлен без штатной команды \(AppBrand.name). Откройте журнал — причина внутреннего отключения помечается совместимой строкой «SelectiveRemote Host»."
+            return UpdateLocalization.text(ru: "RDP-процесс был остановлен без штатной команды \(AppBrand.name). Откройте журнал — причина внутреннего отключения помечается совместимой строкой «SelectiveRemote Host».", en: "The RDP process stopped without a normal \(AppBrand.name) command. Open the log; the internal disconnect reason is marked with “SelectiveRemote Host”.")
         }
         return RDPFailureClassifier.presentation(status: status, log: log).message
     }
@@ -5917,9 +6009,9 @@ final class AppModel: NSObject, ObservableObject {
     ) {
         guard !value.isEmpty else {
             switch kind {
-            case .rdp: statusMessage = "Введите новый RDP-пароль перед сохранением"
-            case .gateway: statusMessage = "Введите новый пароль RD Gateway перед сохранением"
-            case .ssh: statusMessage = "Введите SSH-пароль перед сохранением"
+            case .rdp: statusMessage = UpdateLocalization.text(ru: "Введите новый RDP-пароль перед сохранением", en: "Enter a new RDP password before saving")
+            case .gateway: statusMessage = UpdateLocalization.text(ru: "Введите новый пароль RD Gateway перед сохранением", en: "Enter a new RD Gateway password before saving")
+            case .ssh: statusMessage = UpdateLocalization.text(ru: "Введите SSH-пароль перед сохранением", en: "Enter an SSH password before saving")
             case .forwarding, .sshKeyAuthorization, .proxy: return
             }
             return
@@ -5935,13 +6027,13 @@ final class AppModel: NSObject, ObservableObject {
             switch kind {
             case .rdp:
                 password = ""
-                statusMessage = "RDP-пароль сохранён в Keychain"
+                statusMessage = UpdateLocalization.text(ru: "RDP-пароль сохранён в Keychain", en: "RDP password saved in Keychain")
             case .gateway:
                 gatewayPassword = ""
-                statusMessage = "Пароль RD Gateway сохранён в Keychain"
+                statusMessage = UpdateLocalization.text(ru: "Пароль RD Gateway сохранён в Keychain", en: "RD Gateway password saved in Keychain")
             case .ssh:
                 sshPassword = ""
-                statusMessage = "SSH-пароль сохранён в Keychain"
+                statusMessage = UpdateLocalization.text(ru: "SSH-пароль сохранён в Keychain", en: "SSH password saved in Keychain")
             case .forwarding, .sshKeyAuthorization, .proxy:
                 break
             }
@@ -5958,10 +6050,10 @@ final class AppModel: NSObject, ObservableObject {
             switch kind {
             case .rdp:
                 password = ""
-                statusMessage = "Сохранённый RDP-пароль удалён"
+                statusMessage = UpdateLocalization.text(ru: "Сохранённый RDP-пароль удалён", en: "Saved RDP password removed")
             case .gateway:
                 gatewayPassword = ""
-                statusMessage = "Сохранённый пароль RD Gateway удалён"
+                statusMessage = UpdateLocalization.text(ru: "Сохранённый пароль RD Gateway удалён", en: "Saved RD Gateway password removed")
             case .ssh:
                 sshPassword = ""
                 sshPasswordUserPresenceProfileIDs.remove(selectedProfile.id.uuidString)
@@ -5969,7 +6061,7 @@ final class AppModel: NSObject, ObservableObject {
                     sshPasswordUserPresenceProfileIDs.sorted(),
                     forKey: sshPasswordUserPresenceProfilesKey
                 )
-                statusMessage = "Сохранённый SSH-пароль удалён"
+                statusMessage = UpdateLocalization.text(ru: "Сохранённый SSH-пароль удалён", en: "Saved SSH password removed")
             case .forwarding, .sshKeyAuthorization, .proxy:
                 break
             }
@@ -6014,7 +6106,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private func setSSHPasswordUserPresence(_ enabled: Bool, profileID: UUID) {
         if enabled && !KeychainService.touchIDAvailable {
-            errorMessage = "Touch ID недоступен на этом Mac или для текущего пользователя."
+            errorMessage = UpdateLocalization.text(ru: "Touch ID недоступен на этом Mac или для текущего пользователя.", en: "Touch ID is unavailable on this Mac or for the current user.")
             return
         }
         let key = profileID.uuidString
@@ -6023,7 +6115,7 @@ final class AppModel: NSObject, ObservableObject {
                 let existing = try KeychainService.readPassword(
                     profileID: profileID,
                     kind: .ssh,
-                    authenticationPrompt: "Подтвердите изменение защиты SSH-пароля"
+                    authenticationPrompt: UpdateLocalization.text(ru: "Подтвердите изменение защиты SSH-пароля", en: "Confirm the SSH password protection change")
                 )
                 if let existing {
                     try KeychainService.savePassword(
@@ -6048,14 +6140,14 @@ final class AppModel: NSObject, ObservableObject {
             forKey: sshPasswordUserPresenceProfilesKey
         )
         statusMessage = enabled
-            ? "SSH-пароль будет выдаваться только после Touch ID"
-            : "Touch ID-защита SSH-пароля отключена"
+            ? UpdateLocalization.text(ru: "SSH-пароль будет выдаваться только после Touch ID", en: "The SSH password will be released only after Touch ID")
+            : UpdateLocalization.text(ru: "Touch ID-защита SSH-пароля отключена", en: "Touch ID protection for the SSH password disabled")
         errorMessage = nil
     }
 
     private func setForwardingPasswordUserPresencePreference(_ enabled: Bool, tunnelID: UUID) {
         if enabled && !KeychainService.touchIDAvailable {
-            errorMessage = "Touch ID недоступен на этом Mac или для текущего пользователя."
+            errorMessage = UpdateLocalization.text(ru: "Touch ID недоступен на этом Mac или для текущего пользователя.", en: "Touch ID is unavailable on this Mac or for the current user.")
             return
         }
         let key = tunnelID.uuidString
@@ -6064,7 +6156,7 @@ final class AppModel: NSObject, ObservableObject {
                 let existing = try KeychainService.readPassword(
                     profileID: tunnelID,
                     kind: .forwarding,
-                    authenticationPrompt: "Подтвердите изменение защиты пароля туннеля"
+                    authenticationPrompt: UpdateLocalization.text(ru: "Подтвердите изменение защиты пароля туннеля", en: "Confirm the tunnel password protection change")
                 )
                 if let existing {
                     try KeychainService.savePassword(
@@ -6086,8 +6178,8 @@ final class AppModel: NSObject, ObservableObject {
             forKey: forwardingPasswordUserPresenceIDsKey
         )
         statusMessage = enabled
-            ? "Пароль туннеля будет выдаваться только после Touch ID"
-            : "Touch ID-защита пароля туннеля отключена"
+            ? UpdateLocalization.text(ru: "Пароль туннеля будет выдаваться только после Touch ID", en: "The tunnel password will be released only after Touch ID")
+            : UpdateLocalization.text(ru: "Touch ID-защита пароля туннеля отключена", en: "Touch ID protection for the tunnel password disabled")
         errorMessage = nil
     }
 
@@ -6128,15 +6220,15 @@ final class AppModel: NSObject, ObservableObject {
            selectedProfile.selectedDisplayIDs.isEmpty {
             mutateSelectedProfile { profile in configureDefaultDisplays(for: &profile) }
         }
-        statusMessage = "Обнаружено дисплеев: \(displays.count)"
+        statusMessage = UpdateLocalization.text(ru: "Обнаружено дисплеев: \(displays.count)", en: "Displays found: \(displays.count)")
     }
 
     private func refreshCameras(announce: Bool) {
         cameras = CameraDiscovery.currentDevices()
         if announce {
             statusMessage = cameras.isEmpty
-                ? "Камеры не обнаружены"
-                : "Обнаружено камер: \(cameras.count)"
+                ? UpdateLocalization.text(ru: "Камеры не обнаружены", en: "No cameras found")
+                : UpdateLocalization.text(ru: "Обнаружено камер: \(cameras.count)", en: "Cameras found: \(cameras.count)")
         }
     }
 
@@ -6154,7 +6246,7 @@ final class AppModel: NSObject, ObservableObject {
         // Do nothing until two separated snapshots agree on the same non-empty
         // physical topology.
         guard !currentIDs.isEmpty, firstIDs == currentIDs else {
-            statusMessage = "Конфигурация дисплеев меняется — ожидаем стабилизацию"
+            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев меняется — ожидаем стабилизацию", en: "Display configuration is changing — waiting for it to stabilize")
             return
         }
 
@@ -6165,7 +6257,7 @@ final class AppModel: NSObject, ObservableObject {
         )
         let added = currentIDs.subtracting(previousIDs)
         guard !removed.isEmpty || !added.isEmpty else {
-            statusMessage = "Конфигурация дисплеев обновлена: \(displays.count)"
+            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев обновлена: \(displays.count)", en: "Display configuration updated: \(displays.count)")
             return
         }
 
@@ -6181,7 +6273,7 @@ final class AppModel: NSObject, ObservableObject {
             restarting.insert(profileID)
             requestDisconnect(
                 profileID: profileID,
-                interruptionReason: "Конфигурация мониторов изменилась — перестраиваем RDP на доступных дисплеях",
+                interruptionReason: UpdateLocalization.text(ru: "Конфигурация мониторов изменилась — перестраиваем RDP на доступных дисплеях", en: "Monitor configuration changed — rebuilding RDP for the available displays"),
                 interruption: .monitorTopologyChanged
             )
         }
@@ -6202,14 +6294,14 @@ final class AppModel: NSObject, ObservableObject {
                 restarting.insert(profileID)
                 requestDisconnect(
                     profileID: profileID,
-                    interruptionReason: "Выбранный монитор подключён — восстанавливаем RDP-схему",
+                    interruptionReason: UpdateLocalization.text(ru: "Выбранный монитор подключён — восстанавливаем RDP-схему", en: "Selected monitor connected — restoring the RDP layout"),
                     interruption: .monitorTopologyChanged
                 )
             }
         }
 
         if restarting.isEmpty {
-            statusMessage = "Конфигурация дисплеев обновлена: \(displays.count)"
+            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев обновлена: \(displays.count)", en: "Display configuration updated: \(displays.count)")
         }
     }
 
@@ -6256,7 +6348,7 @@ final class AppModel: NSObject, ObservableObject {
     @objc private func captureDevicesChanged(_ notification: Notification) {
         _ = notification
         refreshCameras(announce: false)
-        statusMessage = "Список камер обновлён: \(cameras.count)"
+        statusMessage = UpdateLocalization.text(ru: "Список камер обновлён: \(cameras.count)", en: "Camera list updated: \(cameras.count)")
     }
 
     @objc private func screenParametersChanged() {
@@ -6277,12 +6369,12 @@ final class AppModel: NSObject, ObservableObject {
                 && !runtime.selectedDisplayIDs.isDisjoint(with: immediateRemoved) {
                 requestDisconnect(
                     profileID: profileID,
-                    interruptionReason: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи",
+                    interruptionReason: UpdateLocalization.text(ru: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи", en: "MacBook screen closed — moving RDP to external displays"),
                     interruption: .monitorTopologyChanged
                 )
             }
 
-            statusMessage = "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи"
+            statusMessage = UpdateLocalization.text(ru: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи", en: "MacBook screen closed — moving RDP to external displays")
             errorMessage = nil
             displayRefreshTask?.cancel()
             return
@@ -6380,7 +6472,7 @@ final class AppModel: NSObject, ObservableObject {
             guard let runtime = managedSessions[profileID] else { continue }
             requestDisconnect(
                 profileID: profileID,
-                interruptionReason: "Mac переходит в сон — сессия «\(runtime.profileName)» приостановлена",
+                interruptionReason: UpdateLocalization.text(ru: "Mac переходит в сон — сессия «\(runtime.profileName)» приостановлена", en: "Mac is going to sleep — session “\(runtime.profileName)” paused"),
                 interruption: .sleep
             )
         }
@@ -6435,7 +6527,7 @@ final class AppModel: NSObject, ObservableObject {
                     tabID: tab.id,
                     session: tab.session,
                     attempt: 1,
-                    reason: "Mac вышел из сна"
+                    reason: UpdateLocalization.text(ru: "Mac вышел из сна", en: "Mac woke from sleep")
                 )
             }
 
@@ -6454,7 +6546,7 @@ final class AppModel: NSObject, ObservableObject {
             if !reconnectCandidateProfileIDs.isEmpty
                 || !interruptedTerminals.isEmpty
                 || !interruptedTunnels.isEmpty {
-                statusMessage = "Mac вышел из сна — восстанавливаем прерванные подключения"
+                statusMessage = UpdateLocalization.text(ru: "Mac вышел из сна — восстанавливаем прерванные подключения", en: "Mac woke from sleep — reconnecting interrupted sessions")
             }
         }
     }

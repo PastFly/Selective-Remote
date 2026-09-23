@@ -99,6 +99,7 @@ private enum CredentialVaultScope: String, CaseIterable, Identifiable {
 
 struct CredentialVaultView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     @EnvironmentObject private var model: AppModel
     @StateObject private var teamCredentials = SelectiveRemoteTeamCredentialStore.shared
 
@@ -349,7 +350,8 @@ struct CredentialVaultView: View {
                 Button("Удалить", role: .destructive) { deleteKnownHost(entry) }
                 Button("Отмена", role: .cancel) {}
             } message: { entry in
-                Text("Запись «\(entry.displayHost)» будет удалена из ~/.ssh/known_hosts. Перед изменением создаётся резервная копия known_hosts.selectiveremote.bak.")
+                Text(UpdateLocalization.formatted("hosts.known_host.delete.confirm",
+                    english: language.selection.usesEnglish, entry.displayHost))
             }
     }
 
@@ -578,7 +580,7 @@ struct CredentialVaultView: View {
                         normalizeSelectionForFilter()
                     } label: {
                         Label {
-                            Text(LocalizedStringKey(item.title))
+                            Text(language.localized("keychain.filter.\(item.rawValue)"))
                         } icon: {
                             Image(systemName: item.systemImage)
                         }
@@ -706,7 +708,7 @@ struct CredentialVaultView: View {
                 Picker("Сортировка", selection: $sortModeRaw) {
                     ForEach(VaultSortMode.allCases) { mode in
                         Label {
-                            Text(LocalizedStringKey(mode.title))
+                            Text(language.localized("keychain.sort.\(mode.rawValue)"))
                         } icon: {
                             Image(systemName: mode.systemImage)
                         }
@@ -715,7 +717,7 @@ struct CredentialVaultView: View {
                 }
             } label: {
                 Label {
-                    Text(LocalizedStringKey(sortMode.title))
+                    Text(language.localized("keychain.sort.\(sortMode.rawValue)"))
                 } icon: {
                     Image(systemName: "arrow.up.arrow.down")
                 }

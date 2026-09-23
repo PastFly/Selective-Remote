@@ -20,6 +20,9 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .dark: "Тёмная"
         }
     }
+    func localizedTitle(in language: AppLanguage) -> String {
+        UpdateLocalization.key("appearance.theme.\(rawValue)", english: language.usesEnglish)
+    }
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -43,6 +46,10 @@ enum AppTextSize: String, CaseIterable, Identifiable, Sendable {
         case .large: "Большой"
         case .extraLarge: "Очень большой"
         }
+    }
+    func localizedTitle(in language: AppLanguage) -> String {
+        let key = self == .extraLarge ? "extra_large" : rawValue
+        return UpdateLocalization.key("appearance.text_size.\(key)", english: language.usesEnglish)
     }
     var dynamicTypeSize: DynamicTypeSize {
         switch self {
@@ -126,6 +133,9 @@ enum AppDensity: String, CaseIterable, Identifiable, Sendable {
         case .standard: "Стандартная"
         case .comfortable: "Комфортная"
         }
+    }
+    func localizedTitle(in language: AppLanguage) -> String {
+        UpdateLocalization.key("appearance.density.\(rawValue)", english: language.usesEnglish)
     }
     var controlSize: ControlSize {
         switch self {
@@ -255,37 +265,38 @@ final class WindowBackdropView: NSVisualEffectView {
 }
 
 struct AppAppearanceSettingsSection: View {
+    @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var store: AppAppearanceStore
 
     var body: some View {
         Group {
-            Section("Внешний вид") {
-                Picker("Тема приложения", selection: $store.theme) {
+            Section(language.localized("appearance.section.theme")) {
+                Picker(language.localized("appearance.theme"), selection: $store.theme) {
                     ForEach(AppTheme.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()
-                Picker("Размер текста", selection: $store.textSize) {
+                Picker(language.localized("appearance.text_size"), selection: $store.textSize) {
                     ForEach(AppTextSize.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()
-                Picker("Плотность интерфейса", selection: $store.density) {
+                Picker(language.localized("appearance.density"), selection: $store.density) {
                     ForEach(AppDensity.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()
-                Text("Размер текста меняется нативно, без масштабирования всего окна. Retina/DPI macOS остаётся системным.")
+                Text(language.localized("appearance.help.text_size"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Окно приложения") {
-                Toggle("Прозрачное окно", isOn: $store.transparencyEnabled)
-                LabeledContent("Непрозрачность") {
+            Section(language.localized("appearance.section.window")) {
+                Toggle(language.localized("appearance.transparent_window"), isOn: $store.transparencyEnabled)
+                LabeledContent(language.localized("appearance.opacity")) {
                     HStack {
                         Slider(value: $store.opacity, in: 0.55...1.0, step: 0.01)
                             .frame(width: 180)
@@ -295,10 +306,7 @@ struct AppAppearanceSettingsSection: View {
                     }
                 }
                 .disabled(!store.transparencyEnabled)
-                Text(
-                    "Системное размытие остаётся активным. Непрозрачность меняет "
-                        + "только фон — текст и кнопки сохраняют контраст."
-                )
+                Text(language.localized("appearance.help.opacity"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
@@ -330,6 +338,7 @@ struct AppAppearanceRoot<Content: View>: View {
 /// Auxiliary document-style windows must keep a visible system frame even
 /// when transparency is enabled for the main workspace.
 struct AppAuxiliaryWindowRoot<Content: View>: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     @ObservedObject var store: AppAppearanceStore
     let content: Content
 
@@ -340,6 +349,8 @@ struct AppAuxiliaryWindowRoot<Content: View>: View {
 
     var body: some View {
         content
+            .id(language.selection)
+            .environment(\.locale, language.locale)
             .background(Color(nsColor: .windowBackgroundColor).ignoresSafeArea())
             .preferredColorScheme(store.theme.colorScheme)
             .appTextSize(store.textSize)

@@ -1,6 +1,15 @@
 import Foundation
 import SwiftUI
 
+enum TerminalGroupSettingsCopy {
+    static func title(for name: String) -> String {
+        UpdateLocalization.text(
+            ru: "Настройки группы «\(name)»",
+            en: "Group settings for “\(name)”"
+        )
+    }
+}
+
 struct TerminalHostInsights: Codable, Equatable, Sendable {
     var hostname = ""
     var uptimeSeconds: Int64?
@@ -408,7 +417,10 @@ struct SSHAutomationSettingsView: View {
         let name = profile.group.trimmingCharacters(in: .whitespacesAndNewlines)
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Label("Настройки группы «\(name)»", systemImage: "square.stack.3d.up")
+                Label(
+                    TerminalGroupSettingsCopy.title(for: name),
+                    systemImage: "square.stack.3d.up"
+                )
                     .font(.headline)
                 Spacer()
                 if groupConfiguration != nil {
@@ -792,7 +804,7 @@ struct TerminalNamedWorkspaceView: View {
                 Text(entry.name)
                     .font(.headline)
                     .lineLimit(1)
-                Text("\(entry.snapshot.tabs.count) вкладок · \(entry.snapshot.layout.title)")
+                Text(entry.snapshot.layout.localizedSummary(tabCount: entry.snapshot.tabs.count))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -2,7 +2,14 @@ import AppKit
 import SwiftUI
 
 struct LocalTerminalView: View {
+    static var workingDirectoryPanelTitle: String {
+        UpdateLocalization.text(
+            ru: "Рабочая папка локального терминала",
+            en: "Local Terminal Working Folder"
+        )
+    }
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var workspace: TerminalWorkspaceModel
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
@@ -41,17 +48,14 @@ struct LocalTerminalView: View {
             terminalWithInspector
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 320)
-            Text(
-                "Локальный терминал запускает login shell текущего пользователя внутри псевдотерминала. "
-                    + "История хранится только на этом Mac; строки с признаками секретов не сохраняются."
-            )
+            Text(UpdateLocalization.key("terminal.local.description"))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Локальный терминал")
+        .accessibilityLabel(UpdateLocalization.key("terminal.local.accessibility"))
         .alert("Переименовать вкладку", isPresented: Binding(
             get: { renameTabID != nil },
             set: { if !$0 { renameTabID = nil } }
@@ -96,7 +100,8 @@ struct LocalTerminalView: View {
                     .font(.title3)
             }
             .buttonStyle(.borderedProminent)
-            .help(selectedTab.session.isRunning ? "Перезапустить shell" : "Запустить shell")
+            .help(UpdateLocalization.key(selectedTab.session.isRunning
+                ? "terminal.local.restart" : "terminal.local.start"))
 
             Button {
                 showsSnippets = false
@@ -202,7 +207,7 @@ struct LocalTerminalView: View {
             }
 
             if selectedTab.session.isRunning {
-                Button("Завершить", systemImage: "stop.fill", role: .destructive) {
+                Button(language.localized("terminal.local.terminate"), systemImage: "stop.fill", role: .destructive) {
                     selectedTab.session.stop()
                 }
                 .buttonStyle(.bordered)
@@ -254,7 +259,7 @@ struct LocalTerminalView: View {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
-                            Button(tab.isPinned ? "Открепить" : "Закрепить", systemImage: "pin") {
+                            Button(UpdateLocalization.key(tab.isPinned ? "terminal.local.unpin" : "terminal.local.pin"), systemImage: "pin") {
                                 workspace.togglePinned(tab.id)
                             }
                             if !tab.isPrimary && !tab.isPinned {
@@ -416,8 +421,7 @@ struct LocalTerminalView: View {
     private func addTab() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         guard let tab = workspace.addTab(
-            connection: .local(workingDirectory: home),
-            title: "Terminal \(workspace.displayedTabs.count + 1)"
+            connection: .local(workingDirectory: home)
         ) else { return }
         connect(tab)
     }
@@ -441,7 +445,7 @@ struct LocalTerminalView: View {
 
     private func chooseWorkingDirectory(for tab: TerminalWorkspaceTab) {
         let panel = NSOpenPanel()
-        panel.title = "Рабочая папка локального терминала"
+        panel.title = Self.workingDirectoryPanelTitle
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

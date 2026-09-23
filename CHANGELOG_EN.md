@@ -1,13 +1,10 @@
 ## 0.32.0
 
-- Cloud Personal Vault now uses account-scoped browser state with safe first-time bootstrap and automatic restore after a normal login or reload without a second password prompt.
-- Team Vaults now cover Hosts, Credentials, and Snippets with nested folders, roles, invitations, new-device admission, and separate device identities isolated from Personal Vault.
-- Personal and Team Hosts share one navigation, search, sorting, list/grid, and folder interaction model while Team actions remain role-aware and isolated from Personal Keychain credentials.
-- Sync and recovery are more resilient to concurrent edits, deletions, causal-history conflicts, missing wrappers, and trusted browser/macOS session restoration.
-- Web management adds complete team and device administration, privacy-safe registration behavior, protected team archiving, and verified email workflows.
-- RU/EN, Graphite/Light, and desktop/narrow interfaces are more consistent, including forms, selectors, keyboard/focus navigation, mobile navigation, and semantic light-theme contrast.
-- macOS improves Cloud/session integration, Personal/Team navigation, Credentials/Snippets synchronization, and protected SSH/SFTP use with Team Hosts.
-- Release security is fail-closed: the official DMG requires Developer ID, the exact TeamIdentifier, notarization and stapling, while the updater verifies publisher identity before installation and after transactional copy without weakening rollback.
+- **Selective Remote Cloud** — new in this public release: work with connections on your Mac and in the browser. Local use without an account remains available.
+- **Personal Vault** — Hosts, Credentials, and Snippets are protected with end-to-end encryption and synced across trusted devices.
+- **Team Vaults** — share Hosts, Credentials, and Snippets with teammates, with roles, invitations, and device access controls.
+- **Browser and devices** — manage personal data, teams, and devices in the browser; changes sync with your Mac.
+- **Everyday workflows** — Personal and Team Hosts share folders, search, sorting, list, and grid views. Forms, keyboard use, mobile layout, RU/EN, and light-theme readability are improved; official updates verify the publisher.
 
 ## 0.31.0
 

@@ -12,20 +12,22 @@ enum SFTPServiceError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .executableUnavailable:
-            "Системная команда /usr/bin/sftp недоступна"
+            UpdateLocalization.text(ru: "Системная команда /usr/bin/sftp недоступна", en: "The system command /usr/bin/sftp is unavailable")
         case .unsupportedPath:
-            "Путь SFTP содержит недопустимый перенос строки или нулевой символ"
+            UpdateLocalization.text(ru: "Путь SFTP содержит недопустимый перенос строки или нулевой символ", en: "The SFTP path contains an invalid newline or null character")
         case .invalidName:
-            "Имя не должно быть пустым, равно «.» или «..», содержать /, перенос строки или нулевой символ"
+            UpdateLocalization.text(ru: "Имя не должно быть пустым, равно «.» или «..», содержать /, перенос строки или нулевой символ", en: "Name must not be empty, equal to ‘.’ or ‘..’, or contain /, a newline, or a null character")
         case .invalidPermissions:
-            "Права доступа должны быть записаны тремя или четырьмя восьмеричными цифрами, например 755 или 0644"
+            UpdateLocalization.text(ru: "Права доступа должны быть записаны тремя или четырьмя восьмеричными цифрами, например 755 или 0644", en: "Permissions must contain three or four octal digits, such as 755 or 0644")
         case .invalidNumericID:
-            "UID и GID должны быть целыми неотрицательными числами"
+            UpdateLocalization.text(ru: "UID и GID должны быть целыми неотрицательными числами", en: "UID and GID must be nonnegative integers")
         case .authenticationRequired:
-            "SSH-сервер отклонил аутентификацию SFTP. Проверьте логин, пароль "
-                + "или SSH-ключ и повторите подключение."
+            UpdateLocalization.text(
+                ru: "SSH-сервер отклонил аутентификацию SFTP. Проверьте логин, пароль или SSH-ключ и повторите подключение.",
+                en: "The SSH server rejected SFTP authentication. Check the username, password, or SSH key and reconnect."
+            )
         case let .commandFailed(message):
-            "Ошибка SFTP: \(message)"
+            UpdateLocalization.text(ru: "Ошибка SFTP: \(message)", en: "SFTP error: \(message)")
         }
     }
 }
@@ -345,8 +347,10 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 throw SFTPServiceError.authenticationRequired
             }
             throw SFTPServiceError.commandFailed(
-                "не удалось создать управляющее SSH-соединение "
-                    + "(код \(process.terminationStatus))"
+                UpdateLocalization.text(
+                    ru: "не удалось создать управляющее SSH-соединение (код \(process.terminationStatus))",
+                    en: "could not establish the SSH control connection (code \(process.terminationStatus))"
+                )
             )
         }
     }
@@ -453,8 +457,10 @@ enum SFTPService {
         if entries.isEmpty, listingContainsUnparsedEntries(output) {
             let sample = listingDiagnosticSample(output)
             throw SFTPServiceError.commandFailed(
-                "сервер вернул список файлов в неизвестном формате. "
-                    + "Фрагмент ответа: \(sample)"
+                UpdateLocalization.text(
+                    ru: "сервер вернул список файлов в неизвестном формате. Фрагмент ответа: \(sample)",
+                    en: "the server returned a file list in an unknown format. Response excerpt: \(sample)"
+                )
             )
         }
         return entries
@@ -669,7 +675,7 @@ enum SFTPService {
         guard process.terminationStatus == 0 else {
             throw SFTPServiceError.commandFailed(
                 text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    ? "удалённая команда завершилась с кодом \(process.terminationStatus)"
+                    ? UpdateLocalization.text(ru: "удалённая команда завершилась с кодом \(process.terminationStatus)", en: "remote command exited with code \(process.terminationStatus)")
                     : String(text.suffix(4_000))
             )
         }
@@ -1303,7 +1309,7 @@ enum SFTPService {
                 throw SFTPServiceError.authenticationRequired
             }
             throw SFTPServiceError.commandFailed(
-                message.isEmpty ? "команда завершилась с кодом \(process.terminationStatus)"
+                message.isEmpty ? UpdateLocalization.text(ru: "команда завершилась с кодом \(process.terminationStatus)", en: "command exited with code \(process.terminationStatus)")
                     : String(message.suffix(4_000))
             )
         }

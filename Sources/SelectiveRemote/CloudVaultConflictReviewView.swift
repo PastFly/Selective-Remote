@@ -194,14 +194,14 @@ enum SelectiveRemoteVaultConflictPresentation {
         case let .record(record):
             return .init(
                 title: boundedTitle(record.data),
-                metadata: "\(record.type.rawValue) · \(record.modifiedAt)",
+                metadata: "\(UpdateLocalization.key("cloud.vault.recordType.\(record.type.rawValue)")) · \(UpdateLocalization.cloudTimestamp(record.modifiedAt))",
                 symbol: symbol(record.type),
                 isDeletion: false
             )
         case let .tombstone(tombstone):
             return .init(
                 title: UpdateLocalization.text(ru: "Удалено", en: "Deleted"),
-                metadata: tombstone.deletedAt,
+                metadata: UpdateLocalization.cloudTimestamp(tombstone.deletedAt),
                 symbol: "trash.fill",
                 isDeletion: true
             )

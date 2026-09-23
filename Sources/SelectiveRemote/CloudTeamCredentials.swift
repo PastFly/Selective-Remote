@@ -841,7 +841,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
                     "r\(credential.revision) · k\(credential.keyGeneration)",
                     systemImage: "lock.shield"
                 )
-                Label(credential.modifiedDate.formatted(date: .abbreviated, time: .shortened), systemImage: "clock")
+                Label(UpdateLocalization.dateTimeShort(credential.modifiedDate), systemImage: "clock")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -1167,12 +1167,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
-        switch role {
-        case .owner: UpdateLocalization.text(ru: "Владелец", en: "Owner")
-        case .admin: UpdateLocalization.text(ru: "Администратор", en: "Admin")
-        case .editor: UpdateLocalization.text(ru: "Редактор", en: "Editor")
-        case .viewer: UpdateLocalization.text(ru: "Просмотр", en: "Viewer")
-        }
+        role.displayRoleTitle()
     }
 
     private func credentialKindTitle(_ kind: KeychainCredentialKind?) -> String {

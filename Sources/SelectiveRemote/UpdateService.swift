@@ -23,9 +23,15 @@ enum UpdateServiceError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .feedNotConfigured:
-            "Канал обновлений ещё не настроен. При сборке задайте SELECTIVEREMOTE_UPDATE_FEED_URL."
+            UpdateLocalization.text(
+                ru: "Канал обновлений ещё не настроен. При сборке задайте SELECTIVEREMOTE_UPDATE_FEED_URL.",
+                en: "The update channel is not configured yet. Set SELECTIVEREMOTE_UPDATE_FEED_URL when building the app."
+            )
         case .invalidResponse:
-            "Сервер обновлений вернул некорректный ответ"
+            UpdateLocalization.text(
+                ru: "Сервер обновлений вернул некорректный ответ",
+                en: "The update server returned an invalid response."
+            )
         }
     }
 }

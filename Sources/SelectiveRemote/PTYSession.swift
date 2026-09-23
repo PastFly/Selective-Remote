@@ -12,13 +12,13 @@ enum PTYProcessError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case let .executableUnavailable(path):
-            "Системная команда недоступна: \(path)"
+            UpdateLocalization.text(ru: "Системная команда недоступна: \(path)", en: "System command is unavailable: \(path)")
         case .alreadyRunning:
-            "В этом терминале уже выполняется команда"
+            UpdateLocalization.text(ru: "В этом терминале уже выполняется команда", en: "A command is already running in this terminal")
         case .invalidArgument:
-            "Команда терминала содержит недопустимый нулевой символ"
+            UpdateLocalization.text(ru: "Команда терминала содержит недопустимый нулевой символ", en: "The terminal command contains an invalid null character")
         case let .spawnFailed(message):
-            "Не удалось создать псевдотерминал: \(message)"
+            UpdateLocalization.text(ru: "Не удалось создать псевдотерминал: \(message)", en: "Could not create pseudo-terminal: \(message)")
         }
     }
 }
@@ -276,15 +276,16 @@ enum EmbeddedTerminalPhase: Equatable {
     var title: String {
         switch self {
         case .idle:
-            "Терминал не запущен"
+            UpdateLocalization.key("terminal.phase.idle")
         case let .starting(command):
-            "Запуск: \(command)"
+            UpdateLocalization.formatted("terminal.phase.starting", command)
         case let .running(command):
-            "Выполняется: \(command)"
+            UpdateLocalization.formatted("terminal.phase.running", command)
         case .stopping:
-            "Завершение…"
+            UpdateLocalization.key("terminal.phase.stopping")
         case let .finished(code):
-            code == 0 ? "Команда завершена" : "Команда завершилась с кодом \(code)"
+            code == 0 ? UpdateLocalization.key("terminal.phase.finished")
+                : UpdateLocalization.formatted("terminal.phase.failed", code)
         }
     }
 }
@@ -384,7 +385,10 @@ final class TerminalSessionModel: ObservableObject {
             startedAt = nil
             phase = .finished(255)
             self.completion = nil
-            appendLocalText("\r\nНе удалось запустить команду: \(error.localizedDescription)\r\n")
+            appendLocalText(UpdateLocalization.text(
+                ru: "\r\nНе удалось запустить команду: \(error.localizedDescription)\r\n",
+                en: "\r\nCould not launch command: \(error.localizedDescription)\r\n"
+            ))
             throw error
         }
     }
@@ -494,16 +498,28 @@ final class TerminalSessionModel: ObservableObject {
         lastTerminationWasRequested = terminationRequested
         stopRequested = false
         phase = .finished(exitCode)
-        if terminationRequested {
-            appendLocalText("\r\n\r\n[\(AppBrand.name)] Сессия отключена пользователем.\r\n")
-        } else {
-            appendLocalText(
-                "\r\n\r\n[\(AppBrand.name)] Процесс завершён"
-                    + (exitCode == 0 ? ".\r\n" : " с кодом \(exitCode).\r\n")
-            )
-        }
+        appendLocalText(Self.terminationLine(exitCode: exitCode, requested: terminationRequested))
         let handler = completion
         completion = nil
         handler?(exitCode)
+    }
+
+    static func terminationLine(exitCode: Int32, requested: Bool) -> String {
+        if requested {
+            return UpdateLocalization.text(
+                ru: "\r\n\r\n[\(AppBrand.name)] Сессия отключена пользователем.\r\n",
+                en: "\r\n\r\n[\(AppBrand.name)] Session disconnected by user.\r\n"
+            )
+        }
+        if exitCode == 0 {
+            return UpdateLocalization.text(
+                ru: "\r\n\r\n[\(AppBrand.name)] Процесс завершён.\r\n",
+                en: "\r\n\r\n[\(AppBrand.name)] Process exited.\r\n"
+            )
+        }
+        return UpdateLocalization.text(
+            ru: "\r\n\r\n[\(AppBrand.name)] Процесс завершён с кодом \(exitCode).\r\n",
+            en: "\r\n\r\n[\(AppBrand.name)] Process exited with code \(exitCode).\r\n"
+        )
     }
 }

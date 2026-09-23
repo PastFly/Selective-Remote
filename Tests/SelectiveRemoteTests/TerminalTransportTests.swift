@@ -131,14 +131,14 @@ func terminalTransportValidationAndFailures() {
             output: "Telnet: cannot connect to router:23",
             connection: .telnet(host: "router"),
             exitCode: 69
-        )?.contains("Telnet-сервер недоступен") == true
+        ).map { $0.contains("Telnet-сервер недоступен") || $0.contains("Telnet server is unavailable") } == true
     )
     #expect(
         TerminalTransportService.userFacingFailure(
             output: "Serial: device is already in use.",
             connection: .serial(devicePath: "/dev/cu.test"),
             exitCode: 73
-        )?.contains("уже используется") == true
+        ).map { $0.contains("уже используется") || $0.contains("already in use") } == true
     )
 }
 

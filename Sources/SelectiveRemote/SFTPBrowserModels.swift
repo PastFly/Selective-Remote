@@ -130,17 +130,17 @@ enum SFTPLocalFileError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case let .unreadableDirectory(path):
-            "Не удалось прочитать локальную папку: \(path)"
+            UpdateLocalization.text(ru: "Не удалось прочитать локальную папку: \(path)", en: "Could not read local folder: \(path)")
         case let .targetExists(name):
-            "Локальный объект «\(name)» уже существует"
+            UpdateLocalization.text(ru: "Локальный объект «\(name)» уже существует", en: "Local item “\(name)” already exists")
         case let .copyFailed(message):
-            "Не удалось скопировать локальный объект: \(message)"
+            UpdateLocalization.text(ru: "Не удалось скопировать локальный объект: \(message)", en: "Could not copy local item: \(message)")
         case let .operationFailed(message):
             message
         case .textFileTooLarge:
-            "Встроенный редактор открывает текстовые файлы размером не более 5 МБ"
+            UpdateLocalization.text(ru: "Встроенный редактор открывает текстовые файлы размером не более 5 МБ", en: "The built-in editor opens text files up to 5 MB")
         case .unsupportedTextEncoding:
-            "Файл похож на двоичный или использует неподдерживаемую кодировку. Откройте его во внешнем приложении."
+            UpdateLocalization.text(ru: "Файл похож на двоичный или использует неподдерживаемую кодировку. Откройте его во внешнем приложении.", en: "The file appears to be binary or uses an unsupported encoding. Open it in another app.")
         }
     }
 }
@@ -229,7 +229,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
         reloadID = token
         isReloading = true
         updateBusy()
-        statusMessage = "Читаем локальную папку…"
+        statusMessage = UpdateLocalization.text(ru: "Читаем локальную папку…", en: "Reading local folder…")
 
         Task {
             do {
@@ -242,7 +242,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 selectedEntryIDs.removeAll()
                 isReloading = false
                 updateBusy()
-                statusMessage = "Объектов: \(values.count)"
+                statusMessage = UpdateLocalization.text(ru: "Объектов: \(values.count)", en: "Items: \(values.count)")
                 errorMessage = nil
             } catch {
                 guard reloadID == token, currentDirectory == directory else { return }
@@ -250,7 +250,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 entries = []
                 isReloading = false
                 updateBusy()
-                statusMessage = "Локальная папка недоступна"
+                statusMessage = UpdateLocalization.text(ru: "Локальная папка недоступна", en: "Local folder is unavailable")
                 errorMessage = error.localizedDescription
             }
         }
@@ -342,7 +342,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 at: target,
                 withIntermediateDirectories: false
             )
-            statusMessage = "Папка \(validated) создана"
+            statusMessage = UpdateLocalization.text(ru: "Папка \(validated) создана", en: "Folder \(validated) created")
             errorMessage = nil
             reload()
         } catch {
@@ -358,7 +358,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 throw SFTPLocalFileError.targetExists(validated)
             }
             try Data().write(to: target, options: .atomic)
-            statusMessage = "Файл \(validated) создан"
+            statusMessage = UpdateLocalization.text(ru: "Файл \(validated) создан", en: "File \(validated) created")
             errorMessage = nil
             reload()
         } catch {
@@ -377,7 +377,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 throw SFTPLocalFileError.targetExists(validated)
             }
             try FileManager.default.moveItem(at: entry.url, to: target)
-            statusMessage = "«\(entry.name)» переименован"
+            statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» переименован", en: "“\(entry.name)” renamed")
             errorMessage = nil
             reload()
         } catch {
@@ -388,17 +388,17 @@ final class SFTPLocalBrowserModel: ObservableObject {
     func moveToTrash(_ entry: SFTPLocalEntry) {
         isTransferring = true
         updateBusy()
-        statusMessage = "Перемещаем «\(entry.name)» в Корзину…"
+        statusMessage = UpdateLocalization.text(ru: "Перемещаем «\(entry.name)» в Корзину…", en: "Moving “\(entry.name)” to Trash…")
         NSWorkspace.shared.recycle([entry.url]) { [weak self] _, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isTransferring = false
                 self.updateBusy()
                 if let error {
-                    self.statusMessage = "Удаление не выполнено"
+                    self.statusMessage = UpdateLocalization.text(ru: "Удаление не выполнено", en: "Could not delete item")
                     self.errorMessage = error.localizedDescription
                 } else {
-                    self.statusMessage = "«\(entry.name)» перемещён в Корзину"
+                    self.statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» перемещён в Корзину", en: "“\(entry.name)” moved to Trash")
                     self.errorMessage = nil
                     self.reload()
                 }
@@ -414,17 +414,17 @@ final class SFTPLocalBrowserModel: ObservableObject {
         }
         isTransferring = true
         updateBusy()
-        statusMessage = "Перемещаем в Корзину: \(entries.count)…"
+        statusMessage = UpdateLocalization.text(ru: "Перемещаем в Корзину: \(entries.count)…", en: "Moving to Trash: \(entries.count)…")
         NSWorkspace.shared.recycle(entries.map(\.url)) { [weak self] _, error in
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.isTransferring = false
                 self.updateBusy()
                 if let error {
-                    self.statusMessage = "Удаление не выполнено"
+                    self.statusMessage = UpdateLocalization.text(ru: "Удаление не выполнено", en: "Could not delete items")
                     self.errorMessage = error.localizedDescription
                 } else {
-                    self.statusMessage = "Перемещено в Корзину: \(entries.count)"
+                    self.statusMessage = UpdateLocalization.text(ru: "Перемещено в Корзину: \(entries.count)", en: "Moved to Trash: \(entries.count)")
                     self.errorMessage = nil
                     self.reload()
                 }
@@ -457,7 +457,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
             }
             guard !attributes.isEmpty else { return }
             try FileManager.default.setAttributes(attributes, ofItemAtPath: entry.url.path)
-            statusMessage = "Свойства «\(entry.name)» обновлены"
+            statusMessage = UpdateLocalization.text(ru: "Свойства «\(entry.name)» обновлены", en: "Properties for “\(entry.name)” updated")
             errorMessage = nil
             reload()
         } catch {
@@ -471,7 +471,7 @@ final class SFTPLocalBrowserModel: ObservableObject {
         isTransferring = true
         updateBusy()
         errorMessage = nil
-        statusMessage = "Копируем на этот Mac…"
+        statusMessage = UpdateLocalization.text(ru: "Копируем на этот Mac…", en: "Copying to this Mac…")
 
         Task {
             do {
@@ -503,14 +503,14 @@ final class SFTPLocalBrowserModel: ObservableObject {
                 }.value
                 isTransferring = false
                 updateBusy()
-                statusMessage = "Локальное копирование завершено"
+                statusMessage = UpdateLocalization.text(ru: "Локальное копирование завершено", en: "Local copy completed")
                 if destinationDirectory.standardizedFileURL == currentDirectory {
                     reload()
                 }
             } catch {
                 isTransferring = false
                 updateBusy()
-                statusMessage = "Локальное копирование не выполнено"
+                statusMessage = UpdateLocalization.text(ru: "Локальное копирование не выполнено", en: "Local copy failed")
                 errorMessage = error.localizedDescription
             }
         }
@@ -675,7 +675,7 @@ final class SFTPBrowserModel: ObservableObject {
     @Published private(set) var entries: [SFTPRemoteEntry] = []
     @Published private(set) var currentPath = "."
     @Published private(set) var isBusy = false
-    @Published private(set) var statusMessage = "SFTP ещё не подключён"
+    @Published private(set) var statusMessage = UpdateLocalization.text(ru: "SFTP ещё не подключён", en: "SFTP is not connected yet")
     @Published var errorMessage: String?
     @Published var selectedEntryIDs: Set<String> = []
     @Published var editorDocument: SFTPRemoteTextDocument?
@@ -724,7 +724,7 @@ final class SFTPBrowserModel: ObservableObject {
         entries = []
         currentPath = "."
         isBusy = false
-        statusMessage = "SFTP ещё не подключён"
+        statusMessage = UpdateLocalization.text(ru: "SFTP ещё не подключён", en: "SFTP is not connected yet")
         errorMessage = nil
         selectedEntryIDs.removeAll()
         editorDocument = nil
@@ -752,7 +752,7 @@ final class SFTPBrowserModel: ObservableObject {
             entries.isEmpty && currentPath == "." ? settings.initialDirectory : currentPath
         )).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !target.isEmpty else {
-            errorMessage = "Путь на сервере не должен быть пустым"
+            errorMessage = UpdateLocalization.text(ru: "Путь на сервере не должен быть пустым", en: "The server path cannot be empty")
             completion?(false)
             return
         }
@@ -761,7 +761,7 @@ final class SFTPBrowserModel: ObservableObject {
         operationID = token
         isBusy = true
         errorMessage = nil
-        statusMessage = "Читаем \(target)…"
+        statusMessage = UpdateLocalization.text(ru: "Читаем \(target)…", en: "Reading \(target)…")
 
         Task {
             do {
@@ -778,7 +778,7 @@ final class SFTPBrowserModel: ObservableObject {
                 currentPath = target
                 selectedEntryIDs.removeAll()
                 isBusy = false
-                statusMessage = "Объектов: \(values.count)"
+                statusMessage = UpdateLocalization.text(ru: "Объектов: \(values.count)", en: "Items: \(values.count)")
                 completion?(true)
                 enrichDirectorySizes(
                     settings: settings,
@@ -789,7 +789,7 @@ final class SFTPBrowserModel: ObservableObject {
             } catch {
                 guard operationID == token else { return }
                 isBusy = false
-                statusMessage = "SFTP недоступен"
+                statusMessage = UpdateLocalization.text(ru: "SFTP недоступен", en: "SFTP is unavailable")
                 errorMessage = error.localizedDescription
                 completion?(false)
             }
@@ -884,7 +884,7 @@ final class SFTPBrowserModel: ObservableObject {
                 }
                 applySort()
                 selectedEntryIDs.formIntersection(Set(entries.map(\.id)))
-                statusMessage = "Объектов: \(values.count)"
+                statusMessage = UpdateLocalization.text(ru: "Объектов: \(values.count)", en: "Items: \(values.count)")
                 errorMessage = nil
             case .failure:
                 // Background refresh must never turn a healthy visible panel
@@ -967,7 +967,7 @@ final class SFTPBrowserModel: ObservableObject {
         settings: SSHConnectionSettings
     ) {
         guard payload.profileID == settings.profileID else {
-            errorMessage = "Этот удалённый объект относится к другому SSH-профилю"
+            errorMessage = UpdateLocalization.text(ru: "Этот удалённый объект относится к другому SSH-профилю", en: "This remote item belongs to another SSH profile")
             return
         }
         guard let destination = localDestination(
@@ -1061,14 +1061,14 @@ final class SFTPBrowserModel: ObservableObject {
                 },
                 completion: { [weak self] in
                     guard let self else { return }
-                    self.statusMessage = "\(request.localURL.lastPathComponent) загружен"
+                    self.statusMessage = UpdateLocalization.text(ru: "\(request.localURL.lastPathComponent) загружен", en: "\(request.localURL.lastPathComponent) uploaded")
                     if targetDirectory == self.currentPath {
                         self.load(settings: settings, directory: self.currentPath, recordHistory: false)
                     }
                 }
             ))
         }
-        statusMessage = "Добавлено в очередь: \(requests.count)"
+        statusMessage = UpdateLocalization.text(ru: "Добавлено в очередь: \(requests.count)", en: "Added to queue: \(requests.count)")
     }
 
     func copyRemote(
@@ -1113,9 +1113,9 @@ final class SFTPBrowserModel: ObservableObject {
         }
 
         if added == 0 {
-            statusMessage = "Выбранные объекты пропущены по политике конфликтов"
+            statusMessage = UpdateLocalization.text(ru: "Выбранные объекты пропущены по политике конфликтов", en: "Selected items were skipped by the conflict policy")
         } else {
-            statusMessage = "Server → Server: добавлено в очередь \(added)"
+            statusMessage = UpdateLocalization.text(ru: "Server → Server: добавлено в очередь \(added)", en: "Server → Server: \(added) added to queue")
         }
     }
 
@@ -1126,14 +1126,14 @@ final class SFTPBrowserModel: ObservableObject {
         to destinationDirectory: String? = nil
     ) {
         guard payload.profileID == sourceSettings.profileID else {
-            errorMessage = "Перетаскиваемый объект относится к другой SSH-сессии"
+            errorMessage = UpdateLocalization.text(ru: "Перетаскиваемый объект относится к другой SSH-сессии", en: "The dragged item belongs to another SSH session")
             return
         }
         let targetDirectory = destinationDirectory ?? currentPath
         if targetDirectory == currentPath,
            entries.contains(where: { $0.name == payload.name }),
            transfers.conflictPolicy == .skip {
-            statusMessage = "«\(payload.name)» пропущен: объект уже существует"
+            statusMessage = UpdateLocalization.text(ru: "«\(payload.name)» пропущен: объект уже существует", en: "“\(payload.name)” skipped: item already exists")
             return
         }
 
@@ -1157,7 +1157,7 @@ final class SFTPBrowserModel: ObservableObject {
             sourceSettings: sourceSettings,
             destinationSettings: destinationSettings
         )
-        statusMessage = "Server → Server: «\(payload.name)» добавлен в очередь"
+        statusMessage = UpdateLocalization.text(ru: "Server → Server: «\(payload.name)» добавлен в очередь", en: "Server → Server: “\(payload.name)” added to queue")
     }
 
     private func enqueueRemoteBridge(
@@ -1254,7 +1254,7 @@ final class SFTPBrowserModel: ObservableObject {
                 },
                 completion: { [weak self] in
                     guard let self else { return }
-                    self.statusMessage = "«\(name)» скопирован между серверами"
+                    self.statusMessage = UpdateLocalization.text(ru: "«\(name)» скопирован между серверами", en: "“\(name)” copied between servers")
                     if self.currentPath == targetDirectory {
                         self.load(
                             settings: destinationSettings,
@@ -1274,13 +1274,13 @@ final class SFTPBrowserModel: ObservableObject {
         do {
             let validated = try SFTPService.validatedName(name)
             let remotePath = SFTPService.joinedRemotePath(currentPath, validated)
-            runTransfer(status: "Создаём \(validated)…") {
+            runTransfer(status: UpdateLocalization.text(ru: "Создаём \(validated)…", en: "Creating \(validated)…")) {
                 try SFTPService.createDirectory(
                     settings: settings,
                     remotePath: remotePath
                 )
             } completion: {
-                self.statusMessage = "Папка \(validated) создана"
+                self.statusMessage = UpdateLocalization.text(ru: "Папка \(validated) создана", en: "Folder \(validated) created")
                 self.load(
                     settings: settings,
                     directory: self.currentPath,
@@ -1302,7 +1302,7 @@ final class SFTPBrowserModel: ObservableObject {
                 throw SFTPLocalFileError.targetExists(validated)
             }
             let remotePath = SFTPService.joinedRemotePath(currentPath, validated)
-            runTransfer(status: "Создаём \(validated)…") {
+            runTransfer(status: UpdateLocalization.text(ru: "Создаём \(validated)…", en: "Creating \(validated)…")) {
                 let directory = FileManager.default.temporaryDirectory
                     .appendingPathComponent(
                         "SelectiveRemote-SFTP-Create-\(UUID().uuidString)",
@@ -1321,7 +1321,7 @@ final class SFTPBrowserModel: ObservableObject {
                     remotePath: remotePath
                 )
             } completion: {
-                self.statusMessage = "Файл \(validated) создан"
+                self.statusMessage = UpdateLocalization.text(ru: "Файл \(validated) создан", en: "File \(validated) created")
                 self.load(
                     settings: settings,
                     directory: self.currentPath,
@@ -1345,14 +1345,14 @@ final class SFTPBrowserModel: ObservableObject {
             }
             let source = SFTPService.joinedRemotePath(currentPath, entry.name)
             let destination = SFTPService.joinedRemotePath(currentPath, validated)
-            runTransfer(status: "Переименовываем «\(entry.name)»…") {
+            runTransfer(status: UpdateLocalization.text(ru: "Переименовываем «\(entry.name)»…", en: "Renaming “\(entry.name)”…")) {
                 try SFTPService.rename(
                     settings: settings,
                     from: source,
                     to: destination
                 )
             } completion: {
-                self.statusMessage = "«\(entry.name)» переименован"
+                self.statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» переименован", en: "“\(entry.name)” renamed")
                 self.load(
                     settings: settings,
                     directory: self.currentPath,
@@ -1369,14 +1369,14 @@ final class SFTPBrowserModel: ObservableObject {
         settings: SSHConnectionSettings
     ) {
         let path = SFTPService.joinedRemotePath(currentPath, entry.name)
-        runTransfer(status: "Удаляем «\(entry.name)»…") {
+        runTransfer(status: UpdateLocalization.text(ru: "Удаляем «\(entry.name)»…", en: "Deleting “\(entry.name)”…")) {
             try SFTPService.remove(
                 settings: settings,
                 remotePath: path,
                 isDirectory: entry.isDirectory
             )
         } completion: {
-            self.statusMessage = "«\(entry.name)» удалён"
+            self.statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» удалён", en: "“\(entry.name)” deleted")
             self.load(
                 settings: settings,
                 directory: self.currentPath,
@@ -1400,10 +1400,10 @@ final class SFTPBrowserModel: ObservableObject {
                 isDirectory: entry.isDirectory
             )
         }
-        runTransfer(status: "Удаляем объектов: \(entries.count)…") {
+        runTransfer(status: UpdateLocalization.text(ru: "Удаляем объектов: \(entries.count)…", en: "Deleting items: \(entries.count)…")) {
             try SFTPService.removeMany(settings: settings, items: items)
         } completion: {
-            self.statusMessage = "Удалено объектов: \(entries.count)"
+            self.statusMessage = UpdateLocalization.text(ru: "Удалено объектов: \(entries.count)", en: "Deleted items: \(entries.count)")
             self.load(
                 settings: settings,
                 directory: self.currentPath,
@@ -1420,7 +1420,7 @@ final class SFTPBrowserModel: ObservableObject {
         settings: SSHConnectionSettings
     ) {
         let path = SFTPService.joinedRemotePath(currentPath, entry.name)
-        runTransfer(status: "Обновляем свойства «\(entry.name)»…") {
+        runTransfer(status: UpdateLocalization.text(ru: "Обновляем свойства «\(entry.name)»…", en: "Updating properties for “\(entry.name)”…")) {
             try SFTPService.updateAttributes(
                 settings: settings,
                 remotePath: path,
@@ -1429,7 +1429,7 @@ final class SFTPBrowserModel: ObservableObject {
                 groupID: groupID
             )
         } completion: {
-            self.statusMessage = "Свойства «\(entry.name)» обновлены"
+            self.statusMessage = UpdateLocalization.text(ru: "Свойства «\(entry.name)» обновлены", en: "Properties for “\(entry.name)” updated")
             self.load(
                 settings: settings,
                 directory: self.currentPath,
@@ -1452,7 +1452,7 @@ final class SFTPBrowserModel: ObservableObject {
         operationID = token
         isBusy = true
         errorMessage = nil
-        statusMessage = "Открываем «\(entry.name)»…"
+        statusMessage = UpdateLocalization.text(ru: "Открываем «\(entry.name)»…", en: "Opening “\(entry.name)”…")
 
         Task {
             do {
@@ -1490,12 +1490,12 @@ final class SFTPBrowserModel: ObservableObject {
                 }.value
                 guard operationID == token else { return }
                 isBusy = false
-                statusMessage = "«\(entry.name)» открыт в редакторе"
+                statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» открыт в редакторе", en: "“\(entry.name)” opened in editor")
                 editorDocument = document
             } catch {
                 guard operationID == token else { return }
                 isBusy = false
-                statusMessage = "Файл не открыт"
+                statusMessage = UpdateLocalization.text(ru: "Файл не открыт", en: "Could not open file")
                 errorMessage = error.localizedDescription
             }
         }
@@ -1506,7 +1506,7 @@ final class SFTPBrowserModel: ObservableObject {
         text: String,
         settings: SSHConnectionSettings
     ) {
-        runTransfer(status: "Сохраняем «\(document.name)»…") {
+        runTransfer(status: UpdateLocalization.text(ru: "Сохраняем «\(document.name)»…", en: "Saving “\(document.name)”…")) {
             let directory = FileManager.default.temporaryDirectory
                 .appendingPathComponent(
                     "SelectiveRemote-SFTP-Save-\(UUID().uuidString)",
@@ -1528,7 +1528,7 @@ final class SFTPBrowserModel: ObservableObject {
             )
         } completion: {
             self.editorDocument = nil
-            self.statusMessage = "«\(document.name)» сохранён"
+            self.statusMessage = UpdateLocalization.text(ru: "«\(document.name)» сохранён", en: "“\(document.name)” saved")
             self.load(
                 settings: settings,
                 directory: self.currentPath,
@@ -1550,7 +1550,7 @@ final class SFTPBrowserModel: ObservableObject {
                 isDirectory: true
             )
         let destination = directory.appendingPathComponent(entry.name)
-        runTransfer(status: "Скачиваем «\(entry.name)» для открытия…") {
+        runTransfer(status: UpdateLocalization.text(ru: "Скачиваем «\(entry.name)» для открытия…", en: "Downloading “\(entry.name)” to open…")) {
             try FileManager.default.createDirectory(
                 at: directory,
                 withIntermediateDirectories: false
@@ -1581,7 +1581,7 @@ final class SFTPBrowserModel: ObservableObject {
             } else {
                 NSWorkspace.shared.open(destination)
             }
-            self.statusMessage = "«\(entry.name)» открыт из временной копии"
+            self.statusMessage = UpdateLocalization.text(ru: "«\(entry.name)» открыт из временной копии", en: "“\(entry.name)” opened from a temporary copy")
             DispatchQueue.global(qos: .utility).asyncAfter(
                 deadline: .now() + .seconds(86_400)
             ) {
@@ -1702,10 +1702,10 @@ final class SFTPBrowserModel: ObservableObject {
             },
             progressProbe: { Self.localItemSize(destination) },
             completion: { [weak self] in
-                self?.statusMessage = "\(name) скачан в \(destination.deletingLastPathComponent().path)"
+                self?.statusMessage = UpdateLocalization.text(ru: "\(name) скачан в \(destination.deletingLastPathComponent().path)", en: "\(name) downloaded to \(destination.deletingLastPathComponent().path)")
             }
         ))
-        statusMessage = "«\(name)» добавлен в очередь"
+        statusMessage = UpdateLocalization.text(ru: "«\(name)» добавлен в очередь", en: "“\(name)” added to queue")
     }
 
     private func localDestination(
@@ -1725,7 +1725,7 @@ final class SFTPBrowserModel: ObservableObject {
         case .replace:
             return exact
         case .skip:
-            statusMessage = "«\(name)» пропущен: объект уже существует"
+            statusMessage = UpdateLocalization.text(ru: "«\(name)» пропущен: объект уже существует", en: "“\(name)” skipped: item already exists")
             return nil
         }
     }
@@ -1789,7 +1789,7 @@ final class SFTPBrowserModel: ObservableObject {
             } catch {
                 guard operationID == token else { return }
                 isBusy = false
-                statusMessage = "Операция SFTP не выполнена"
+                statusMessage = UpdateLocalization.text(ru: "Операция SFTP не выполнена", en: "SFTP operation failed")
                 errorMessage = error.localizedDescription
             }
         }

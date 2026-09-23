@@ -1424,7 +1424,7 @@ struct SSHTerminalView: View {
             .disabled(workspace.runningSessionCount < 2)
             Divider()
             ForEach(TerminalWorkspaceLayout.allCases) { layout in
-                Button(layout.title, systemImage: layout.systemImage) {
+                Button(LocalizedStringKey(layout.title), systemImage: layout.systemImage) {
                     workspace.setLayout(layout)
                     showsCommandPalette = false
                 }
@@ -1832,7 +1832,7 @@ struct SSHTerminalView: View {
                             Image(systemName: state.systemImage)
                                 .font(.system(size: 28, weight: .semibold))
                                 .foregroundStyle(statusColor(for: state))
-                            Text(LocalizedStringKey(state.title))
+                            Text(state.localizedTitle())
                                 .font(.headline)
                                 .foregroundStyle(.white)
                             Text(connectionLabel(for: tab))
@@ -1974,11 +1974,13 @@ struct SSHTerminalView: View {
             Image(systemName: state.systemImage)
                 .font(compact ? .system(size: 9, weight: .semibold) : .caption2)
             if let progress = tab.session.reconnectProgress {
-                Text("Reconnect \(progress.attempt)/\(progress.maximumAttempts)")
+                Text(UpdateLocalization.formatted(
+                    "terminal.state.reconnectProgress", progress.attempt, progress.maximumAttempts
+                ))
                     .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
                     .lineLimit(1)
             } else {
-                Text(LocalizedStringKey(state.title))
+                Text(state.localizedTitle())
                     .font(compact ? .system(size: 9, weight: .semibold) : .caption2.weight(.semibold))
                     .lineLimit(1)
             }
@@ -1991,7 +1993,7 @@ struct SSHTerminalView: View {
             Capsule()
                 .strokeBorder(color.opacity(0.35), lineWidth: 1)
         }
-        .help(state.detail ?? state.title)
+        .help(state.localizedDetail() ?? state.localizedTitle())
     }
 
     private func connectionHost(for tab: TerminalWorkspaceTab) -> String {
@@ -2423,8 +2425,8 @@ struct TerminalConnectionEditor: View {
                 Text(
                     customAuthenticationMessage
                         ?? (allowsInteractivePassword
-                            ? "Для временного подключения используется системный ssh-agent и ~/.ssh/config; при необходимости OpenSSH запросит пароль отдельно."
-                            : "Для временного фонового подключения используйте SSH-ключ, системный ssh-agent или ~/.ssh/config. Для пароля сохраните подключение как SSH-профиль.")
+                            ? UpdateLocalization.key("terminal.remote.temporary_interactive_help")
+                            : UpdateLocalization.key("terminal.remote.temporary_background_help"))
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -2469,8 +2471,8 @@ struct TerminalConnectionEditor: View {
 
                         Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 10) {
                             GridRow {
-                                Text("Baud rate")
-                                Picker("Baud rate", selection: $serialBaudRate) {
+                                Text(UpdateLocalization.text(ru: "Скорость (бод)", en: "Baud rate"))
+                                Picker(UpdateLocalization.text(ru: "Скорость (бод)", en: "Baud rate"), selection: $serialBaudRate) {
                                     ForEach(TerminalTransportService.supportedBaudRates, id: \.self) {
                                         Text($0.formatted(.number.grouping(.never))).tag($0)
                                     }
@@ -2478,31 +2480,31 @@ struct TerminalConnectionEditor: View {
                                 .labelsHidden()
                             }
                             GridRow {
-                                Text("Data bits")
-                                Picker("Data bits", selection: $serialDataBits) {
+                                Text(UpdateLocalization.text(ru: "Биты данных", en: "Data bits"))
+                                Picker(UpdateLocalization.text(ru: "Биты данных", en: "Data bits"), selection: $serialDataBits) {
                                     ForEach(5...8, id: \.self) { Text(String($0)).tag($0) }
                                 }
                                 .labelsHidden()
                             }
                             GridRow {
-                                Text("Parity")
-                                Picker("Parity", selection: $serialParity) {
-                                    ForEach(SerialParity.allCases) { Text($0.title).tag($0) }
+                                Text(UpdateLocalization.text(ru: "Чётность", en: "Parity"))
+                                Picker(UpdateLocalization.text(ru: "Чётность", en: "Parity"), selection: $serialParity) {
+                                    ForEach(SerialParity.allCases) { Text($0.localizedTitle()).tag($0) }
                                 }
                                 .labelsHidden()
                             }
                             GridRow {
-                                Text("Stop bits")
-                                Picker("Stop bits", selection: $serialStopBits) {
+                                Text(UpdateLocalization.text(ru: "Стоп-биты", en: "Stop bits"))
+                                Picker(UpdateLocalization.text(ru: "Стоп-биты", en: "Stop bits"), selection: $serialStopBits) {
                                     Text("1").tag(1)
                                     Text("2").tag(2)
                                 }
                                 .labelsHidden()
                             }
                             GridRow {
-                                Text("Flow control")
-                                Picker("Flow control", selection: $serialFlowControl) {
-                                    ForEach(SerialFlowControl.allCases) { Text($0.title).tag($0) }
+                                Text(UpdateLocalization.text(ru: "Управление потоком", en: "Flow control"))
+                                Picker(UpdateLocalization.text(ru: "Управление потоком", en: "Flow control"), selection: $serialFlowControl) {
+                                    ForEach(SerialFlowControl.allCases) { Text($0.localizedTitle()).tag($0) }
                                 }
                                 .labelsHidden()
                             }

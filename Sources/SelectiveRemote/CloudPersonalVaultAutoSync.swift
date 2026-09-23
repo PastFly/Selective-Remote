@@ -16,7 +16,38 @@ enum SelectiveRemotePersonalVaultSyncStatus {
     }
 
     static func recordError(_ error: Error) {
-        UserDefaults.standard.set(error.localizedDescription, forKey: errorKey)
+        let value: String
+        if let error = error as? SelectiveRemotePersonalVaultError {
+            switch error {
+            case .invalidRecoveryPhrase: value = "personalVault.invalidRecoveryPhrase"
+            case .invalidEnvelope: value = "personalVault.invalidEnvelope"
+            case .cryptoFailure: value = "personalVault.cryptoFailure"
+            case .emptyLocalVault: value = "personalVault.emptyLocalVault"
+            case let .remoteVaultNotEmpty(revision): value = "personalVault.remoteVaultNotEmpty:\(revision)"
+            case .legacyMigrationRequiresLocalData: value = "personalVault.legacyMigrationRequiresLocalData"
+            case let .uploadConflict(revision): value = "personalVault.uploadConflict:\(revision)"
+            }
+        } else {
+            value = error.localizedDescription
+        }
+        UserDefaults.standard.set(value, forKey: errorKey)
+    }
+
+    static func message(for storedValue: String) -> String {
+        let pieces = storedValue.split(separator: ":", maxSplits: 1).map(String.init)
+        let revision = pieces.count == 2 ? Int(pieces[1]) : nil
+        let error: SelectiveRemotePersonalVaultError?
+        switch pieces.first {
+        case "personalVault.invalidRecoveryPhrase": error = .invalidRecoveryPhrase
+        case "personalVault.invalidEnvelope": error = .invalidEnvelope
+        case "personalVault.cryptoFailure": error = .cryptoFailure
+        case "personalVault.emptyLocalVault": error = .emptyLocalVault
+        case "personalVault.remoteVaultNotEmpty": error = revision.map { .remoteVaultNotEmpty($0) }
+        case "personalVault.legacyMigrationRequiresLocalData": error = .legacyMigrationRequiresLocalData
+        case "personalVault.uploadConflict": error = revision.map { .uploadConflict($0) }
+        default: error = nil
+        }
+        return error?.localizedDescription ?? storedValue
     }
 }
 

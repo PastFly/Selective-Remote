@@ -110,6 +110,30 @@ struct SystemDiagnosticCheckResult: Identifiable {
     let action: SystemDiagnosticCheckAction?
 }
 
+struct SystemDiagnosticResultSnapshot {
+    let results: [SystemDiagnosticCheckResult]
+    let checkedAt: Date
+    let english: Bool
+
+    static func completed(
+        results: [SystemDiagnosticCheckResult],
+        checkedAt: Date,
+        startedInEnglish: Bool,
+        currentEnglish: Bool
+    ) -> Self? {
+        guard startedInEnglish == currentEnglish else { return nil }
+        return .init(results: results, checkedAt: checkedAt, english: startedInEnglish)
+    }
+
+    func isStale(english: Bool) -> Bool { self.english != english }
+    func visibleResults(english: Bool) -> [SystemDiagnosticCheckResult] {
+        isStale(english: english) ? [] : results
+    }
+    func visibleCheckedAt(english: Bool) -> Date? {
+        isStale(english: english) ? nil : checkedAt
+    }
+}
+
 @MainActor
 enum SystemDiagnosticsCheckService {
     private static let rawHistoryRU = URL(
@@ -799,11 +823,19 @@ enum SystemDiagnosticsCheckService {
 
 struct DiagnosticsSystemCheckView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var language = AppLanguageStore.shared
 
-    @State private var results: [SystemDiagnosticCheckResult] = []
+    @State private var snapshot: SystemDiagnosticResultSnapshot?
     @State private var isRunning = false
-    @State private var lastRunAt: Date?
     @State private var showProblemsOnly = false
+
+    private var results: [SystemDiagnosticCheckResult] {
+        snapshot?.visibleResults(english: language.selection.usesEnglish) ?? []
+    }
+
+    private var lastRunAt: Date? {
+        snapshot?.visibleCheckedAt(english: language.selection.usesEnglish)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -859,15 +891,27 @@ struct DiagnosticsSystemCheckView: View {
                     .frame(maxWidth: .infinity, minHeight: 220)
             } else if results.isEmpty {
                 ContentUnavailableView(
-                    UpdateLocalization.text(
-                        ru: "Проверка ещё не запускалась",
-                        en: "The system check has not run yet"
-                    ),
+                    snapshot?.isStale(english: language.selection.usesEnglish) == true
+                        ? UpdateLocalization.text(
+                            ru: "Результаты на другом языке",
+                            en: "Results Are in Another Language"
+                        )
+                        : UpdateLocalization.text(
+                            ru: "Проверка ещё не запускалась",
+                            en: "The system check has not run yet"
+                        ),
                     systemImage: "checkmark.shield",
-                    description: Text(UpdateLocalization.text(
-                        ru: "Нажмите «Проверить всё», чтобы проверить локальные компоненты, разрешения и канал обновлений.",
-                        en: "Run all checks to verify local components, permissions, and the update feed."
-                    ))
+                    description: Text(
+                        snapshot?.isStale(english: language.selection.usesEnglish) == true
+                            ? UpdateLocalization.text(
+                                ru: "Запустите проверку вручную, чтобы обновить результаты на выбранном языке.",
+                                en: "Run the checks manually to refresh the results in the selected language."
+                            )
+                            : UpdateLocalization.text(
+                                ru: "Нажмите «Проверить всё», чтобы проверить локальные компоненты, разрешения и канал обновлений.",
+                                en: "Run all checks to verify local components, permissions, and the update feed."
+                            )
+                    )
                 )
                 .frame(minHeight: 260)
             } else {
@@ -1079,6 +1123,7 @@ struct DiagnosticsSystemCheckView: View {
     private func runChecks() async {
         guard !isRunning else { return }
         isRunning = true
+        let startedInEnglish = language.selection.usesEnglish
         let evidence = model.rdpCapturePermissionEvidence()
         let newResults = await SystemDiagnosticsCheckService.run(
             captureEvidence: evidence
@@ -1087,8 +1132,14 @@ struct DiagnosticsSystemCheckView: View {
             isRunning = false
             return
         }
-        results = newResults
-        lastRunAt = Date()
+        if let completed = SystemDiagnosticResultSnapshot.completed(
+            results: newResults,
+            checkedAt: Date(),
+            startedInEnglish: startedInEnglish,
+            currentEnglish: language.selection.usesEnglish
+        ) {
+            snapshot = completed
+        }
         isRunning = false
     }
 
