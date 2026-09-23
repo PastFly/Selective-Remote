@@ -140,6 +140,75 @@ func passwordOnlyAuthenticationArguments() throws {
     #expect(arguments.contains("PubkeyAuthentication=no"))
 }
 
+@Test("SSH Terminal password limits OpenSSH retries and tries password before keyboard-interactive")
+func terminalPasswordAuthenticationHasOneOpenSSHPromptPerMethod() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshAuthenticationMode = .password
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let arguments = SSHService.interactiveSSHArguments(settings: settings)
+
+    #expect(arguments.contains("NumberOfPasswordPrompts=1"))
+    #expect(arguments.contains("PreferredAuthentications=password,keyboard-interactive"))
+    #expect(arguments.contains("PubkeyAuthentication=no"))
+    #expect(arguments.contains("ControlMaster=no"))
+}
+
+@Test("Terminal password attempt state is private and removed after the connection")
+func terminalPasswordAttemptStateLifecycle() throws {
+    var environment: [String: String] = [:]
+    try SSHKeyService.prepareTerminalPasswordAttempt(environment: &environment)
+    let path = try #require(environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"])
+    let attributes = try FileManager.default.attributesOfItem(atPath: path)
+    let permissions = try #require(attributes[.posixPermissions] as? NSNumber)
+    #expect(permissions.intValue & 0o077 == 0)
+    #expect(FileManager.default.fileExists(atPath: path))
+
+    SSHKeyService.cleanupAuthenticationEnvironment(environment)
+    #expect(!FileManager.default.fileExists(atPath: path))
+}
+
+@Test("Saved SSH password resolves by profile after a fresh Terminal connection is reconstructed")
+func savedSSHPasswordReferenceIsStableAcrossReconnect() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.com"
+    profile.sshAuthenticationMode = .password
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let connection = TerminalTabConnection.savedProfile(profile.id)
+    let first = SSHKeyService.terminalPasswordCredential(
+        settings: settings,
+        connection: connection,
+        tabID: UUID(),
+        temporaryPassword: nil
+    )
+    let reconnected = SSHKeyService.terminalPasswordCredential(
+        settings: settings,
+        connection: TerminalTabConnection.savedProfile(profile.id),
+        tabID: UUID(),
+        temporaryPassword: nil
+    )
+    #expect(first == reconnected)
+    #expect(first == KeychainService.credentialReference(profileID: profile.id, kind: .ssh))
+}
+
+@Test("Export the production SSH Terminal argument vector for the synthetic endpoint")
+func exportTerminalPasswordArgumentsForSyntheticEndpoint() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let path = environment["SR_TEST_SSH_ARGUMENTS_FILE"] else { return }
+    let port = try #require(Int(environment["SR_TEST_SSH_PORT"] ?? ""))
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "127.0.0.1"
+    profile.username = "synthetic-user"
+    profile.sshPort = port
+    profile.sshAuthenticationMode = .password
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let arguments = environment["SR_TEST_SSH_ARGUMENT_KIND"] == "sftp"
+        ? SFTPService.persistentMasterArguments(settings: settings)
+        : SSHService.interactiveSSHArguments(settings: settings)
+    let data = try JSONSerialization.data(withJSONObject: arguments)
+    try data.write(to: URL(fileURLWithPath: path))
+}
+
 @Test("SSH proxy добавляет ProxyCommand для SOCKS5")
 func socksProxyArguments() throws {
     var profile = ConnectionProfile(connectionType: .ssh)
@@ -639,6 +708,7 @@ func forwardingCommandPreviewUsesRealArgumentsWithoutSecrets() throws {
     #expect(command.contains("'-L' '127.0.0.1:5432:db.internal:5432'"))
     #expect(command.contains("'ExitOnForwardFailure=yes'"))
     #expect(command.contains("'LogLevel=DEBUG1'"))
+    #expect(command.contains("'NumberOfPasswordPrompts=1'"))
     #expect(command.contains("'ssh.example.com'"))
     #expect(!command.localizedCaseInsensitiveContains("password="))
     #expect(!command.contains("SELECTIVEREMOTE_PASSWORD"))

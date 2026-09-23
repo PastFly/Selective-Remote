@@ -541,6 +541,12 @@ enum SSHService {
             batchMode: false,
             multiplexing: false
         )
+        if settings.authenticationMode == .password {
+            if let preference = arguments.firstIndex(of: "PreferredAuthentications=keyboard-interactive,password") {
+                arguments[preference] = "PreferredAuthentications=password,keyboard-interactive"
+            }
+            arguments += ["-o", "NumberOfPasswordPrompts=1"]
+        }
         // Agent forwarding is deliberately limited to the interactive Terminal
         // session. SFTP masters and background forwarding processes never request
         // a forwarded agent socket merely because the profile enables this option.
@@ -926,12 +932,35 @@ enum SSHKeyService {
             ?? ProcessInfo.processInfo.environment
     }
 
+    static func terminalPasswordCredential(
+        settings: SSHConnectionSettings,
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        temporaryPassword: String?
+    ) -> KeychainCredentialReference? {
+        guard settings.authenticationMode == .automatic
+                || settings.authenticationMode == .password else { return nil }
+        switch connection.kind {
+        case .savedProfile:
+            return connection.profileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            }
+        case .custom:
+            return temporaryPassword?.isEmpty == false
+                ? KeychainService.credentialReference(profileID: tabID, kind: .ssh)
+                : nil
+        case .telnet, .serial, .local:
+            return nil
+        }
+    }
+
     static func backgroundAuthenticationEnvironment(
         passwordCredential: KeychainCredentialReference? = nil,
         proxyPasswordCredential: KeychainCredentialReference? = nil,
         jumpHostPasswordCredential: KeychainCredentialReference? = nil,
         jumpHostPromptTokens: [String] = [],
-        requiresUserPresence: Bool = true
+        requiresUserPresence: Bool = true,
+        terminalPasswordAttempt: Bool = false
     ) throws -> [String: String] {
         var environment = processEnvironment(startAgentIfNeeded: true)
         guard let helper = askPassHelperURL() else { return environment }
@@ -944,6 +973,10 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_PROXY_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PROMPT_TOKENS")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE")
+        if !jumpHostPromptTokens.isEmpty {
+            environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"] = jumpHostPromptTokens.joined(separator: "\n")
+        }
 
         if let passwordCredential {
             let requiresTouchID = KeychainService.requiresTouchID(reference: passwordCredential)
@@ -973,10 +1006,6 @@ enum SSHKeyService {
             ), !jumpPassword.isEmpty {
                 let secretURL = try makeSecretFile(jumpPassword, prefix: "jump")
                 environment["SELECTIVEREMOTE_JUMP_SECRET_FILE"] = secretURL.path
-                if !jumpHostPromptTokens.isEmpty {
-                    environment["SELECTIVEREMOTE_JUMP_PROMPT_TOKENS"] =
-                        jumpHostPromptTokens.joined(separator: "\n")
-                }
             }
         }
         if let proxyPasswordCredential,
@@ -985,7 +1014,28 @@ enum SSHKeyService {
             let secretURL = try makeSecretFile(proxyPassword, prefix: "proxy")
             environment["SELECTIVEREMOTE_PROXY_SECRET_FILE"] = secretURL.path
         }
+        if terminalPasswordAttempt {
+            try prepareTerminalPasswordAttempt(environment: &environment)
+        }
         return environment
+    }
+
+    static func prepareTerminalPasswordAttempt(environment: inout [String: String]) throws {
+        let stateURL = try makeSecretFile("0,0", prefix: "terminal-password-state")
+        environment["SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"] = stateURL.path
+    }
+
+    static func cleanupAuthenticationEnvironment(_ environment: [String: String]) {
+        for key in [
+            "SELECTIVEREMOTE_ASKPASS_SECRET_FILE",
+            "SELECTIVEREMOTE_PROXY_SECRET_FILE",
+            "SELECTIVEREMOTE_JUMP_SECRET_FILE",
+            "SELECTIVEREMOTE_TERMINAL_PASSWORD_STATE_FILE"
+        ] {
+            if let path = environment[key] {
+                try? FileManager.default.removeItem(atPath: path)
+            }
+        }
     }
 
     private static func makeSecretFile(_ secret: String, prefix: String) throws -> URL {

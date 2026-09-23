@@ -3811,6 +3811,7 @@ final class AppModel: NSObject, ObservableObject {
             statusMessage = UpdateLocalization.text(ru: "Эта вкладка Terminal уже подключена", en: "This Terminal tab is already connected")
             return
         }
+        var preparedAuthenticationEnvironment: [String: String]?
         do {
             if connection.kind == .custom,
                let temporaryPassword,
@@ -3831,23 +3832,12 @@ final class AppModel: NSObject, ObservableObject {
                     reason: UpdateLocalization.text(ru: "Подтвердите Touch ID для SSH-сессии и ключа «\(identity.name)»", en: "Confirm Touch ID for the SSH session and key “\(identity.name)”")
                 )
             }
-            let credential: KeychainCredentialReference?
-            if settings.authenticationMode == .automatic || settings.authenticationMode == .password {
-                switch connection.kind {
-                case .savedProfile:
-                    credential = connection.profileID.map {
-                        KeychainService.credentialReference(profileID: $0, kind: .ssh)
-                    }
-                case .custom:
-                    credential = temporaryPassword?.isEmpty == false
-                        ? KeychainService.credentialReference(profileID: tabID, kind: .ssh)
-                        : nil
-                case .telnet, .serial, .local:
-                    credential = nil
-                }
-            } else {
-                credential = nil
-            }
+            let credential = SSHKeyService.terminalPasswordCredential(
+                settings: settings,
+                connection: connection,
+                tabID: tabID,
+                temporaryPassword: temporaryPassword
+            )
             let launchConfiguration: (executable: String, arguments: [String])
             switch settings.terminalProtocol {
             case .ssh:
@@ -3871,18 +3861,23 @@ final class AppModel: NSObject, ObservableObject {
                 jumpHostPasswordCredential: settings.jumpHostProfileID.map {
                     KeychainService.credentialReference(profileID: $0, kind: .ssh)
                 },
-                jumpHostPromptTokens: settings.jumpHostPromptTokens
+                jumpHostPromptTokens: settings.jumpHostPromptTokens,
+                terminalPasswordAttempt: settings.terminalProtocol == .ssh
+                    && settings.authenticationMode == .password
             )
             if settings.terminalProtocol == .mosh {
                 authenticationEnvironment["LANG"] = authenticationEnvironment["LANG"] ?? "en_US.UTF-8"
                 authenticationEnvironment["LC_CTYPE"] = authenticationEnvironment["LC_CTYPE"] ?? "en_US.UTF-8"
             }
+            preparedAuthenticationEnvironment = authenticationEnvironment
+            let sessionAuthenticationEnvironment = authenticationEnvironment
             try session.start(
                 executable: launchConfiguration.executable,
                 arguments: launchConfiguration.arguments,
                 title: "\(terminalProtocolTitle) · \(settings.profileName)",
                 environment: authenticationEnvironment
             ) { [weak self, weak session] exitCode in
+                SSHKeyService.cleanupAuthenticationEnvironment(sessionAuthenticationEnvironment)
                 guard let self, let session else { return }
                 finishTerminalSessionLog(
                     tabID: tabID,
@@ -4001,6 +3996,9 @@ final class AppModel: NSObject, ObservableObject {
             }
             errorMessage = nil
         } catch {
+            if let preparedAuthenticationEnvironment {
+                SSHKeyService.cleanupAuthenticationEnvironment(preparedAuthenticationEnvironment)
+            }
             if connection.kind == .custom, temporaryPassword?.isEmpty == false {
                 try? KeychainService.deletePassword(profileID: tabID, kind: .ssh)
             }

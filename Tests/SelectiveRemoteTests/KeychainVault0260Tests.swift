@@ -11,6 +11,63 @@ func unifiedVaultEntryKeyIsStable() {
     #expect(UnifiedCredentialVault.entryKey(for: ssh).contains(id.uuidString))
 }
 
+@Test("Saved SSH password is read through the Terminal resolver after reconnect")
+func sshPasswordKeychainResolverReconnect() throws {
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.host = "server.example.invalid"
+    profile.sshAuthenticationMode = .password
+    let syntheticPassword = "TEST-ONLY-SSH-\(UUID().uuidString)"
+    defer { try? KeychainService.deletePassword(profileID: profile.id, kind: .ssh) }
+
+    try KeychainService.savePassword(syntheticPassword, profileID: profile.id, kind: .ssh)
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let connection = TerminalTabConnection.savedProfile(profile.id)
+    let reference = try #require(SSHKeyService.terminalPasswordCredential(
+        settings: settings,
+        connection: connection,
+        tabID: UUID(),
+        temporaryPassword: nil
+    ))
+    #expect(try KeychainService.readPassword(reference: reference) == syntheticPassword)
+
+    let reconnected = try #require(SSHKeyService.terminalPasswordCredential(
+        settings: settings,
+        connection: TerminalTabConnection.savedProfile(profile.id),
+        tabID: UUID(),
+        temporaryPassword: nil
+    ))
+    #expect(try KeychainService.readPassword(reference: reconnected) == syntheticPassword)
+}
+
+@Test("Saved SSH password survives a new test process through the Terminal resolver")
+func sshPasswordKeychainProcessBoundary() throws {
+    let environment = ProcessInfo.processInfo.environment
+    guard let stage = environment["SR_TEST_SSH_RELAUNCH_STAGE"] else { return }
+    let profileID = try #require(UUID(uuidString: environment["SR_TEST_SSH_RELAUNCH_ID"] ?? ""))
+    if stage == "cleanup" {
+        try? KeychainService.deletePassword(profileID: profileID, kind: .ssh)
+        return
+    }
+    var profile = ConnectionProfile(connectionType: .ssh)
+    profile.id = profileID
+    profile.host = "server.example.invalid"
+    profile.sshAuthenticationMode = .password
+    let expected = "TEST-ONLY-SSH-\(profileID.uuidString)"
+    if stage == "save" {
+        try KeychainService.savePassword(expected, profileID: profileID, kind: .ssh)
+        return
+    }
+    #expect(stage == "read")
+    let settings = try SSHConnectionSettings(profile: profile, identity: nil)
+    let reference = try #require(SSHKeyService.terminalPasswordCredential(
+        settings: settings,
+        connection: .savedProfile(profileID),
+        tabID: UUID(),
+        temporaryPassword: nil
+    ))
+    #expect(try KeychainService.readPassword(reference: reference) == expected)
+}
+
 @Test("Cloud state has a deterministic namespace inside the unified Keychain item")
 func unifiedVaultProtectedDataKeyIsStableAndSeparate() {
     let endpoint = "https://cloud.example.invalid"
