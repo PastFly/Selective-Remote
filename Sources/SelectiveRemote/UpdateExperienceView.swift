@@ -6,11 +6,25 @@ struct AppSettingsView: View {
     @ObservedObject var appearance: AppAppearanceStore
     @ObservedObject var appLock: AppLockStore
     @AppStorage("SelectiveRemote.settings.selected-tab.v1") private var selectedTab = "appearance"
+    @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
+    private var showsHostShelf = true
 
     var body: some View {
         TabView(selection: $selectedTab) {
             Form {
                 AppAppearanceSettingsSection(store: appearance)
+                Section(UpdateLocalization.text(ru: "Рабочая область", en: "Workspace")) {
+                    Toggle(
+                        UpdateLocalization.text(ru: "Показывать Host Shelf в боковой панели", en: "Show Host Shelf in Sidebar"),
+                        isOn: $showsHostShelf
+                    )
+                    Text(UpdateLocalization.text(
+                        ru: "Host Shelf доступен во всех разделах. Отключите его, чтобы полностью скрыть список хостов в боковой панели.",
+                        en: "Host Shelf stays available in every workspace. Turn it off to hide the host list from the sidebar."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
                 Section {
                     Button(language.localized("settings.reset_appearance")) { appearance.reset() }
                 }

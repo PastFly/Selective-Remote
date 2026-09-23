@@ -151,6 +151,88 @@ struct CloudTeamHostsTests {
     }
 
     @MainActor
+    @Test("Host warning identifies record shape without revealing Vault values")
+    func materializationShapeDiagnostic() throws {
+        let valid = try SelectiveRemoteVaultDocument.decode(Self.fixtureData())
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let malformed = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .host,
+            version: SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("PRIVATE-TITLE-MARKER"),
+                "address": .string("PRIVATE-ADDRESS-MARKER"),
+                "port": .number(22),
+                "secretCustomField": .string("PRIVATE-SECRET-MARKER")
+            ])
+        )
+        let standaloneCredential = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .credential,
+            version: SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("PRIVATE-CREDENTIAL-TITLE"),
+                "username": .string("test-user"),
+                "secret": .string("PRIVATE-CREDENTIAL-SECRET")
+            ])
+        )
+        let snippet = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .snippet,
+            version: SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("PRIVATE-SNIPPET-TITLE"),
+                "body": .string("PRIVATE-SNIPPET-BODY")
+            ])
+        )
+        let document = try SelectiveRemoteVaultDocument(
+            records: valid.records + [malformed, standaloneCredential, snippet],
+            tombstones: valid.tombstones
+        )
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [Self.snapshot(payload: try document.encoded())])
+        let issue = try #require(store.materializationIssues.first)
+        let diagnostic = try #require(issue.safeDiagnostic)
+        #expect(diagnostic.contains("Host"))
+        #expect(diagnostic.contains("port"))
+        #expect(diagnostic.contains("unknown fields: 1"))
+        #expect(!diagnostic.contains("PRIVATE-"))
+        #expect(!diagnostic.contains("secretCustomField"))
+        #expect(diagnostic.contains("Snippet projection: readable"))
+        #expect(diagnostic.contains("Credential projection: readable"))
+        #expect(store.hosts.isEmpty)
+    }
+
+    @MainActor
+    @Test("A standalone Credential shape cannot hide valid Team Hosts")
+    func standaloneCredentialProjectionIsolation() throws {
+        let document = try SelectiveRemoteVaultDocument.decode(Self.fixtureData())
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let legacyCredential = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .credential,
+            version: SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("Standalone"),
+                "username": .string("user"),
+                "secret": .string("synthetic-only"),
+                "folder": .string("Legacy")
+            ])
+        )
+        let mixed = try SelectiveRemoteVaultDocument(
+            records: document.records + [legacyCredential], tombstones: document.tombstones
+        )
+        let snapshot = Self.snapshot(payload: try mixed.encoded())
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [snapshot])
+        #expect(store.hosts.count == 2)
+        #expect(store.invalidVaultCount == 0)
+        #expect(throws: SelectiveRemoteTeamCredentialMaterializationError.self) {
+            _ = try SelectiveRemoteTeamCredentialMaterializer.materialize(snapshot)
+        }
+    }
+
+    @MainActor
     @Test("Team Host warning reports zero, one and multiple hidden scopes without exposing payloads")
     func materializationWarningStates() throws {
         let store = SelectiveRemoteTeamHostStore()
@@ -369,6 +451,7 @@ struct CloudTeamHostsTests {
         let credentialBefore = try #require(created.records.first { $0.type == .credential })
         profile.group = "Infrastructure/Production"
         profile.sortIndex = 4
+        profile.folderOrderPath = [1, 2]
         let organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
             in: created,
             recordID: recordID,
@@ -382,6 +465,7 @@ struct CloudTeamHostsTests {
         store.replace(with: [Self.snapshot(payload: try organized.encoded(), role: .editor)])
         #expect(store.hosts.first?.profile.group == "Infrastructure/Production")
         #expect(store.hosts.first?.profile.sortIndex == 4)
+        #expect(store.hosts.first?.profile.folderOrderPath == [1, 2])
     }
 
     @MainActor

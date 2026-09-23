@@ -68,9 +68,22 @@ struct SelectiveRemoteProfileFolderNode: Identifiable, Equatable {
                 childNames.insert(String(component))
             }
         }
-        var result = childNames.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }.map { component in
+        let depth = SelectiveRemoteHostFolderPath.components(parent).count
+        let orderedNames = childNames.sorted { lhs, rhs in
+            func rank(_ name: String) -> Int? {
+                let path = parent.isEmpty ? name : "\(parent)/\(name)"
+                return entries.filter { $0.0 == path || $0.0.hasPrefix(path + "/") }
+                    .compactMap {
+                        $0.1.folderOrderPath.indices.contains(depth)
+                            ? $0.1.folderOrderPath[depth] : nil
+                    }.min()
+            }
+            if let left = rank(lhs), let right = rank(rhs), left != right {
+                return left < right
+            }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        var result = orderedNames.map { component in
             let path = parent.isEmpty ? component : "\(parent)/\(component)"
             let nested = entries.filter { $0.0 == path || $0.0.hasPrefix("\(path)/") }
             return Self(
@@ -160,9 +173,22 @@ struct SelectiveRemoteTeamHostOutlineItem: Identifiable, Equatable {
                 childNames.insert(String(component))
             }
         }
-        var result = childNames.sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }.map { component in
+        let depth = SelectiveRemoteHostFolderPath.components(parent).count
+        let orderedNames = childNames.sorted { lhs, rhs in
+            func rank(_ name: String) -> Int? {
+                let path = parent.isEmpty ? name : "\(parent)/\(name)"
+                return entries.filter { $0.0 == path || $0.0.hasPrefix(path + "/") }
+                    .compactMap {
+                        $0.1.profile.folderOrderPath.indices.contains(depth)
+                            ? $0.1.profile.folderOrderPath[depth] : nil
+                    }.min()
+            }
+            if let left = rank(lhs), let right = rank(rhs), left != right {
+                return left < right
+            }
+            return lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
+        }
+        var result = orderedNames.map { component in
             let path = parent.isEmpty ? component : "\(parent)/\(component)"
             let nested = entries.filter { $0.0 == path || $0.0.hasPrefix("\(path)/") }
             let descendants = children(

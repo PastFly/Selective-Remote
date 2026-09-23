@@ -2,6 +2,23 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+@Test("Active Terminal uses a small accent indicator across session states")
+func terminalPaneSemanticHighlight() {
+    for state in [
+        TerminalWorkspaceSessionState.connected,
+        .disconnected,
+        .error(255)
+    ] {
+        let active = TerminalPaneHighlight.resolve(selected: true, state: state)
+        let inactive = TerminalPaneHighlight.resolve(selected: false, state: state)
+        #expect(active.surfaceTintOpacity == 0)
+        #expect(active.headerTintOpacity <= 0.12)
+        #expect(active.borderWidth <= 2)
+        #expect(active.showsFocusIndicator)
+        #expect(!inactive.showsFocusIndicator)
+    }
+}
+
 @Test("New local Terminal command uses the production generated-tab creation path")
 func newLocalTerminalCommandUsesGeneratedCreationPath() throws {
     let source = try String(

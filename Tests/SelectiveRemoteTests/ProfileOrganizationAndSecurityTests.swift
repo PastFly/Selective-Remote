@@ -52,11 +52,13 @@ struct ProfileOrganizationAndSecurityTests {
 
         var legacy = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
         legacy.removeValue(forKey: "sortIndex")
+        legacy.removeValue(forKey: "folderOrderPath")
         let migrated = try JSONDecoder().decode(
             ConnectionProfile.self,
             from: JSONSerialization.data(withJSONObject: legacy)
         )
         #expect(migrated.sortIndex == 0)
+        #expect(migrated.folderOrderPath.isEmpty)
     }
 
     @Test("Дерево Personal Hosts строит папку внутри папки")
@@ -74,6 +76,78 @@ struct ProfileOrganizationAndSecurityTests {
         let linux = try #require(production.children.first)
         #expect(linux.path == "Infrastructure/Production/Linux")
         #expect(linux.profiles.map(\.id) == [host.id])
+    }
+
+    @Test("Nested folder reorder and move survive profile serialization")
+    func nestedFolderDragPersists() throws {
+        var alpha = ConnectionProfile(connectionType: .ssh)
+        alpha.group = "Ops/Alpha"
+        var beta = ConnectionProfile(connectionType: .ssh)
+        beta.group = "Ops/Beta"
+        var gamma = ConnectionProfile(connectionType: .ssh)
+        gamma.group = "Archive/Gamma"
+        let reordered = try SelectiveRemoteHostFolderOrganizer.move(
+            profiles: [alpha, beta, gamma], folder: "Ops/Beta",
+            toParent: "Ops", before: "Ops/Alpha"
+        )
+        let ops = try #require(SelectiveRemoteProfileFolderNode.roots(from: [
+            .init(name: "Ops", profiles: reordered.filter { $0.group.hasPrefix("Ops/") })
+        ]).first)
+        #expect(ops.children.map(\.path) == ["Ops/Beta", "Ops/Alpha"])
+        #expect(SelectiveRemoteHostFolderOrganizer.folderComesBefore(
+            "Ops/Beta", "Ops/Alpha", profiles: reordered
+        ))
+
+        let moved = try SelectiveRemoteHostFolderOrganizer.move(
+            profiles: reordered, folder: "Ops/Beta", toParent: "Archive/Gamma"
+        )
+        #expect(moved.first(where: { $0.id == beta.id })?.group == "Archive/Gamma/Beta")
+        #expect(SelectiveRemoteHostFolderOrganizer.visibleFolderPaths(profiles: moved)
+            .contains("Archive"))
+        let restored = try JSONDecoder().decode(
+            [ConnectionProfile].self, from: JSONEncoder().encode(moved)
+        )
+        #expect(restored == moved)
+        #expect(throws: SelectiveRemoteHostFolderOrganizer.Error.self) {
+            try SelectiveRemoteHostFolderOrganizer.move(
+                profiles: moved, folder: "Archive/Gamma",
+                toParent: "Archive/Gamma/Beta"
+            )
+        }
+    }
+
+    @Test("Host drag reorders and moves without crossing an unrelated target")
+    func hostDragOrderPlanner() throws {
+        var first = ConnectionProfile(connectionType: .ssh)
+        first.group = "Ops"
+        first.sortIndex = 0
+        var second = ConnectionProfile(connectionType: .ssh)
+        second.group = "Ops"
+        second.sortIndex = 1
+        var target = ConnectionProfile(connectionType: .ssh)
+        target.group = "Dev"
+        target.sortIndex = 0
+        let input = [first, second, target]
+        let reordered = try #require(SelectiveRemoteHostOrder.move(
+            profiles: input, profileID: second.id, toFolder: "Ops", before: first.id
+        ))
+        #expect(reordered.first(where: { $0.id == second.id })?.sortIndex == 0)
+        #expect(reordered.first(where: { $0.id == first.id })?.sortIndex == 1)
+        #expect(SelectiveRemoteHostOrder.move(
+            profiles: reordered, profileID: second.id, toFolder: "Ops", before: second.id
+        ) == nil)
+        #expect(SelectiveRemoteHostOrder.move(
+            profiles: reordered, profileID: second.id, toFolder: "Ops", before: target.id
+        ) == nil)
+        let moved = try #require(SelectiveRemoteHostOrder.move(
+            profiles: reordered, profileID: second.id, toFolder: "Dev", before: target.id
+        ))
+        #expect(moved.first(where: { $0.id == second.id })?.group == "Dev")
+        #expect(moved.first(where: { $0.id == second.id })?.sortIndex == 0)
+        #expect(moved.first(where: { $0.id == target.id })?.sortIndex == 1)
+        #expect(try JSONDecoder().decode(
+            [ConnectionProfile].self, from: JSONEncoder().encode(moved)
+        ) == moved)
     }
 
     @Test("Названия пользовательских тегов нормализуются и ограничиваются")

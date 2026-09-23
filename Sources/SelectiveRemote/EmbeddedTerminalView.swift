@@ -3,6 +3,24 @@ import Foundation
 import SwiftUI
 @preconcurrency import WebKit
 
+struct TerminalPaneHighlight {
+    let surfaceTintOpacity: Double
+    let headerTintOpacity: Double
+    let borderWidth: CGFloat
+    let showsFocusIndicator: Bool
+
+    static func resolve(selected: Bool, state: TerminalWorkspaceSessionState) -> Self {
+        let isError: Bool
+        if case .error = state { isError = true } else { isError = false }
+        return Self(
+            surfaceTintOpacity: 0,
+            headerTintOpacity: selected ? (isError ? 0.08 : 0.10) : 0,
+            borderWidth: selected ? 1.6 : 0.8,
+            showsFocusIndicator: selected
+        )
+    }
+}
+
 enum TerminalSmartLinkKind: String, Sendable {
     case url
     case path
@@ -1182,7 +1200,7 @@ struct SSHTerminalView: View {
                         .padding(.vertical, 7)
                         .background(
                             isSelected
-                                ? Color.accentColor.opacity(0.24)
+                                ? Color.accentColor.opacity(0.10)
                                 : Color.primary.opacity(0.055),
                             in: RoundedRectangle(cornerRadius: 9, style: .continuous)
                         )
@@ -1190,7 +1208,7 @@ struct SSHTerminalView: View {
                             RoundedRectangle(cornerRadius: 9, style: .continuous)
                                 .strokeBorder(
                                     isSelected
-                                        ? Color.accentColor.opacity(0.85)
+                                        ? Color.accentColor.opacity(0.68)
                                         : Color.primary.opacity(0.06),
                                     lineWidth: isSelected ? 1.5 : 1
                                 )
@@ -1199,7 +1217,7 @@ struct SSHTerminalView: View {
                             if isSelected {
                                 Capsule()
                                     .fill(Color.accentColor)
-                                    .frame(height: 3)
+                                    .frame(height: 2)
                                     .padding(.horizontal, 10)
                                     .offset(y: 1)
                             }
@@ -1539,10 +1557,10 @@ struct SSHTerminalView: View {
                     .foregroundStyle(.orange)
                 Text("Нет открытых терминалов")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(TerminalColorCodecView.color(appearance.palette.foreground))
                 Text("Выберите сохранённый сервер или укажите новый SSH-адрес.")
                     .font(.callout)
-                    .foregroundStyle(.white.opacity(0.68))
+                    .foregroundStyle(TerminalColorCodecView.color(appearance.palette.foreground).opacity(0.68))
                 Button("Подключиться", systemImage: "play.fill") {
                     requestConnection(for: workspace.selectedTab)
                 }
@@ -1579,24 +1597,24 @@ struct SSHTerminalView: View {
                 Image(systemName: "plus")
                     .font(.system(size: 24, weight: .semibold))
                     .frame(width: 48, height: 48)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                    .background(Color.accentColor.opacity(0.10), in: Circle())
                 Text("Добавить SSH-панель")
                     .font(.callout.weight(.semibold))
                 Text("Выбрать сервер или указать новый адрес")
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.58))
+                    .foregroundStyle(TerminalColorCodecView.color(appearance.palette.foreground).opacity(0.58))
                     .multilineTextAlignment(.center)
             }
-            .foregroundStyle(.white.opacity(0.82))
+            .foregroundStyle(TerminalColorCodecView.color(appearance.palette.foreground).opacity(0.82))
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(Color.white.opacity(0.025), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(Color.accentColor.opacity(0.025), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    Color.white.opacity(0.20),
+                    Color.accentColor.opacity(0.35),
                     style: StrokeStyle(lineWidth: 1.5, dash: [7, 6])
                 )
         }
@@ -1610,13 +1628,13 @@ struct SSHTerminalView: View {
             Text("Свободная Terminal-панель")
                 .font(.caption.weight(.semibold))
         }
-        .foregroundStyle(.white.opacity(0.34))
+        .foregroundStyle(TerminalColorCodecView.color(appearance.palette.foreground).opacity(0.45))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.white.opacity(0.018))
+        .background(Color.accentColor.opacity(0.018))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(
-                    Color.white.opacity(0.13),
+                    Color.accentColor.opacity(0.24),
                     style: StrokeStyle(lineWidth: 1, dash: [6, 6])
                 )
         }
@@ -1629,6 +1647,8 @@ struct SSHTerminalView: View {
         )
         let isSelected = tab.id == workspace.selectedTabID
         let state = sessionState(for: tab)
+        let highlight = TerminalPaneHighlight.resolve(selected: isSelected, state: state)
+        let paneForeground = TerminalColorCodecView.color(paneAppearance.theme.foreground)
         let broadcastTarget = broadcastsInput && tab.session.isRunning
 
         return VStack(spacing: 0) {
@@ -1661,15 +1681,15 @@ struct SSHTerminalView: View {
                         HStack(spacing: 5) {
                             Text(connectionHost(for: tab))
                                 .font(.caption2.monospaced())
-                                .foregroundStyle(.white.opacity(0.72))
+                                .foregroundStyle(paneForeground.opacity(0.72))
                                 .lineLimit(1)
                             if tab.session.startedAt != nil, state != .disconnected {
                                 Text("·")
-                                    .foregroundStyle(.white.opacity(0.42))
+                                    .foregroundStyle(paneForeground.opacity(0.42))
                                 TimelineView(.periodic(from: .now, by: 1)) { context in
                                     Text(uptimeText(for: tab, now: context.date))
                                         .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(.white.opacity(0.72))
+                                        .foregroundStyle(paneForeground.opacity(0.72))
                                 }
                             }
                         }
@@ -1725,10 +1745,10 @@ struct SSHTerminalView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
-                .foregroundStyle(.white)
+                .foregroundStyle(paneForeground)
                 .background(
                     isSelected
-                        ? Color.accentColor.opacity(0.22)
+                        ? Color.accentColor.opacity(highlight.headerTintOpacity)
                         : (broadcastTarget ? Color.orange.opacity(0.16) : color.opacity(0.14))
                 )
                 .overlay(alignment: .bottom) {
@@ -1741,6 +1761,15 @@ struct SSHTerminalView: View {
                         .frame(height: isSelected || broadcastTarget ? 2 : 1)
                 }
                 .contentShape(Rectangle())
+                .overlay(alignment: .leading) {
+                    if highlight.showsFocusIndicator {
+                        Capsule()
+                            .fill(Color.accentColor)
+                            .frame(width: 3)
+                            .padding(.vertical, 5)
+                            .accessibilityHidden(true)
+                    }
+                }
                 .onTapGesture { selectTabIfNeeded(tab.id) }
                 .draggable(tab.id.uuidString)
                 .dropDestination(for: String.self) { items, _ in
@@ -1834,10 +1863,10 @@ struct SSHTerminalView: View {
                                 .foregroundStyle(statusColor(for: state))
                             Text(state.localizedTitle())
                                 .font(.headline)
-                                .foregroundStyle(.white)
+                                .foregroundStyle(paneForeground)
                             Text(connectionLabel(for: tab))
                                 .font(.caption.monospaced())
-                                .foregroundStyle(.white.opacity(0.62))
+                                .foregroundStyle(paneForeground.opacity(0.62))
                                 .lineLimit(1)
                             if let detail = tab.session.failureMessage ?? state.detail {
                                 Text(detail)
@@ -1864,6 +1893,7 @@ struct SSHTerminalView: View {
             TerminalColorCodecView.color(paneAppearance.theme.background)
                 .opacity(paneAppearance.backgroundOpacity)
         )
+        .background(Color.accentColor.opacity(highlight.surfaceTintOpacity))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -1871,15 +1901,13 @@ struct SSHTerminalView: View {
                     isSelected
                         ? Color.accentColor
                         : (broadcastTarget ? Color.orange : color.opacity(0.65)),
-                    lineWidth: isSelected ? 3.5 : (broadcastTarget ? 3 : 1)
+                    lineWidth: broadcastTarget ? 2 : highlight.borderWidth
                 )
                 .allowsHitTesting(false)
         }
         .shadow(
-            color: isSelected
-                ? Color.accentColor.opacity(0.20)
-                : (broadcastTarget ? Color.orange.opacity(0.16) : Color.clear),
-            radius: isSelected || broadcastTarget ? 8 : 0
+            color: broadcastTarget ? Color.orange.opacity(0.11) : Color.clear,
+            radius: broadcastTarget ? 5 : 0
         )
     }
 
@@ -1908,10 +1936,10 @@ struct SSHTerminalView: View {
                     .foregroundStyle(.orange)
                 Text("Smart Reconnect · \(progress.attemptLabel)")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(TerminalColorCodecView.color(tab.appearance.snapshot.theme.foreground))
                 Text(progress.reason)
                     .font(.caption)
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(TerminalColorCodecView.color(tab.appearance.snapshot.theme.foreground).opacity(0.72))
                     .multilineTextAlignment(.center)
                 if let countdown = progress.countdownText(now: context.date) {
                     Text(countdown)
@@ -2288,6 +2316,7 @@ struct TerminalConnectionEditor: View {
 
     @State private var kind: TerminalTabConnection.Kind
     @State private var selectedProfileID: UUID?
+    @State private var showsSavedHostPicker = false
     @State private var host: String
     @State private var username: String
     @State private var port: Int
@@ -2360,16 +2389,35 @@ struct TerminalConnectionEditor: View {
             .pickerStyle(.segmented)
 
             if kind == .savedProfile {
-                Picker("Подключение", selection: $selectedProfileID) {
-                    ForEach(profiles) { profile in
-                        VStack(alignment: .leading) {
-                            Text(profile.friendlyName)
-                            Text(profile.host).foregroundStyle(.secondary)
-                        }
-                        .tag(Optional(profile.id))
+                Button {
+                    showsSavedHostPicker = true
+                } label: {
+                    HStack {
+                        Label(
+                            profiles.first(where: { $0.id == selectedProfileID })
+                                .map { $0.friendlyName.isEmpty ? $0.host : $0.friendlyName }
+                                ?? UpdateLocalization.text(ru: "Выберите Host", en: "Select Host"),
+                            systemImage: "server.rack"
+                        )
+                        Spacer()
+                        Image(systemName: "chevron.down")
+                            .foregroundStyle(.secondary)
                     }
                 }
-                .pickerStyle(.menu)
+                .popover(isPresented: $showsSavedHostPicker, arrowEdge: .bottom) {
+                    SelectiveRemoteHostSelectionBrowser(
+                        items: profiles.map(SelectiveRemoteHostSelectionItem.init(profile:)),
+                        mode: .single,
+                        scope: .personal,
+                        selection: Binding(
+                            get: { selectedProfileID.map { [$0] } ?? [] },
+                            set: { selectedProfileID = $0.first }
+                        ),
+                        onCommit: { showsSavedHostPicker = false },
+                        onCancel: { showsSavedHostPicker = false }
+                    )
+                    .frame(width: 400)
+                }
             } else if kind == .custom {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 12) {

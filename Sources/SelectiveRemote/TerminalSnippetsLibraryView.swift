@@ -223,23 +223,42 @@ struct TerminalSnippetsLibraryView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 5) {
-                Text("Сниппеты")
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                Text(scope == .personal
-                    ? UpdateLocalization.text(
-                        ru: "Личная библиотека команд · SSH и Локальный терминал используют одни Snippets",
-                        en: "Personal command library shared by SSH and Local Terminal"
-                    )
-                    : UpdateLocalization.text(
-                        ru: "Зашифрованные Team Snippets · отдельно от личной библиотеки",
-                        en: "Encrypted Team Snippets, kept separate from your personal library"
-                    )
-                )
-                    .foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 16) {
+                headerTitle
+                    .frame(minWidth: 300, maxWidth: 520, alignment: .leading)
+                Spacer(minLength: 8)
+                headerActions
             }
-            Spacer()
+            VStack(alignment: .leading, spacing: 12) {
+                headerTitle
+                headerActions
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.vertical, 22)
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"))
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+            Text(scope == .personal
+                ? UpdateLocalization.text(
+                    ru: "Личная библиотека команд · SSH и Локальный терминал используют одни Snippets",
+                    en: "Personal command library shared by SSH and Local Terminal"
+                )
+                : UpdateLocalization.text(
+                    ru: "Зашифрованные Team Snippets · отдельно от личной библиотеки",
+                    en: "Encrypted Team Snippets, kept separate from your personal library"
+                )
+            )
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    private var headerActions: some View {
+        HStack(spacing: 9) {
             Picker(
                 UpdateLocalization.text(ru: "Область", en: "Scope"),
                 selection: Binding(get: { scope }, set: { scope = $0 })
@@ -301,8 +320,6 @@ struct TerminalSnippetsLibraryView: View {
             }
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 28)
-        .padding(.vertical, 22)
     }
 
     private var libraryBrowser: some View {
@@ -952,7 +969,13 @@ private struct TerminalSnippetEditorView: View {
                 ?? preferredGroupID
                 ?? TerminalCommandTemplate.legacyUnassignedGroupID
         )
-        _targets = State(initialValue: Set(snippet?.targets ?? []))
+        let availableIDs = Set(profiles.map(\.id))
+        _targets = State(initialValue: Set((snippet?.targets ?? []).filter { target in
+            switch target {
+            case .localTerminal: return true
+            case let .sshProfile(id): return availableIDs.contains(id)
+            }
+        }))
     }
 
     var body: some View {
@@ -984,17 +1007,24 @@ private struct TerminalSnippetEditorView: View {
                         Label("Локальный терминал", systemImage: "terminal")
                     }
                     .disabled(!targets.contains(.localTerminal) && targets.count >= 8)
-                    ForEach(profiles) { profile in
-                        Toggle(isOn: targetBinding(.sshProfile(profile.id))) {
-                            VStack(alignment: .leading) {
-                                Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
-                                Text(profile.host)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
+                    SelectiveRemoteHostSelectionBrowser(
+                        items: profiles.map(SelectiveRemoteHostSelectionItem.init(profile:)),
+                        mode: .multi,
+                        scope: .personal,
+                        selection: Binding(
+                            get: {
+                                Set(targets.compactMap { target in
+                                    if case let .sshProfile(id) = target { return id }
+                                    return nil
+                                })
+                            },
+                            set: { ids in
+                                targets = Set(ids.map(TerminalSnippetTarget.sshProfile))
+                                    .union(targets.contains(.localTerminal) ? [.localTerminal] : [])
                             }
-                        }
-                        .disabled(!targets.contains(.sshProfile(profile.id)) && targets.count >= 8)
-                    }
+                        ),
+                        selectionLimit: targets.contains(.localTerminal) ? 7 : 8
+                    )
                 }
 
                 if !saveError.isEmpty {

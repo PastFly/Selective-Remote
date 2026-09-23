@@ -129,7 +129,9 @@ struct ContentView: View {
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.hosts
-    @State private var hostScope = HostScope.personal
+    @State private var hostScope = HostScope(rawValue:
+        UserDefaults.standard.string(forKey: "SelectiveRemote.host-shelf.scope.v1") ?? ""
+    ) ?? .personal
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
@@ -145,7 +147,9 @@ struct ContentView: View {
     @State private var showsCloudOnboarding = false
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
-    @State private var selectedTeamHostID: UUID?
+    @State private var selectedTeamHostID = UserDefaults.standard
+        .string(forKey: "SelectiveRemote.host-shelf.team-selection.v1")
+        .flatMap(UUID.init(uuidString:))
     @State private var requestedTeamHostAction: SelectiveRemoteTeamHostActionRequest?
     @State private var hostScopePresentationID = UUID()
     @State private var personalHostSidebarPresentationID = UUID()
@@ -165,14 +169,14 @@ struct ContentView: View {
     @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
     private var teamHostSortMode = SelectiveRemoteTeamHostSortMode.manual
     @State private var personalHostDropTargetID: UUID?
+    @State private var sidebarTeamDropTargetID: String?
+    @State private var sidebarTeamMutationInProgress = false
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
     @AppStorage("SelectiveRemote.personal-host.detail-visible.v1")
     private var personalHostDetailVisible = true
     @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
     private var sidebarHostQuickAccessVisible = true
-    @AppStorage("SelectiveRemote.sidebar-host-scope-picker-visible.v1")
-    private var sidebarHostScopePickerVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -180,6 +184,8 @@ struct ContentView: View {
     )
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var cloudEndpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1")
+    private var cloudDeviceID = ""
 
     private let cloudClient = SelectiveRemoteCloudAPIClient()
 
@@ -191,7 +197,7 @@ struct ContentView: View {
     ]
 
     private var showsHostQuickAccess: Bool {
-        sidebarHostQuickAccessVisible && mainArea != .hosts
+        sidebarHostQuickAccessVisible
     }
 
     private var profile: ConnectionProfile { model.selectedProfile }
@@ -248,6 +254,17 @@ struct ContentView: View {
         .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
+        .onChange(of: hostScope) { _, scope in
+            UserDefaults.standard.set(
+                scope.rawValue, forKey: "SelectiveRemote.host-shelf.scope.v1"
+            )
+        }
+        .onChange(of: selectedTeamHostID) { _, id in
+            UserDefaults.standard.set(
+                id?.uuidString,
+                forKey: "SelectiveRemote.host-shelf.team-selection.v1"
+            )
+        }
         .alert("Ошибка", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -592,15 +609,6 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
-            } else if sidebarHostQuickAccessVisible {
-                // Hosts owns its search field in the navigator column. Keep the
-                // same reserved sidebar height so the primary navigation does
-                // not jump when moving between Hosts and another workspace.
-                Color.clear
-                    .frame(height: 38)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-                    .accessibilityHidden(true)
             }
 
             VStack(spacing: 5) {
@@ -688,19 +696,11 @@ struct ContentView: View {
                     Section(UpdateLocalization.text(ru: "Боковая панель", en: "Sidebar")) {
                         Toggle(
                             UpdateLocalization.text(
-                                ru: "Показывать быстрый список Hosts",
-                                en: "Show Quick Host List"
+                                ru: "Показывать Host Shelf",
+                                en: "Show Host Shelf"
                             ),
                             isOn: $sidebarHostQuickAccessVisible
                         )
-                        Toggle(
-                            UpdateLocalization.text(
-                                ru: "Показывать Personal / Team",
-                                en: "Show Personal / Team"
-                            ),
-                            isOn: $sidebarHostScopePickerVisible
-                        )
-                        .disabled(!sidebarHostQuickAccessVisible)
                     }
                 } label: {
                     HStack(spacing: 10) {
@@ -724,8 +724,7 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            if showsHostQuickAccess && sidebarHostScopePickerVisible
-                && (cloudSessionAvailable || !teamHosts.hosts.isEmpty) {
+            if showsHostQuickAccess {
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -977,9 +976,13 @@ struct ContentView: View {
                     switch outline.kind {
                     case let .folder(path, name):
                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                            .draggable("personal-folder:\(path)")
                             .font(.headline)
-                            .dropDestination(for: String.self) { values, _ in
-                                movePersonalProfile(values, toFolder: path)
+                            .dropDestination(for: String.self) { values, location in
+                                movePersonalProfile(
+                                    values, toFolder: path,
+                                    beforeFolder: location.y < 12 ? path : nil
+                                )
                             }
                     case let .profile(item):
                         Button {
@@ -1041,16 +1044,23 @@ struct ContentView: View {
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(model.profileGroups) { group in
+                    ForEach(personalGridGroups) { group in
                         VStack(alignment: .leading, spacing: 8) {
+                            let groupPath: String = {
+                                if case let .named(path) = group.id { return path }
+                                return ""
+                            }()
                             Text(group.name)
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
-                                .dropDestination(for: String.self) { values, _ in
+                                .draggable("personal-folder:\(groupPath)")
+                                .dropDestination(for: String.self) { values, location in
                                     movePersonalProfile(
                                         values,
-                                        toFolder: group.profiles.first?.group ?? ""
+                                        toFolder: groupPath,
+                                        beforeFolder: location.y < 12
+                                            ? groupPath : nil
                                     )
                                 }
                             LazyVGrid(
@@ -1092,6 +1102,33 @@ struct ContentView: View {
                 .padding(.vertical, 10)
             }
         }
+    }
+
+    private var personalGridGroups: [ProfileGroupSection] {
+        let groups = model.profileGroups
+        var byPath: [String: ProfileGroupSection] = [:]
+        var ungrouped: ProfileGroupSection?
+        for group in groups {
+            switch group.id {
+            case .ungrouped:
+                ungrouped = group
+            case let .named(path):
+                byPath[path] = group
+                let parts = SelectiveRemoteHostFolderPath.components(path)
+                for depth in 1 ..< parts.count {
+                    let prefix = parts.prefix(depth).joined(separator: "/")
+                    if byPath[prefix] == nil {
+                        byPath[prefix] = .init(name: prefix, profiles: [])
+                    }
+                }
+            }
+        }
+        let ordered = byPath.keys.sorted {
+            SelectiveRemoteHostFolderOrganizer.folderComesBefore(
+                $0, $1, profiles: groups.flatMap(\.profiles)
+            )
+        }.compactMap { byPath[$0] }
+        return ungrouped.map { [$0] + ordered } ?? ordered
     }
 
     private var sidebarHostSearchBinding: Binding<String> {
@@ -1139,11 +1176,10 @@ struct ContentView: View {
     }
 
     private func sidebarTeamFolders(_ teamID: UUID) -> [String] {
-        Array(Set(visibleSidebarTeamHosts.filter { $0.teamID == teamID }.map {
-            $0.profile.group
-        })).sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }
+        SelectiveRemoteHostFolderOrganizer.visibleFolderPaths(
+            profiles: visibleSidebarTeamHosts.filter { $0.teamID == teamID }
+                .map(\.profile)
+        )
     }
 
     private func sidebarTeamOutlineItems(
@@ -1192,10 +1228,30 @@ struct ContentView: View {
                                     name,
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
+                                .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
+                                            ? Color.accentColor.opacity(0.14) : Color.clear)
+                                .dropDestination(for: String.self) { values, location in
+                                    sidebarTeamDropTargetID = nil
+                                    return moveSidebarTeamItem(
+                                        values, toFolder: path, teamID: teamID,
+                                        beforeFolder: location.y < 12 ? path : nil
+                                    )
+                                } isTargeted: { targeted in
+                                    sidebarTeamDropTargetID = targeted
+                                        ? "\(teamID.uuidString):\(path)" : nil
+                                }
                             case let .host(host):
                                 teamHostSidebarRow(host)
                                     .tag(host.id)
                                     .contextMenu { teamHostContextMenu(host) }
+                                    .draggable("team-host:\(host.id.uuidString)")
+                                    .dropDestination(for: String.self) { values, _ in
+                                        moveSidebarTeamItem(
+                                            values, toFolder: host.profile.group,
+                                            teamID: teamID, before: host.id
+                                        )
+                                    }
                             }
                         }
                     } label: {
@@ -1225,6 +1281,13 @@ struct ContentView: View {
                                 )
                                 .font(.caption2.bold())
                                 .foregroundStyle(.secondary)
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: folder))
+                                .dropDestination(for: String.self) { values, location in
+                                    moveSidebarTeamItem(
+                                        values, toFolder: folder, teamID: teamID,
+                                        beforeFolder: location.y < 12 ? folder : nil
+                                    )
+                                }
 
                                 LazyVGrid(
                                     columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
@@ -1241,6 +1304,13 @@ struct ContentView: View {
                                         .buttonStyle(.plain)
                                         .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
+                                        .draggable("team-host:\(host.id.uuidString)")
+                                        .dropDestination(for: String.self) { values, _ in
+                                            moveSidebarTeamItem(
+                                                values, toFolder: host.profile.group,
+                                                teamID: teamID, before: host.id
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1258,13 +1328,21 @@ struct ContentView: View {
             openTeamHostCard(host)
         } label: {
             VStack(alignment: .leading, spacing: 3) {
-                Label(
-                    host.profile.friendlyName.isEmpty
-                        ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
-                        : host.profile.friendlyName,
-                    systemImage: host.profile.connectionType.systemImage
-                )
-                .font(.headline)
+                HStack(spacing: 6) {
+                    Label(
+                        host.profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                            : host.profile.friendlyName,
+                        systemImage: host.profile.connectionType.systemImage
+                    )
+                    .font(.headline)
+                    if model.isSSHTerminalRunning(profileID: host.id) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(.green)
+                            .accessibilityLabel(UpdateLocalization.text(ru: "Активная сессия", en: "Active Session"))
+                    }
+                }
                 Text("\(host.vaultName) · \(host.profile.connectionType.title)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1294,6 +1372,11 @@ struct ContentView: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if model.isSSHTerminalRunning(profileID: host.id) {
+                Label(UpdateLocalization.text(ru: "Активно", en: "Active"), systemImage: "circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
         .padding(9)
@@ -1418,6 +1501,110 @@ struct ContentView: View {
         }
     }
 
+    private func sidebarTeamFolderDragValue(teamID: UUID, path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let vaultIDs = Set(teamHosts.hosts.filter {
+            $0.teamID == teamID
+                && ($0.profile.group == path || $0.profile.group.hasPrefix(path + "/"))
+        }.map(\.vaultID))
+        guard vaultIDs.count == 1, let vaultID = vaultIDs.first else { return "" }
+        return "team-folder:\(vaultID.uuidString):\(path)"
+    }
+
+    private func moveSidebarTeamItem(
+        _ values: [String], toFolder rawFolder: String, teamID: UUID,
+        beforeFolder: String? = nil, before targetID: UUID? = nil
+    ) -> Bool {
+        guard !sidebarTeamMutationInProgress, let value = values.first else { return false }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        let scopedHosts: [SelectiveRemoteTeamHost]
+        let selectedRecordID: UUID
+        let updatedProfiles: [ConnectionProfile]
+
+        if value.hasPrefix("team-folder:") {
+            let suffix = String(value.dropFirst("team-folder:".count))
+            guard suffix.count > 37,
+                  let vaultID = UUID(uuidString: String(suffix.prefix(36))),
+                  suffix[suffix.index(suffix.startIndex, offsetBy: 36)] == ":"
+            else { return false }
+            let source = String(suffix.dropFirst(37))
+            scopedHosts = teamHosts.hosts.filter {
+                $0.teamID == teamID && $0.vaultID == vaultID
+            }
+            guard let selected = scopedHosts.first(where: {
+                $0.profile.group == source || $0.profile.group.hasPrefix(source + "/")
+            }) else { return false }
+            selectedRecordID = selected.recordID
+            let parent = beforeFolder == nil ? folder
+                : folder.split(separator: "/").dropLast().joined(separator: "/")
+            guard parent.isEmpty || scopedHosts.contains(where: {
+                $0.profile.group == parent || $0.profile.group.hasPrefix(parent + "/")
+            }), let arranged = try? SelectiveRemoteHostFolderOrganizer.move(
+                profiles: scopedHosts.map(\.profile), folder: source,
+                toParent: parent, before: beforeFolder
+            ) else { return false }
+            updatedProfiles = arranged
+        } else if value.hasPrefix("team-host:"),
+                  let hostID = UUID(uuidString: String(value.dropFirst("team-host:".count))),
+                  let host = teamHosts.hosts.first(where: { $0.id == hostID }),
+                  host.teamID == teamID {
+            scopedHosts = teamHosts.hosts.filter {
+                $0.teamID == host.teamID && $0.vaultID == host.vaultID
+            }
+            guard targetID != hostID,
+                  targetID == nil || scopedHosts.contains(where: { $0.id == targetID }),
+                  folder.isEmpty || scopedHosts.contains(where: {
+                      $0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/")
+                  }) else { return false }
+            selectedRecordID = host.recordID
+            guard let arranged = SelectiveRemoteHostOrder.move(
+                profiles: scopedHosts.map(\.profile), profileID: host.id,
+                toFolder: folder, before: targetID
+            ) else { return false }
+            updatedProfiles = arranged
+        } else { return false }
+
+        guard let source = scopedHosts.first,
+              let context = teamHosts.vaults.first(where: {
+                  $0.teamID == source.teamID && $0.vaultID == source.vaultID
+              }),
+              SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
+        else { return false }
+        let updates = zip(scopedHosts, updatedProfiles).compactMap { host, profile in
+            host.profile == profile ? nil
+                : SelectiveRemoteTeamHostOrganizationUpdate(
+                    recordID: host.recordID, profile: profile
+                )
+        }
+        guard !updates.isEmpty else { return false }
+        sidebarTeamMutationInProgress = true
+        teamHostSortMode = .manual
+        Task { @MainActor in
+            defer { sidebarTeamMutationInProgress = false }
+            do {
+                let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+                let deviceID = UUID(uuidString: cloudDeviceID)
+                    .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
+                cloudDeviceID = deviceID.canonicalCloudString
+                let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
+                    .identity(endpoint: endpoint, deviceID: deviceID)
+                let service = try SelectiveRemoteTeamHostMutationService()
+                let snapshot = try await service.apply(
+                    .organize(updates), to: context, endpoint: endpoint,
+                    identity: identity
+                )
+                teamHosts.replaceVault(with: snapshot)
+                selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                    teamID: context.teamID, vaultID: context.vaultID,
+                    recordID: selectedRecordID
+                )
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+        return true
+    }
+
     private func sidebarTeamExpansionBinding(_ teamID: UUID) -> Binding<Bool> {
         Binding(
             get: { expandedSidebarTeamIDs.contains(teamID) },
@@ -1469,8 +1656,10 @@ struct ContentView: View {
     }
 
     private var personalHostsManagementDetail: some View {
-        HSplitView {
-            if personalHostNavigatorVisible {
+        GeometryReader { available in
+          HSplitView {
+            if personalHostNavigatorVisible
+                && (available.size.width >= 820 || !personalHostDetailVisible) {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1550,13 +1739,16 @@ struct ContentView: View {
                 )
             }
 
-            if personalHostDetailVisible {
+            if personalHostDetailVisible || !personalHostNavigatorVisible {
                 profileDetail
-                    .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: min(520, available.size.width), maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
-                        if !personalHostNavigatorVisible {
+                        if !personalHostNavigatorVisible || available.size.width < 820 {
                             Button {
                                 personalHostNavigatorVisible = true
+                                if available.size.width < 820 {
+                                    personalHostDetailVisible = false
+                                }
                             } label: {
                                 Label(
                                     UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
@@ -1573,6 +1765,7 @@ struct ContentView: View {
                         }
                     }
             }
+          }
         }
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
@@ -1682,7 +1875,7 @@ struct ContentView: View {
     ) -> Bool {
         switch surface {
         case .sidebar:
-            return mainArea != .hosts || !personalHostNavigatorVisible
+            return true
         case .navigator:
             return true
         }
@@ -1813,6 +2006,7 @@ struct ContentView: View {
 
     private func openProfile(_ profileID: UUID) {
         model.selectProfile(profileID)
+        personalHostDetailVisible = true
         openPersonalHosts()
     }
 
@@ -1827,10 +2021,21 @@ struct ContentView: View {
     private func movePersonalProfile(
         _ values: [String],
         toFolder folder: String,
-        before targetID: UUID? = nil
+        before targetID: UUID? = nil,
+        beforeFolder: String? = nil
     ) -> Bool {
-        guard let value = values.first,
-              value.hasPrefix("personal-host:"),
+        guard let value = values.first else { return false }
+        if value.hasPrefix("personal-folder:") {
+            let source = String(value.dropFirst("personal-folder:".count))
+            let parent: String
+            if beforeFolder != nil {
+                parent = folder.split(separator: "/").dropLast().joined(separator: "/")
+            } else {
+                parent = folder
+            }
+            return model.moveProfileFolder(source, toParent: parent, before: beforeFolder)
+        }
+        guard value.hasPrefix("personal-host:"),
               let profileID = UUID(uuidString: String(value.dropFirst("personal-host:".count)))
         else { return false }
         model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)

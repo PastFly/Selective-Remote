@@ -638,7 +638,9 @@ struct SelectiveRemoteTeamSnippetsView: View {
             }
             .padding(.horizontal, 12)
             .frame(height: 38)
+            .frame(maxWidth: 560, alignment: .leading)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack {
                 Menu {
@@ -945,6 +947,31 @@ struct SelectiveRemoteTeamSnippetsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
 
+            if !actionMessage.isEmpty {
+                Text(actionMessage)
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Color.accentColor)
+            }
+
+            ScrollView {
+                Text(snippet.body)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(18)
+            }
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+
+            Label(
+                UpdateLocalization.text(
+                    ru: "Команда показывается только в памяти после расшифровки Team Vault. Она не запускается автоматически: копирование и запуск выполняются только по вашему нажатию.",
+                    en: "The command exists only in memory after Team Vault decryption. It never runs automatically; copying and running require your explicit action."
+                ),
+                systemImage: "lock.shield"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
             GroupBox(UpdateLocalization.text(ru: "Назначенные хосты", en: "Assigned Targets")) {
                 VStack(alignment: .leading, spacing: 8) {
                     let profiles = targetProfiles(for: snippet)
@@ -973,11 +1000,21 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 .padding(8)
             }
 
-            if !actionMessage.isEmpty {
-                Text(actionMessage)
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(Color.accentColor)
+            Button {
+                run(snippet)
+            } label: {
+                Label(
+                    UpdateLocalization.text(
+                        ru: "Запустить на \(targetProfiles(for: snippet).count) хостах",
+                        en: "Run on \(targetProfiles(for: snippet).count) Targets"
+                    ),
+                    systemImage: "play.fill"
+                )
+                .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(targetProfiles(for: snippet).isEmpty)
 
             if let summary = model.latestSnippetRun, summary.snippetID == snippet.id {
                 GroupBox(UpdateLocalization.text(ru: "Последний запуск", en: "Latest Run")) {
@@ -998,41 +1035,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     .padding(8)
                 }
             }
-
-            ScrollView {
-                Text(snippet.body)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(18)
-            }
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
-
-            Label(
-                UpdateLocalization.text(
-                    ru: "Команда показывается только в памяти после расшифровки Team Vault. Она не запускается автоматически: копирование и запуск выполняются только по вашему нажатию.",
-                    en: "The command exists only in memory after Team Vault decryption. It never runs automatically; copying and running require your explicit action."
-                ),
-                systemImage: "lock.shield"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-
-            Button {
-                run(snippet)
-            } label: {
-                Label(
-                    UpdateLocalization.text(
-                        ru: "Запустить на \(targetProfiles(for: snippet).count) хостах",
-                        en: "Run on \(targetProfiles(for: snippet).count) Targets"
-                    ),
-                    systemImage: "play.fill"
-                )
-                .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(targetProfiles(for: snippet).isEmpty)
         }
         .padding(24)
     }
@@ -1436,7 +1438,9 @@ private struct SelectiveRemoteTeamSnippetTargetsEditor: View {
         self.snippet = snippet
         self.profiles = profiles
         self.onSave = onSave
-        _selectedProfileIDs = State(initialValue: Set(selectedProfileIDs))
+        _selectedProfileIDs = State(initialValue:
+            Set(selectedProfileIDs).intersection(Set(profiles.map(\.id)))
+        )
     }
 
     var body: some View {
@@ -1464,18 +1468,13 @@ private struct SelectiveRemoteTeamSnippetTargetsEditor: View {
                     ))
                 )
             } else {
-                List(profiles) { profile in
-                    Toggle(isOn: targetBinding(profile.id)) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(profile.friendlyName.isEmpty ? profile.host : profile.friendlyName)
-                            Text(profile.host)
-                                .font(.caption.monospaced())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    .toggleStyle(.checkbox)
-                }
-                .listStyle(.inset)
+                SelectiveRemoteHostSelectionBrowser(
+                    items: profiles.map(SelectiveRemoteHostSelectionItem.init(profile:)),
+                    mode: .multi,
+                    scope: .personal,
+                    selection: $selectedProfileIDs,
+                    onCancel: { dismiss() }
+                )
             }
 
             HStack {
@@ -1496,18 +1495,6 @@ private struct SelectiveRemoteTeamSnippetTargetsEditor: View {
         .frame(minWidth: 560, minHeight: 520)
     }
 
-    private func targetBinding(_ profileID: UUID) -> Binding<Bool> {
-        Binding(
-            get: { selectedProfileIDs.contains(profileID) },
-            set: { selected in
-                if selected {
-                    selectedProfileIDs.insert(profileID)
-                } else {
-                    selectedProfileIDs.remove(profileID)
-                }
-            }
-        )
-    }
 }
 
 private extension SelectiveRemoteCloudTeamRole {
