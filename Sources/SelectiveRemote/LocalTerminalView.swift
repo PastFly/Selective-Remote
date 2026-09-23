@@ -41,17 +41,14 @@ struct LocalTerminalView: View {
             terminalWithInspector
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .frame(minHeight: 320)
-            Text(
-                "Локальный терминал запускает login shell текущего пользователя внутри псевдотерминала. "
-                    + "История хранится только на этом Mac; строки с признаками секретов не сохраняются."
-            )
+            Text(UpdateLocalization.key("terminal.local.description"))
             .font(.caption)
             .foregroundStyle(.secondary)
         }
         .padding(18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Локальный терминал")
+        .accessibilityLabel(UpdateLocalization.key("terminal.local.accessibility"))
         .alert("Переименовать вкладку", isPresented: Binding(
             get: { renameTabID != nil },
             set: { if !$0 { renameTabID = nil } }
@@ -96,7 +93,8 @@ struct LocalTerminalView: View {
                     .font(.title3)
             }
             .buttonStyle(.borderedProminent)
-            .help(selectedTab.session.isRunning ? "Перезапустить shell" : "Запустить shell")
+            .help(UpdateLocalization.key(selectedTab.session.isRunning
+                ? "terminal.local.restart" : "terminal.local.start"))
 
             Button {
                 showsSnippets = false
@@ -254,7 +252,7 @@ struct LocalTerminalView: View {
                                 renameValue = tab.title
                                 renameTabID = tab.id
                             }
-                            Button(tab.isPinned ? "Открепить" : "Закрепить", systemImage: "pin") {
+                            Button(UpdateLocalization.key(tab.isPinned ? "terminal.local.unpin" : "terminal.local.pin"), systemImage: "pin") {
                                 workspace.togglePinned(tab.id)
                             }
                             if !tab.isPrimary && !tab.isPinned {

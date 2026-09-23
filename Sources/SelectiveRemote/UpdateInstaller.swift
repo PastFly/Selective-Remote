@@ -16,6 +16,11 @@ enum UpdateLocalization {
         usesEnglish ? en : ru
     }
 
+    static func key(_ key: String, english: Bool = usesEnglish) -> String {
+        guard let copy = AppCopy.translations[key] else { return key }
+        return english ? copy.en : copy.ru
+    }
+
     static var locale: Locale {
         Locale(identifier: usesEnglish ? "en_US" : "ru_RU")
     }

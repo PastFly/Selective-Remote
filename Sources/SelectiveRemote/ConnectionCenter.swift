@@ -900,11 +900,14 @@ struct ConnectionCenterView: View {
             Circle()
                 .fill(.green)
                 .frame(width: 7, height: 7)
-            Text("Обновлено только что")
+            Text(UpdateLocalization.key("connection.updated.just_now"))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text("\(items.count) подключений")
+            Text(UpdateLocalization.text(
+                ru: "Подключений: \(items.count)",
+                en: "Connections: \(items.count)"
+            ))
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
         }

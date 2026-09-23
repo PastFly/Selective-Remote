@@ -521,21 +521,21 @@ struct ForwardingManagerView: View {
             statCard(
                 title: "Активные туннели",
                 value: snapshot.activeCount,
-                detail: "из \(snapshot.items.count) всего",
+                detail: UpdateLocalization.text(ru: "из \(snapshot.items.count) всего", en: "of \(snapshot.items.count) total"),
                 systemImage: "arrow.left.arrow.right",
                 color: .green
             )
             statCard(
                 title: "Profile tunnel",
                 value: snapshot.profileActiveCount,
-                detail: "из \(snapshot.profileCount) всего",
+                detail: UpdateLocalization.text(ru: "из \(snapshot.profileCount) всего", en: "of \(snapshot.profileCount) total"),
                 systemImage: "person.crop.square",
                 color: .blue
             )
             statCard(
                 title: "Independent tunnel",
                 value: snapshot.independentActiveCount,
-                detail: "из \(snapshot.independentCount) всего",
+                detail: UpdateLocalization.text(ru: "из \(snapshot.independentCount) всего", en: "of \(snapshot.independentCount) total"),
                 systemImage: "shippingbox",
                 color: .indigo
             )

@@ -123,7 +123,9 @@ struct ProfileOrganizationAndSecurityTests {
         let content = try source("Sources/SelectiveRemote/ContentView.swift")
 
         #expect(app.components(separatedBy: "AppLockGate(store: appLock)").count == 3)
-        #expect(app.contains("Заблокировать Selective Remote"))
+        #expect(app.contains("UpdateLocalization.key(\"menu.session.lock\")"))
+        #expect(UpdateLocalization.key("menu.session.lock", english: false) == "Заблокировать Selective Remote")
+        #expect(UpdateLocalization.key("menu.session.lock", english: true) == "Lock Selective Remote")
         #expect(app.contains("if appLock.isLocked"))
         #expect(lock.contains("deviceOwnerAuthenticationWithBiometrics"))
         #expect(lock.contains("try await context.evaluatePolicy"))

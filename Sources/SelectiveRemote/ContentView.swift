@@ -938,7 +938,9 @@ struct ContentView: View {
                             )
                         }
                         .buttonStyle(.plain)
-                        .help(selected ? "Убрать тег из фильтра" : "Фильтровать по тегу «\(tag)»")
+                        .help(selected
+                            ? UpdateLocalization.text(ru: "Убрать тег из фильтра", en: "Remove tag from filter")
+                            : UpdateLocalization.text(ru: "Фильтровать по тегу «\(tag)»", en: "Filter by tag ‘\(tag)’"))
                     }
                 }
                 .padding(.horizontal, 14)
@@ -1931,8 +1933,8 @@ struct ContentView: View {
         } else {
             Button(
                 item.connectionType == .rdp
-                    ? "Подключить RDP"
-                    : "Подключить \(item.connectionType.title)",
+                    ? UpdateLocalization.text(ru: "Подключить RDP", en: "Connect RDP")
+                    : UpdateLocalization.text(ru: "Подключить \(item.connectionType.title)", en: "Connect \(item.connectionType.title)"),
                 systemImage: item.connectionType == .rdp ? "play.fill" : "terminal"
             ) {
                 model.selectProfile(item.id)
@@ -1986,7 +1988,9 @@ struct ContentView: View {
                         options: [.caseInsensitive, .diacriticInsensitive]
                     ) == .orderedSame
                 }
-                Button(assigned ? "Убрать «\(tag)»" : "Добавить «\(tag)»") {
+                Button(assigned
+                    ? UpdateLocalization.text(ru: "Убрать «\(tag)»", en: "Remove ‘\(tag)’")
+                    : UpdateLocalization.text(ru: "Добавить «\(tag)»", en: "Add ‘\(tag)’")) {
                     if assigned {
                         model.removeProfileTag(tag, from: item.id)
                     } else {
@@ -2061,6 +2065,9 @@ struct ContentView: View {
                         onShowPersonal: {
                             hostScope = .personal
                             refreshHostPresentations()
+                        },
+                        onShowDiagnostics: {
+                            setMainArea(.diagnostics)
                         }
                     )
                     .id("team-host-detail-\(hostScopePresentationID)")
@@ -4248,15 +4255,15 @@ struct ContentView: View {
     private var authModeHint: String {
         switch profileBinding.wrappedValue.sshAuthenticationMode {
         case .automatic:
-            "OpenSSH попробует выбранный ключ, ssh-agent и затем пароль. Удобно для совместимости."
+            UpdateLocalization.key("hosts.auth.automatic.help")
         case .password:
-            "Используется только SSH-пароль. Public key authentication отключена."
+            UpdateLocalization.key("hosts.auth.password.help")
         case .key:
-            "Используется только выбранный SSH-ключ. Пароль не будет fallback-вариантом."
+            UpdateLocalization.key("hosts.auth.key.help")
         case .touchIDKey:
-            "Touch ID Key — отдельный тип входа: используется только ECDSA-ключ и перед каждым использованием требуется Touch ID. На сервер устанавливается обычный публичный ECDSA-ключ."
+            UpdateLocalization.key("hosts.auth.touch_id.help")
         case .agent:
-            "Используются только системный ssh-agent и ~/.ssh/config."
+            UpdateLocalization.key("hosts.auth.agent.help")
         }
     }
 
@@ -4445,7 +4452,7 @@ struct ContentView: View {
 
                 if profileBinding.wrappedValue.sshAuthenticationMode == .agent {
                     Label(
-                        "Selective Remote использует системный ssh-agent и ~/.ssh/config. Пароль и выбранный SSH ID профиля не передаются OpenSSH.",
+                        UpdateLocalization.key("hosts.auth.agent.detail"),
                         systemImage: "terminal.fill"
                     )
                     .font(.caption)
@@ -4583,8 +4590,8 @@ struct ContentView: View {
                     }
                     Label(
                         profileBinding.wrappedValue.sshProxyMode == .http
-                            ? "HTTP CONNECT: Basic-аутентификация выполняется защищённым helper-процессом; пароль не попадает в аргументы OpenSSH."
-                            : "SOCKS5: поддерживаются анонимный режим и username/password; пароль хранится в Keychain и передаётся helper-процессу через временный файл 0600.",
+                            ? UpdateLocalization.key("hosts.proxy.http.help")
+                            : UpdateLocalization.key("hosts.proxy.socks.help"),
                         systemImage: "lock.shield"
                     )
                     .font(.caption)
@@ -5313,8 +5320,8 @@ struct ContentView: View {
                 } label: {
                     Label(
                         profile.connectionType == .rdp
-                            ? "Подключиться"
-                            : "Открыть \(profile.connectionType.title)",
+                            ? UpdateLocalization.text(ru: "Подключиться", en: "Connect")
+                            : UpdateLocalization.text(ru: "Открыть \(profile.connectionType.title)", en: "Open \(profile.connectionType.title)"),
                         systemImage: profile.connectionType != .rdp
                             ? "terminal"
                             : "arrow.right.circle.fill"
@@ -5629,9 +5636,9 @@ private struct ProfileRow: View {
                 Text(
                     session?.phase.rawValue
                         ?? (hasActiveSSH
-                            ? "SSH-сессия активна"
+                            ? UpdateLocalization.text(ru: "SSH-сессия активна", en: "SSH session active")
                             : activeTunnelCount > 0
-                            ? "Туннелей: \(activeTunnelCount)"
+                            ? UpdateLocalization.text(ru: "Туннелей: \(activeTunnelCount)", en: "Tunnels: \(activeTunnelCount)")
                             : inactiveProfileSubtitle)
                 )
                     .font(.caption)

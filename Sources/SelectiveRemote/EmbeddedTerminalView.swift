@@ -2423,8 +2423,8 @@ struct TerminalConnectionEditor: View {
                 Text(
                     customAuthenticationMessage
                         ?? (allowsInteractivePassword
-                            ? "Для временного подключения используется системный ssh-agent и ~/.ssh/config; при необходимости OpenSSH запросит пароль отдельно."
-                            : "Для временного фонового подключения используйте SSH-ключ, системный ssh-agent или ~/.ssh/config. Для пароля сохраните подключение как SSH-профиль.")
+                            ? UpdateLocalization.key("terminal.remote.temporary_interactive_help")
+                            : UpdateLocalization.key("terminal.remote.temporary_background_help"))
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)

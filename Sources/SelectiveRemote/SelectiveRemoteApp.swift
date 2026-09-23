@@ -91,7 +91,10 @@ private struct SFTPMenuBarTransferControls: View {
     var body: some View {
     if workspace.hasTransferItems {
         Divider()
-        Text("SFTP-передачи: \(workspace.activeTransferCount) активных")
+        Text(UpdateLocalization.text(
+            ru: "SFTP-передачи: \(workspace.activeTransferCount) активных",
+            en: "SFTP transfers: \(workspace.activeTransferCount) active"
+        ))
         if workspace.hasPausedTransfers {
             Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
                 workspace.resumeAllTransfers()
@@ -211,7 +214,7 @@ struct SelectiveRemoteApp: App {
                 }
             }
             CommandGroup(replacing: .newItem) {
-                Button("Новая вкладка терминала", systemImage: "terminal") {
+                Button(UpdateLocalization.key("menu.terminal.new_tab"), systemImage: "terminal") {
                     NotificationCenter.default.post(
                         name: .selectiveRemoteNewLocalTerminal,
                         object: nil
@@ -221,16 +224,16 @@ struct SelectiveRemoteApp: App {
                 .disabled(appLock.isLocked)
             }
             CommandGroup(replacing: .help) {
-                Button("Что нового…", systemImage: "sparkles") {
+                Button(UpdateLocalization.key("menu.whats_new"), systemImage: "sparkles") {
                     model.openInstalledReleaseNotes()
                 }
                 Divider()
-                Button("Справка Selective Remote") {
+                Button(UpdateLocalization.key("menu.help.title")) {
                     appDelegate.showHelpWindow()
                 }
                     .keyboardShortcut("?", modifiers: [.command])
                 Divider()
-                Menu("Поддержать проект", systemImage: "heart") {
+                Menu(UpdateLocalization.key("help.support.title"), systemImage: "heart") {
                     Button("ЮMoney…") {
                         NSWorkspace.shared.open(ProjectSupport.yoomoneyURL)
                     }
@@ -242,16 +245,16 @@ struct SelectiveRemoteApp: App {
                     }
                 }
             }
-            CommandMenu("Сессия") {
+            CommandMenu(UpdateLocalization.key("menu.session.title")) {
                 if appLock.isLocked {
-                    Button("Разблокировать Selective Remote", systemImage: "touchid") {
+                    Button(UpdateLocalization.key("menu.session.unlock"), systemImage: "touchid") {
                         appLock.unlock()
                     }
-                    Button("Отключить App Lock…", systemImage: "lock.open") {
+                    Button(UpdateLocalization.key("menu.session.disable_lock"), systemImage: "lock.open") {
                         appLock.disableWithSystemAuthentication()
                     }
                 } else {
-                Button("Заблокировать Selective Remote", systemImage: "lock.fill") {
+                Button(UpdateLocalization.key("menu.session.lock"), systemImage: "lock.fill") {
                     appLock.lockNow()
                 }
                 .keyboardShortcut("l", modifiers: [.command, .shift])
@@ -262,12 +265,12 @@ struct SelectiveRemoteApp: App {
                 }
                 .keyboardShortcut("k", modifiers: [.command])
                 Divider()
-                Button("Показать \(AppBrand.name)") { model.showMainWindow() }
+                Button(UpdateLocalization.key("menu.session.show_main")) { model.showMainWindow() }
                 Divider()
                 if model.runningSessions.isEmpty {
-                    Text("Активных RDP-сессий нет")
+                    Text(UpdateLocalization.key("menu.session.no_rdp"))
                 } else {
-                    Button("Панель управления RDP…") {
+                    Button(UpdateLocalization.key("menu.session.rdp_panel")) {
                         model.showRDPControlPanel()
                     }
                     ForEach(model.runningSessions) { session in
@@ -280,37 +283,37 @@ struct SelectiveRemoteApp: App {
                         }
                     }
                     Divider()
-                    Button("Отключить все", role: .destructive) {
+                    Button(UpdateLocalization.key("menu.session.disconnect_all"), role: .destructive) {
                         model.disconnectAll()
                     }
                         .keyboardShortcut("d", modifiers: [.command, .option])
                 }
                 if model.runningSSHTunnelCount > 0 {
                     Divider()
-                    Text("SSH-туннелей: \(model.runningSSHTunnelCount)")
-                    Button("Остановить все SSH-туннели", role: .destructive) {
+                    Text("\(UpdateLocalization.key("menu.session.ssh_tunnels_count")): \(model.runningSSHTunnelCount)")
+                    Button(UpdateLocalization.key("menu.session.stop_ssh_tunnels"), role: .destructive) {
                         model.stopAllSSHTunnels()
                     }
                 }
                 if model.runningSSHTerminalCount > 0 {
                     Divider()
-                    Text("SSH-сессий: \(model.runningSSHTerminalCount)")
-                    Button("Отключить все SSH-сессии", role: .destructive) {
+                    Text("\(UpdateLocalization.key("menu.session.ssh_sessions_count")): \(model.runningSSHTerminalCount)")
+                    Button(UpdateLocalization.key("menu.session.disconnect_ssh"), role: .destructive) {
                         model.stopAllSSHTerminals()
                     }
                 }
                 if model.runningLocalTerminalCount > 0 {
                     Divider()
-                    Text("Локальных терминалов: \(model.runningLocalTerminalCount)")
-                    Button("Завершить все локальные терминалы", role: .destructive) {
+                    Text("\(UpdateLocalization.key("menu.session.local_terminals_count")): \(model.runningLocalTerminalCount)")
+                    Button(UpdateLocalization.key("menu.session.stop_local_terminals"), role: .destructive) {
                         model.stopAllLocalTerminals()
                     }
                 }
                 Divider()
-                Button("Импортировать профили…") { model.importProfiles() }
-                Button("Экспортировать все профили…") { model.exportAllProfiles() }
+                Button(UpdateLocalization.key("menu.session.import_profiles")) { model.importProfiles() }
+                Button(UpdateLocalization.key("menu.session.export_profiles")) { model.exportAllProfiles() }
                 Divider()
-                Button("Проверить обновления…") { model.checkForUpdates() }
+                Button(UpdateLocalization.key("menu.session.check_updates")) { model.checkForUpdates() }
                     .disabled(model.isCheckingForUpdates)
                 Divider()
                 Text(AppBuildInfo.fullText)
@@ -339,24 +342,24 @@ struct SelectiveRemoteApp: App {
 
         MenuBarExtra {
             if appLock.isLocked {
-                Button("Разблокировать Selective Remote", systemImage: "touchid") {
+                Button(UpdateLocalization.key("menu.session.unlock"), systemImage: "touchid") {
                     appLock.unlock()
                 }
-                Button("Отключить App Lock…", systemImage: "lock.open") {
+                Button(UpdateLocalization.key("menu.session.disable_lock"), systemImage: "lock.open") {
                     appLock.disableWithSystemAuthentication()
                 }
                 Divider()
-                Button("Завершить \(AppBrand.name)") { model.quitApplication() }
+                Button(UpdateLocalization.key("menu.session.quit")) { model.quitApplication() }
             } else {
-            Button("Показать \(AppBrand.name)") { model.showMainWindow() }
+            Button(UpdateLocalization.key("menu.session.show_main")) { model.showMainWindow() }
             if !model.favoriteRDPProfiles.isEmpty {
                 Divider()
-                Text("Избранное")
+                Text(UpdateLocalization.key("menu.favorites"))
                 ForEach(model.favoriteRDPProfiles) { profile in
                     Button(
                         model.isSessionRunning(profileID: profile.id)
-                            ? "\(profile.friendlyName) · подключено"
-                            : "Подключить \(profile.friendlyName)",
+                            ? "\(profile.friendlyName) · \(UpdateLocalization.key("menu.connected"))"
+                            : "\(UpdateLocalization.key("menu.connect")) \(profile.friendlyName)",
                         systemImage: profile.isFavorite ? "star.fill" : "star"
                     ) {
                         if model.isSessionRunning(profileID: profile.id) {
@@ -369,10 +372,10 @@ struct SelectiveRemoteApp: App {
             }
             Divider()
             if model.runningSessions.isEmpty {
-                Text("RDP-сессии не запущены")
+                Text(UpdateLocalization.key("menu.no_rdp_running"))
             } else {
-                Text("Активных сессий: \(model.runningSessionCount)")
-                Button("Открыть панель управления…", systemImage: "switch.2") {
+                Text("\(UpdateLocalization.key("menu.active_sessions")): \(model.runningSessionCount)")
+                Button(UpdateLocalization.key("menu.open_control_panel"), systemImage: "switch.2") {
                     model.showRDPControlPanel()
                 }
                 ForEach(model.runningSessions) { session in
@@ -385,41 +388,41 @@ struct SelectiveRemoteApp: App {
                     }
                 }
                 Divider()
-                Button("Отключить все", role: .destructive) {
+                Button(UpdateLocalization.key("menu.session.disconnect_all"), role: .destructive) {
                     model.disconnectAll()
                 }
             }
             if model.runningSSHTunnelCount > 0 {
                 Divider()
-                Text("SSH-туннелей: \(model.runningSSHTunnelCount)")
-                Button("Остановить все SSH-туннели", role: .destructive) {
+                Text("\(UpdateLocalization.key("menu.session.ssh_tunnels_count")): \(model.runningSSHTunnelCount)")
+                Button(UpdateLocalization.key("menu.session.stop_ssh_tunnels"), role: .destructive) {
                     model.stopAllSSHTunnels()
                 }
             }
             if model.runningSSHTerminalCount > 0 {
                 Divider()
-                Text("SSH-сессий: \(model.runningSSHTerminalCount)")
-                Button("Отключить все SSH-сессии", role: .destructive) {
+                Text("\(UpdateLocalization.key("menu.session.ssh_sessions_count")): \(model.runningSSHTerminalCount)")
+                Button(UpdateLocalization.key("menu.session.disconnect_ssh"), role: .destructive) {
                     model.stopAllSSHTerminals()
                 }
             }
             if model.runningLocalTerminalCount > 0 {
                 Divider()
-                Text("Локальных терминалов: \(model.runningLocalTerminalCount)")
-                Button("Завершить все локальные терминалы", role: .destructive) {
+                Text("\(UpdateLocalization.key("menu.session.local_terminals_count")): \(model.runningLocalTerminalCount)")
+                Button(UpdateLocalization.key("menu.session.stop_local_terminals"), role: .destructive) {
                     model.stopAllLocalTerminals()
                 }
             }
             SFTPMenuBarTransferControls(workspace: model.sftpWorkspace)
             Divider()
-            Text("Правый Shift + Enter — полный экран / окно")
-            Text("Правый Shift + D — отключить RDP")
+            Text(UpdateLocalization.key("menu.shortcut.full_screen"))
+            Text(UpdateLocalization.key("menu.shortcut.disconnect"))
             Divider()
-            Button("Проверить обновления…") { model.checkForUpdates() }
+            Button(UpdateLocalization.key("menu.session.check_updates")) { model.checkForUpdates() }
                 .disabled(model.isCheckingForUpdates)
             Text(AppBuildInfo.fullText)
             Divider()
-            Button("Завершить \(AppBrand.name)") { model.quitApplication() }
+            Button(UpdateLocalization.key("menu.session.quit")) { model.quitApplication() }
             }
         } label: {
             Label(

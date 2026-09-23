@@ -3,6 +3,32 @@ import Testing
 @testable import SelectiveRemote
 
 struct UpdateReleaseNotesTests {
+    @Test("0.32.0 introduces Cloud to existing 0.31.0 users in both languages")
+    func publicCloudIntroductionDoesNotDescribeInternalIterations() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for (file, required, forbidden) in [
+            (
+                "CHANGELOG.md",
+                ["Selective Remote Cloud", "Personal Vault", "Team Vault", "Mac", "браузер", "Hosts", "Credentials", "Snippets"],
+                ["account-scoped", "causal history", "wrappers", "восстановлению доверенных", "стали устойчивее"]
+            ),
+            (
+                "CHANGELOG_EN.md",
+                ["Selective Remote Cloud", "Personal Vault", "Team Vault", "Mac", "browser", "Hosts", "Credentials", "Snippets"],
+                ["account-scoped", "causal history", "wrappers", "recovery improvements", "more resilient"]
+            )
+        ] {
+            let markdown = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+            let section = try #require(UpdateReleaseNotesParser.parse(
+                markdown, currentVersion: "0.31.0", targetVersion: "0.32.0"
+            ).first)
+            let copy = section.changes.joined(separator: " ")
+            for phrase in required { #expect(copy.localizedCaseInsensitiveContains(phrase), "Missing \(phrase) in \(file)") }
+            for phrase in forbidden { #expect(!copy.localizedCaseInsensitiveContains(phrase), "Internal claim \(phrase) in \(file)") }
+        }
+    }
+
     @Test("Что нового показывает пропущенные версии от свежей к старой")
     func skippedVersionsAreNewestFirst() throws {
         let markdown = """

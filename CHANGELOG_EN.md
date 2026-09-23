@@ -1,13 +1,12 @@
 ## 0.32.0
 
-- Cloud Personal Vault now uses account-scoped browser state with safe first-time bootstrap and automatic restore after a normal login or reload without a second password prompt.
-- Team Vaults now cover Hosts, Credentials, and Snippets with nested folders, roles, invitations, new-device admission, and separate device identities isolated from Personal Vault.
-- Personal and Team Hosts share one navigation, search, sorting, list/grid, and folder interaction model while Team actions remain role-aware and isolated from Personal Keychain credentials.
-- Sync and recovery are more resilient to concurrent edits, deletions, causal-history conflicts, missing wrappers, and trusted browser/macOS session restoration.
-- Web management adds complete team and device administration, privacy-safe registration behavior, protected team archiving, and verified email workflows.
-- RU/EN, Graphite/Light, and desktop/narrow interfaces are more consistent, including forms, selectors, keyboard/focus navigation, mobile navigation, and semantic light-theme contrast.
-- macOS improves Cloud/session integration, Personal/Team navigation, Credentials/Snippets synchronization, and protected SSH/SFTP use with Team Hosts.
-- Release security is fail-closed: the official DMG requires Developer ID, the exact TeamIdentifier, notarization and stapling, while the updater verifies publisher identity before installation and after transactional copy without weakening rollback.
+- Introducing Selective Remote Cloud: sign in to manage connections from your Mac and browser. Local use without an account remains available.
+- Personal Vault protects your Hosts, Credentials, and Snippets with end-to-end encryption and syncs them across trusted devices.
+- Team Vaults let you share Hosts, Credentials, and Snippets with teammates, with roles, invitations, and device access controls.
+- Manage personal data, teams, and devices in the browser, with changes synchronized to your Mac.
+- Personal and Team Hosts now share familiar folders, search, sorting, list, and grid views. Team actions respect member roles.
+- Mac and browser interfaces have improved forms, keyboard navigation, mobile layout, RU/EN support, and light-theme readability.
+- Official releases have stronger publisher verification and safer updates.
 
 ## 0.31.0
 

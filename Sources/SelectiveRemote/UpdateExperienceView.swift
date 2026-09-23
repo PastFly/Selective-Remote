@@ -63,7 +63,8 @@ private struct UpdateSettingsView: View {
                 } else {
                     LabeledContent("Состояние") {
                         Label(
-                            model.isCheckingForUpdates ? "Проверка…" : "Установлена актуальная версия",
+                            UpdateLocalization.key(model.isCheckingForUpdates
+                                ? "updates.status.checking" : "updates.status.current"),
                             systemImage: model.isCheckingForUpdates
                                 ? "arrow.triangle.2.circlepath"
                                 : "checkmark.circle.fill"
@@ -130,7 +131,9 @@ private struct UpdateSettingsView: View {
     }
 
     private var lastCheckText: String {
-        guard let date = model.lastSuccessfulUpdateCheckDate else { return "Ещё не выполнялась" }
+        guard let date = model.lastSuccessfulUpdateCheckDate else {
+            return UpdateLocalization.key("updates.last_check.never")
+        }
         return UpdateLocalization.dateTimeShort(date)
     }
 

@@ -1,13 +1,12 @@
 ## 0.32.0
 
-- Cloud Personal Vault получил account-scoped browser state, безопасное первичное развёртывание и автоматическое восстановление после обычного входа и перезагрузки без второго запроса пароля.
-- Team Vaults получили полноценные Hosts, Credentials и Snippets, вложенные папки, роли, приглашения, admission новых устройств и отдельные device identities без смешивания с Personal Vault.
-- Personal и Team Hosts используют единый язык навигации, поиска, сортировки, списка/плитки и папок; Team-действия остаются role-aware и изолированы от личных Keychain credentials.
-- Синхронизация и recovery стали устойчивее к параллельным изменениям, удалениям, конфликтам causal history, отсутствующим wrappers и восстановлению доверенных browser/macOS sessions.
-- Web management дополнен управлением командами и устройствами, privacy-safe registration flow, безопасными архивированием команды и verification-сценариями.
-- Интерфейсы RU/EN, Graphite/Light и desktop/narrow унифицированы; исправлены формы, селекторы, keyboard/focus navigation, mobile navigation и semantic contrast светлой темы.
-- В macOS улучшены Cloud/session integration, Personal/Team navigation, синхронизация Credentials/Snippets и защищённая работа SSH/SFTP с Team Hosts.
-- Усилена release security: официальный DMG требует Developer ID, точный TeamIdentifier, notarization/stapling, а updater проверяет publisher identity до установки и после transactional copy с сохранением rollback.
+- Впервые представлен Selective Remote Cloud: входите в аккаунт и управляйте подключениями с Mac и в браузере. Локальная работа без аккаунта по-прежнему доступна.
+- Personal Vault защищает ваши Hosts, Credentials и Snippets сквозным шифрованием и синхронизирует их между доверенными устройствами.
+- Team Vaults позволяют совместно работать с Hosts, Credentials и Snippets: доступны команды, роли, приглашения и управление доступом устройств.
+- В браузере можно управлять личными данными, командами и устройствами; изменения синхронизируются с приложением на Mac.
+- Личные и командные Hosts получили согласованные папки, поиск, сортировку, список и плитку. Командные действия учитывают роль участника.
+- Обновлены интерфейсы Mac и браузера: улучшены формы, навигация с клавиатуры, мобильная компоновка, RU/EN и читаемость светлой темы.
+- Для официальных выпусков усилена проверка издателя приложения и безопасность обновления.
 
 ## 0.31.0
 

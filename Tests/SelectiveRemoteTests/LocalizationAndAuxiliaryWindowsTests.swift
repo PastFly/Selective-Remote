@@ -13,6 +13,58 @@ private func repositorySource(_ relativePath: String) throws -> String {
     )
 }
 
+@Test("Confirmed English audit paths use stable keys that rerender with the app language")
+func prereleaseAuditCopyUsesLiveSemanticKeys() throws {
+    let cases: [(String, String, String)] = [
+        ("menu.session.title", "Сессия", "Session"),
+        ("menu.help.title", "Справка Selective Remote", "Selective Remote Help"),
+        ("hosts.auth.automatic.help", "OpenSSH попробует выбранный ключ, ssh-agent и затем пароль. Удобно для совместимости.", "OpenSSH tries the selected key, ssh-agent, then a password for compatibility."),
+        ("terminal.local.restart", "Перезапустить shell", "Restart Shell"),
+        ("connection.updated.just_now", "Обновлено только что", "Updated just now"),
+        ("help.support.title", "Поддержать проект", "Support the Project")
+    ]
+    for (key, russian, english) in cases {
+        #expect(UpdateLocalization.key(key, english: false) == russian)
+        #expect(UpdateLocalization.key(key, english: true) == english)
+    }
+    for (key, copy) in AppCopy.translations {
+        #expect(!key.isEmpty)
+        #expect(!copy.ru.isEmpty)
+        #expect(!copy.en.isEmpty)
+        #expect(!copy.en.unicodeScalars.contains {
+            (0x0400...0x052F).contains($0.value)
+        })
+    }
+    let menu = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+    let hosts = try repositorySource("Sources/SelectiveRemote/ContentView.swift")
+    let ssh = try repositorySource("Sources/SelectiveRemote/SSHService.swift")
+    #expect(menu.contains("CommandMenu(UpdateLocalization.key(\"menu.session.title\"))"))
+    #expect(menu.contains("Button(UpdateLocalization.key(\"menu.help.title\"))"))
+    #expect(hosts.contains("UpdateLocalization.key(\"hosts.auth.password.help\")"))
+    #expect(ssh.contains("UpdateLocalization.key(\"ssh.error.invalid_host\")"))
+}
+
+@Test("Audited secondary macOS UI has English fallbacks across SSH, SFTP, Terminal, Help and Settings")
+func auditedSecondaryEnglishResources() throws {
+    let english = try repositorySource("Resources/en.lproj/Localizable.strings")
+    for key in [
+        "Продолжить SFTP-передачи", "Приостановить SFTP-передачи",
+        "Локальный shell остановлен", "История и подсказки команд терминала",
+        "Назад к подключениям", "Маршрут без промежуточного узла",
+        "Рядом с приватным ключом не найден файл публичного ключа .pub",
+        "Версия приложения", "Проверять обновления при запуске и каждые 5 часов",
+        "Новая локальная вкладка", "Палитра действий терминала"
+    ] {
+        #expect(english.contains("\"\(key)\" = \""))
+    }
+    let sftp = try repositorySource("Sources/SelectiveRemote/SFTPWorkspace.swift")
+    let forwarding = try repositorySource("Sources/SelectiveRemote/ForwardingManager.swift")
+    let terminal = try repositorySource("Sources/SelectiveRemote/LocalTerminalView.swift")
+    #expect(sftp.contains("en: \"Servers: "))
+    #expect(forwarding.contains("en: \"of "))
+    #expect(terminal.contains("UpdateLocalization.key(\"terminal.local.description\")"))
+}
+
 @Test("Help and What's New keep an opaque auxiliary window frame")
 func auxiliaryWindowsKeepVisibleFrame() throws {
     let app = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")

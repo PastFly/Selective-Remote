@@ -150,6 +150,81 @@ struct CloudTeamHostsTests {
         #expect(store.invalidVaultCount == 1)
     }
 
+    @MainActor
+    @Test("Team Host warning reports zero, one and multiple hidden scopes without exposing payloads")
+    func materializationWarningStates() throws {
+        let store = SelectiveRemoteTeamHostStore()
+        let observedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        store.replace(with: [], now: observedAt)
+        #expect(store.materializationIssues.isEmpty)
+        #expect(SelectiveRemoteTeamHostWarningCopy.status(count: 0, english: false) == nil)
+
+        let first = Self.snapshot(payload: Data("not a vault document".utf8))
+        let second = SelectiveRemoteTeamVaultMaterializedSnapshot(
+            teamID: first.teamID,
+            teamName: "Platform",
+            role: .viewer,
+            vaultID: UUID(uuidString: "33333333-3333-4333-8333-333333333333")!,
+            vaultName: "Projects",
+            revision: 1,
+            keyGeneration: 1,
+            payload: Data("also invalid".utf8)
+        )
+        store.replace(with: [first], now: observedAt)
+        #expect(store.hosts.isEmpty)
+        #expect(store.materializationIssues.count == 1)
+        #expect(store.materializationIssues[0].category == .invalidSnapshot)
+        #expect(store.materializationIssues[0].teamName == "Platform")
+        #expect(store.materializationIssues[0].vaultName == "Operations")
+        #expect(store.materializationIssues[0].lastAttempt == observedAt)
+        #expect(SelectiveRemoteTeamHostWarningCopy.status(count: 1, english: false) == "Требует внимания · 1")
+        #expect(SelectiveRemoteTeamHostWarningCopy.status(count: 1, english: true) == "Needs attention · 1")
+
+        store.replace(with: [first, second], now: observedAt)
+        #expect(store.invalidVaultCount == 2)
+        #expect(store.materializationIssues.count == 2)
+        #expect(SelectiveRemoteTeamHostWarningCopy.status(count: 2, english: false) == "Требует внимания · 2")
+        #expect(SelectiveRemoteTeamHostWarningCopy.status(count: 2, english: true) == "Needs attention · 2")
+        store.clear()
+        #expect(store.materializationIssues.isEmpty)
+    }
+
+    @MainActor
+    @Test("Team Host warning is privacy-safe and does not offer device recovery for materialization errors")
+    func materializationWarningPrivacyAndActions() {
+        let invalid = Self.snapshot(payload: Data("SECRET-CIPHERTEXT-TEST".utf8))
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [invalid])
+        let issue = store.materializationIssues[0]
+        #expect(issue.category == .invalidSnapshot)
+        #expect(!issue.category.allowsDeviceRecovery)
+        #expect(!issue.category.allowsTeamManagementRecovery)
+        let details = SelectiveRemoteTeamHostWarningCopy.details(english: true)
+        #expect(details.contains("Hosts from one team could not be displayed"))
+        #expect(!details.contains("SECRET-CIPHERTEXT-TEST"))
+        #expect(!details.contains("invalidSnapshot"))
+        #expect(!details.contains(invalid.vaultID.uuidString))
+    }
+
+    @Test("Team Host warning exposes keyboard-accessible retry and diagnostics without weakening fail-closed projection")
+    func materializationWarningInteractionContract() throws {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/SelectiveRemote/CloudTeamHosts.swift")
+        let source = try String(contentsOf: sourceURL, encoding: .utf8)
+        #expect(source.contains("if let warning = SelectiveRemoteTeamHostWarningCopy.status("))
+        #expect(source.contains("warningDetailsPresented = true"))
+        #expect(source.contains(".focused($warningButtonFocused)"))
+        #expect(source.contains("warningButtonFocused = true"))
+        #expect(source.contains(".keyboardShortcut(.cancelAction)"))
+        #expect(source.contains("synchronizeConfiguredAccountNow()"))
+        #expect(source.contains("onShowDiagnostics()"))
+        #expect(source.contains("nextHosts += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)"))
+        #expect(source.contains("} catch {\n                invalid += 1"))
+    }
+
 
 
     @Test("Team Host write capability matches the complete role matrix")

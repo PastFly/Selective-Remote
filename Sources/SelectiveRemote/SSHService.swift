@@ -18,29 +18,29 @@ enum SSHServiceError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .invalidHost:
-            "Укажите корректный hostname, IP-адрес или Host из ~/.ssh/config"
+            UpdateLocalization.key("ssh.error.invalid_host")
         case .invalidUsername:
-            "Имя пользователя SSH содержит недопустимые пробелы или управляющие символы"
+            UpdateLocalization.key("ssh.error.invalid_username")
         case .invalidPort:
-            "Порт SSH должен быть в диапазоне 1…65535"
+            UpdateLocalization.key("ssh.error.invalid_port")
         case .invalidInitialDirectory:
-            "Начальная папка SFTP не должна содержать переносы строк"
+            UpdateLocalization.key("ssh.error.invalid_directory")
         case let .invalidForwardAddress(name):
-            "Некорректный адрес в туннеле «\(name)»"
+            UpdateLocalization.text(ru: "Некорректный адрес в туннеле «\(name)»", en: "Invalid address in tunnel ‘\(name)’")
         case let .invalidForwardPort(name):
-            "Порты туннеля «\(name)» должны быть в диапазоне 1…65535"
+            UpdateLocalization.text(ru: "Порты туннеля «\(name)» должны быть в диапазоне 1…65535", en: "Tunnel ‘\(name)’ ports must be between 1 and 65535")
         case .missingForwardDestination:
-            "Для локального или удалённого туннеля укажите конечный host и порт"
+            UpdateLocalization.key("ssh.error.missing_forward_destination")
         case let .missingIdentityFile(path):
-            "Файл SSH-ключа недоступен: \(path)"
+            UpdateLocalization.text(ru: "Файл SSH-ключа недоступен: \(path)", en: "SSH key file is unavailable: \(path)")
         case .incompatibleTouchIDKey:
-            "Touch ID Key поддерживает только обычные ECDSA-ключи. Выберите ECDSA ключ или создайте новый Touch ID Key."
+            UpdateLocalization.key("ssh.error.incompatible_touch_id")
         case let .executableUnavailable(path):
-            "Системная команда недоступна: \(path)"
+            UpdateLocalization.text(ru: "Системная команда недоступна: \(path)", en: "System command is unavailable: \(path)")
         case let .launchFailed(message):
-            "Не удалось запустить SSH: \(message)"
+            UpdateLocalization.text(ru: "Не удалось запустить SSH: \(message)", en: "Could not launch SSH: \(message)")
         case let .commandFailed(message):
-            "SSH завершился с ошибкой: \(message)"
+            UpdateLocalization.text(ru: "SSH завершился с ошибкой: \(message)", en: "SSH failed: \(message)")
         }
     }
 }
@@ -136,7 +136,7 @@ struct SSHConnectionSettings: Equatable, Sendable {
             }
         }
         if authenticationMode == .key || authenticationMode == .touchIDKey, identity == nil {
-            throw SSHServiceError.missingIdentityFile("Выберите SSH-ключ для выбранного способа входа")
+            throw SSHServiceError.missingIdentityFile(UpdateLocalization.key("ssh.error.select_identity"))
         }
         if authenticationMode == .touchIDKey,
            let identity,
@@ -251,7 +251,10 @@ private final class SSHAgentManager: @unchecked Sendable {
         } catch {
             try? FileManager.default.removeItem(at: directoryURL)
             throw SSHServiceError.launchFailed(
-                "не удалось запустить встроенный ssh-agent: \(error.localizedDescription)"
+                UpdateLocalization.text(
+                    ru: "не удалось запустить встроенный ssh-agent: \(error.localizedDescription)",
+                    en: "could not start the bundled ssh-agent: \(error.localizedDescription)"
+                )
             )
         }
 
@@ -275,7 +278,7 @@ private final class SSHAgentManager: @unchecked Sendable {
         }
         try? FileManager.default.removeItem(at: directoryURL)
         throw SSHServiceError.launchFailed(
-            "встроенный ssh-agent не создал защищённый сокет"
+            UpdateLocalization.key("ssh.error.agent_socket")
         )
     }
 
@@ -822,19 +825,19 @@ enum SSHKeyServiceError: LocalizedError, Sendable {
     var errorDescription: String? {
         switch self {
         case .notPrivateKey:
-            "Выберите приватный SSH-ключ, а не файл .pub"
+            UpdateLocalization.key("ssh.error.not_private_key")
         case let .inspectionFailed(message):
-            "Не удалось проверить SSH-ключ: \(message)"
+            UpdateLocalization.text(ru: "Не удалось проверить SSH-ключ: \(message)", en: "Could not inspect SSH key: \(message)")
         case .askPassHelperUnavailable:
-            "В пакете отсутствует помощник Keychain. Пересоберите приложение scripts/build_app.sh"
+            UpdateLocalization.key("ssh.error.askpass_missing")
         case let .agentFailed(message):
-            "ssh-agent не принял ключ: \(message)"
+            UpdateLocalization.text(ru: "ssh-agent не принял ключ: \(message)", en: "ssh-agent did not accept the key: \(message)")
         case .publicKeyUnavailable:
-            "Рядом с приватным ключом не найден файл публичного ключа .pub"
+            UpdateLocalization.key("ssh.error.public_key_missing")
         case .invalidGenerationPath:
-            "Укажите корректный путь для нового приватного SSH-ключа"
+            UpdateLocalization.key("ssh.error.invalid_key_path")
         case let .generationTargetExists(path):
-            "Файл уже существует: \(path). Выберите другое имя, чтобы ничего не перезаписать."
+            UpdateLocalization.text(ru: "Файл уже существует: \(path). Выберите другое имя, чтобы ничего не перезаписать.", en: "File already exists: \(path). Choose another name to avoid overwriting it.")
         }
     }
 }
@@ -849,11 +852,11 @@ enum SSHKeyAlgorithm: String, CaseIterable, Identifiable, Hashable, Sendable {
     var title: String {
         switch self {
         case .ed25519:
-            "Ed25519 — рекомендуется"
+            UpdateLocalization.key("ssh.key.ed25519_title")
         case .ecdsaP256TouchID:
             "Touch ID Key · ECDSA P-256"
         case .rsa4096:
-            "RSA 4096 — для старых серверов"
+            UpdateLocalization.key("ssh.key.rsa_title")
         }
     }
 
@@ -947,7 +950,7 @@ enum SSHKeyService {
             let hasCurrentSecret = KeychainService.passwordExists(reference: passwordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
-                    reason: "Подтвердите Touch ID для использования SSH-пароля"
+                    reason: UpdateLocalization.key("ssh.touch_id.password")
                 )
             }
             if let password = try KeychainService.readPassword(
@@ -962,7 +965,7 @@ enum SSHKeyService {
             let hasCurrentSecret = KeychainService.passwordExists(reference: jumpHostPasswordCredential)
             if requiresUserPresence && requiresTouchID && hasCurrentSecret {
                 try KeychainService.authenticateTouchID(
-                    reason: "Подтвердите Touch ID для использования пароля Jump Host"
+                    reason: UpdateLocalization.key("ssh.touch_id.jump_password")
                 )
             }
             if let jumpPassword = try KeychainService.readPassword(
@@ -991,7 +994,7 @@ enum SSHKeyService {
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
         let url = directory.appendingPathComponent("\(prefix)-\(UUID().uuidString)")
         guard FileManager.default.createFile(atPath: url.path, contents: Data(secret.utf8), attributes: [.posixPermissions: 0o600]) else {
-            throw SSHServiceError.launchFailed("не удалось подготовить защищённый канал секрета")
+            throw SSHServiceError.launchFailed(UpdateLocalization.key("ssh.error.secret_channel"))
         }
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 180) { try? FileManager.default.removeItem(at: url) }
@@ -1155,7 +1158,7 @@ enum SSHKeyService {
         let fields = result.output
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .split(whereSeparator: \.isWhitespace)
-        let fingerprint = fields.count > 1 ? String(fields[1]) : "не определён"
+        let fingerprint = fields.count > 1 ? String(fields[1]) : UpdateLocalization.key("ssh.fingerprint.unknown")
         let algorithm = fields.last.map {
             String($0).trimmingCharacters(in: CharacterSet(charactersIn: "()"))
         } ?? "SSH"
@@ -1308,6 +1311,6 @@ enum SSHKeyService {
 
     private static func cleanOutput(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "неизвестная ошибка" : String(trimmed.suffix(2_000))
+        return trimmed.isEmpty ? UpdateLocalization.key("ssh.error.unknown") : String(trimmed.suffix(2_000))
     }
 }

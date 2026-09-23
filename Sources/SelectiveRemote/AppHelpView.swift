@@ -139,7 +139,7 @@ struct AppHelpView: View {
                     .frame(width: 48, height: 48)
 
                     VStack(alignment: .leading, spacing: 5) {
-                        Text("Поддержать проект")
+                        Text(UpdateLocalization.key("help.support.title"))
                             .font(.headline)
                         Text("Selective Remote остаётся бесплатным и открытым. Если приложение оказалось полезным, вы можете поддержать дальнейшую разработку.")
                             .font(.callout)
@@ -166,13 +166,13 @@ struct AppHelpView: View {
                         }
                         .accessibilityIdentifier("supportProjectSberbankButton")
                     } label: {
-                        Label("Поддержать проект", systemImage: "heart.fill")
+                        Label(UpdateLocalization.key("help.support.title"), systemImage: "heart.fill")
                             .frame(minWidth: 160)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
                     .fixedSize()
-                    .help("Выбрать способ поддержки")
+                    .help(UpdateLocalization.key("help.support.choose"))
                     .accessibilityIdentifier("supportProjectMenu")
                 }
                 .padding(18)

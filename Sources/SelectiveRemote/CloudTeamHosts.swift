@@ -453,6 +453,56 @@ enum SelectiveRemoteTeamHostMaterializer {
     }
 }
 
+struct SelectiveRemoteTeamHostMaterializationIssue: Identifiable, Equatable {
+    enum Category: Equatable {
+        case invalidSnapshot
+        case invalidHostRecord
+        case unknown
+
+        // A materialization error alone is not evidence of an admission or membership problem.
+        var allowsDeviceRecovery: Bool { false }
+        var allowsTeamManagementRecovery: Bool { false }
+    }
+
+    let id: String
+    let teamName: String?
+    let vaultName: String?
+    let category: Category
+    let lastAttempt: Date
+}
+
+enum SelectiveRemoteTeamHostWarningCopy {
+    static func status(count: Int, english: Bool) -> String? {
+        guard count > 0 else { return nil }
+        return "\(english ? "Needs attention" : "Требует внимания") · \(count)"
+    }
+
+    static func summary(english: Bool) -> String {
+        english ? "Hosts from one team could not be displayed" : "Не удалось показать хосты одной команды"
+    }
+
+    static func explanation(english: Bool) -> String {
+        english
+            ? "Selective Remote could not safely read the hosts from one Team Vault, so they are temporarily hidden. Other data was not changed."
+            : "Selective Remote не смог безопасно прочитать хосты одного Team Vault, поэтому они временно скрыты. Остальные данные не изменены."
+    }
+
+    static func details(english: Bool) -> String {
+        "\(summary(english: english))\n\(explanation(english: english))"
+    }
+
+    static func category(_ category: SelectiveRemoteTeamHostMaterializationIssue.Category, english: Bool) -> String {
+        switch category {
+        case .invalidSnapshot:
+            english ? "Vault data could not be read safely" : "Не удалось безопасно прочитать данные Vault"
+        case .invalidHostRecord:
+            english ? "Host data is not in the expected format" : "Данные хостов имеют неожиданный формат"
+        case .unknown:
+            english ? "The cause could not be determined" : "Причину не удалось определить"
+        }
+    }
+}
+
 @MainActor
 final class SelectiveRemoteTeamHostStore: ObservableObject {
     static let shared = SelectiveRemoteTeamHostStore()
@@ -462,6 +512,7 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     @Published private(set) var lastUpdatedAt: Date?
     @Published private(set) var synchronizedVaultCount = 0
     @Published private(set) var invalidVaultCount = 0
+    @Published private(set) var materializationIssues: [SelectiveRemoteTeamHostMaterializationIssue] = []
 
     private var snapshots: [String: SelectiveRemoteTeamVaultMaterializedSnapshot] = [:]
 
@@ -492,6 +543,7 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
         vaults = []
         synchronizedVaultCount = 0
         invalidVaultCount = 0
+        materializationIssues = []
         lastUpdatedAt = nil
     }
 
@@ -499,6 +551,7 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
         var nextHosts: [SelectiveRemoteTeamHost] = []
         var nextVaults: [SelectiveRemoteTeamHostVaultContext] = []
         var invalid = 0
+        var issues: [SelectiveRemoteTeamHostMaterializationIssue] = []
         for snapshot in snapshots.values {
             do {
                 nextHosts += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)
@@ -516,6 +569,25 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
                 ))
             } catch {
                 invalid += 1
+                let category: SelectiveRemoteTeamHostMaterializationIssue.Category
+                switch error as? SelectiveRemoteTeamHostMaterializationError {
+                case .invalidSnapshot: category = .invalidSnapshot
+                case .invalidHostRecord: category = .invalidHostRecord
+                case nil: category = .unknown
+                }
+                func safeName(_ value: String) -> String? {
+                    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                    return !trimmed.isEmpty && trimmed == value && value.count <= 120
+                        && !value.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
+                        ? value : nil
+                }
+                issues.append(.init(
+                    id: scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID),
+                    teamName: safeName(snapshot.teamName),
+                    vaultName: safeName(snapshot.vaultName),
+                    category: category,
+                    lastAttempt: now
+                ))
             }
         }
         hosts = nextHosts.sorted {
@@ -535,6 +607,7 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
         }
         synchronizedVaultCount = snapshots.count - invalid
         invalidVaultCount = invalid
+        materializationIssues = issues.sorted { $0.id < $1.id }
         lastUpdatedAt = now
     }
 
@@ -572,6 +645,79 @@ struct SelectiveRemoteTeamHostActionRequest: Equatable {
     let action: SelectiveRemoteTeamHostRequestedAction
 }
 
+private struct SelectiveRemoteTeamHostWarningDetailsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: SelectiveRemoteTeamHostStore
+    let isRetrying: Bool
+    let retryFailed: Bool
+    let onRetry: () -> Void
+    let onShowDiagnostics: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(
+                SelectiveRemoteTeamHostWarningCopy.summary(english: UpdateLocalization.usesEnglish),
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.title2.bold())
+            .foregroundStyle(.orange)
+
+            Text(SelectiveRemoteTeamHostWarningCopy.explanation(english: UpdateLocalization.usesEnglish))
+            .fixedSize(horizontal: false, vertical: true)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(store.materializationIssues) { issue in
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(issue.vaultName.map { vault in
+                                issue.teamName.map { "\($0) / \(vault)" } ?? vault
+                            } ?? UpdateLocalization.text(
+                                ru: "Имя хранилища недоступно", en: "Vault name unavailable"
+                            ))
+                            .font(.headline)
+                            Text(SelectiveRemoteTeamHostWarningCopy.category(
+                                issue.category, english: UpdateLocalization.usesEnglish
+                            ))
+                            .foregroundStyle(.secondary)
+                            Text(UpdateLocalization.text(
+                                ru: "Последняя попытка: \(UpdateLocalization.dateTime(issue.lastAttempt))",
+                                en: "Last attempt: \(UpdateLocalization.dateTime(issue.lastAttempt))"
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(12)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    }
+                }
+            }
+
+            if retryFailed {
+                Label(UpdateLocalization.text(
+                    ru: "Повторная синхронизация не завершилась. Откройте диагностику и проверьте доступ к команде.",
+                    en: "Sync did not complete. Open Diagnostics and check your team access."
+                ), systemImage: "exclamationmark.circle")
+                .foregroundStyle(.orange)
+            }
+
+            HStack {
+                Button(UpdateLocalization.text(ru: "Повторить синхронизацию", en: "Retry Sync"),
+                       systemImage: "arrow.clockwise") { onRetry() }
+                    .disabled(isRetrying)
+                if isRetrying { ProgressView().controlSize(.small) }
+                Button(UpdateLocalization.text(ru: "Диагностика", en: "Diagnostics"),
+                       systemImage: "stethoscope") { onShowDiagnostics() }
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Закрыть", en: "Close")) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(24)
+        .frame(minWidth: 520, minHeight: 340)
+    }
+}
+
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
@@ -583,7 +729,12 @@ struct SelectiveRemoteTeamHostsView: View {
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onOpenSFTP: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onShowPersonal: () -> Void
+    let onShowDiagnostics: () -> Void
 
+    @State private var warningDetailsPresented = false
+    @State private var warningRetryInProgress = false
+    @State private var warningRetryFailed = false
+    @FocusState private var warningButtonFocused: Bool
     @State private var username = ""
     @State private var password = ""
     @State private var gatewayPassword = ""
@@ -616,6 +767,22 @@ struct SelectiveRemoteTeamHostsView: View {
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
+
+    private func retryHiddenTeamHosts() {
+        guard !warningRetryInProgress else { return }
+        warningRetryInProgress = true
+        warningRetryFailed = false
+        Task { @MainActor in
+            defer { warningRetryInProgress = false }
+            do {
+                let report = try await SelectiveRemoteTeamVaultAutoSync.shared
+                    .synchronizeConfiguredAccountNow()
+                warningRetryFailed = report.failures > 0 || !store.materializationIssues.isEmpty
+            } catch {
+                warningRetryFailed = true
+            }
+        }
+    }
 
     private var selectedHost: SelectiveRemoteTeamHost? {
         store.hosts.first(where: { $0.id == selectedHostID })
@@ -791,15 +958,21 @@ struct SelectiveRemoteTeamHostsView: View {
                             )
                         }
 
-                        if store.invalidVaultCount > 0 {
-                            Label(
-                                "\(store.invalidVaultCount)",
-                                systemImage: "exclamationmark.triangle.fill"
-                            )
-                            .foregroundStyle(.orange)
+                        if let warning = SelectiveRemoteTeamHostWarningCopy.status(
+                            count: store.invalidVaultCount,
+                            english: UpdateLocalization.usesEnglish
+                        ) {
+                            Button {
+                                warningDetailsPresented = true
+                            } label: {
+                                Label(warning, systemImage: "exclamationmark.triangle.fill")
+                            }
+                            .buttonStyle(.bordered)
+                            .focused($warningButtonFocused)
+                            .accessibilityLabel(warning)
                             .help(UpdateLocalization.text(
-                                ru: "Некорректные Team Vaults скрыты целиком",
-                                en: "Invalid Team Vaults are hidden in full"
+                                ru: "Показать причину и безопасные действия",
+                                en: "Show the cause and safe actions"
                             ))
                         }
                     }
@@ -888,6 +1061,20 @@ struct SelectiveRemoteTeamHostsView: View {
                 host: host,
                 endpoint: endpoint,
                 store: personalSettingsStore
+            )
+        }
+        .sheet(isPresented: $warningDetailsPresented, onDismiss: {
+            warningButtonFocused = true
+        }) {
+            SelectiveRemoteTeamHostWarningDetailsView(
+                store: store,
+                isRetrying: warningRetryInProgress,
+                retryFailed: warningRetryFailed,
+                onRetry: retryHiddenTeamHosts,
+                onShowDiagnostics: {
+                    warningDetailsPresented = false
+                    onShowDiagnostics()
+                }
             )
         }
         .confirmationDialog(
