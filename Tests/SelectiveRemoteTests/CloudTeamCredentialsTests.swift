@@ -150,7 +150,7 @@ struct CloudTeamCredentialsTests {
         )
 
         #expect(source.contains("selective-remote/team-credential/v1"))
-        #expect(source.contains("let keys = Set(data.keys)"))
+        #expect(source.contains("let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data)"))
         #expect(source.contains("keys == hostCredentialKeys"))
         #expect(source.contains("keys == credentialKeys"))
         #expect(source.contains("NSPasteboard.general"))

@@ -38,6 +38,27 @@ enum SelectiveRemoteJSONValue: Equatable, Sendable {
     case object([String: SelectiveRemoteJSONValue])
 }
 
+enum SelectiveRemoteVaultBrowserMetadata {
+    // The web Vault adds presentation-only favorite to any record type. Keep
+    // the rest of each encrypted record schema strict, including credential scope.
+    static func coreKeys(_ data: [String: SelectiveRemoteJSONValue]) -> Set<String>? {
+        guard let favorite = data["favorite"] else { return Set(data.keys) }
+        guard case .boolean = favorite else { return nil }
+        return Set(data.keys).subtracting(["favorite"])
+    }
+
+    static func preservingFavorite(
+        in replacement: SelectiveRemoteJSONValue,
+        from existing: SelectiveRemoteVaultRecord?
+    ) -> SelectiveRemoteJSONValue {
+        guard case var .object(newData) = replacement,
+              let existing, case let .object(oldData) = existing.data,
+              case .boolean? = oldData["favorite"] else { return replacement }
+        newData["favorite"] = oldData["favorite"]
+        return .object(newData)
+    }
+}
+
 extension SelectiveRemoteJSONValue: Codable {
     init(from decoder: Decoder) throws {
         let values = try decoder.singleValueContainer()

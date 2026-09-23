@@ -67,7 +67,9 @@ enum SelectiveRemoteTeamCredentialMaterializer {
             guard case let .object(data) = record.data else {
                 throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
             }
-            let keys = Set(data.keys)
+            guard let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) else {
+                throw SelectiveRemoteTeamCredentialMaterializationError.invalidCredentialRecord
+            }
             let sourceHostID: UUID?
             let sourceHostTitle: String?
             let kind: KeychainCredentialKind?
@@ -286,7 +288,7 @@ enum SelectiveRemoteTeamCredentialDocumentMutation {
             throw SelectiveRemoteTeamCredentialMutationError.hostLinkedCredential
         }
         let allowedKeys = Set(["title", "username", "secret", "folder", "tags"])
-        guard Set(data.keys).isSubset(of: allowedKeys),
+        guard SelectiveRemoteVaultBrowserMetadata.coreKeys(data)?.isSubset(of: allowedKeys) == true,
               case let .string(title)? = data["title"],
               case let .string(username)? = data["username"],
               case let .string(secret)? = data["secret"]
@@ -302,13 +304,13 @@ enum SelectiveRemoteTeamCredentialDocumentMutation {
             type: .credential,
             version: try existing.version.incrementing(deviceID),
             modifiedAt: modifiedAt,
-            data: .object([
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object([
                 "title": .string(title),
                 "username": .string(username),
                 "secret": .string(secret),
                 "folder": .string(folder),
                 "tags": .array(tags.map { .string($0) })
-            ])
+            ]), from: existing)
         )
         return try .init(
             records: document.records.map { $0.id == recordID ? record : $0 },

@@ -82,7 +82,9 @@ enum SelectiveRemoteTeamHostMaterializer {
             else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
 
             var input: ConnectionProfile
-            let keys = Set(data.keys)
+            guard let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) else {
+                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+            }
             let structuralKeys = keys.subtracting(organizationKeys)
             if structuralKeys == browserKeys {
                 input = try browserProfile(
@@ -156,7 +158,8 @@ enum SelectiveRemoteTeamHostMaterializer {
             // projection and must never hide otherwise valid Hosts.
             guard case let .object(data) = record.data,
                   data["sourceID"] != nil else { continue }
-            guard Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
+            guard SelectiveRemoteVaultBrowserMetadata.coreKeys(data)
+                    == Set(["title", "username", "secret", "kind", "sourceID"]),
                   let source = string(data["sourceID"]),
                   let sourceID = UUID(uuidString: source),
                   sourceID.isSelectiveRemoteCloudUUID,
@@ -478,7 +481,7 @@ enum SelectiveRemoteTeamHostShapeDiagnostic {
     private static let knownFields: Set<String> = [
         "title", "address", "username", "connectionType", "profile",
         "folder", "tags", "description", "port", "protocol",
-        "secret", "kind", "sourceID"
+        "secret", "kind", "sourceID", "favorite"
     ]
     private static let hostCore: Set<String> = ["title", "address"]
     private static let nativeCore: Set<String> = [
@@ -514,11 +517,16 @@ enum SelectiveRemoteTeamHostShapeDiagnostic {
         guard case let .object(data) = record.data else {
             return "\(label): data is not an object"
         }
-        let keys = Set(data.keys)
-        let visible = keys.intersection(knownFields).sorted().joined(separator: ", ")
-        let unknownCount = keys.subtracting(knownFields).count
+        let allKeys = Set(data.keys)
+        let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) ?? allKeys
+        let visible = allKeys.intersection(knownFields).sorted().joined(separator: ", ")
+        let unknownCount = allKeys.subtracting(knownFields).count
         let shape: String
         var validation = ""
+        if data["favorite"] != nil,
+           SelectiveRemoteVaultBrowserMetadata.coreKeys(data) == nil {
+            validation = "favorite metadata has invalid type"
+        }
         if record.type == .host {
             let core = keys.subtracting(organization)
             if core == hostCore { shape = "browser" }

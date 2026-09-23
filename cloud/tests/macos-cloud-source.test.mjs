@@ -735,7 +735,7 @@ test("macOS Team Credentials use the shared sync lifecycle and a separate memory
     readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
   ]);
   assert.match(credentials, /selective-remote\/team-credential\/v1/u);
-  assert.match(credentials, /let keys = Set\(data\.keys\)/u);
+  assert.match(credentials, /let keys = SelectiveRemoteVaultBrowserMetadata\.coreKeys\(data\)/u);
   assert.match(credentials, /keys == hostCredentialKeys/u);
   assert.match(credentials, /keys == credentialKeys/u);
   assert.match(credentials, /NSPasteboard\.general/u);

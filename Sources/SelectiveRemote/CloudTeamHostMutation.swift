@@ -127,7 +127,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             type: .host,
             version: existing.version.incrementing(deviceID),
             modifiedAt: modifiedAt,
-            data: exported.data
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: exported.data, from: existing)
         )
         return try .init(
             records: document.records.map { $0.id == recordID ? replacement : $0 },
@@ -208,7 +208,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             version: try priorVersion?.incrementing(deviceID)
                 ?? SelectiveRemoteVaultVersion([deviceID: 1]),
             modifiedAt: modifiedAt,
-            data: exported.data
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: exported.data, from: existing)
         )
         let previous = document.records.filter { isCredential($0, for: recordID) }
         let credentialRecords = try makeCredentials(
@@ -253,19 +253,24 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             guard !secret.isEmpty else { return nil }
             let id = credentialID(sourceID: recordID, kind: kind)
             let old = previous.first(where: { $0.id == id })
+            let metadataSource = old ?? previous.first { record in
+                guard case let .object(data) = record.data,
+                      case let .string(previousKind)? = data["kind"] else { return false }
+                return previousKind == kind.rawValue
+            }
             return try SelectiveRemoteVaultRecord(
                 id: id,
                 type: .credential,
                 version: try old?.version.incrementing(deviceID)
                     ?? SelectiveRemoteVaultVersion([deviceID: 1]),
                 modifiedAt: modifiedAt,
-                data: .object([
+                data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object([
                     "title": .string("\(profile.friendlyName) · \(kind.rawValue)"),
                     "username": .string(kind == .gateway ? profile.gatewayUsername : profile.username),
                     "secret": .string(secret),
                     "kind": .string(kind.rawValue),
                     "sourceID": .string(recordID.canonicalCloudString)
-                ])
+                ]), from: metadataSource)
             )
         }
     }

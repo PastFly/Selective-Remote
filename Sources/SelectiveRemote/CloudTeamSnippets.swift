@@ -104,7 +104,9 @@ enum SelectiveRemoteTeamSnippetMaterializer {
             guard case let .object(data) = record.data else {
                 throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
             }
-            let keys = Set(data.keys)
+            guard let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) else {
+                throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
+            }
             guard keys == Set(["title", "body"])
                     || keys == Set(["title", "body", "folder"]),
                   let title = string(data["title"]),

@@ -233,6 +233,160 @@ struct CloudTeamHostsTests {
     }
 
     @MainActor
+    @Test("Browser favorite metadata cannot hide Host, linked Credential, or Snippet")
+    func browserFavoriteMetadataCompatibility() throws {
+        let original = try SelectiveRemoteVaultDocument.decode(Self.fixtureData())
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let host = try #require(original.records.first { $0.type == .host })
+        guard case let .object(hostData) = host.data else {
+            Issue.record("Expected synthetic Host object")
+            return
+        }
+        var favoriteHostData = hostData
+        favoriteHostData["favorite"] = .boolean(true)
+        let favoriteHost = try SelectiveRemoteVaultRecord(
+            id: host.id, type: .host, version: host.version,
+            modifiedAt: host.modifiedAt, data: .object(favoriteHostData)
+        )
+        let credential = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .credential,
+            version: try SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("Synthetic SSH credential"),
+                "username": .string("synthetic"),
+                "secret": .string("synthetic-only"),
+                "kind": .string("ssh"),
+                "sourceID": .string(host.id.uuidString.lowercased()),
+                "favorite": .boolean(true)
+            ])
+        )
+        let snippet = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .snippet,
+            version: try SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("Synthetic command"),
+                "body": .string("printf ok"),
+                "favorite": .boolean(false)
+            ])
+        )
+        let standaloneCredential = try SelectiveRemoteVaultRecord(
+            id: UUID(), type: .credential,
+            version: try SelectiveRemoteVaultVersion([deviceID: 1]),
+            modifiedAt: "2026-09-10T00:02:00.000Z",
+            data: .object([
+                "title": .string("Synthetic standalone credential"),
+                "username": .string("synthetic"),
+                "secret": .string("synthetic-only"),
+                "favorite": .boolean(true)
+            ])
+        )
+        let document = try SelectiveRemoteVaultDocument(
+            records: original.records.map { $0.id == host.id ? favoriteHost : $0 }
+                + [credential, standaloneCredential, snippet], tombstones: original.tombstones
+        )
+        let snapshot = Self.snapshot(payload: try document.encoded())
+        let diagnostic = SelectiveRemoteTeamHostShapeDiagnostic.describe(snapshot)
+        #expect(diagnostic.split(separator: "\n").contains { line in
+            line.contains("Credential") && line.contains("favorite")
+                && line.contains("unknown fields: 0")
+        })
+        let hosts = try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)
+        #expect(hosts.count == 2)
+        #expect(hosts.first { $0.recordID == host.id }?.credentials.password == "synthetic-only")
+        #expect(try SelectiveRemoteTeamCredentialMaterializer.materialize(snapshot).count == 2)
+        #expect(try SelectiveRemoteTeamSnippetMaterializer.materialize(snapshot).count == 1)
+
+        let profile = try #require(hosts.first { $0.recordID == host.id }?.profile)
+        let organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
+            in: document, recordID: host.id, profile: profile, role: .editor,
+            deviceID: deviceID, modifiedAt: "2026-09-10T00:03:00.000Z"
+        )
+        let organizedHost = try #require(organized.records.first { $0.id == host.id })
+        guard case let .object(organizedHostData) = organizedHost.data else {
+            Issue.record("Expected organized Host object")
+            return
+        }
+        #expect(organizedHostData["favorite"] == .boolean(true))
+
+        let updatedHost = try SelectiveRemoteTeamHostDocumentMutation.update(
+            in: document, recordID: host.id, profile: profile,
+            credentials: .init(password: "synthetic-only", gatewayPassword: nil),
+            role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-10T00:03:00.000Z"
+        )
+        let updatedHostRecord = try #require(updatedHost.records.first { $0.id == host.id })
+        guard case let .object(updatedHostData) = updatedHostRecord.data else {
+            Issue.record("Expected updated Host object")
+            return
+        }
+        #expect(updatedHostData["favorite"] == .boolean(true))
+        let updatedCredential = try #require(updatedHost.records.first { $0.type == .credential })
+        guard case let .object(updatedCredentialData) = updatedCredential.data else {
+            Issue.record("Expected updated linked Credential object")
+            return
+        }
+        #expect(updatedCredentialData["favorite"] == .boolean(true))
+
+        let organizedCredential = try SelectiveRemoteTeamCredentialDocumentMutation.organize(
+            in: document, recordID: standaloneCredential.id, folder: "Synthetic",
+            tags: [], role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-10T00:03:00.000Z"
+        )
+        let standaloneRecord = try #require(organizedCredential.records.first { $0.id == standaloneCredential.id })
+        guard case let .object(standaloneData) = standaloneRecord.data else {
+            Issue.record("Expected organized standalone Credential object")
+            return
+        }
+        #expect(standaloneData["favorite"] == .boolean(true))
+
+        let updatedSnippet = try SelectiveRemoteTeamSnippetDocumentMutation.update(
+            in: document, recordID: snippet.id, title: "Synthetic command",
+            body: "printf updated", role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-10T00:03:00.000Z"
+        )
+        let snippetRecord = try #require(updatedSnippet.records.first { $0.id == snippet.id })
+        guard case let .object(snippetData) = snippetRecord.data else {
+            Issue.record("Expected updated Snippet object")
+            return
+        }
+        #expect(snippetData["favorite"] == .boolean(false))
+
+        var invalidData = favoriteHostData
+        invalidData["favorite"] = .string("yes")
+        let invalidHost = try SelectiveRemoteVaultRecord(
+            id: host.id, type: .host, version: host.version,
+            modifiedAt: host.modifiedAt, data: .object(invalidData)
+        )
+        let invalidDocument = try SelectiveRemoteVaultDocument(
+            records: original.records.map { $0.id == host.id ? invalidHost : $0 },
+            tombstones: original.tombstones
+        )
+        #expect(throws: SelectiveRemoteTeamHostMaterializationError.invalidHostRecord) {
+            try SelectiveRemoteTeamHostMaterializer.materialize(Self.snapshot(payload: invalidDocument.encoded()))
+        }
+
+        guard case let .object(credentialData) = credential.data else {
+            Issue.record("Expected linked Credential object")
+            return
+        }
+        var unknownCredentialData = credentialData
+        unknownCredentialData["unexpected"] = .boolean(true)
+        let unknownCredential = try SelectiveRemoteVaultRecord(
+            id: credential.id, type: .credential, version: credential.version,
+            modifiedAt: credential.modifiedAt, data: .object(unknownCredentialData)
+        )
+        let unknownDocument = try SelectiveRemoteVaultDocument(
+            records: document.records.map { $0.id == credential.id ? unknownCredential : $0 },
+            tombstones: document.tombstones
+        )
+        #expect(throws: SelectiveRemoteTeamHostMaterializationError.invalidHostRecord) {
+            try SelectiveRemoteTeamHostMaterializer.materialize(Self.snapshot(payload: unknownDocument.encoded()))
+        }
+    }
+
+    @MainActor
     @Test("Team Host warning reports zero, one and multiple hidden scopes without exposing payloads")
     func materializationWarningStates() throws {
         let store = SelectiveRemoteTeamHostStore()
