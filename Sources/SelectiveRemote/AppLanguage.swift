@@ -68,6 +68,9 @@ final class AppLanguageStore: ObservableObject {
 /// key equivalents, targets, or enabled states.
 @MainActor
 enum RuntimeMenuLocalization {
+    private static var currentLanguage: AppLanguage = .system
+    private static var menuUpdateObserver: NSObjectProtocol?
+
     static let nativeTitles: [(ru: String, en: String)] = [
         ("Файл", "File"), ("Правка", "Edit"), ("Вид", "View"),
         ("Окно", "Window"), ("Справка", "Help"),
@@ -113,12 +116,25 @@ enum RuntimeMenuLocalization {
     }
 
     static func refresh(_ language: AppLanguage) {
+        currentLanguage = language
+        if menuUpdateObserver == nil {
+            menuUpdateObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didUpdateNotification,
+                object: NSApplication.shared,
+                queue: .main
+            ) { _ in
+                Task { @MainActor in
+                    guard let menu = NSApplication.shared.mainMenu else { return }
+                    apply(to: menu, language: currentLanguage)
+                }
+            }
+        }
         // SwiftUI may rebuild Commands after the selection changes. Apply to
         // the resulting NSMenu on the next main run-loop turn.
         DispatchQueue.main.async {
-            guard let menu = NSApp.mainMenu else { return }
+            guard let menu = NSApplication.shared.mainMenu else { return }
             apply(to: menu, language: language)
-            (NSApp.delegate as? SelectiveRemoteApplicationDelegate)?
+            (NSApplication.shared.delegate as? SelectiveRemoteApplicationDelegate)?
                 .refreshAuxiliaryTitles()
         }
     }

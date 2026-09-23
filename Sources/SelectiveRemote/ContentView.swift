@@ -3816,17 +3816,7 @@ struct ContentView: View {
     private func openNewLocalTerminalTab() {
         let workspace = model.localTerminalWorkspace()
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let tab: TerminalWorkspaceTab?
-        if workspace.displayedTabs.count == 1,
-           let primary = workspace.displayedTabs.first,
-           !primary.session.isRunning {
-            workspace.selectedTabID = primary.id
-            tab = primary
-        } else {
-            tab = workspace.addTab(
-                connection: .local(workingDirectory: home)
-            )
-        }
+        let tab = workspace.tabForNewLocalTerminalCommand(workingDirectory: home)
         if let tab {
             model.connectLocalTerminal(
                 connection: tab.connection,

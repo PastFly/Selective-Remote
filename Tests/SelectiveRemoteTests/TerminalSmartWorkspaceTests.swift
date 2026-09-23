@@ -2,6 +2,68 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+@Test("New local Terminal command uses the production generated-tab creation path")
+func newLocalTerminalCommandUsesGeneratedCreationPath() throws {
+    let source = try String(
+        contentsOf: URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/SelectiveRemote/ContentView.swift"),
+        encoding: .utf8
+    )
+    let action = try #require(source.components(separatedBy: "private func openNewLocalTerminalTab()").last?
+        .components(separatedBy: "private func openConnectionCenterSource").first)
+    #expect(action.contains("workspace.tabForNewLocalTerminalCommand("))
+    #expect(!action.contains("workspace.selectedTabID = primary.id"))
+}
+
+@Test("New local Terminal action preserves unknown legacy title and creates locale-reactive tabs")
+@MainActor
+func newLocalTerminalProductionPathPreservesLegacyAndRerenders() throws {
+    let suiteName = "LocalTerminalProductionPath.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    language.selection = .russian
+    let profileID = UUID()
+    let legacyTitle = "Терминал 1"
+    let legacyStorage: [String: Any] = [
+        "tabs": [["id": UUID().uuidString, "title": legacyTitle, "isPrimary": true]],
+        "layout": "single"
+    ]
+    defaults.set(try JSONSerialization.data(withJSONObject: legacyStorage),
+                 forKey: "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)")
+
+    let workspace = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .local(workingDirectory: "/tmp"),
+        defaults: defaults,
+        language: language
+    )
+    let first = try #require(workspace.tabForNewLocalTerminalCommand(workingDirectory: "/tmp"))
+    #expect(first.id != workspace.tabs[0].id)
+    #expect(first.title == "Терминал 1")
+    #expect(first.generatedTitleNumber == 1)
+    let second = try #require(workspace.tabForNewLocalTerminalCommand(workingDirectory: "/tmp"))
+    #expect(second.title == "Терминал 2")
+    workspace.renameTab(second.id, to: "My terminal")
+
+    language.selection = .english
+    #expect(workspace.tabs.map(\.title) == [legacyTitle, "Terminal 1", "My terminal"])
+    let restored = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        primaryConnection: .local(workingDirectory: "/tmp"),
+        defaults: defaults,
+        language: language
+    )
+    #expect(restored.tabs.map(\.title) == [legacyTitle, "Terminal 1", "My terminal"])
+    language.selection = .russian
+    #expect(restored.tabs.map(\.title) == [legacyTitle, "Терминал 1", "My terminal"])
+}
+
 @Test("Выбранный язык приложения сохраняется между запусками")
 @MainActor
 func persistsApplicationLanguage() throws {

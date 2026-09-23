@@ -14,6 +14,54 @@ private func repositorySource(_ relativePath: String) throws -> String {
     )
 }
 
+@Test("Live NSApplication mainMenu survives locale switches and a SwiftUI menu rebuild")
+@MainActor
+func liveApplicationMenuFollowsRuntimeLanguageAfterRebuild() async {
+    let app = NSApplication.shared
+    let previous = app.mainMenu
+    defer { app.mainMenu = previous }
+
+    func installMenu() -> NSMenu {
+        let menu = NSMenu()
+        for title in ["Selective Remote", "Файл", "Правка", "Вид", "Session", "Cloud", "Окно", "Справка"] {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let submenu = NSMenu(title: title)
+            if title == "Файл" {
+                submenu.addItem(NSMenuItem(
+                    title: "Закрыть окно",
+                    action: #selector(NSWindow.performClose(_:)),
+                    keyEquivalent: "w"
+                ))
+            }
+            item.submenu = submenu
+            menu.addItem(item)
+        }
+        app.mainMenu = menu
+        return menu
+    }
+
+    func titles() -> [String] { app.mainMenu?.items.map(\.title) ?? [] }
+    let menu = installMenu()
+    RuntimeMenuLocalization.refresh(.russian)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(titles() == ["Selective Remote", "Файл", "Правка", "Вид", "Сеанс", "Cloud", "Окно", "Справка"])
+
+    RuntimeMenuLocalization.refresh(.english)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(titles() == ["Selective Remote", "File", "Edit", "View", "Session", "Cloud", "Window", "Help"])
+    #expect(menu.items[1].submenu?.items[0].action == #selector(NSWindow.performClose(_:)))
+    #expect(menu.items[1].submenu?.items[0].keyEquivalent == "w")
+
+    _ = installMenu() // SwiftUI/AppKit may rebuild system menus after the first refresh.
+    NotificationCenter.default.post(name: NSApplication.didUpdateNotification, object: app)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(titles() == ["Selective Remote", "File", "Edit", "View", "Session", "Cloud", "Window", "Help"])
+
+    RuntimeMenuLocalization.refresh(.russian)
+    try? await Task.sleep(for: .milliseconds(50))
+    #expect(titles() == ["Selective Remote", "Файл", "Правка", "Вид", "Сеанс", "Cloud", "Окно", "Справка"])
+}
+
 @Test("Runtime language switch localizes Settings, Appearance, and native menu titles both ways")
 @MainActor
 func runtimeLanguageSwitchLocalizesAllSurfaces() throws {

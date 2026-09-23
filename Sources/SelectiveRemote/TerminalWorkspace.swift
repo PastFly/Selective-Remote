@@ -575,6 +575,20 @@ final class TerminalWorkspaceModel: ObservableObject {
         return tabs.filter { visibleIDs.contains($0.id) }
     }
 
+    /// The menu command may reuse only a proven generated, dormant primary tab.
+    /// A persisted title without provenance might be user-defined, even when its
+    /// text resembles a default title, so opening a new tab must preserve it.
+    func tabForNewLocalTerminalCommand(workingDirectory: String) -> TerminalWorkspaceTab? {
+        if displayedTabs.count == 1,
+           let primary = displayedTabs.first,
+           primary.generatedTitleNumber != nil,
+           !primary.session.isRunning {
+            selectedTabID = primary.id
+            return primary
+        }
+        return addTab(connection: .local(workingDirectory: workingDirectory))
+    }
+
     func moveTab(_ draggedID: UUID, to targetID: UUID) {
         guard draggedID != targetID,
               let sourceIndex = tabs.firstIndex(where: { $0.id == draggedID }),
@@ -610,7 +624,7 @@ final class TerminalWorkspaceModel: ObservableObject {
             return tabs[0]
         }
         guard tabs.count < 8 else { return nil }
-        let number = tabs.count + 1
+        let number = (tabs.compactMap(\.generatedTitleNumber).max() ?? 0) + 1
         let generated = title?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
         let tab = TerminalWorkspaceTab(
             id: UUID(),
