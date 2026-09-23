@@ -182,7 +182,7 @@ struct SSHProxyCommandMain {
         }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = [
+        var childArguments = [
             "-p", String(jumpPort),
             "-o", "NumberOfPasswordPrompts=1",
             "-o", "StrictHostKeyChecking=\(args[9])",
@@ -190,8 +190,17 @@ struct SSHProxyCommandMain {
             "-o", "ProxyCommand=none",
             "-o", "ClearAllForwardings=yes",
             "-W", "\(args[4]):\(targetPort)"
-        ] + (args[10].isEmpty ? [] : ["-o", "UserKnownHostsFile=\(args[10])"])
-          + (args[6].isEmpty ? [] : ["-l", args[6]]) + [args[2]]
+        ]
+        if !args[10].isEmpty {
+            childArguments.append("-o")
+            childArguments.append("UserKnownHostsFile=\(args[10])")
+        }
+        if !args[6].isEmpty {
+            childArguments.append("-l")
+            childArguments.append(args[6])
+        }
+        childArguments.append(args[2])
+        process.arguments = childArguments
         var environment = ProcessInfo.processInfo.environment
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_SECRET_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY")

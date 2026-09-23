@@ -99,7 +99,11 @@ def serve_destination(listening, server, key):
         transport.start_server(server=server)
         channel = transport.accept(10)
         if channel:
-            server.shell_ready.wait(5)
+            if server.shell_ready.wait(5):
+                channel.settimeout(5)
+                received = channel.recv(128)
+                if received:
+                    channel.sendall(b"session:" + received)
             channel.send_exit_status(0)
             channel.close()
     finally:
@@ -260,8 +264,8 @@ def case(name, jump_method, destination_method, jump_prompt="Password: ", destin
                 ]
             result = subprocess.run(
                 command,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
+                input=b"transport-ok\n",
+                stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=environment,
                 timeout=20,
@@ -271,6 +275,7 @@ def case(name, jump_method, destination_method, jump_prompt="Password: ", destin
                 assert result.returncode != 0, f"{name}: rejected authentication unexpectedly succeeded"
             else:
                 assert result.returncode == 0, f"{name}: connection failed ({result.returncode})"
+                assert b"session:transport-ok" in result.stdout, f"{name}: destination interactive session unavailable"
         else:
             process = subprocess.Popen(
                 ["/usr/bin/ssh", *arguments],
