@@ -414,8 +414,7 @@ struct LocalTerminalView: View {
     private func addTab() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         guard let tab = workspace.addTab(
-            connection: .local(workingDirectory: home),
-            title: "Terminal \(workspace.displayedTabs.count + 1)"
+            connection: .local(workingDirectory: home)
         ) else { return }
         connect(tab)
     }

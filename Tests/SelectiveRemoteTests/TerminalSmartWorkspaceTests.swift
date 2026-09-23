@@ -18,6 +18,120 @@ func persistsApplicationLanguage() throws {
     #expect(restored.locale.identifier == "en")
 }
 
+@Test("Generated terminal titles follow RU and EN, but explicit titles do not")
+@MainActor
+func generatedTerminalTitlesFollowLanguageWithoutRenamingCustomTabs() throws {
+    let suiteName = "GeneratedTerminalTitles.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+
+    language.selection = .russian
+    let profileID = UUID()
+    let workspace = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        defaults: defaults,
+        language: language
+    )
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1"])
+
+    let second = try #require(workspace.addTab(select: false))
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1", "Терминал 2"])
+
+    language.selection = .english
+    #expect(workspace.tabs.map(\.title) == ["Terminal 1", "Terminal 2"])
+    workspace.renameTab(second.id, to: "Terminal 2")
+
+    language.selection = .russian
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1", "Terminal 2"])
+    language.selection = .english
+    #expect(workspace.tabs.map(\.title) == ["Terminal 1", "Terminal 2"])
+
+    let restoredLanguage = AppLanguageStore(defaults: defaults)
+    #expect(restoredLanguage.selection == .english)
+    let restored = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        defaults: defaults,
+        language: restoredLanguage
+    )
+    #expect(restored.tabs.map(\.title) == ["Terminal 1", "Terminal 2"])
+    restoredLanguage.selection = .russian
+    #expect(restored.tabs.map(\.title) == ["Терминал 1", "Terminal 2"])
+}
+
+@Test("English-first default titles retain their generated origin through a workspace snapshot")
+@MainActor
+func englishGeneratedTerminalTitlesSurviveSnapshotRestore() throws {
+    let suiteName = "EnglishTerminalTitles.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    language.selection = .english
+
+    let workspace = TerminalWorkspaceModel(
+        profileID: UUID(),
+        primarySession: TerminalSessionModel(),
+        defaults: defaults,
+        language: language
+    )
+    #expect(workspace.tabs[0].title == "Terminal 1")
+    let second = try #require(workspace.addTab(select: false))
+    #expect(second.title == "Terminal 2")
+    let primaryID = workspace.tabs[0].id
+    #expect(workspace.updateConnection(
+        tabID: primaryID,
+        connection: .local(workingDirectory: "/tmp"),
+        suggestedTitle: workspace.tabs[0].title
+    ))
+    let snapshot = workspace.workspaceSnapshot()
+
+    language.selection = .russian
+    #expect(workspace.restoreWorkspaceSnapshot(snapshot))
+    #expect(workspace.tabs.map(\.title) == ["Терминал 1", "Терминал 2"])
+}
+
+@Test("Historical terminal titles without origin metadata remain unclassified and unchanged")
+@MainActor
+func historicalTerminalTitleWithoutProvenanceIsNotGuessedFromItsText() throws {
+    let suiteName = "LegacyTerminalTitles.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    language.selection = .english
+    let profileID = UUID()
+    let historicalTabID = UUID()
+    let legacyTitle = "  Терминал 1 — ручное  "
+    let legacyStorage: [String: Any] = [
+        "tabs": [["id": historicalTabID.uuidString, "title": legacyTitle, "isPrimary": true]],
+        "layout": "single"
+    ]
+    defaults.set(
+        try JSONSerialization.data(withJSONObject: legacyStorage),
+        forKey: "SelectiveRemote.terminal.workspace.v1.\(profileID.uuidString)"
+    )
+
+    let workspace = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        defaults: defaults,
+        language: language
+    )
+    #expect(workspace.tabs[0].title == legacyTitle)
+    #expect(workspace.tabs[0].generatedTitleNumber == nil)
+    language.selection = .russian
+    language.selection = .english
+    #expect(workspace.tabs[0].title == legacyTitle)
+    let restored = TerminalWorkspaceModel(
+        profileID: profileID,
+        primarySession: TerminalSessionModel(),
+        defaults: defaults,
+        language: language
+    )
+    #expect(restored.tabs[0].title == legacyTitle)
+}
+
 @Test("Рабочая область терминала восстанавливает вкладки без автоподключения")
 @MainActor
 func restoresTerminalWorkspaceWithoutStartingSessions() throws {

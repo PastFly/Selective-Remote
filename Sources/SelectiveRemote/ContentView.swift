@@ -3824,8 +3824,7 @@ struct ContentView: View {
             tab = primary
         } else {
             tab = workspace.addTab(
-                connection: .local(workingDirectory: home),
-                title: "Terminal \(workspace.displayedTabs.count + 1)"
+                connection: .local(workingDirectory: home)
             )
         }
         if let tab {
