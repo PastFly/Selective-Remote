@@ -108,6 +108,9 @@ func bridge(_ socketFD: Int32) -> Never {
 struct SSHProxyCommandMain {
     static func main() {
         let args = CommandLine.arguments
+        if args.count >= 4, args[1] == "mosh-launch" {
+            runMosh(args)
+        }
         if args.count == 11, args[1] == "jump" {
             runJump(args)
         }
@@ -207,11 +210,34 @@ struct SSHProxyCommandMain {
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_TARGET_IDENTITY")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH")
         process.environment = environment
         process.standardInput = FileHandle.standardInput
         process.standardOutput = FileHandle.standardOutput
         process.standardError = FileHandle.standardError
         do { try process.run() } catch { die("jump transport unavailable") }
+        process.waitUntilExit()
+        exit(process.terminationStatus)
+    }
+
+    private static func runMosh(_ args: [String]) -> Never {
+        let environment = ProcessInfo.processInfo.environment
+        guard let target = environment["SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY"],
+              target.hasPrefix("destination|"),
+              environment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] == String(getppid()) else {
+            die("mosh authentication context unavailable")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: args[2])
+        process.arguments = Array(args.dropFirst(3))
+        var scopedEnvironment = environment
+        scopedEnvironment["SELECTIVEREMOTE_ASKPASS_OWNER_PID"] = String(getpid())
+        scopedEnvironment["SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH"] = "mosh"
+        process.environment = scopedEnvironment
+        process.standardInput = FileHandle.standardInput
+        process.standardOutput = FileHandle.standardOutput
+        process.standardError = FileHandle.standardError
+        do { try process.run() } catch { die("mosh client unavailable") }
         process.waitUntilExit()
         exit(process.terminationStatus)
     }

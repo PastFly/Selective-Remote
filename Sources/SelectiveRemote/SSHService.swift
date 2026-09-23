@@ -996,6 +996,7 @@ enum SSHKeyService {
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_TARGET_IDENTITY")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_CREDENTIAL_IDENTITY")
         environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_OWNER_PID")
+        environment.removeValue(forKey: "SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_TARGET_IDENTITY")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_CREDENTIAL_IDENTITY")
         environment.removeValue(forKey: "SELECTIVEREMOTE_JUMP_PASSWORD_STATE_FILE")

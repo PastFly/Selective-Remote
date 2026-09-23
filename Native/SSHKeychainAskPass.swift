@@ -199,6 +199,15 @@ struct SSHKeychainAskPass {
         var length = MemoryLayout<kinfo_proc>.stride
         guard sysctl(&identifiers, u_int(identifiers.count), &process, &length, nil, 0) == 0,
               length == MemoryLayout<kinfo_proc>.stride else { return false }
+        if process.kp_eproc.e_ppid == ownerPID { return true }
+        guard environment["SELECTIVEREMOTE_ASKPASS_ROUTING_DEPTH"] == "mosh" else { return false }
+        // Mosh forks once before exec'ing SSH. The scoped launcher is the
+        // parent of that Mosh process; an additional SSH ProxyCommand child
+        // sits one level deeper and remains outside this credential scope.
+        identifiers[3] = process.kp_eproc.e_ppid
+        length = MemoryLayout<kinfo_proc>.stride
+        guard sysctl(&identifiers, u_int(identifiers.count), &process, &length, nil, 0) == 0,
+              length == MemoryLayout<kinfo_proc>.stride else { return false }
         return process.kp_eproc.e_ppid == ownerPID
     }
 

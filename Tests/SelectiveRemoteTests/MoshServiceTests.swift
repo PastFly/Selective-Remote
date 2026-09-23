@@ -59,12 +59,13 @@ func moshLaunchArguments() throws {
         executablePath: "/opt/homebrew/bin/mosh"
     )
 
-    #expect(launch.executable == "/opt/homebrew/bin/mosh")
+    #expect(launch.executable.contains("SelectiveRemoteSSHProxy"))
+    #expect(launch.arguments.prefix(2).elementsEqual(["mosh-launch", "/opt/homebrew/bin/mosh"]))
     #expect(launch.arguments.contains("--port"))
     #expect(launch.arguments.contains("60007"))
     #expect(launch.arguments.contains("--server=/opt/mosh server/bin/mosh-server"))
     #expect(launch.arguments.last == "server.example.com")
-    let sshOption = try #require(launch.arguments.first)
+    let sshOption = try #require(launch.arguments.first(where: { $0.hasPrefix("--ssh=") }))
     #expect(sshOption.hasPrefix("--ssh="))
     #expect(sshOption.contains("'/usr/bin/ssh'"))
     #expect(sshOption.contains("'2222'"))

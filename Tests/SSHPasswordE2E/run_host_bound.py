@@ -128,13 +128,16 @@ def serve_jump(listening, server, key, destination_port):
                         (destination if source is channel else channel).sendall(data)
             finally:
                 destination.close()
-                channel.close()
+                try:
+                    channel.close()
+                except EOFError:
+                    pass
     finally:
         transport.close()
         listening.close()
 
 
-def case(name, jump_method, destination_method, jump_prompt="Password: ", destination_prompt="Password: ", kind="terminal", saved_jump=True, saved_destination=True, wrong_jump=False, wrong_destination=False, cancel=False, expect_failure=False, unmanaged_jump=False):
+def case(name, jump_method, destination_method, jump_prompt="Password: ", destination_prompt="Password: ", kind="terminal", saved_jump=True, saved_destination=True, wrong_jump=False, wrong_destination=False, cancel=False, expect_failure=False, unmanaged_jump=False, mosh_wrapper=False):
     with tempfile.TemporaryDirectory(prefix="sr-host-bound-") as directory:
         root = Path(directory)
         destination_listener = listener()
@@ -248,8 +251,15 @@ def case(name, jump_method, destination_method, jump_prompt="Password: ", destin
         destination_thread.start()
         jump_thread.start()
         if kind == "terminal":
+            command = ["/usr/bin/ssh", *arguments]
+            if mosh_wrapper:
+                command = [
+                    str(PROXY_HELPER), "mosh-launch", sys.executable, "-c",
+                    "import subprocess,sys;sys.exit(subprocess.run(sys.argv[1:]).returncode)",
+                    *command,
+                ]
             result = subprocess.run(
-                ["/usr/bin/ssh", *arguments],
+                command,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -323,7 +333,9 @@ case("jump_repeated_keyboard_interactive", "repeat", "password", jump_prompt="Pa
 case("destination_repeated_keyboard_interactive", "password", "repeat", destination_prompt="Password for jump.example: ")
 case("sftp_through_jump", "password", "password", kind="sftp")
 case("forwarding_through_jump", "password", "password", kind="forwarding")
+case("mosh_saved_password_through_jump", "password", "password", mosh_wrapper=True)
 if os.environ.get("SR_TEST_INCLUDE_CANCEL") == "1":
+    case("mosh_unmanaged_jump_cannot_inherit_destination_secret", "password", "password", unmanaged_jump=True, mosh_wrapper=True)
     case("jump_cancel", "password", "password", saved_jump=False, cancel=True)
     case("manual_jump", "password", "password", saved_jump=False)
     case("manual_destination", "password", "password", saved_destination=False)
