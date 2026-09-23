@@ -206,7 +206,7 @@ struct CloudTeamHostsTests {
         #expect(!details.contains(invalid.vaultID.uuidString))
     }
 
-    @Test("Team Host warning exposes keyboard-accessible retry and diagnostics without weakening fail-closed projection")
+    @Test("Team Host warning keeps recovery local and content-sized without weakening fail-closed projection")
     func materializationWarningInteractionContract() throws {
         let sourceURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -220,9 +220,22 @@ struct CloudTeamHostsTests {
         #expect(source.contains("warningButtonFocused = true"))
         #expect(source.contains(".keyboardShortcut(.cancelAction)"))
         #expect(source.contains("synchronizeConfiguredAccountNow()"))
-        #expect(source.contains("onShowDiagnostics()"))
+        #expect(!source.contains("onShowDiagnostics()"))
+        #expect(!source.contains(".frame(minWidth: 520, minHeight: 340)"))
         #expect(source.contains("nextHosts += try SelectiveRemoteTeamHostMaterializer.materialize(snapshot)"))
         #expect(source.contains("} catch {\n                invalid += 1"))
+    }
+
+    @Test("Team Host warning names multiple hidden projections without claiming corrupted data")
+    func materializationWarningMultipleCopy() {
+        #expect(SelectiveRemoteTeamHostWarningCopy.summary(count: 2, english: false)
+                == "Не удалось показать хосты из 2 Team Vaults")
+        #expect(SelectiveRemoteTeamHostWarningCopy.summary(count: 2, english: true)
+                == "Hosts from 2 Team Vaults could not be displayed")
+        #expect(SelectiveRemoteTeamHostWarningCopy.explanation(count: 2, english: false)
+                .contains("временно скрыты"))
+        #expect(SelectiveRemoteTeamHostWarningCopy.explanation(count: 2, english: true)
+                .contains("temporarily hidden"))
     }
 
 

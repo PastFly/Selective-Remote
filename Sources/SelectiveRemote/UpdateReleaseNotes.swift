@@ -40,6 +40,22 @@ struct UpdateReleaseNotesSection: Identifiable, Equatable, Sendable {
     var id: String { version }
 }
 
+struct UpdateReleaseNotesHighlight: Equatable, Sendable {
+    let title: String
+    let description: String
+
+    init?(_ change: String) {
+        guard change.hasPrefix("**"), let separator = change.range(of: "** — ") else {
+            return nil
+        }
+        let title = String(change[change.index(change.startIndex, offsetBy: 2)..<separator.lowerBound])
+        let description = String(change[separator.upperBound...])
+        guard !title.isEmpty, !description.isEmpty else { return nil }
+        self.title = title
+        self.description = description
+    }
+}
+
 struct UpdateReleaseNotesHistory: Equatable, Sendable {
     let sections: [UpdateReleaseNotesSection]
     let language: UpdateReleaseNotesLanguage
@@ -810,24 +826,54 @@ private struct UpdateReleaseNotesView: View {
                 Spacer()
             }
 
-            VStack(alignment: .leading, spacing: 9) {
-                ForEach(Array(section.changes.enumerated()), id: \.offset) { item in
-                    HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Circle()
-                            .fill(Color.secondary.opacity(0.65))
-                            .frame(width: 5, height: 5)
-                        markdownText(item.element)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+            if section.version == "0.32.0" {
+                let highlights = section.changes.compactMap(UpdateReleaseNotesHighlight.init)
+                if !highlights.isEmpty, highlights.count == section.changes.count {
+                    VStack(alignment: .leading, spacing: 14) {
+                        ForEach(Array(highlights.enumerated()), id: \.offset) { item in
+                            if item.offset > 0 { Divider() }
+                            releaseHighlight(item.element)
+                        }
                     }
+                    .textSelection(.enabled)
+                } else {
+                    releaseBullets(section.changes)
                 }
+            } else {
+                releaseBullets(section.changes)
             }
-            .textSelection(.enabled)
 
             if !isLast {
                 Divider()
                     .padding(.vertical, 9)
             }
         }
+    }
+
+    private func releaseHighlight(_ highlight: UpdateReleaseNotesHighlight) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(highlight.title)
+                .font(.headline)
+            Text(highlight.description)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func releaseBullets(_ changes: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            ForEach(Array(changes.enumerated()), id: \.offset) { item in
+                HStack(alignment: .firstTextBaseline, spacing: 9) {
+                    Circle()
+                        .fill(Color.secondary.opacity(0.65))
+                        .frame(width: 5, height: 5)
+                    markdownText(item.element)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        }
+        .textSelection(.enabled)
     }
 
     private func markdownText(_ value: String) -> Text {

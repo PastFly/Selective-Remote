@@ -1,12 +1,10 @@
 ## 0.32.0
 
-- Introducing Selective Remote Cloud: sign in to manage connections from your Mac and browser. Local use without an account remains available.
-- Personal Vault protects your Hosts, Credentials, and Snippets with end-to-end encryption and syncs them across trusted devices.
-- Team Vaults let you share Hosts, Credentials, and Snippets with teammates, with roles, invitations, and device access controls.
-- Manage personal data, teams, and devices in the browser, with changes synchronized to your Mac.
-- Personal and Team Hosts now share familiar folders, search, sorting, list, and grid views. Team actions respect member roles.
-- Mac and browser interfaces have improved forms, keyboard navigation, mobile layout, RU/EN support, and light-theme readability.
-- Official releases have stronger publisher verification and safer updates.
+- **Selective Remote Cloud** — new in this public release: work with connections on your Mac and in the browser. Local use without an account remains available.
+- **Personal Vault** — Hosts, Credentials, and Snippets are protected with end-to-end encryption and synced across trusted devices.
+- **Team Vaults** — share Hosts, Credentials, and Snippets with teammates, with roles, invitations, and device access controls.
+- **Browser and devices** — manage personal data, teams, and devices in the browser; changes sync with your Mac.
+- **Everyday workflows** — Personal and Team Hosts share folders, search, sorting, list, and grid views. Forms, keyboard use, mobile layout, RU/EN, and light-theme readability are improved; official updates verify the publisher.
 
 ## 0.31.0
 

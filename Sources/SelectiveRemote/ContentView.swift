@@ -2065,9 +2065,6 @@ struct ContentView: View {
                         onShowPersonal: {
                             hostScope = .personal
                             refreshHostPresentations()
-                        },
-                        onShowDiagnostics: {
-                            setMainArea(.diagnostics)
                         }
                     )
                     .id("team-host-detail-\(hostScopePresentationID)")

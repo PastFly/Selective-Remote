@@ -29,6 +29,35 @@ struct UpdateReleaseNotesTests {
         }
     }
 
+    @Test("0.32.0 is five concise titled highlights while earlier release history remains available")
+    func publicCloudHighlightsAreScannable() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for (file, expectedTitles) in [
+            ("CHANGELOG.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Браузер и устройства", "Удобнее каждый день"]),
+            ("CHANGELOG_EN.md", ["Selective Remote Cloud", "Personal Vault", "Team Vaults", "Browser and devices", "Everyday workflows"])
+        ] {
+            let markdown = try String(contentsOf: root.appendingPathComponent(file), encoding: .utf8)
+            let sections = try UpdateReleaseNotesParser.parseInstalledHistory(markdown, currentVersion: "0.32.0")
+            let latest = try #require(sections.first)
+            #expect(latest.version == "0.32.0")
+            #expect(latest.changes.count == 5)
+            for (line, title) in zip(latest.changes, expectedTitles) {
+                #expect(line.hasPrefix("**\(title)** — "))
+                #expect(line.count <= 235)
+            }
+            let highlights = latest.changes.compactMap(UpdateReleaseNotesHighlight.init)
+            #expect(highlights.count == 5)
+            #expect(highlights.map(\.title) == expectedTitles)
+            #expect(highlights.allSatisfy { !$0.description.isEmpty })
+            #expect(sections.contains { $0.version == "0.31.0" })
+        }
+        #expect(UpdateReleaseNotesHighlight("Plain historical bullet") == nil)
+        let viewSource = try String(contentsOf: root.appendingPathComponent("Sources/SelectiveRemote/UpdateReleaseNotes.swift"), encoding: .utf8)
+        #expect(viewSource.contains("if section.version == \"0.32.0\""))
+        #expect(viewSource.contains("releaseHighlight"))
+    }
+
     @Test("Что нового показывает пропущенные версии от свежей к старой")
     func skippedVersionsAreNewestFirst() throws {
         let markdown = """

@@ -477,14 +477,24 @@ enum SelectiveRemoteTeamHostWarningCopy {
         return "\(english ? "Needs attention" : "Требует внимания") · \(count)"
     }
 
-    static func summary(english: Bool) -> String {
-        english ? "Hosts from one team could not be displayed" : "Не удалось показать хосты одной команды"
+    static func summary(count: Int = 1, english: Bool) -> String {
+        if count == 1 {
+            return english ? "Hosts from one team could not be displayed" : "Не удалось показать хосты одной команды"
+        }
+        return english
+            ? "Hosts from \(count) Team Vaults could not be displayed"
+            : "Не удалось показать хосты из \(count) Team Vaults"
     }
 
-    static func explanation(english: Bool) -> String {
-        english
-            ? "Selective Remote could not safely read the hosts from one Team Vault, so they are temporarily hidden. Other data was not changed."
-            : "Selective Remote не смог безопасно прочитать хосты одного Team Vault, поэтому они временно скрыты. Остальные данные не изменены."
+    static func explanation(count: Int = 1, english: Bool) -> String {
+        if count == 1 {
+            return english
+                ? "Selective Remote could not safely read the hosts from one Team Vault, so they are temporarily hidden. Other data was not changed."
+                : "Selective Remote не смог безопасно прочитать хосты одного Team Vault, поэтому они временно скрыты. Остальные данные не изменены."
+        }
+        return english
+            ? "Selective Remote could not safely read the hosts from these Team Vaults, so they are temporarily hidden. Other data was not changed."
+            : "Selective Remote не смог безопасно прочитать хосты этих Team Vaults, поэтому они временно скрыты. Остальные данные не изменены."
     }
 
     static func details(english: Bool) -> String {
@@ -651,54 +661,38 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
     let isRetrying: Bool
     let retryFailed: Bool
     let onRetry: () -> Void
-    let onShowDiagnostics: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label(
-                SelectiveRemoteTeamHostWarningCopy.summary(english: UpdateLocalization.usesEnglish),
+                SelectiveRemoteTeamHostWarningCopy.summary(
+                    count: store.materializationIssues.count, english: UpdateLocalization.usesEnglish
+                ),
                 systemImage: "exclamationmark.triangle.fill"
             )
-            .font(.title2.bold())
-            .foregroundStyle(.orange)
+            .font(.headline)
+            .foregroundStyle(.primary)
 
-            Text(SelectiveRemoteTeamHostWarningCopy.explanation(english: UpdateLocalization.usesEnglish))
+            Text(SelectiveRemoteTeamHostWarningCopy.explanation(
+                count: store.materializationIssues.count, english: UpdateLocalization.usesEnglish
+            ))
             .fixedSize(horizontal: false, vertical: true)
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(store.materializationIssues) { issue in
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(issue.vaultName.map { vault in
-                                issue.teamName.map { "\($0) / \(vault)" } ?? vault
-                            } ?? UpdateLocalization.text(
-                                ru: "Имя хранилища недоступно", en: "Vault name unavailable"
-                            ))
-                            .font(.headline)
-                            Text(SelectiveRemoteTeamHostWarningCopy.category(
-                                issue.category, english: UpdateLocalization.usesEnglish
-                            ))
-                            .foregroundStyle(.secondary)
-                            Text(UpdateLocalization.text(
-                                ru: "Последняя попытка: \(UpdateLocalization.dateTime(issue.lastAttempt))",
-                                en: "Last attempt: \(UpdateLocalization.dateTime(issue.lastAttempt))"
-                            ))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    }
+            if store.materializationIssues.count > 3 {
+                ScrollView {
+                    issueRows
                 }
+                .frame(maxHeight: 240)
+            } else {
+                issueRows
             }
 
             if retryFailed {
                 Label(UpdateLocalization.text(
-                    ru: "Повторная синхронизация не завершилась. Откройте диагностику и проверьте доступ к команде.",
-                    en: "Sync did not complete. Open Diagnostics and check your team access."
+                    ru: "Повторная синхронизация не завершилась. Подождите и повторите позже; сведения об ошибке показаны выше.",
+                    en: "Sync did not complete. Wait and retry later; the issue details are shown above."
                 ), systemImage: "exclamationmark.circle")
-                .foregroundStyle(.orange)
+                .foregroundStyle(.secondary)
             }
 
             HStack {
@@ -706,15 +700,41 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
                        systemImage: "arrow.clockwise") { onRetry() }
                     .disabled(isRetrying)
                 if isRetrying { ProgressView().controlSize(.small) }
-                Button(UpdateLocalization.text(ru: "Диагностика", en: "Diagnostics"),
-                       systemImage: "stethoscope") { onShowDiagnostics() }
                 Spacer()
                 Button(UpdateLocalization.text(ru: "Закрыть", en: "Close")) { dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
         }
-        .padding(24)
-        .frame(minWidth: 520, minHeight: 340)
+        .padding(22)
+        .frame(width: 520)
+    }
+
+    private var issueRows: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(store.materializationIssues) { issue in
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(issue.vaultName.map { vault in
+                        issue.teamName.map { "\($0) / \(vault)" } ?? vault
+                    } ?? UpdateLocalization.text(
+                        ru: "Имя хранилища недоступно", en: "Vault name unavailable"
+                    ))
+                    .font(.headline)
+                    Text(SelectiveRemoteTeamHostWarningCopy.category(
+                        issue.category, english: UpdateLocalization.usesEnglish
+                    ))
+                    .foregroundStyle(.secondary)
+                    Text(UpdateLocalization.text(
+                        ru: "Последняя попытка: \(UpdateLocalization.dateTime(issue.lastAttempt))",
+                        en: "Last attempt: \(UpdateLocalization.dateTime(issue.lastAttempt))"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+            }
+        }
     }
 }
 
@@ -729,7 +749,6 @@ struct SelectiveRemoteTeamHostsView: View {
     let onOpenTerminal: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onOpenSFTP: (SelectiveRemoteTeamHost, String, String?) -> Void
     let onShowPersonal: () -> Void
-    let onShowDiagnostics: () -> Void
 
     @State private var warningDetailsPresented = false
     @State private var warningRetryInProgress = false
@@ -1070,11 +1089,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 store: store,
                 isRetrying: warningRetryInProgress,
                 retryFailed: warningRetryFailed,
-                onRetry: retryHiddenTeamHosts,
-                onShowDiagnostics: {
-                    warningDetailsPresented = false
-                    onShowDiagnostics()
-                }
+                onRetry: retryHiddenTeamHosts
             )
         }
         .confirmationDialog(
