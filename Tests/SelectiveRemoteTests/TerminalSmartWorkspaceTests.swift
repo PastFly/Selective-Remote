@@ -138,11 +138,14 @@ func restoresTerminalWorkspaceWithoutStartingSessions() throws {
     let suiteName = "TerminalSmartWorkspaceTests.\(UUID().uuidString)"
     let defaults = try #require(UserDefaults(suiteName: suiteName))
     defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+    language.selection = .russian
     let profileID = UUID()
     let workspace = TerminalWorkspaceModel(
         profileID: profileID,
         primarySession: TerminalSessionModel(),
-        defaults: defaults
+        defaults: defaults,
+        language: language
     )
 
     let second = try #require(workspace.addTab(
@@ -154,7 +157,8 @@ func restoresTerminalWorkspaceWithoutStartingSessions() throws {
     let restored = TerminalWorkspaceModel(
         profileID: profileID,
         primarySession: TerminalSessionModel(),
-        defaults: defaults
+        defaults: defaults,
+        language: language
     )
     #expect(restored.tabs.map(\.title) == ["Терминал 1", "Журналы"])
     #expect(restored.layout == .splitHorizontal)
