@@ -1381,7 +1381,7 @@ private struct SFTPWorkspaceLocalPaneView: View {
 
     private func chooseLocalDirectory() {
         let panel = NSOpenPanel()
-        panel.title = "Выберите локальную папку"
+        SFTPWorkspacePanelLocalization.configureLocalFolder(panel)
         panel.directoryURL = model.currentDirectory
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -2267,7 +2267,7 @@ private func sftpWorkspacePathSuggestions(
 @MainActor
 private func sftpWorkspaceChooseApplication(completion: (URL) -> Void) {
     let panel = NSOpenPanel()
-    panel.title = "Выберите приложение"
+    SFTPWorkspacePanelLocalization.configureApplication(panel)
     panel.directoryURL = URL(fileURLWithPath: "/Applications", isDirectory: true)
     panel.canChooseFiles = true
     panel.canChooseDirectories = false
@@ -2275,6 +2275,17 @@ private func sftpWorkspaceChooseApplication(completion: (URL) -> Void) {
     panel.allowedContentTypes = [.application]
     guard panel.runModal() == .OK, let applicationURL = panel.url else { return }
     completion(applicationURL)
+}
+
+@MainActor
+enum SFTPWorkspacePanelLocalization {
+    static func configureLocalFolder(_ panel: NSOpenPanel, english: Bool = UpdateLocalization.usesEnglish) {
+        panel.title = english ? "Choose a Local Folder" : "Выберите локальную папку"
+    }
+
+    static func configureApplication(_ panel: NSOpenPanel, english: Bool = UpdateLocalization.usesEnglish) {
+        panel.title = english ? "Choose an Application" : "Выберите приложение"
+    }
 }
 
 @MainActor

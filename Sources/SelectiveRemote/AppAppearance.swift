@@ -20,6 +20,9 @@ enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         case .dark: "Тёмная"
         }
     }
+    func localizedTitle(in language: AppLanguage) -> String {
+        UpdateLocalization.key("appearance.theme.\(rawValue)", english: language.usesEnglish)
+    }
     var colorScheme: ColorScheme? {
         switch self {
         case .system: nil
@@ -43,6 +46,10 @@ enum AppTextSize: String, CaseIterable, Identifiable, Sendable {
         case .large: "Большой"
         case .extraLarge: "Очень большой"
         }
+    }
+    func localizedTitle(in language: AppLanguage) -> String {
+        let key = self == .extraLarge ? "extra_large" : rawValue
+        return UpdateLocalization.key("appearance.text_size.\(key)", english: language.usesEnglish)
     }
     var dynamicTypeSize: DynamicTypeSize {
         switch self {
@@ -126,6 +133,9 @@ enum AppDensity: String, CaseIterable, Identifiable, Sendable {
         case .standard: "Стандартная"
         case .comfortable: "Комфортная"
         }
+    }
+    func localizedTitle(in language: AppLanguage) -> String {
+        UpdateLocalization.key("appearance.density.\(rawValue)", english: language.usesEnglish)
     }
     var controlSize: ControlSize {
         switch self {
@@ -263,19 +273,19 @@ struct AppAppearanceSettingsSection: View {
             Section(language.localized("appearance.section.theme")) {
                 Picker(language.localized("appearance.theme"), selection: $store.theme) {
                     ForEach(AppTheme.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()
                 Picker(language.localized("appearance.text_size"), selection: $store.textSize) {
                     ForEach(AppTextSize.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()
                 Picker(language.localized("appearance.density"), selection: $store.density) {
                     ForEach(AppDensity.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 .modernMenuPicker()

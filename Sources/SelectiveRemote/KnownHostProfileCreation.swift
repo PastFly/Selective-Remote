@@ -110,6 +110,7 @@ extension AppModel {
 }
 
 struct KnownHostSSHProfileCreationView: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var model: AppModel
     let entry: SSHKnownHostEntry
@@ -195,11 +196,14 @@ struct KnownHostSSHProfileCreationView: View {
                 }
                 if let duplicate {
                     VStack(alignment: .leading, spacing: 8) {
-                        Label("Такой SSH-профиль уже существует: \(duplicate.friendlyName)", systemImage: "rectangle.stack").foregroundStyle(.orange)
+                        Label(UpdateLocalization.formatted("hosts.known_host.duplicate",
+                            english: language.selection.usesEnglish, duplicate.friendlyName),
+                            systemImage: "rectangle.stack").foregroundStyle(.orange)
                         Button("Открыть существующий", systemImage: "arrow.right.circle") { onOpenProfile(duplicate.id); dismiss() }
                     }
                 } else if !sameEndpointProfiles.isEmpty {
-                    Text("Для этого host:port уже есть профиль: " + sameEndpointProfiles.map(\.friendlyName).joined(separator: ", ") + ". С другим пользователем можно создать отдельный профиль.")
+                    Text(String(format: language.localized("hosts.known_host.same_endpoint.help"),
+                                sameEndpointProfiles.map(\.friendlyName).joined(separator: ", ")))
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

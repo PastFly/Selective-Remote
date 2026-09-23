@@ -14,7 +14,6 @@ final class RDPSessionControlPanelController: NSObject, NSWindowDelegate {
                 backing: .buffered,
                 defer: false
             )
-            panel.title = "Управление RDP"
             panel.level = .floating
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.hidesOnDeactivate = false
@@ -22,11 +21,18 @@ final class RDPSessionControlPanelController: NSObject, NSWindowDelegate {
             panel.delegate = self
             self.panel = panel
         }
+        if let panel {
+            Self.configureTitle(panel)
+        }
         panel?.contentView = NSHostingView(
             rootView: RDPSessionControlPanelView(model: model)
         )
         panel?.center()
         panel?.orderFrontRegardless()
+    }
+
+    static func configureTitle(_ panel: NSPanel, english: Bool = UpdateLocalization.usesEnglish) {
+        panel.title = english ? "RDP Controls" : "Управление RDP"
     }
 }
 

@@ -7,6 +7,9 @@ enum SerialParity: String, Codable, CaseIterable, Identifiable {
     case odd
 
     var id: String { rawValue }
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        UpdateLocalization.key("terminal.serial.parity.\(rawValue)", english: english)
+    }
     var title: String {
         switch self {
         case .none: "Нет"
@@ -22,6 +25,9 @@ enum SerialFlowControl: String, Codable, CaseIterable, Identifiable {
     case software
 
     var id: String { rawValue }
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        UpdateLocalization.key("terminal.serial.flow.\(rawValue)", english: english)
+    }
     var title: String {
         switch self {
         case .none: "Нет"
@@ -38,6 +44,38 @@ enum TerminalWorkspaceLayout: String, Codable, CaseIterable, Identifiable {
     case grid
 
     var id: String { rawValue }
+
+    var localizedTitle: String {
+        title(forEnglish: UpdateLocalization.usesEnglish)
+    }
+
+    private func title(forEnglish english: Bool) -> String {
+        switch self {
+        case .single: english ? "Single pane" : "Одна панель"
+        case .splitHorizontal: english ? "Split left to right" : "Разделить слева направо"
+        case .splitVertical: english ? "Split top to bottom" : "Разделить сверху вниз"
+        case .grid: english ? "Grid of up to four panes" : "Сетка до четырёх панелей"
+        }
+    }
+
+    func localizedSummary(tabCount: Int, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let layout = title(forEnglish: english)
+        if english {
+            return "\(tabCount) \(tabCount == 1 ? "tab" : "tabs") · \(layout)"
+        }
+        let lastTwo = tabCount % 100
+        let noun: String
+        if (11...14).contains(lastTwo) {
+            noun = "вкладок"
+        } else {
+            switch tabCount % 10 {
+            case 1: noun = "вкладка"
+            case 2...4: noun = "вкладки"
+            default: noun = "вкладок"
+            }
+        }
+        return "\(tabCount) \(noun) · \(layout)"
+    }
 
     var title: String {
         switch self {
@@ -65,6 +103,24 @@ enum TerminalWorkspaceSessionState: Equatable {
     case stopping
     case disconnected
     case error(Int32)
+
+    func localizedTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let suffix: String
+        switch self {
+        case .connecting: suffix = "connecting"
+        case .connected: suffix = "connected"
+        case .reconnecting: suffix = "reconnecting"
+        case .stopping: suffix = "stopping"
+        case .disconnected: suffix = "disconnected"
+        case .error: suffix = "error"
+        }
+        return UpdateLocalization.key("terminal.state.\(suffix)", english: english)
+    }
+
+    func localizedDetail(english: Bool = UpdateLocalization.usesEnglish) -> String? {
+        guard case let .error(code) = self else { return nil }
+        return UpdateLocalization.formatted("terminal.state.exitCode", english: english, code)
+    }
 
     static func resolve(
         phase: EmbeddedTerminalPhase,
@@ -106,12 +162,7 @@ enum TerminalWorkspaceSessionState: Equatable {
     }
 
     var detail: String? {
-        switch self {
-        case let .error(code):
-            "Exit code \(code)"
-        default:
-            nil
-        }
+        localizedDetail()
     }
 
     var systemImage: String {
@@ -687,7 +738,8 @@ final class TerminalWorkspaceModel: ObservableObject {
         if tabs.count == 1 {
             tabs[0].session.stop()
             remoteContexts[id] = nil
-            tabs[0].title = "Новый терминал"
+            tabs[0].title = Self.generatedTitle(0, language: language.selection)
+            tabs[0].generatedTitleNumber = 0
             tabs[0].connection = .custom(host: "", username: "")
             tabs[0].isPrimary = true
             tabs[0].isEphemeral = false
@@ -965,7 +1017,10 @@ final class TerminalWorkspaceModel: ObservableObject {
     }
 
     private static func generatedTitle(_ number: Int, language: AppLanguage) -> String {
-        "\(language.usesEnglish ? "Terminal" : "Терминал") \(number)"
+        if number == 0 {
+            return language.usesEnglish ? "New Terminal" : "Новый терминал"
+        }
+        return "\(language.usesEnglish ? "Terminal" : "Терминал") \(number)"
     }
 
     private func refreshGeneratedTitles(for selection: AppLanguage) {

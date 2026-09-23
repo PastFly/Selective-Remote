@@ -18,6 +18,10 @@ enum AppLanguage: String, CaseIterable, Identifiable {
         }
     }
 
+    func localizedTitle(in language: AppLanguage) -> String {
+        UpdateLocalization.key("appearance.language.\(rawValue)", english: language.usesEnglish)
+    }
+
     var locale: Locale {
         switch self {
         case .system: .current

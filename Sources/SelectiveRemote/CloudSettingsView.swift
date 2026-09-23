@@ -285,7 +285,10 @@ struct CloudSettingsView: View {
                         )
                         .foregroundStyle(.secondary)
                     } else if !personalVaultSyncError.isEmpty {
-                        Label(personalVaultSyncError, systemImage: "exclamationmark.triangle.fill")
+                        Label(
+                            SelectiveRemotePersonalVaultSyncStatus.message(for: personalVaultSyncError),
+                            systemImage: "exclamationmark.triangle.fill"
+                        )
                             .foregroundStyle(.orange)
                             .font(.caption)
                             .fixedSize(horizontal: false, vertical: true)
@@ -849,10 +852,7 @@ struct CloudSettingsView: View {
         guard personalVaultLastSuccess > 0 else {
             return UpdateLocalization.text(ru: "Ещё не выполнялась", en: "Not yet synchronized")
         }
-        return Date(timeIntervalSince1970: personalVaultLastSuccess).formatted(
-            date: .abbreviated,
-            time: .standard
-        )
+        return UpdateLocalization.dateTimeShort(Date(timeIntervalSince1970: personalVaultLastSuccess))
     }
 
     @MainActor @ViewBuilder

@@ -41,6 +41,77 @@ enum ForwardingManagerOwnership: String, Hashable {
     }
 }
 
+enum ForwardingManagerCopy {
+    enum SummaryTitle { case active, profile, independent, errors }
+    enum LogField {
+        case state, mode, ownership, bind, destination, ssh, authentication
+        case jumpHost, proxy, localListener, destinationEvidence
+        case lastRuntimeError, lastForwardingFailure
+    }
+
+    static func summaryTitle(_ title: SummaryTitle, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        switch title {
+        case .active: english ? "Active tunnels" : "Активные туннели"
+        case .profile: english ? "Profile tunnel" : "Туннель профиля"
+        case .independent: english ? "Independent tunnel" : "Независимый туннель"
+        case .errors: english ? "Errors" : "Ошибки"
+        }
+    }
+
+    static func errorDetail(hasErrors: Bool, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        hasErrors
+            ? (english ? "needs attention" : "требует внимания")
+            : (english ? "no problems" : "нет проблем")
+    }
+
+    static func hopTitle(count: Int, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        count == 1
+            ? (english ? "Direct" : "Напрямую")
+            : (english ? "\(count) hops" : "\(count) узла")
+    }
+
+    static func logHeading(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        english ? "SSH tunnel log" : "Журнал SSH-туннеля"
+    }
+
+    static func logSummaryHeading(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        english ? "[Selective Remote] Tunnel runtime summary" : "[Selective Remote] Сводка работы туннеля"
+    }
+
+    static func ownershipTitle(_ ownership: ForwardingManagerOwnership, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        switch ownership {
+        case .profile: english ? "Profile" : "Профиль"
+        case .independent: english ? "Independent" : "Независимый"
+        }
+    }
+
+    static func listenerStatus(confirmed: Bool, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        confirmed
+            ? (english ? "confirmed by OpenSSH" : "подтверждён OpenSSH")
+            : (english ? "not confirmed yet" : "ещё не подтверждён")
+    }
+
+    static func logLine(_ field: LogField, value: String, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let label: String
+        switch field {
+        case .state: label = english ? "State" : "Состояние"
+        case .mode: label = english ? "Mode" : "Режим"
+        case .ownership: label = english ? "Ownership" : "Принадлежность"
+        case .bind: label = english ? "Local/remote bind" : "Локальная/удалённая привязка"
+        case .destination: label = english ? "Destination" : "Назначение"
+        case .ssh: label = "SSH"
+        case .authentication: label = english ? "Authentication" : "Аутентификация"
+        case .jumpHost: label = english ? "Jump Host" : "Промежуточный хост"
+        case .proxy: label = english ? "Proxy" : "Прокси"
+        case .localListener: label = english ? "Local listener" : "Локальный слушатель"
+        case .destinationEvidence: label = english ? "Destination evidence" : "Подтверждение назначения"
+        case .lastRuntimeError: label = english ? "Last runtime error" : "Последняя ошибка туннеля"
+        case .lastForwardingFailure: label = english ? "Last forwarding failure" : "Последний сбой перенаправления"
+        }
+        return "\(label): \(value)"
+    }
+}
+
 enum ForwardingManagerState: String, Hashable {
     case running
     case reconnecting
@@ -519,30 +590,30 @@ struct ForwardingManagerView: View {
             spacing: 12
         ) {
             statCard(
-                title: "Активные туннели",
+                title: ForwardingManagerCopy.summaryTitle(.active),
                 value: snapshot.activeCount,
                 detail: UpdateLocalization.text(ru: "из \(snapshot.items.count) всего", en: "of \(snapshot.items.count) total"),
                 systemImage: "arrow.left.arrow.right",
                 color: .green
             )
             statCard(
-                title: "Profile tunnel",
+                title: ForwardingManagerCopy.summaryTitle(.profile),
                 value: snapshot.profileActiveCount,
                 detail: UpdateLocalization.text(ru: "из \(snapshot.profileCount) всего", en: "of \(snapshot.profileCount) total"),
                 systemImage: "person.crop.square",
                 color: .blue
             )
             statCard(
-                title: "Independent tunnel",
+                title: ForwardingManagerCopy.summaryTitle(.independent),
                 value: snapshot.independentActiveCount,
                 detail: UpdateLocalization.text(ru: "из \(snapshot.independentCount) всего", en: "of \(snapshot.independentCount) total"),
                 systemImage: "shippingbox",
                 color: .indigo
             )
             statCard(
-                title: "Ошибки",
+                title: ForwardingManagerCopy.summaryTitle(.errors),
                 value: snapshot.errorCount,
-                detail: snapshot.errorCount == 0 ? "нет проблем" : "требует внимания",
+                detail: ForwardingManagerCopy.errorDetail(hasErrors: snapshot.errorCount > 0),
                 systemImage: "exclamationmark.triangle.fill",
                 color: snapshot.errorCount == 0 ? .secondary : .red
             )
@@ -1444,7 +1515,7 @@ struct ForwardingManagerView: View {
     private func logInspector(item: ForwardingManagerItem) -> some View {
         VStack(spacing: 0) {
             HStack {
-                Text("SSH tunnel log")
+                Text(ForwardingManagerCopy.logHeading())
                     .font(.headline)
                 Spacer()
                 Button("Обновить", systemImage: "arrow.clockwise") {
@@ -1953,27 +2024,30 @@ struct ForwardingManagerView: View {
         rawLog: String
     ) -> String {
         var lines = [
-            "[Selective Remote] Tunnel runtime summary",
-            "State: \(item.state.title)",
-            "Mode: \(item.rule.kind.title)",
-            "Ownership: \(item.ownership.title)",
-            "Local/remote bind: \(item.localAddress)",
-            "Destination: \(item.destination)",
-            "SSH: \(item.sshEndpoint)",
-            "Authentication: \(item.authentication)",
-            "Jump Host: \(item.jumpHost ?? "—")",
-            "Proxy: \(item.proxy ?? "—")",
+            ForwardingManagerCopy.logSummaryHeading(),
+            ForwardingManagerCopy.logLine(.state, value: item.state.title),
+            ForwardingManagerCopy.logLine(.mode, value: item.rule.kind.title),
+            ForwardingManagerCopy.logLine(.ownership, value: ForwardingManagerCopy.ownershipTitle(item.ownership)),
+            ForwardingManagerCopy.logLine(.bind, value: item.localAddress),
+            ForwardingManagerCopy.logLine(.destination, value: item.destination),
+            ForwardingManagerCopy.logLine(.ssh, value: item.sshEndpoint),
+            ForwardingManagerCopy.logLine(.authentication, value: item.authentication),
+            ForwardingManagerCopy.logLine(.jumpHost, value: item.jumpHost ?? "—"),
+            ForwardingManagerCopy.logLine(.proxy, value: item.proxy ?? "—"),
         ]
 
         if item.rule.kind == .local {
-            lines.append("Local listener: \(evidence.listenerReady ? "confirmed by OpenSSH" : "not confirmed yet")")
-            lines.append("Destination evidence: \(destinationEvidenceText(evidence))")
+            lines.append(ForwardingManagerCopy.logLine(
+                .localListener,
+                value: ForwardingManagerCopy.listenerStatus(confirmed: evidence.listenerReady)
+            ))
+            lines.append(ForwardingManagerCopy.logLine(.destinationEvidence, value: destinationEvidenceText(evidence)))
         }
         if let error = item.lastError, !error.isEmpty {
-            lines.append("Last runtime error: \(error)")
+            lines.append(ForwardingManagerCopy.logLine(.lastRuntimeError, value: error))
         }
         if let failure = evidence.destinationFailure {
-            lines.append("Last forwarding failure: \(failure)")
+            lines.append(ForwardingManagerCopy.logLine(.lastForwardingFailure, value: failure))
         }
 
         lines.append("")
@@ -2007,9 +2081,7 @@ struct ForwardingManagerView: View {
         var count = 1
         if item.proxy != nil { count += 1 }
         if item.jumpHost != nil { count += 1 }
-        return count == 1
-            ? "Direct"
-            : UpdateLocalization.text(ru: "\(count) узла", en: "\(count) hops")
+        return ForwardingManagerCopy.hopTitle(count: count)
     }
 
     private func routeExplanation(_ kind: PortForwardKind) -> String {

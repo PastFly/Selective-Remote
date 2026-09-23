@@ -2045,12 +2045,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func roleTitle(_ role: SelectiveRemoteCloudTeamRole) -> String {
-        switch role {
-        case .owner: "Owner"
-        case .admin: "Admin"
-        case .editor: "Editor"
-        case .viewer: "Viewer"
-        }
+        role.displayRoleTitle()
     }
 
     private func connectionButtonTitle(_ type: ConnectionType) -> String {

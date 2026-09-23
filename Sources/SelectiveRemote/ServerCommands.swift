@@ -325,6 +325,7 @@ private enum ServerServiceFilter: String, CaseIterable, Identifiable {
 }
 
 struct ServerCommandsView: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     let context: TerminalRemoteContextSnapshot
     let isRefreshing: Bool
     let onRefresh: () -> Void
@@ -435,7 +436,8 @@ struct ServerCommandsView: View {
 
                     Spacer()
 
-                    Text("\(filteredServices.count) из \(context.services.count)")
+                    Text(UpdateLocalization.formatted("server.services.count",
+                        english: language.selection.usesEnglish, filteredServices.count, context.services.count))
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

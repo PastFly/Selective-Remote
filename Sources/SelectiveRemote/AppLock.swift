@@ -338,13 +338,14 @@ private struct AppLockScreen: View {
 
 struct AppLockSettingsView: View {
     @ObservedObject var store: AppLockStore
+    @ObservedObject private var language = AppLanguageStore.shared
 
     private let timeoutOptions: [(TimeInterval, String)] = [
-        (0, "Сразу после перехода в фон"),
-        (60, "Через 1 минуту"),
-        (300, "Через 5 минут"),
-        (900, "Через 15 минут"),
-        (1800, "Через 30 минут")
+        (0, "security.timeout.immediate"),
+        (60, "security.timeout.1_minute"),
+        (300, "security.timeout.5_minutes"),
+        (900, "security.timeout.15_minutes"),
+        (1800, "security.timeout.30_minutes")
     ]
 
     var body: some View {
@@ -380,7 +381,7 @@ struct AppLockSettingsView: View {
                 Toggle("При сворачивании окна", isOn: $store.lockOnMinimize)
                 Picker("После бездействия", selection: $store.inactivityTimeout) {
                     ForEach(timeoutOptions, id: \.0) { option in
-                        Text(LocalizedStringKey(option.1)).tag(option.0)
+                        Text(language.localized(option.1)).tag(option.0)
                     }
                 }
             }

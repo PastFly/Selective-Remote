@@ -601,16 +601,7 @@ struct PortForwardRule: Codable, Equatable, Identifiable, Sendable {
     var destinationPort: Int
 
     var displayName: String {
-        switch name {
-        case "Локальный туннель":
-            UpdateLocalization.text(ru: name, en: "Local tunnel")
-        case "Удалённый туннель":
-            UpdateLocalization.text(ru: name, en: "Remote tunnel")
-        case "SOCKS-прокси":
-            UpdateLocalization.text(ru: name, en: "SOCKS proxy")
-        default:
-            name
-        }
+        name
     }
 
     init(kind: PortForwardKind = .local) {
@@ -675,13 +666,7 @@ enum ProfileSortMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 
     var title: String {
-        switch self {
-        case .manual: UpdateLocalization.text(ru: "Вручную", en: "Manual")
-        case .favoritesAndName: "Избранное и название"
-        case .name: "Название"
-        case .host: "Hostname"
-        case .recent: "Последнее подключение"
-        }
+        UpdateLocalization.key("hosts.sort.\(rawValue)")
     }
 }
 
@@ -707,9 +692,24 @@ enum ProfileCollectionDisplayMode: String, CaseIterable, Identifiable {
 }
 
 struct ProfileGroupSection: Identifiable {
+    enum ID: Hashable {
+        case ungrouped
+        case named(String)
+    }
+
+    let id: ID
     let name: String
     let profiles: [ConnectionProfile]
-    var id: String { name }
+
+    init(id: ID, name: String, profiles: [ConnectionProfile]) {
+        self.id = id
+        self.name = name
+        self.profiles = profiles
+    }
+
+    init(name: String, profiles: [ConnectionProfile]) {
+        self.init(id: name.isEmpty ? .ungrouped : .named(name), name: name, profiles: profiles)
+    }
 }
 
 enum RDPWindowMode: String, Codable, CaseIterable, Identifiable {
@@ -744,16 +744,16 @@ enum RDPRemappableKey: String, Codable, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .leftCommand: "Левый Command"
-        case .rightCommand: "Правый Command"
-        case .leftOption: "Левый Option"
-        case .rightOption: "Правый Option"
+        case .leftCommand: UpdateLocalization.text(ru: "Левый Command", en: "Left Command")
+        case .rightCommand: UpdateLocalization.text(ru: "Правый Command", en: "Right Command")
+        case .leftOption: UpdateLocalization.text(ru: "Левый Option", en: "Left Option")
+        case .rightOption: UpdateLocalization.text(ru: "Правый Option", en: "Right Option")
         case .capsLock: "Caps Lock"
         case .escape: "Escape"
-        case .leftControl: "Левый Control"
-        case .rightControl: "Правый Control"
-        case .leftWindows: "Левая Windows"
-        case .rightWindows: "Правая Windows"
+        case .leftControl: UpdateLocalization.text(ru: "Левый Control", en: "Left Control")
+        case .rightControl: UpdateLocalization.text(ru: "Правый Control", en: "Right Control")
+        case .leftWindows: UpdateLocalization.text(ru: "Левая Windows", en: "Left Windows")
+        case .rightWindows: UpdateLocalization.text(ru: "Правая Windows", en: "Right Windows")
         }
     }
 

@@ -21,6 +21,14 @@ enum UpdateLocalization {
         return english ? copy.en : copy.ru
     }
 
+    static func formatted(_ key: String, english: Bool = usesEnglish, _ arguments: CVarArg...) -> String {
+        String(
+            format: self.key(key, english: english),
+            locale: Locale(identifier: english ? "en_US" : "ru_RU"),
+            arguments: arguments
+        )
+    }
+
     static var locale: Locale {
         Locale(identifier: usesEnglish ? "en_US" : "ru_RU")
     }
@@ -56,6 +64,17 @@ enum UpdateLocalization {
                 .hour()
                 .minute()
                 .locale(locale)
+        )
+    }
+
+    static func cloudTimestamp(_ raw: String, english: Bool = usesEnglish) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = parser.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        guard let date else { return raw }
+        return date.formatted(
+            .dateTime.day().month(.abbreviated).year().hour().minute()
+                .locale(Locale(identifier: english ? "en_US" : "ru_RU"))
         )
     }
 }

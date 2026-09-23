@@ -15,11 +15,11 @@ enum TerminalStartupSnippetSequenceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .tooManySnippets:
-            "В Startup Sequence можно добавить не больше 8 Snippets."
+            UpdateLocalization.text(ru: "В Startup Sequence можно добавить не больше 8 Snippets.", en: "Startup Sequence can contain no more than 8 Snippets.")
         case .missingSnippet:
-            "Один из выбранных Snippets больше не существует. Обновите последовательность."
+            UpdateLocalization.text(ru: "Один из выбранных Snippets больше не существует. Обновите последовательность.", en: "One of the selected Snippets no longer exists. Update the sequence.")
         case .invalidCombinedCommand:
-            "Общий Startup Sequence слишком длинный или содержит недопустимые данные."
+            UpdateLocalization.text(ru: "Общий Startup Sequence слишком длинный или содержит недопустимые данные.", en: "The combined Startup Sequence is too long or contains invalid data.")
         }
     }
 }
@@ -154,6 +154,7 @@ final class TerminalStartupSnippetSequenceStore: ObservableObject {
 }
 
 struct TerminalStartupSnippetSequenceEditor: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     @ObservedObject private var library = TerminalCommandHistoryStore.shared
     @ObservedObject private var sequenceStore = TerminalStartupSnippetSequenceStore.shared
 
@@ -225,7 +226,8 @@ struct TerminalStartupSnippetSequenceEditor: View {
             HStack(spacing: 12) {
                 Picker("Запуск", selection: $mode) {
                     ForEach(TerminalStartupSnippetMode.allCases) { value in
-                        Text(value.title).tag(value)
+                        Text(UpdateLocalization.key("terminal.startup.mode.\(value.rawValue)"))
+                            .tag(value)
                     }
                 }
                 .frame(width: 220)
@@ -234,10 +236,7 @@ struct TerminalStartupSnippetSequenceEditor: View {
                     .disabled(mode == .disabled || selectedIDs.isEmpty)
             }
 
-            Text(
-                "Snippets выполняются сверху вниз после появления shell prompt. "
-                    + "Режим «Спрашивать» подтверждает всю последовательность перед отправкой."
-            )
+            Text(language.localized("terminal.startup.sequence.help"))
             .font(.caption)
             .foregroundStyle(.secondary)
 

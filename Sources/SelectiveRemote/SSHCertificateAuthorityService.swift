@@ -25,9 +25,9 @@ enum SSHCertificateAuthorityError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .invalidPublicKey: "Выберите публичный SSH CA key (*.pub)"
-        case let .privateKeyUnavailable(path): "Private CA key недоступен: \(path)"
-        case let .signingFailed(message): "Не удалось подписать SSH certificate: \(message)"
+        case .invalidPublicKey: UpdateLocalization.text(ru: "Выберите публичный SSH CA key (*.pub)", en: "Select a public SSH CA key (*.pub)")
+        case let .privateKeyUnavailable(path): UpdateLocalization.text(ru: "Private CA key недоступен: \(path)", en: "Private CA key is unavailable: \(path)")
+        case let .signingFailed(message): UpdateLocalization.text(ru: "Не удалось подписать SSH certificate: \(message)", en: "Could not sign SSH certificate: \(message)")
         }
     }
 }
@@ -98,13 +98,18 @@ enum SSHCertificateAuthorityService {
     @MainActor
     static func chooseAndRegister() throws -> SSHCertificateAuthorityRecord? {
         let panel = NSOpenPanel()
-        panel.title = "Импортировать SSH CA public key"
-        panel.prompt = "Импортировать"
+        configureImportPanel(panel)
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
         return try register(publicKeyURL: url)
+    }
+
+    @MainActor
+    static func configureImportPanel(_ panel: NSOpenPanel, english: Bool = UpdateLocalization.usesEnglish) {
+        panel.title = english ? "Import SSH CA Public Key" : "Импортировать SSH CA public key"
+        panel.prompt = english ? "Import" : "Импортировать"
     }
 
     private static func save(_ values: [SSHCertificateAuthorityRecord]) {

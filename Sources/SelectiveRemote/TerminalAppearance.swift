@@ -1030,7 +1030,7 @@ struct TerminalAppearanceView: View {
             Section(language.localized("appearance.section.language")) {
                 Picker(language.localized("appearance.language"), selection: $language.selection) {
                     ForEach(AppLanguage.allCases) { item in
-                        Text(LocalizedStringKey(item.title)).tag(item)
+                        Text(item.localizedTitle(in: language.selection)).tag(item)
                     }
                 }
                 Text(language.localized("appearance.help.language"))

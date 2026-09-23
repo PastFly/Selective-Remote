@@ -35,13 +35,19 @@ enum KeychainError: LocalizedError {
         switch self {
         case let .unexpectedStatus(status):
             let message = SecCopyErrorMessageString(status, nil).map { $0 as String }
-                ?? "неизвестная ошибка"
+                ?? UpdateLocalization.text(ru: "неизвестная ошибка", en: "unknown error")
             if status == errSecMissingEntitlement {
-                return "Keychain не разрешил доступ к старой записи (-34018). Нажмите «Восстановить доступ» рядом с SSH-паролем и сохраните пароль заново."
+                return UpdateLocalization.text(
+                    ru: "Keychain не разрешил доступ к старой записи (-34018). Нажмите «Восстановить доступ» рядом с SSH-паролем и сохраните пароль заново.",
+                    en: "Keychain denied access to the old item (-34018). Select Restore Access next to the SSH password and save the password again."
+                )
             }
-            return "Ошибка Keychain: \(message) (\(status))"
+            return UpdateLocalization.text(
+                ru: "Ошибка Keychain: \(message) (\(status))",
+                en: "Keychain error: \(message) (\(status))"
+            )
         case .invalidData:
-            return "Keychain вернул некорректные данные"
+            return UpdateLocalization.text(ru: "Keychain вернул некорректные данные", en: "Keychain returned invalid data")
         case let .touchIDUnavailable(message):
             return message
         case let .biometricAuthenticationFailed(message):
@@ -149,7 +155,10 @@ enum KeychainService {
               context.biometryType == .touchID else {
             throw KeychainError.touchIDUnavailable(
                 availabilityError?.localizedDescription
-                    ?? "Touch ID недоступен. Добавьте отпечаток в настройках macOS."
+                    ?? UpdateLocalization.text(
+                        ru: "Touch ID недоступен. Добавьте отпечаток в настройках macOS.",
+                        en: "Touch ID is unavailable. Add a fingerprint in macOS settings."
+                    )
             )
         }
 
@@ -179,13 +188,22 @@ enum KeychainService {
             let message = (outcome.error as? LAError).map { error -> String in
                 switch error.code {
                 case .userCancel, .appCancel, .systemCancel:
-                    return "Touch ID отменён. SSH-пароль не был передан."
+                    return UpdateLocalization.text(
+                        ru: "Touch ID отменён. SSH-пароль не был передан.",
+                        en: "Touch ID was cancelled. The SSH password was not shared."
+                    )
                 case .biometryLockout:
-                    return "Touch ID временно заблокирован после нескольких неудачных попыток. Разблокируйте Touch ID в macOS и повторите."
+                    return UpdateLocalization.text(
+                        ru: "Touch ID временно заблокирован после нескольких неудачных попыток. Разблокируйте Touch ID в macOS и повторите.",
+                        en: "Touch ID is temporarily locked after several failed attempts. Unlock Touch ID in macOS and try again."
+                    )
                 default:
                     return error.localizedDescription
                 }
-            } ?? outcome.error?.localizedDescription ?? "Touch ID не подтвердил доступ."
+            } ?? outcome.error?.localizedDescription ?? UpdateLocalization.text(
+                ru: "Touch ID не подтвердил доступ.",
+                en: "Touch ID did not confirm access."
+            )
             throw KeychainError.biometricAuthenticationFailed(message)
         }
     }
@@ -334,7 +352,10 @@ enum KeychainService {
     ) throws {
         if requiresUserPresence && !touchIDAvailable {
             throw KeychainError.touchIDUnavailable(
-                "Touch ID недоступен. Добавьте отпечаток в настройках macOS или отключите защиту Touch ID для этого секрета."
+                UpdateLocalization.text(
+                    ru: "Touch ID недоступен. Добавьте отпечаток в настройках macOS или отключите защиту Touch ID для этого секрета.",
+                    en: "Touch ID is unavailable. Add a fingerprint in macOS settings or turn off Touch ID protection for this secret."
+                )
             )
         }
         let reference = credentialReference(profileID: profileID, kind: kind)
@@ -372,7 +393,10 @@ enum KeychainService {
     static func setSSHKeyUseProtection(profileID: UUID, enabled: Bool) throws {
         if enabled && !touchIDAvailable {
             throw KeychainError.touchIDUnavailable(
-                "Touch ID недоступен. Добавьте отпечаток в настройках macOS."
+                UpdateLocalization.text(
+                    ru: "Touch ID недоступен. Добавьте отпечаток в настройках macOS.",
+                    en: "Touch ID is unavailable. Add a fingerprint in macOS settings."
+                )
             )
         }
         // Preference is persisted by AppModel. No synthetic Keychain marker is

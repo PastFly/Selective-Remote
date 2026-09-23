@@ -15,19 +15,19 @@ enum SelectiveRemoteBackupError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidPassword:
-            "Пароль архива должен содержать не менее 12 символов."
+            UpdateLocalization.text(ru: "Пароль архива должен содержать не менее 12 символов.", en: "The archive password must contain at least 12 characters.")
         case .invalidArchive:
-            "Файл не является корректным архивом Selective Remote или повреждён."
+            UpdateLocalization.text(ru: "Файл не является корректным архивом Selective Remote или повреждён.", en: "The file is not a valid Selective Remote archive or is damaged.")
         case let .unsupportedVersion(version):
-            "Версия архива \(version) пока не поддерживается."
+            UpdateLocalization.text(ru: "Версия архива \(version) пока не поддерживается.", en: "Archive version \(version) is not supported yet.")
         case .authenticationFailed:
-            "Не удалось расшифровать архив. Проверьте пароль и целостность файла."
+            UpdateLocalization.text(ru: "Не удалось расшифровать архив. Проверьте пароль и целостность файла.", en: "Could not decrypt the archive. Check the password and file integrity.")
         case .fileTooLarge:
-            "Архив или один из его файлов превышает допустимый размер."
+            UpdateLocalization.text(ru: "Архив или один из его файлов превышает допустимый размер.", en: "The archive or one of its files exceeds the size limit.")
         case .cryptoFailure:
-            "Не удалось подготовить ключ шифрования архива."
+            UpdateLocalization.text(ru: "Не удалось подготовить ключ шифрования архива.", en: "Could not prepare the archive encryption key.")
         case let .missingFile(path):
-            "Файл для резервной копии недоступен: \(path)"
+            UpdateLocalization.text(ru: "Файл для резервной копии недоступен: \(path)", en: "Backup file is unavailable: \(path)")
         }
     }
 }

@@ -172,6 +172,7 @@ struct TerminalThemeSelector: View {
 
 private struct TerminalThemeCatalogView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     @ObservedObject var store: TerminalAppearanceStore
     @State private var query = ""
     @State private var filter: TerminalThemeCatalogFilter = .all
@@ -215,7 +216,9 @@ private struct TerminalThemeCatalogView: View {
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
 
             Picker("Фильтр", selection: $filter) {
-                ForEach(TerminalThemeCatalogFilter.allCases) { Text($0.title).tag($0) }
+                ForEach(TerminalThemeCatalogFilter.allCases) {
+                    Text(language.localized("terminal.theme_filter.\($0.rawValue)")).tag($0)
+                }
             }
             .labelsHidden().pickerStyle(.segmented)
 

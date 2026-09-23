@@ -16,25 +16,25 @@ enum FreeRDPError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
-            "В пакете \(AppBrand.name) не найден встроенный RDP-движок. Переустановите приложение из полного community DMG"
+            UpdateLocalization.text(ru: "В пакете \(AppBrand.name) не найден встроенный RDP-движок. Переустановите приложение из полного community DMG", en: "The bundled RDP engine is missing from \(AppBrand.name). Reinstall the app from the complete community DMG")
         case let .monitorListFailed(message):
-            "Не удалось получить список мониторов FreeRDP: \(message)"
+            UpdateLocalization.text(ru: "Не удалось получить список мониторов FreeRDP: \(message)", en: "Could not get the FreeRDP monitor list: \(message)")
         case let .monitorMappingFailed(name):
-            "FreeRDP не смог сопоставить монитор «\(name)»"
+            UpdateLocalization.text(ru: "FreeRDP не смог сопоставить монитор «\(name)»", en: "FreeRDP could not map monitor “\(name)”")
         case .noSelectedMonitors:
-            "Выберите хотя бы один монитор"
+            UpdateLocalization.text(ru: "Выберите хотя бы один монитор", en: "Select at least one monitor")
         case .invalidHost:
-            "Укажите hostname удалённого компьютера"
+            UpdateLocalization.text(ru: "Укажите hostname удалённого компьютера", en: "Enter the remote computer hostname")
         case .monitorInterposerNotFound:
-            "Не найден модуль компактной раскладки мониторов. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh"
+            UpdateLocalization.text(ru: "Не найден модуль компактной раскладки мониторов. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh", en: "The compact monitor layout module is missing. Rebuild \(AppBrand.name) with scripts/build_app.sh")
         case .fnShortcutModuleNotFound:
-            "Не найден безопасный модуль клавиши Fn. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh"
+            UpdateLocalization.text(ru: "Не найден безопасный модуль клавиши Fn. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh", en: "The safe Fn key module is missing. Rebuild \(AppBrand.name) with scripts/build_app.sh")
         case .privacyPreflightNotFound:
-            "Не найден модуль предварительной проверки доступа к микрофону и камере. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh"
+            UpdateLocalization.text(ru: "Не найден модуль предварительной проверки доступа к микрофону и камере. Пересоберите \(AppBrand.name) скриптом scripts/build_app.sh", en: "The microphone and camera access preflight module is missing. Rebuild \(AppBrand.name) with scripts/build_app.sh")
         case .unsupportedArgumentLineBreak:
-            "Параметры подключения не должны содержать перенос строки"
+            UpdateLocalization.text(ru: "Параметры подключения не должны содержать перенос строки", en: "Connection parameters must not contain a newline")
         case let .launchFailed(message):
-            "Не удалось запустить RDP: \(message)"
+            UpdateLocalization.text(ru: "Не удалось запустить RDP: \(message)", en: "Could not launch RDP: \(message)")
         }
     }
 }

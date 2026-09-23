@@ -106,6 +106,7 @@ enum SFTPPropertiesTarget: Identifiable, Equatable {
 
 struct SFTPPropertiesView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     let target: SFTPPropertiesTarget
     let onApply: (_ mode: String?, _ ownerID: Int?, _ groupID: Int?) -> Void
 
@@ -269,11 +270,14 @@ struct SFTPPropertiesView: View {
             Text(title)
                 .foregroundStyle(.secondary)
                 .frame(minWidth: 120, alignment: .leading)
-            Toggle("Чтение для: \(title)", isOn: permissionBinding(read))
+            Toggle(UpdateLocalization.formatted("sftp.permissions.read",
+                english: language.selection.usesEnglish, title), isOn: permissionBinding(read))
                 .labelsHidden()
-            Toggle("Запись для: \(title)", isOn: permissionBinding(write))
+            Toggle(UpdateLocalization.formatted("sftp.permissions.write",
+                english: language.selection.usesEnglish, title), isOn: permissionBinding(write))
                 .labelsHidden()
-            Toggle("Выполнение для: \(title)", isOn: permissionBinding(execute))
+            Toggle(UpdateLocalization.formatted("sftp.permissions.execute",
+                english: language.selection.usesEnglish, title), isOn: permissionBinding(execute))
                 .labelsHidden()
         }
         .toggleStyle(SelectiveRemoteCheckboxToggleStyle())
@@ -353,6 +357,7 @@ struct SFTPPropertiesView: View {
 
 struct SFTPRemoteEditorView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     let document: SFTPRemoteTextDocument
     let onSave: (String) -> Void
 
@@ -382,7 +387,8 @@ struct SFTPRemoteEditorView: View {
                         .truncationMode(.middle)
                 }
                 Spacer()
-                Text("\(text.count) символов")
+                Text(UpdateLocalization.formatted("sftp.editor.characters",
+                    english: language.selection.usesEnglish, text.count))
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
                 Button("Отмена", role: .cancel) {

@@ -938,7 +938,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         modifiedRelativeTitle(snippet.modifiedDate, now: context.date),
                         systemImage: "clock"
                     )
-                    .help(snippet.modifiedDate.formatted(date: .abbreviated, time: .standard))
+                    .help(UpdateLocalization.dateTimeShort(snippet.modifiedDate))
                 }
                 Label("r\(snippet.revision) · k\(snippet.keyGeneration)", systemImage: "lock.shield")
             }
@@ -1512,11 +1512,6 @@ private struct SelectiveRemoteTeamSnippetTargetsEditor: View {
 
 private extension SelectiveRemoteCloudTeamRole {
     var localizedTitle: String {
-        switch self {
-        case .owner: UpdateLocalization.text(ru: "Владелец", en: "Owner")
-        case .admin: UpdateLocalization.text(ru: "Администратор", en: "Admin")
-        case .editor: UpdateLocalization.text(ru: "Редактор", en: "Editor")
-        case .viewer: UpdateLocalization.text(ru: "Просмотр", en: "Viewer")
-        }
+        displayRoleTitle()
     }
 }

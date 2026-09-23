@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SSHKeyGenerationView: View {
     @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var language = AppLanguageStore.shared
     let generate: (SSHKeyGenerationRequest, TerminalSessionModel) -> Bool
     private let touchIDOnly: Bool
 
@@ -73,10 +74,7 @@ struct SSHKeyGenerationView: View {
                                 .strokeBorder(Color.white.opacity(0.10))
                         }
 
-                    Text(
-                        "Это отдельный служебный терминал. Основная SSH-сессия может "
-                            + "продолжать работать параллельно."
-                    )
+                    Text(language.localized("ssh.keygen.separate_terminal.help"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
@@ -187,7 +185,7 @@ struct SSHKeyGenerationView: View {
 
     private func chooseDestination() {
         let panel = NSSavePanel()
-        panel.title = "Сохранить новый приватный SSH-ключ"
+        panel.title = UpdateLocalization.key("ssh.key.save_private.title")
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = algorithm.defaultFilename
         let current = URL(fileURLWithPath: NSString(string: path).expandingTildeInPath)

@@ -2,7 +2,14 @@ import AppKit
 import SwiftUI
 
 struct LocalTerminalView: View {
+    static var workingDirectoryPanelTitle: String {
+        UpdateLocalization.text(
+            ru: "Рабочая папка локального терминала",
+            en: "Local Terminal Working Folder"
+        )
+    }
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var workspace: TerminalWorkspaceModel
     @ObservedObject var appearance: TerminalAppearanceStore
     @ObservedObject var appAppearance: AppAppearanceStore
@@ -200,7 +207,7 @@ struct LocalTerminalView: View {
             }
 
             if selectedTab.session.isRunning {
-                Button("Завершить", systemImage: "stop.fill", role: .destructive) {
+                Button(language.localized("terminal.local.terminate"), systemImage: "stop.fill", role: .destructive) {
                     selectedTab.session.stop()
                 }
                 .buttonStyle(.bordered)
@@ -438,7 +445,7 @@ struct LocalTerminalView: View {
 
     private func chooseWorkingDirectory(for tab: TerminalWorkspaceTab) {
         let panel = NSOpenPanel()
-        panel.title = "Рабочая папка локального терминала"
+        panel.title = Self.workingDirectoryPanelTitle
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false

@@ -66,7 +66,7 @@ struct BackupSettingsView: View {
                 message = result
             }
         }
-        .alert("Backup & Restore", isPresented: Binding(
+        .alert(UpdateLocalization.text(ru: "Резервная копия и восстановление", en: "Backup & Restore"), isPresented: Binding(
             get: { message != nil },
             set: { if !$0 { message = nil } }
         )) {

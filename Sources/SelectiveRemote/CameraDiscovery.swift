@@ -8,9 +8,9 @@ enum CameraDeviceKind: Int, Equatable, Hashable {
 
     var title: String {
         switch self {
-        case .builtIn: "Встроенная"
-        case .external: "Внешняя"
-        case .continuity: "Камера iPhone"
+        case .builtIn: UpdateLocalization.key("camera.kind.builtIn")
+        case .external: UpdateLocalization.key("camera.kind.external")
+        case .continuity: UpdateLocalization.key("camera.kind.continuity")
         }
     }
 

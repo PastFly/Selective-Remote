@@ -121,6 +121,10 @@ enum SelectiveRemoteCloudTeamRole: String, Codable, Equatable, Hashable, Sendabl
     case admin
     case editor
     case viewer
+
+    func displayRoleTitle(english: Bool = UpdateLocalization.usesEnglish) -> String {
+        UpdateLocalization.key("cloud.team.role.\(rawValue)", english: english)
+    }
 }
 
 struct SelectiveRemoteCloudTeam: Codable, Equatable, Identifiable, Sendable {
