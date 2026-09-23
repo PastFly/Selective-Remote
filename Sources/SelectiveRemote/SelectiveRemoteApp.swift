@@ -30,6 +30,7 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
 
     func showHelpWindow() {
         if let helpWindow {
+            refreshAuxiliaryTitles()
             helpWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -55,6 +56,7 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
 
     func showAboutWindow() {
         if let aboutWindow {
+            refreshAuxiliaryTitles()
             aboutWindow.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -83,6 +85,15 @@ final class SelectiveRemoteApplicationDelegate: NSObject, NSApplicationDelegate 
         window.titlebarAppearsTransparent = false
         window.hasShadow = true
     }
+
+    func refreshAuxiliaryTitles() {
+        helpWindow?.title = UpdateLocalization.text(
+            ru: "Справка Selective Remote", en: "Selective Remote Help"
+        )
+        aboutWindow?.title = UpdateLocalization.text(
+            ru: "О Selective Remote", en: "About Selective Remote"
+        )
+    }
 }
 
 private struct SFTPMenuBarTransferControls: View {
@@ -96,15 +107,15 @@ private struct SFTPMenuBarTransferControls: View {
             en: "SFTP transfers: \(workspace.activeTransferCount) active"
         ))
         if workspace.hasPausedTransfers {
-            Button("Продолжить SFTP-передачи", systemImage: "play.fill") {
+            Button(UpdateLocalization.key("menu.sftp.resume"), systemImage: "play.fill") {
                 workspace.resumeAllTransfers()
             }
         } else if workspace.activeTransferCount > 0 {
-            Button("Приостановить SFTP-передачи", systemImage: "pause.fill") {
+            Button(UpdateLocalization.key("menu.sftp.pause"), systemImage: "pause.fill") {
                 workspace.pauseAllTransfers()
             }
         }
-        Button("Отменить SFTP-передачи", role: .destructive) {
+        Button(UpdateLocalization.key("menu.sftp.cancel"), role: .destructive) {
             workspace.cancelAllTransfers()
         }
         .disabled(workspace.activeTransferCount == 0)
@@ -119,7 +130,7 @@ private struct SelectiveRemoteCloudCommands: Commands {
     var body: some Commands {
         CommandMenu("Cloud") {
             Button(
-                UpdateLocalization.text(ru: "Открыть настройки Cloud…", en: "Open Cloud Settings…"),
+                UpdateLocalization.key("menu.cloud.settings"),
                 systemImage: "cloud"
             ) {
                 UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
@@ -128,7 +139,7 @@ private struct SelectiveRemoteCloudCommands: Commands {
             .disabled(appLock.isLocked)
 
             Button(
-                UpdateLocalization.text(ru: "Открыть Cloud в браузере…", en: "Open Cloud in Browser…"),
+                UpdateLocalization.key("menu.cloud.browser"),
                 systemImage: "safari"
             ) {
                 NSWorkspace.shared.open(SelectiveRemoteCloudPortalURL.login)
@@ -142,7 +153,7 @@ struct SelectiveRemoteApp: App {
     @NSApplicationDelegateAdaptor(SelectiveRemoteApplicationDelegate.self)
     private var appDelegate
     @StateObject private var model = AppModel()
-    @StateObject private var language = AppLanguageStore()
+    @StateObject private var language = AppLanguageStore.shared
     @StateObject private var appAppearance = AppAppearanceStore.shared
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
@@ -163,6 +174,7 @@ struct SelectiveRemoteApp: App {
         WindowGroup {
             AppLockGate(store: appLock) {
                 ContentView()
+                    .background(AppRuntimeLanguageObserver())
                     .environmentObject(model)
                     .environmentObject(language)
                     .environmentObject(appAppearance)
@@ -206,10 +218,7 @@ struct SelectiveRemoteApp: App {
         .windowResizability(.contentMinSize)
         .commands {
             CommandGroup(replacing: .appInfo) {
-                Button(UpdateLocalization.text(
-                    ru: "О Selective Remote",
-                    en: "About Selective Remote"
-                )) {
+                Button(UpdateLocalization.key("menu.app.about")) {
                     appDelegate.showAboutWindow()
                 }
             }
@@ -234,13 +243,13 @@ struct SelectiveRemoteApp: App {
                     .keyboardShortcut("?", modifiers: [.command])
                 Divider()
                 Menu(UpdateLocalization.key("help.support.title"), systemImage: "heart") {
-                    Button("ЮMoney…") {
+                    Button(UpdateLocalization.key("menu.help.yoomoney")) {
                         NSWorkspace.shared.open(ProjectSupport.yoomoneyURL)
                     }
                     Button("Boosty…") {
                         NSWorkspace.shared.open(ProjectSupport.boostyURL)
                     }
-                    Button("СберБанк…") {
+                    Button(UpdateLocalization.key("menu.help.sberbank")) {
                         NSWorkspace.shared.open(ProjectSupport.sberbankURL)
                     }
                 }
@@ -260,7 +269,7 @@ struct SelectiveRemoteApp: App {
                 .keyboardShortcut("l", modifiers: [.command, .shift])
                 .disabled(!appLock.enabled || appLock.isLocked)
                 Divider()
-                Button("Quick Connect…", systemImage: "bolt.fill") {
+                Button(UpdateLocalization.key("menu.session.quick_connect"), systemImage: "bolt.fill") {
                     model.quickConnectPresented = true
                 }
                 .keyboardShortcut("k", modifiers: [.command])

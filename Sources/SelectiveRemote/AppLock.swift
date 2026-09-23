@@ -380,7 +380,7 @@ struct AppLockSettingsView: View {
                 Toggle("При сворачивании окна", isOn: $store.lockOnMinimize)
                 Picker("После бездействия", selection: $store.inactivityTimeout) {
                     ForEach(timeoutOptions, id: \.0) { option in
-                        Text(option.1).tag(option.0)
+                        Text(LocalizedStringKey(option.1)).tag(option.0)
                     }
                 }
             }

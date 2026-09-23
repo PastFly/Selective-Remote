@@ -1012,14 +1012,14 @@ struct TerminalAppearanceView: View {
     var body: some View {
         Form {
             if let individualTitle {
-                Section("Индивидуальное оформление") {
+                Section(language.localized("appearance.section.individual")) {
                     Label(individualTitle, systemImage: "rectangle.inset.filled.and.person.filled")
                         .font(.headline)
-                    Text("Тема, шрифт, курсор, подсветка синтаксиса и своя палитра сохраняются только для этой вкладки терминала.")
+                    Text(language.localized("appearance.help.individual"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if let copyFrom {
-                        Button("Скопировать общее оформление", systemImage: "square.on.square") {
+                        Button(language.localized("appearance.copy_general"), systemImage: "square.on.square") {
                             store.copySettings(from: copyFrom)
                         }
                     }
@@ -1027,13 +1027,13 @@ struct TerminalAppearanceView: View {
             }
 
             if includesApplicationSettings {
-            Section("Язык приложения") {
-                Picker("Язык", selection: $language.selection) {
+            Section(language.localized("appearance.section.language")) {
+                Picker(language.localized("appearance.language"), selection: $language.selection) {
                     ForEach(AppLanguage.allCases) { item in
                         Text(LocalizedStringKey(item.title)).tag(item)
                     }
                 }
-                Text("Интерфейс переключается сразу. Системный режим использует язык macOS.")
+                Text(language.localized("appearance.help.language"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -1041,17 +1041,17 @@ struct TerminalAppearanceView: View {
             AppAppearanceSettingsSection(store: appAppearance)
             }
 
-            Section("Терминал") {
+            Section(language.localized("appearance.section.terminal")) {
                 TerminalThemeSelector(store: store)
 
                 if includesApplicationSettings {
-                    DisclosureGroup("Фон и прозрачность") {
+                    DisclosureGroup(language.localized("appearance.background")) {
                         Toggle(
-                            "Прозрачный фон терминала",
+                            language.localized("appearance.transparent_terminal"),
                             isOn: $store.backgroundTransparencyEnabled
                         )
 
-                        LabeledContent("Непрозрачность фона") {
+                        LabeledContent(language.localized("appearance.background_opacity")) {
                             HStack {
                                 Slider(
                                     value: $store.backgroundOpacity,
@@ -1066,24 +1066,20 @@ struct TerminalAppearanceView: View {
                         }
                         .disabled(!store.backgroundTransparencyEnabled)
 
-                        Text(
-                            "Единая настройка для всех открытых и новых терминалов. Она действует "
-                                + "отдельно от прозрачности окна приложения; текст, курсор и панели "
-                                + "управления остаются контрастными."
-                        )
+                        Text(language.localized("appearance.help.terminal_background"))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     }
                 }
 
-                DisclosureGroup("Шрифт и курсор") {
-                    Picker("Шрифт", selection: $store.font) {
+                DisclosureGroup(language.localized("appearance.font_cursor")) {
+                    Picker(language.localized("appearance.font"), selection: $store.font) {
                     ForEach(TerminalFontChoice.allCases) { font in
                         Text(font.title).tag(font)
                     }
                 }
 
-                LabeledContent("Размер") {
+                LabeledContent(language.localized("appearance.size")) {
                     HStack {
                         Slider(value: $store.fontSize, in: 10...28, step: 1)
                             .frame(width: 180)
@@ -1093,7 +1089,7 @@ struct TerminalAppearanceView: View {
                     }
                 }
 
-                LabeledContent("Межстрочный интервал") {
+                LabeledContent(language.localized("appearance.line_height")) {
                     HStack {
                         Slider(value: $store.lineHeight, in: 1.0...1.6, step: 0.05)
                             .frame(width: 180)
@@ -1103,14 +1099,15 @@ struct TerminalAppearanceView: View {
                     }
                 }
 
-                Picker("Курсор", selection: $store.cursorStyle) {
+                Picker(language.localized("appearance.cursor"), selection: $store.cursorStyle) {
                     ForEach(TerminalCursorStyle.allCases) { style in
-                        Text(LocalizedStringKey(style.title)).tag(style)
+                        Text(language.localized("appearance.cursor.\(style.rawValue)"))
+                            .tag(style)
                     }
                 }
-                Toggle("Мигающий курсор", isOn: $store.cursorBlink)
+                Toggle(language.localized("appearance.blink_cursor"), isOn: $store.cursorBlink)
 
-                LabeledContent("Внутренний отступ") {
+                LabeledContent(language.localized("appearance.padding")) {
                     HStack {
                         Slider(value: $store.padding, in: 0...28, step: 1)
                             .frame(width: 180)
@@ -1121,19 +1118,21 @@ struct TerminalAppearanceView: View {
                 }
                 }
 
-                DisclosureGroup("Подсветка синтаксиса") {
-                    Toggle("Подсветка команд", isOn: $store.syntaxHighlighting)
+                DisclosureGroup(language.localized("appearance.syntax")) {
+                    Toggle(language.localized("appearance.highlight_commands"), isOn: $store.syntaxHighlighting)
 
-                    Picker("Область", selection: $store.syntaxScope) {
+                    Picker(language.localized("appearance.scope"), selection: $store.syntaxScope) {
                         ForEach(TerminalSyntaxScope.allCases) { scope in
-                            Text(scope.title).tag(scope)
+                            Text(language.localized(scope == .currentLine
+                                ? "appearance.scope.current" : "appearance.scope.visible"))
+                                .tag(scope)
                         }
                     }
 
-                    Toggle("Цвета из темы", isOn: $store.syntaxFollowTheme)
-                    Toggle("Выделять команды жирным", isOn: $store.syntaxBoldCommands)
+                    Toggle(language.localized("appearance.theme_colors"), isOn: $store.syntaxFollowTheme)
+                    Toggle(language.localized("appearance.bold_commands"), isOn: $store.syntaxBoldCommands)
 
-                    LabeledContent("Предыдущие команды") {
+                    LabeledContent(language.localized("appearance.previous_commands")) {
                         HStack {
                             Slider(
                                 value: $store.syntaxHistoryOpacity,
@@ -1151,56 +1150,56 @@ struct TerminalAppearanceView: View {
                         Divider()
 
                         TerminalColorControl(
-                            title: "Команда",
+                            title: language.localized("appearance.color.command"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.command },
                                 set: { store.updateSyntaxColor(\.command, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Параметр",
+                            title: language.localized("appearance.color.option"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.option },
                                 set: { store.updateSyntaxColor(\.option, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Строка",
+                            title: language.localized("appearance.color.string"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.string },
                                 set: { store.updateSyntaxColor(\.string, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Путь",
+                            title: language.localized("appearance.color.path"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.path },
                                 set: { store.updateSyntaxColor(\.path, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Переменная",
+                            title: language.localized("appearance.color.variable"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.variable },
                                 set: { store.updateSyntaxColor(\.variable, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Число",
+                            title: language.localized("appearance.color.number"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.number },
                                 set: { store.updateSyntaxColor(\.number, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Оператор",
+                            title: language.localized("appearance.color.operation"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.operation },
                                 set: { store.updateSyntaxColor(\.operation, $0) }
                             )
                         )
                         TerminalColorControl(
-                            title: "Комментарий",
+                            title: language.localized("appearance.color.comment"),
                             value: Binding(
                                 get: { store.syntaxCustomPalette.comment },
                                 set: { store.updateSyntaxColor(\.comment, $0) }
@@ -1209,38 +1208,38 @@ struct TerminalAppearanceView: View {
 
                         HStack {
                             Spacer()
-                            Button("Сбросить цвета к текущей теме") {
+                            Button(language.localized("appearance.reset_syntax")) {
                                 store.resetSyntaxPaletteToTheme()
                             }
                         }
                     }
 
-                    Text(
+                    Text(language.localized(
                         store.syntaxScope == .visibleCommands
-                            ? "Подсвечиваются shell-команды в видимой области. Вывод сервера и его ANSI-цвета не изменяются."
-                            : "Подсвечивается только текущая shell-команда. Вывод сервера и его ANSI-цвета не изменяются."
-                    )
+                            ? "appearance.syntax_visible_help"
+                            : "appearance.syntax_current_help"
+                    ))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 }
 
-                DisclosureGroup("Своя тема") {
+                DisclosureGroup(language.localized("appearance.custom_theme")) {
                     TerminalColorControl(
-                    title: "Фон",
+                    title: language.localized("appearance.color.background"),
                     value: Binding(
                         get: { store.palette.background },
                         set: { store.updateBackground($0) }
                     )
                 )
                 TerminalColorControl(
-                    title: "Текст",
+                    title: language.localized("appearance.color.text"),
                     value: Binding(
                         get: { store.palette.foreground },
                         set: { store.updateForeground($0) }
                     )
                 )
                 TerminalColorControl(
-                    title: "Курсор",
+                    title: language.localized("appearance.cursor"),
                     value: Binding(
                         get: { store.palette.cursor },
                         set: { store.updateCursor($0) }
@@ -1251,7 +1250,7 @@ struct TerminalAppearanceView: View {
 
             HStack {
                 Spacer()
-                Button("Сбросить оформление") {
+                Button(language.localized("settings.reset_appearance")) {
                     store.reset()
                     if includesApplicationSettings {
                         appAppearance.reset()

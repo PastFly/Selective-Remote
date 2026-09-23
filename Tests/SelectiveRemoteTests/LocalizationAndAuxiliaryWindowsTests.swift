@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import Testing
 @testable import SelectiveRemote
 
@@ -13,10 +14,149 @@ private func repositorySource(_ relativePath: String) throws -> String {
     )
 }
 
+@Test("Runtime language switch localizes Settings, Appearance, and native menu titles both ways")
+@MainActor
+func runtimeLanguageSwitchLocalizesAllSurfaces() throws {
+    let suiteName = "RuntimeLocalizationTests.\(UUID().uuidString)"
+    let defaults = try #require(UserDefaults(suiteName: suiteName))
+    defer { defaults.removePersistentDomain(forName: suiteName) }
+    let language = AppLanguageStore(defaults: defaults)
+
+    let menu = NSMenu()
+    for title in ["Файл", "Правка", "Вид", "Сессия", "Cloud", "Окно", "Справка"] {
+        menu.addItem(NSMenuItem(title: title, action: nil, keyEquivalent: ""))
+    }
+    let file = NSMenu(title: "Файл")
+    file.addItem(NSMenuItem(title: "Закрыть", action: nil, keyEquivalent: "w"))
+    menu.items[0].submenu = file
+
+    language.selection = .english
+    #expect(language.localized("settings.tab.appearance") == "Appearance")
+    #expect(language.localized("appearance.section.window") == "Application Window")
+    #expect(language.localized("appearance.help.language") == "The interface switches immediately. System mode follows the macOS language.")
+    RuntimeMenuLocalization.apply(to: menu, language: language.selection)
+    #expect(menu.items.map(\.title) == ["File", "Edit", "View", "Session", "Cloud", "Window", "Help"])
+    #expect(menu.items[0].submenu?.items.first?.title == "Close")
+    #expect(menu.items[0].submenu?.items.first?.keyEquivalent == "w")
+
+    language.selection = .russian
+    #expect(language.localized("settings.tab.appearance") == "Оформление")
+    #expect(language.localized("appearance.section.window") == "Окно приложения")
+    RuntimeMenuLocalization.apply(to: menu, language: language.selection)
+    #expect(menu.items.map(\.title) == ["Файл", "Правка", "Вид", "Сеанс", "Cloud", "Окно", "Справка"])
+    #expect(menu.items[0].submenu?.items.first?.title == "Закрыть")
+}
+
+@Test("Native and custom menu inventory reversibly localizes nested commands without changing actions")
+@MainActor
+func nativeMenuInventoryIsReversible() {
+    let root = NSMenu()
+    let parent = NSMenuItem(title: "Файл", action: nil, keyEquivalent: "")
+    let submenu = NSMenu(title: "Файл")
+    for pair in RuntimeMenuLocalization.nativeTitles {
+        let item = NSMenuItem(title: pair.ru, action: nil, keyEquivalent: "x")
+        item.isEnabled = false
+        submenu.addItem(item)
+    }
+    parent.submenu = submenu
+    root.addItem(parent)
+    RuntimeMenuLocalization.apply(to: root, language: .english)
+    #expect(submenu.items.map(\.title) == RuntimeMenuLocalization.nativeTitles.map(\.en))
+    #expect(submenu.items.allSatisfy { !$0.isEnabled && $0.keyEquivalent == "x" })
+    RuntimeMenuLocalization.apply(to: root, language: .russian)
+    let expectedRussian = RuntimeMenuLocalization.nativeTitles.map {
+        $0.en == "Session" ? "Сеанс" : $0.ru
+    }
+    #expect(submenu.items.map(\.title) == expectedRussian)
+    #expect(submenu.items.allSatisfy { !$0.isEnabled && $0.keyEquivalent == "x" })
+
+    let sessionRoot = NSMenu()
+    let session = NSMenuItem(title: "Session", action: nil, keyEquivalent: "")
+    let sessions = NSMenu(title: "Session")
+    let userProfile = NSMenuItem(title: "File", action: nil, keyEquivalent: "")
+    let profileActions = NSMenu(title: "File")
+    profileActions.addItem(NSMenuItem(title: "Disconnect", action: nil, keyEquivalent: ""))
+    userProfile.submenu = profileActions
+    sessions.addItem(userProfile)
+    session.submenu = sessions
+    sessionRoot.addItem(session)
+    RuntimeMenuLocalization.apply(to: sessionRoot, language: .russian)
+    #expect(userProfile.title == "File")
+    #expect(userProfile.submenu?.title == "File")
+}
+
+@Test("Runtime localization inventory covers every Settings tab and the Appearance controls")
+func runtimeLocalizationInventoryCoversVisibleSurfaces() throws {
+    for key in [
+        "settings.tab.appearance", "settings.tab.updates", "settings.tab.security",
+        "settings.tab.cloud", "settings.tab.backup", "settings.reset_appearance",
+        "appearance.section.theme", "appearance.theme", "appearance.text_size",
+        "appearance.density", "appearance.help.text_size", "appearance.section.window",
+        "appearance.transparent_window", "appearance.opacity", "appearance.help.opacity",
+        "appearance.section.language", "appearance.language", "appearance.help.language"
+    ] {
+        let entry = try #require(AppCopy.translations[key])
+        #expect(!entry.ru.isEmpty && !entry.en.isEmpty)
+        #expect(!entry.en.unicodeScalars.contains { (0x0400...0x052F).contains($0.value) })
+        if key != "settings.tab.cloud" {
+            #expect(entry.ru.unicodeScalars.contains { (0x0400...0x052F).contains($0.value) })
+        }
+    }
+    let settings = try repositorySource("Sources/SelectiveRemote/UpdateExperienceView.swift")
+    let appearance = try repositorySource("Sources/SelectiveRemote/AppAppearance.swift")
+    let terminal = try repositorySource("Sources/SelectiveRemote/TerminalAppearance.swift")
+    let app = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+    #expect(settings.contains("language.localized(\"settings.tab.appearance\")"))
+    #expect(settings.contains(".id(language.selection)"))
+    #expect(appearance.contains("language.localized(\"appearance.section.theme\")"))
+    #expect(terminal.contains("language.localized(\"appearance.section.language\")"))
+    #expect(app.contains("AppRuntimeLanguageObserver()"))
+}
+
+@Test("Settings control inventory has English resources for every remaining literal")
+func settingsControlInventoryHasEnglishCoverage() throws {
+    let resources = try repositorySource("Resources/en.lproj/Localizable.strings")
+    let pattern = try NSRegularExpression(
+        pattern: #"(?:Section|Button|Toggle|Picker|LabeledContent|DisclosureGroup)\("([^\"]+)\""#
+    )
+    for path in [
+        "Sources/SelectiveRemote/UpdateExperienceView.swift",
+        "Sources/SelectiveRemote/AppLock.swift",
+        "Sources/SelectiveRemote/BackupSettingsView.swift",
+        "Sources/SelectiveRemote/CloudSettingsView.swift"
+    ] {
+        let source = try repositorySource(path)
+        let range = NSRange(source.startIndex..<source.endIndex, in: source)
+        for match in pattern.matches(in: source, range: range) {
+            guard let literalRange = Range(match.range(at: 1), in: source) else { continue }
+            let literal = String(source[literalRange])
+            guard literal.unicodeScalars.contains(where: { (0x0400...0x052F).contains($0.value) })
+            else { continue }
+            if !resources.contains("\"\(literal)\" = \"") {
+                Issue.record("Missing English: \(path): \(literal)")
+            }
+        }
+    }
+}
+
+@Test("Language observer refreshes native menus and auxiliary Help/About/What's New windows")
+func runtimeLocalizationCoversDetachedSurfaces() throws {
+    let language = try repositorySource("Sources/SelectiveRemote/AppLanguage.swift")
+    let app = try repositorySource("Sources/SelectiveRemote/SelectiveRemoteApp.swift")
+    let auxiliary = try repositorySource("Sources/SelectiveRemote/AppAppearance.swift")
+    let notes = try repositorySource("Sources/SelectiveRemote/UpdateReleaseNotes.swift")
+    #expect(language.contains(".onChange(of: language.selection)"))
+    #expect(language.contains("RuntimeMenuLocalization.refresh(newValue)"))
+    #expect(app.contains(".background(AppRuntimeLanguageObserver())"))
+    #expect(auxiliary.contains("@ObservedObject private var language = AppLanguageStore.shared"))
+    #expect(auxiliary.contains(".environment(\\.locale, language.locale)"))
+    #expect(notes.contains("func refreshLanguageIfPresented()"))
+}
+
 @Test("Confirmed English audit paths use stable keys that rerender with the app language")
 func prereleaseAuditCopyUsesLiveSemanticKeys() throws {
     let cases: [(String, String, String)] = [
-        ("menu.session.title", "Сессия", "Session"),
+        ("menu.session.title", "Сеанс", "Session"),
         ("menu.help.title", "Справка Selective Remote", "Selective Remote Help"),
         ("hosts.auth.automatic.help", "OpenSSH попробует выбранный ключ, ssh-agent и затем пароль. Удобно для совместимости.", "OpenSSH tries the selected key, ssh-agent, then a password for compatibility."),
         ("terminal.local.restart", "Перезапустить shell", "Restart Shell"),

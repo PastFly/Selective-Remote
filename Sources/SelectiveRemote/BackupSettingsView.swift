@@ -87,8 +87,11 @@ struct BackupSettingsView: View {
 
     private func chooseArchive() {
         let panel = NSOpenPanel()
-        panel.title = "Выберите архив Selective Remote"
-        panel.prompt = "Выбрать"
+        panel.title = UpdateLocalization.text(
+            ru: "Выберите архив Selective Remote",
+            en: "Choose a Selective Remote Archive"
+        )
+        panel.prompt = UpdateLocalization.text(ru: "Выбрать", en: "Choose")
         panel.canChooseDirectories = false
         panel.canChooseFiles = true
         panel.allowsMultipleSelection = false
@@ -192,11 +195,17 @@ private struct BackupExportSheet: View {
         Task { @MainActor in
             do {
                 try await KeychainService.authenticateDeviceOwner(
-                    reason: "Создать полную зашифрованную резервную копию Selective Remote"
+                    reason: UpdateLocalization.text(
+                        ru: "Создать полную зашифрованную резервную копию Selective Remote",
+                        en: "Create a full encrypted Selective Remote backup"
+                    )
                 )
                 let panel = NSSavePanel()
-                panel.title = "Сохранить зашифрованную резервную копию"
-                panel.prompt = "Сохранить"
+                panel.title = UpdateLocalization.text(
+                    ru: "Сохранить зашифрованную резервную копию",
+                    en: "Save Encrypted Backup"
+                )
+                panel.prompt = UpdateLocalization.text(ru: "Сохранить", en: "Save")
                 panel.nameFieldStringValue = "Selective-Remote-Backup.srbackup"
                 panel.allowedContentTypes = [UTType(filenameExtension: "srbackup") ?? .data]
                 guard panel.runModal() == .OK, let url = panel.url else {
@@ -210,7 +219,10 @@ private struct BackupExportSheet: View {
                 )
                 password = ""
                 confirmation = ""
-                onComplete("Архив создан: \(url.lastPathComponent)\nПрофилей: \(summary.profileCount), секретов: \(summary.credentialCount), приватных ключей: \(summary.privateKeyCount), Session Logs: \(summary.sessionLogCount).")
+                onComplete(UpdateLocalization.text(
+                    ru: "Архив создан: \(url.lastPathComponent)\nПрофилей: \(summary.profileCount), секретов: \(summary.credentialCount), приватных ключей: \(summary.privateKeyCount), Session Logs: \(summary.sessionLogCount).",
+                    en: "Archive created: \(url.lastPathComponent)\nProfiles: \(summary.profileCount), secrets: \(summary.credentialCount), private keys: \(summary.privateKeyCount), Session Logs: \(summary.sessionLogCount)."
+                ))
             } catch {
                 errorMessage = error.localizedDescription
                 busy = false
@@ -282,7 +294,7 @@ private struct BackupImportSheet: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(password.count < 12 || busy)
                 } else {
-                    Button("Восстановить", systemImage: "arrow.counterclockwise", role: .destructive) {
+                    Button(UpdateLocalization.key("backup.restore"), systemImage: "arrow.counterclockwise", role: .destructive) {
                         restore()
                     }
                     .buttonStyle(.borderedProminent)
@@ -314,14 +326,20 @@ private struct BackupImportSheet: View {
         Task { @MainActor in
             do {
                 try await KeychainService.authenticateDeviceOwner(
-                    reason: "Восстановить секреты и приватные ключи Selective Remote"
+                    reason: UpdateLocalization.text(
+                        ru: "Восстановить секреты и приватные ключи Selective Remote",
+                        en: "Restore Selective Remote secrets and private keys"
+                    )
                 )
                 let result = try SelectiveRemoteBackupService.shared.restoreArchive(
                     at: request.url,
                     password: password
                 )
                 password = ""
-                onComplete("Данные восстановлены. Перезапустите Selective Remote, чтобы применить профили и настройки.\nRollback: \(result.rollbackURL.path)")
+                onComplete(UpdateLocalization.text(
+                    ru: "Данные восстановлены. Перезапустите Selective Remote, чтобы применить профили и настройки.\nRollback: \(result.rollbackURL.path)",
+                    en: "Data restored. Relaunch Selective Remote to apply profiles and settings.\nRollback: \(result.rollbackURL.path)"
+                ))
             } catch {
                 errorMessage = error.localizedDescription
                 busy = false
@@ -353,7 +371,7 @@ private struct BackupSummaryView: View {
 
     private func row(_ label: String, _ value: String) -> some View {
         GridRow {
-            Text(label).foregroundStyle(.secondary)
+            Text(LocalizedStringKey(label)).foregroundStyle(.secondary)
             Text(value).textSelection(.enabled)
         }
     }

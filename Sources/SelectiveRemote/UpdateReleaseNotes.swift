@@ -460,6 +460,12 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
 
     private var window: NSWindow?
     private var hostingController: NSHostingController<AnyView>?
+    private var currentPresentation: UpdateReleaseNotesPresentation?
+
+    func refreshLanguageIfPresented() {
+        guard window?.isVisible == true, let currentPresentation else { return }
+        show(currentPresentation)
+    }
 
     func show(
         manifest: SelectiveRemoteUpdateManifest,
@@ -477,6 +483,7 @@ final class UpdateReleaseNotesWindowController: NSObject, NSWindowDelegate {
     }
 
     private func show(_ presentation: UpdateReleaseNotesPresentation) {
+        currentPresentation = presentation
         let language = UpdateReleaseNotesLanguage.preferred()
         let content = AnyView(
             AppAuxiliaryWindowRoot(store: .shared) {

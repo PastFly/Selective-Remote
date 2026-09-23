@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AppSettingsView: View {
+    @EnvironmentObject private var language: AppLanguageStore
     @ObservedObject var model: AppModel
     @ObservedObject var appearance: AppAppearanceStore
     @ObservedObject var appLock: AppLockStore
@@ -11,30 +12,32 @@ struct AppSettingsView: View {
             Form {
                 AppAppearanceSettingsSection(store: appearance)
                 Section {
-                    Button("Сбросить оформление") { appearance.reset() }
+                    Button(language.localized("settings.reset_appearance")) { appearance.reset() }
                 }
             }
             .formStyle(.grouped)
-            .tabItem { Label("Оформление", systemImage: "paintpalette") }
+            .tabItem { Label(language.localized("settings.tab.appearance"), systemImage: "paintpalette") }
             .tag("appearance")
 
             UpdateSettingsView(model: model)
-                .tabItem { Label("Обновления", systemImage: "arrow.down.circle") }
+                .tabItem { Label(language.localized("settings.tab.updates"), systemImage: "arrow.down.circle") }
                 .tag("updates")
 
             AppLockSettingsView(store: appLock)
-                .tabItem { Label("Безопасность", systemImage: "lock.shield") }
+                .tabItem { Label(language.localized("settings.tab.security"), systemImage: "lock.shield") }
                 .tag("security")
 
             CloudSettingsView(model: model)
-                .tabItem { Label("Cloud", systemImage: "cloud") }
+                .tabItem { Label(language.localized("settings.tab.cloud"), systemImage: "cloud") }
                 .tag("cloud")
 
             BackupSettingsView(model: model)
-                .tabItem { Label("Резервная копия", systemImage: "externaldrive.badge.timemachine") }
+                .tabItem { Label(language.localized("settings.tab.backup"), systemImage: "externaldrive.badge.timemachine") }
                 .tag("backup")
         }
+        .id(language.selection)
         .frame(minWidth: 760, idealWidth: 820, minHeight: 600, idealHeight: 680)
+        .background(AppRuntimeLanguageObserver())
         .background {
             AppWindowBackdrop(appearance: appearance.snapshot)
                 .ignoresSafeArea()
