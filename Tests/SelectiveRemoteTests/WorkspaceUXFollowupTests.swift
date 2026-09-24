@@ -1,19 +1,22 @@
 import Foundation
-import CoreTransferable
 import Testing
 @testable import SelectiveRemote
 
 struct WorkspaceUXFollowupTests {
-    @Test("Native Host drag provider preserves scoped String identity for existing drop targets")
-    func nativeHostDragProvider() async throws {
-        let value = "team-host:11111111-2222-3333-4444-555555555555"
-        let provider = SelectiveRemoteHostDragPayload.provider(for: value)
-        let loaded = try await withCheckedThrowingContinuation { continuation in
-            _ = provider.loadTransferable(type: String.self) { result in
-                continuation.resume(with: result)
-            }
-        }
-        #expect(loaded == value)
+    @Test("Host drag identities remain scoped to their authentication collection")
+    func hostDragIdentities() {
+        let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+        #expect(SelectiveRemoteHostDragIdentity.personalHost(id).value == "personal-host:\(id.uuidString)")
+        #expect(SelectiveRemoteHostDragIdentity.teamHost(id).value == "team-host:\(id.uuidString)")
+        #expect(SelectiveRemoteHostDragIdentity.personalFolder("Work/Test").value == "personal-folder:Work/Test")
+        #expect(SelectiveRemoteHostDragIdentity.personalHost(id).value
+            != SelectiveRemoteHostDragIdentity.teamHost(id).value)
+    }
+    @Test("Team folder drag preserves vault and path scope")
+    func teamFolderDragIdentity() {
+        let vaultID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+        #expect(SelectiveRemoteHostDragIdentity.teamFolder(vaultID: vaultID, path: "Work/Test").value
+            == "team-folder:\(vaultID.uuidString):Work/Test")
     }
 
     @Test("Team Host duplication prepares a new record without carrying shared credentials")

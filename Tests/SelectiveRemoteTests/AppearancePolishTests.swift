@@ -136,7 +136,7 @@ func managementWorkspaceCompositionContract() throws {
     #expect(teamHosts.contains("ProfileCollectionDisplayModePicker(selection: $displayMode)"))
     #expect(teamSnippets.contains("ProfileCollectionDisplayModePicker(selection: $displayMode)"))
     #expect(!controls.contains("ProfileCollectionDisplayModeMenuItems"))
-    #expect(content.contains(".focusEffectDisabled()"))
+    #expect(content.contains("SelectiveRemoteDraggableHostCard("))
     #expect(teamHosts.contains(".focusEffectDisabled()"))
     #expect(controls.contains("SelectiveRemoteCompactAddMenuLabel"))
 }

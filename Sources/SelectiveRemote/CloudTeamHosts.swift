@@ -1417,7 +1417,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     path: path
                                 )
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: teamFolderDragValue(teamID: teamID, path: path)) }
+                                    .draggable(teamFolderDragValue(teamID: teamID, path: path))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .background {
@@ -1434,14 +1434,18 @@ struct SelectiveRemoteTeamHostsView: View {
                                     }
                             case let .host(host):
                                 let targetID = teamHostHostDropTargetID(host.id)
-                                hostRow(host)
+                                SelectiveRemoteDraggableHostCard(
+                                    identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                    select: { selectedHostID = host.id }
+                                ) {
+                                    hostRow(host)
+                                }
                                     .tag(host.id)
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
                                     .contentShape(Rectangle())
                                     .focusEffectDisabled()
                                     .contextMenu { teamHostContextMenu(host) }
-                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                     .overlay(alignment: .top) {
                                         teamHostInsertionIndicator(for: targetID)
                                     }
@@ -1495,7 +1499,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
-                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: teamFolderDragValue(teamID: teamID, path: folder)) }
+                                .draggable(teamFolderDragValue(teamID: teamID, path: folder))
                                 .background {
                                     teamHostDropHighlight(
                                         for: teamHostFolderDropTargetID(
@@ -1528,15 +1532,13 @@ struct SelectiveRemoteTeamHostsView: View {
                                     ForEach(visibleHosts.filter {
                                         $0.teamID == teamID && $0.profile.group == folder
                                     }) { host in
-                                        Button {
-                                            selectedHostID = host.id
-                                        } label: {
+                                        SelectiveRemoteDraggableHostCard(
+                                            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            select: { selectedHostID = host.id }
+                                        ) {
                                             teamHostGridCard(host)
                                         }
-                                        .buttonStyle(.plain)
-                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
-                                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                         .overlay(alignment: .top) {
                                             teamHostInsertionIndicator(
                                                 for: teamHostHostDropTargetID(host.id)
@@ -2139,7 +2141,9 @@ struct SelectiveRemoteTeamHostsView: View {
             ($0.profile.group == path || $0.profile.group.hasPrefix(path + "/"))
         }.map(\.vaultID))
         guard vaults.count == 1, let vaultID = vaults.first else { return "" }
-        return "team-folder:\(vaultID.uuidString):\(path)"
+        return SelectiveRemoteHostDragIdentity.teamFolder(
+            vaultID: vaultID, path: path
+        ).value
     }
 
     private func moveTeamItem(

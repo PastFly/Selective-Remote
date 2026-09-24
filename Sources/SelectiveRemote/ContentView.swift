@@ -1046,7 +1046,7 @@ struct ContentView: View {
                     switch outline.kind {
                     case let .folder(path, name):
                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                            .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-folder:\(path)") }
+                            .draggable(SelectiveRemoteHostDragIdentity.personalFolder(path).value)
                             .font(.headline)
                             .dropDestination(for: String.self) { values, location in
                                 movePersonalProfile(
@@ -1055,9 +1055,10 @@ struct ContentView: View {
                                 )
                             }
                     case let .profile(item):
-                        Button {
-                            openProfile(item.id)
-                        } label: {
+                        SelectiveRemoteDraggableHostCard(
+                            identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                            select: { openProfile(item.id) }
+                        ) {
                             ProfileRow(
                                 profile: item,
                                 isSelected: showsPersonalHostSelection(on: surface)
@@ -1068,8 +1069,6 @@ struct ContentView: View {
                                 compact: surface == .sidebar
                             )
                         }
-                        .buttonStyle(.plain)
-                        .focusEffectDisabled()
                         .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                         .listRowBackground(
                             Color.clear
@@ -1080,7 +1079,6 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle())
                         .contextMenu { profileContextMenu(item) }
-                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-host:\(item.id.uuidString)") }
                         .dropDestination(for: String.self) { values, _ in
                             setPersonalHostDropTarget(nil)
                             return movePersonalProfile(
@@ -1125,7 +1123,7 @@ struct ContentView: View {
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
-                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-folder:\(groupPath)") }
+                                .draggable(SelectiveRemoteHostDragIdentity.personalFolder(groupPath).value)
                                 .dropDestination(for: String.self) { values, location in
                                     movePersonalProfile(
                                         values,
@@ -1139,9 +1137,10 @@ struct ContentView: View {
                                 spacing: 9
                             ) {
                                 ForEach(group.profiles) { item in
-                                    Button {
-                                        openProfile(item.id)
-                                    } label: {
+                                    SelectiveRemoteDraggableHostCard(
+                                        identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                                        select: { openProfile(item.id) }
+                                    ) {
                                         ProfileGridCard(
                                             profile: item,
                                             isSelected: showsPersonalHostSelection(on: surface)
@@ -1153,10 +1152,7 @@ struct ContentView: View {
                                             activeTunnelCount: activeTunnelCount(for: item.id)
                                         )
                                     }
-                                    .buttonStyle(.plain)
-                                    .focusEffectDisabled()
                                     .contextMenu { profileContextMenu(item) }
-                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-host:\(item.id.uuidString)") }
                                     .dropDestination(for: String.self) { values, _ in
                                         movePersonalProfile(
                                             values,
@@ -1322,7 +1318,7 @@ struct ContentView: View {
                                     name,
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
-                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: sidebarTeamFolderDragValue(teamID: teamID, path: path)) }
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
                                 .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
                                             ? Color.accentColor.opacity(0.14) : Color.clear)
                                 .dropDestination(for: String.self) { values, location in
@@ -1339,7 +1335,6 @@ struct ContentView: View {
                                 teamHostSidebarRow(host)
                                     .tag(host.id)
                                     .contextMenu { teamHostContextMenu(host) }
-                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                     .dropDestination(for: String.self) { values, _ in
                                         moveSidebarTeamItem(
                                             values, toFolder: host.profile.group,
@@ -1376,7 +1371,7 @@ struct ContentView: View {
                                 )
                                 .font(.caption2.bold())
                                 .foregroundStyle(.secondary)
-                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: sidebarTeamFolderDragValue(teamID: teamID, path: folder)) }
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: folder))
                                 .dropDestination(for: String.self) { values, location in
                                     moveSidebarTeamItem(
                                         values, toFolder: folder, teamID: teamID,
@@ -1391,15 +1386,13 @@ struct ContentView: View {
                                     ForEach(visibleSidebarTeamHosts.filter {
                                         $0.teamID == teamID && $0.profile.group == folder
                                     }) { host in
-                                        Button {
-                                            openTeamHostCard(host)
-                                        } label: {
+                                        SelectiveRemoteDraggableHostCard(
+                                            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            select: { openTeamHostCard(host) }
+                                        ) {
                                             teamHostSidebarGridCard(host)
                                         }
-                                        .buttonStyle(.plain)
-                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
-                                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                         .dropDestination(for: String.self) { values, _ in
                                             moveSidebarTeamItem(
                                                 values, toFolder: host.profile.group,
@@ -1433,9 +1426,10 @@ struct ContentView: View {
     }
 
     private func teamHostSidebarRow(_ host: SelectiveRemoteTeamHost) -> some View {
-        Button {
-            openTeamHostCard(host)
-        } label: {
+        SelectiveRemoteDraggableHostCard(
+            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+            select: { openTeamHostCard(host) }
+        ) {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     Label(
@@ -1465,8 +1459,6 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
     }
 
     private func teamHostSidebarGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -1617,7 +1609,9 @@ struct ContentView: View {
                 && ($0.profile.group == path || $0.profile.group.hasPrefix(path + "/"))
         }.map(\.vaultID))
         guard vaultIDs.count == 1, let vaultID = vaultIDs.first else { return "" }
-        return "team-folder:\(vaultID.uuidString):\(path)"
+        return SelectiveRemoteHostDragIdentity.teamFolder(
+            vaultID: vaultID, path: path
+        ).value
     }
 
     private func moveSidebarTeamItem(

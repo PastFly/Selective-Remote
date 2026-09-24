@@ -2,9 +2,44 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-enum SelectiveRemoteHostDragPayload {
-    static func provider(for identity: String) -> NSItemProvider {
-        NSItemProvider(object: identity as NSString)
+enum SelectiveRemoteHostDragIdentity {
+    case personalHost(UUID)
+    case personalFolder(String)
+    case teamHost(UUID)
+    case teamFolder(vaultID: UUID, path: String)
+
+    var value: String {
+        switch self {
+        case let .personalHost(id): "personal-host:\(id.uuidString)"
+        case let .personalFolder(path): "personal-folder:\(path)"
+        case let .teamHost(id): "team-host:\(id.uuidString)"
+        case let .teamFolder(vaultID, path): "team-folder:\(vaultID.uuidString):\(path)"
+        }
+    }
+}
+
+/// Keeps selection and native drag on the same card surface, including in lists.
+struct SelectiveRemoteDraggableHostCard<Content: View>: View {
+    let identity: String
+    let select: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        content()
+            .contentShape(Rectangle())
+            .onTapGesture(perform: select)
+            .focusable()
+            .onKeyPress(.return) {
+                select()
+                return .handled
+            }
+            .onKeyPress(.space) {
+                select()
+                return .handled
+            }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(.default, select)
+            .draggable(identity)
     }
 }
 
