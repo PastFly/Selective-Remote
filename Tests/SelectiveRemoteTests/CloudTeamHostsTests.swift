@@ -4,6 +4,35 @@ import Testing
 
 @Suite("macOS Team Host materialization")
 struct CloudTeamHostsTests {
+    @Test("Team Host sorting offers a Vault option in the shared Shelf and catalog preference")
+    func vaultSortOption() {
+        #expect(SelectiveRemoteTeamHostSortMode.allCases.map(\.rawValue).contains("vault"))
+    }
+
+    @Test("Vault sorting orders Team Hosts by Vault then Host without changing identity")
+    func vaultSortOrder() {
+        let teamID = UUID()
+        func host(_ title: String, vault: String, vaultID: UUID) -> SelectiveRemoteTeamHost {
+            var profile = ConnectionProfile(connectionType: .ssh)
+            profile.friendlyName = title
+            profile.host = "synthetic.example.invalid"
+            return .init(
+                id: UUID(), recordID: UUID(), teamID: teamID, teamName: "Team",
+                role: .owner, vaultID: vaultID, vaultName: vault,
+                revision: 1, keyGeneration: 1, modifiedAt: "2026-09-24T00:00:00Z",
+                address: profile.host, profile: profile, credentials: .empty
+            )
+        }
+        let firstVault = UUID()
+        let secondVault = UUID()
+        let beta = host("Alpha Host", vault: "Beta Vault", vaultID: secondVault)
+        let zulu = host("Zulu Host", vault: "Alpha Vault", vaultID: firstVault)
+        let alpha = host("Alpha Host", vault: "Alpha Vault", vaultID: firstVault)
+        let arranged = [beta, zulu, alpha].sorted(by: SelectiveRemoteTeamHostSortMode.vault.comesBefore)
+        #expect(arranged.map(\.id) == [alpha.id, zulu.id, beta.id])
+        #expect(arranged.map(\.vaultID) == [firstVault, firstVault, secondVault])
+    }
+
     @MainActor
     @Test("browser and macOS host records materialize into one separate read-only projection")
     func crossClientFixture() throws {

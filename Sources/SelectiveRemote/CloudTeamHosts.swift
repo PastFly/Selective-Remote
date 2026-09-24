@@ -732,6 +732,7 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
     case nameAscending
     case nameDescending
     case address
+    case vault
 
     var id: String { rawValue }
 
@@ -741,6 +742,49 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
         case .nameAscending: UpdateLocalization.text(ru: "Название: А–Я", en: "Name: A–Z")
         case .nameDescending: UpdateLocalization.text(ru: "Название: Я–А", en: "Name: Z–A")
         case .address: UpdateLocalization.text(ru: "Адрес", en: "Address")
+        case .vault: UpdateLocalization.text(ru: "Хранилище", en: "Vault")
+        }
+    }
+
+    func comesBefore(_ lhs: SelectiveRemoteTeamHost, _ rhs: SelectiveRemoteTeamHost) -> Bool {
+        switch self {
+        case .manual:
+            if lhs.profile.sortIndex != rhs.profile.sortIndex {
+                return lhs.profile.sortIndex < rhs.profile.sortIndex
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameAscending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameDescending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedDescending
+        case .address:
+            let addressOrder = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
+            if addressOrder != .orderedSame {
+                return addressOrder == .orderedAscending
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .vault:
+            let vaultOrder = lhs.vaultName.localizedCaseInsensitiveCompare(rhs.vaultName)
+            if vaultOrder != .orderedSame {
+                return vaultOrder == .orderedAscending
+            }
+            if lhs.vaultID != rhs.vaultID {
+                return lhs.vaultID.uuidString < rhs.vaultID.uuidString
+            }
+            let hostOrder = lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            )
+            return hostOrder == .orderedSame
+                ? lhs.recordID.uuidString < rhs.recordID.uuidString
+                : hostOrder == .orderedAscending
         }
     }
 }
@@ -1652,31 +1696,7 @@ struct SelectiveRemoteTeamHostsView: View {
         _ lhs: SelectiveRemoteTeamHost,
         _ rhs: SelectiveRemoteTeamHost
     ) -> Bool {
-        switch sortMode {
-        case .manual:
-            if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                return lhs.profile.sortIndex < rhs.profile.sortIndex
-            }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameAscending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameDescending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedDescending
-        case .address:
-            let addressOrder = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
-            if addressOrder != .orderedSame {
-                return addressOrder == .orderedAscending
-            }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        }
+        sortMode.comesBefore(lhs, rhs)
     }
 
     private func handleRequestedAction() {

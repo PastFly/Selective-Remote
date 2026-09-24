@@ -1609,30 +1609,7 @@ struct ContentView: View {
         _ lhs: SelectiveRemoteTeamHost,
         _ rhs: SelectiveRemoteTeamHost
     ) -> Bool {
-        switch teamHostSortMode {
-        case .manual:
-            if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                return lhs.profile.sortIndex < rhs.profile.sortIndex
-            }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameAscending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameDescending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedDescending
-        case .address:
-            let order = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
-            return order == .orderedSame
-                ? lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                    rhs.profile.friendlyName
-                ) == .orderedAscending
-                : order == .orderedAscending
-        }
+        teamHostSortMode.comesBefore(lhs, rhs)
     }
 
     private func sidebarTeamFolderDragValue(teamID: UUID, path: String) -> String {
