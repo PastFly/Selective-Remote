@@ -2748,27 +2748,29 @@ struct ContentView: View {
 
     private var sshCompactWorkspaceHeader: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 12) {
-                sshHeaderIdentity
-                    .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-                sshWorkspaceSwitcher.frame(width: 260)
-                sshHeaderActions.fixedSize()
+            SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 220, spacing: 12) {
+                sshHeaderIdentity(showsBadge: true)
+            } trailing: {
+                HStack(spacing: 12) {
+                    sshWorkspaceSwitcher.frame(width: 260)
+                    sshHeaderActions
+                }
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    sshHeaderIdentity
-                        .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
-                    sshHeaderActions.fixedSize()
+                SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 220) {
+                    sshHeaderIdentity(showsBadge: false)
+                } trailing: {
+                    sshHeaderActions
                 }
                 sshWorkspaceSwitcher
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    sshHeaderIdentity
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    sshHeaderActions.fixedSize()
+                SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 180) {
+                    sshHeaderIdentity(showsBadge: false)
+                } trailing: {
+                    sshHeaderActions
                 }
                 Menu {
                     ForEach(sshWorkspaceTabs) { tab in
@@ -2795,51 +2797,12 @@ struct ContentView: View {
         }
     }
 
-    private var sshHeaderIdentity: some View {
-        HStack(spacing: 10) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.indigo, Color.purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 40, height: 40)
-            .fixedSize()
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 7) {
-                    Text(profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName)
-                        .font(.headline)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    Text("SSH")
-                        .font(.caption2.bold())
-                        .foregroundStyle(Color.indigo)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.indigo.opacity(0.10), in: Capsule())
-                        .fixedSize()
-                }
-                Text(sshEndpointLabel)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-                    .textSelection(.enabled)
-            }
-            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(minWidth: 0)
-        .help(profile.friendlyName)
+    private func sshHeaderIdentity(showsBadge: Bool) -> some View {
+        SelectiveRemoteSSHHeaderIdentity(
+            title: profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName,
+            endpoint: sshEndpointLabel,
+            showsBadge: showsBadge
+        )
     }
 
     private var sshHeaderActions: some View {

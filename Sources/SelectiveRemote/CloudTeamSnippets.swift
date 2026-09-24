@@ -303,7 +303,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
     @State private var query = ""
     @State private var selectedSnippetID: UUID?
-    @State private var selectedVaultKey = ""
     @State private var selectedFolder: String?
     @State private var copiedSnippetID: UUID?
     @State private var targetEditorSnippet: SelectiveRemoteTeamSnippet?
@@ -319,6 +318,8 @@ struct SelectiveRemoteTeamSnippetsView: View {
     private var displayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-snippet.sort-mode.v1")
     private var sortMode = SelectiveRemoteTeamSnippetSortMode.name
+    @AppStorage("SelectiveRemote.team-snippet.vault-filter.v1")
+    private var selectedVaultsRaw = ""
     @AppStorage("SelectiveRemote.team-snippet.collapsed-folders.v1")
     private var collapsedFoldersJSON = "[]"
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
@@ -326,6 +327,12 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
     private let identityManager = SelectiveRemoteTeamDeviceIdentityManager()
+
+    private var selectedVaultKeys: Set<String> {
+        SelectiveRemoteTeamVaultFilterState.effectiveKeys(
+            raw: selectedVaultsRaw, available: store.vaults
+        )
+    }
 
     init(
         store: SelectiveRemoteTeamSnippetStore,
@@ -342,16 +349,21 @@ struct SelectiveRemoteTeamSnippetsView: View {
     }
 
     private var writableVaults: [SelectiveRemoteTeamSnippetVaultContext] {
-        store.vaults.filter {
+        let selected = selectedVaultKeys
+        return store.vaults.filter {
             SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: $0.role)
-                && (selectedVaultKey.isEmpty || $0.selectionKey == selectedVaultKey)
+                && (selected.isEmpty || selected.contains($0.selectionKey))
         }
     }
 
     private var visibleSnippets: [SelectiveRemoteTeamSnippet] {
+        let selected = selectedVaultKeys
         let normalizedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
         let filtered = store.snippets.filter { snippet in
-            (selectedVaultKey.isEmpty || vaultKey(snippet) == selectedVaultKey)
+            SelectiveRemoteTeamVaultFilterState.includes(
+                teamID: snippet.teamID, vaultID: snippet.vaultID,
+                selected: selected
+            )
                 && (selectedFolder.map {
                     snippet.folder == $0 || snippet.folder.hasPrefix("\($0)/")
                 } ?? true)
@@ -378,8 +390,12 @@ struct SelectiveRemoteTeamSnippetsView: View {
     }
 
     private var availableFolders: [String] {
-        Array(Set(store.snippets.filter {
-            selectedVaultKey.isEmpty || vaultKey($0) == selectedVaultKey
+        let selected = selectedVaultKeys
+        return Array(Set(store.snippets.filter {
+            SelectiveRemoteTeamVaultFilterState.includes(
+                teamID: $0.teamID, vaultID: $0.vaultID,
+                selected: selected
+            )
         }.map(\.folder))).sorted { folderTitle($0).localizedStandardCompare(folderTitle($1)) == .orderedAscending }
     }
 
@@ -517,7 +533,8 @@ struct SelectiveRemoteTeamSnippetsView: View {
         }
         .onAppear { normalizeSelection() }
         .onChange(of: store.snippets.map(\.id)) { _, _ in normalizeSelection() }
-        .onChange(of: selectedVaultKey) { _, _ in normalizeSelection() }
+        .onChange(of: selectedVaultsRaw) { _, _ in normalizeSelection() }
+        .onChange(of: store.vaults.map(\.selectionKey)) { _, _ in normalizeSelection() }
         .onChange(of: selectedFolder) { _, _ in normalizeSelection() }
         .onChange(of: selectedSnippetID) { _, _ in actionMessage = "" }
         .onChange(of: createRequest) { _, _ in presentCreateEditor() }
@@ -641,6 +658,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     }
 
     private var controls: some View {
+        HStack(spacing: 8) {
         SelectiveRemoteAdaptiveToolbar {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
@@ -665,21 +683,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
         } controls: {
             HStack(spacing: 7) {
-                Menu {
-                    Button(UpdateLocalization.text(ru: "Все Team Vaults", en: "All Team Vaults")) {
-                        selectedVaultKey = ""
-                    }
-                    if !store.vaults.isEmpty { Divider() }
-                    ForEach(store.vaults) { vault in
-                        Button("\(vault.teamName) / \(vault.vaultName)") {
-                            selectedVaultKey = vault.selectionKey
-                        }
-                    }
-                } label: {
-                    Label(selectedVaultTitle, systemImage: "tray.full")
-                }
-                .menuStyle(.borderlessButton)
-
                 Menu {
                     Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) {
                         selectedFolder = nil
@@ -728,12 +731,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
             }
         } overflow: {
             Menu {
-                Menu(UpdateLocalization.text(ru: "Team Vault", en: "Team Vault")) {
-                    Button(UpdateLocalization.text(ru: "Все Team Vaults", en: "All Team Vaults")) { selectedVaultKey = "" }
-                    ForEach(store.vaults) { vault in
-                        Button("\(vault.teamName) / \(vault.vaultName)") { selectedVaultKey = vault.selectionKey }
-                    }
-                }
                 Menu(UpdateLocalization.text(ru: "Папка", en: "Folder")) {
                     Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) { selectedFolder = nil }
                     ForEach(availableFolders, id: \.self) { folder in
@@ -752,6 +749,10 @@ struct SelectiveRemoteTeamSnippetsView: View {
             } label: { Image(systemName: "ellipsis.circle") }
             .menuStyle(.borderlessButton)
             .help(UpdateLocalization.text(ru: "Действия со сниппетами", en: "Snippet actions"))
+        }
+        SelectiveRemoteTeamVaultFilterControl(
+            vaults: store.vaults, rawSelection: $selectedVaultsRaw
+        )
         }
         .padding(14)
     }
@@ -1112,13 +1113,6 @@ struct SelectiveRemoteTeamSnippetsView: View {
         .padding(10)
     }
 
-    private var selectedVaultTitle: String {
-        guard let vault = store.vaults.first(where: { $0.selectionKey == selectedVaultKey }) else {
-            return UpdateLocalization.text(ru: "Все Team Vaults", en: "All Team Vaults")
-        }
-        return "\(vault.teamName) / \(vault.vaultName)"
-    }
-
     private func folderTitle(_ folder: String) -> String {
         folder.isEmpty
             ? UpdateLocalization.text(ru: "Без папки", en: "No Folder")
@@ -1129,15 +1123,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
         "\(snippet.teamName) / \(snippet.vaultName) · \(folderTitle(snippet.folder))"
     }
 
-    private func vaultKey(_ snippet: SelectiveRemoteTeamSnippet) -> String {
-        "\(snippet.teamID.canonicalCloudString)/\(snippet.vaultID.canonicalCloudString)"
-    }
-
     private func normalizeSelection() {
-        if !selectedVaultKey.isEmpty,
-           !store.vaults.contains(where: { $0.selectionKey == selectedVaultKey }) {
-            selectedVaultKey = ""
-        }
         if let selectedFolder, !availableFolders.contains(selectedFolder) {
             self.selectedFolder = nil
         }

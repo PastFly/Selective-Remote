@@ -751,8 +751,6 @@ struct ForwardingManagerView: View {
             .disabled(selected == nil)
             .help("Ещё")
 
-            Spacer(minLength: 12)
-
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -770,8 +768,8 @@ struct ForwardingManagerView: View {
             }
             .padding(.horizontal, 9)
             .frame(minWidth: minimum ? 100 : compact ? 130 : 160,
-                   idealWidth: compact ? 160 : 220,
-                   maxWidth: 280, minHeight: 32)
+                   maxWidth: .infinity, minHeight: 32)
+            .layoutPriority(1)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)

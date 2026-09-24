@@ -464,10 +464,10 @@ struct SFTPWorkspaceView: View {
 
     private var workspaceToolbar: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
+            SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 180, spacing: 10) {
                 workspaceToolbarTitle
-                    .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
-                workspaceToolbarActions.fixedSize()
+            } trailing: {
+                workspaceToolbarActions
             }
 
             VStack(alignment: .leading, spacing: 8) {

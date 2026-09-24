@@ -793,83 +793,85 @@ enum SelectiveRemoteTeamHostVaultFilter {
     static let preferenceKey = "SelectiveRemote.team-host.vault-filter.v1"
 
     static func key(for vault: SelectiveRemoteTeamHostVaultContext) -> String {
-        "\(vault.teamID.canonicalCloudString)/\(vault.vaultID.canonicalCloudString)"
+        SelectiveRemoteTeamVaultFilterState.key(for: vault)
     }
 
     static func key(for host: SelectiveRemoteTeamHost) -> String {
-        "\(host.teamID.canonicalCloudString)/\(host.vaultID.canonicalCloudString)"
+        SelectiveRemoteTeamVaultFilterState.key(teamID: host.teamID, vaultID: host.vaultID)
     }
 
     static func decode(_ raw: String) -> Set<String> {
-        guard let data = raw.data(using: .utf8),
-              let values = try? JSONDecoder().decode([String].self, from: data)
-        else { return [] }
-        return Set(values)
+        SelectiveRemoteTeamVaultFilterState.decode(raw)
     }
 
     static func encode(_ keys: Set<String>) -> String {
-        guard !keys.isEmpty,
-              let data = try? JSONEncoder().encode(keys.sorted()),
-              let value = String(data: data, encoding: .utf8)
-        else { return "" }
-        return value
+        SelectiveRemoteTeamVaultFilterState.encode(keys)
     }
 
     static func effectiveKeys(
         raw: String, available: [SelectiveRemoteTeamHostVaultContext]
     ) -> Set<String> {
-        // A saved selection from another account must not hide every Vault here.
-        decode(raw).intersection(Set(available.map(key(for:))))
+        SelectiveRemoteTeamVaultFilterState.effectiveKeys(raw: raw, available: available)
     }
 
     static func includes(_ host: SelectiveRemoteTeamHost, selected: Set<String>) -> Bool {
-        selected.isEmpty || selected.contains(key(for: host))
+        SelectiveRemoteTeamVaultFilterState.includes(
+            teamID: host.teamID, vaultID: host.vaultID, selected: selected
+        )
     }
 
     static func search(
         _ vaults: [SelectiveRemoteTeamHostVaultContext], query: String
     ) -> [SelectiveRemoteTeamHostVaultContext] {
-        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return vaults.filter {
-            term.isEmpty || $0.teamName.localizedCaseInsensitiveContains(term)
-                || $0.vaultName.localizedCaseInsensitiveContains(term)
-        }.sorted {
-            let team = $0.teamName.localizedStandardCompare($1.teamName)
-            if team != .orderedSame { return team == .orderedAscending }
-            let vault = $0.vaultName.localizedStandardCompare($1.vaultName)
-            return vault == .orderedSame
-                ? key(for: $0) < key(for: $1)
-                : vault == .orderedAscending
-        }
+        SelectiveRemoteTeamVaultFilterState.search(vaults, query: query)
     }
 
     static func selectAllFiltered(
         raw: String, vaults: [SelectiveRemoteTeamHostVaultContext]
     ) -> String {
-        encode(decode(raw).union(vaults.map(key(for:))))
+        SelectiveRemoteTeamVaultFilterState.selectAllFiltered(raw: raw, vaults: vaults)
     }
 
     static func toggle(raw: String, key: String) -> String {
-        var selected = decode(raw)
-        if !selected.insert(key).inserted { selected.remove(key) }
-        return encode(selected)
+        SelectiveRemoteTeamVaultFilterState.toggle(raw: raw, key: key)
     }
 
-    static func clearAll() -> String { "" }
+    static func clearAll() -> String { SelectiveRemoteTeamVaultFilterState.clearAll() }
 }
 
-struct SelectiveRemoteTeamVaultFilterControl: View {
-    let vaults: [SelectiveRemoteTeamHostVaultContext]
+struct SelectiveRemoteTeamVaultFilterControl<Vault: SelectiveRemoteTeamVaultFilterItem>: View {
+    let vaults: [Vault]
     @Binding var rawSelection: String
     @State private var isPresented = false
     @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
+    @FocusState private var focusedVaultKey: String?
 
     private var selectedKeys: Set<String> {
-        SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: rawSelection, available: vaults)
+        SelectiveRemoteTeamVaultFilterState.effectiveKeys(raw: rawSelection, available: vaults)
     }
 
-    private var filteredVaults: [SelectiveRemoteTeamHostVaultContext] {
-        SelectiveRemoteTeamHostVaultFilter.search(vaults, query: searchText)
+    private var filteredVaults: [Vault] {
+        SelectiveRemoteTeamVaultFilterState.search(vaults, query: searchText)
+    }
+
+    private var filteredKeys: [String] {
+        filteredVaults.map {
+            SelectiveRemoteTeamVaultFilterState.key(
+                teamID: $0.teamID, vaultID: $0.vaultID
+            )
+        }
+    }
+
+    private func moveFocus(_ direction: SelectiveRemoteTeamVaultFilterState.FocusDirection) {
+        if let next = SelectiveRemoteTeamVaultFilterState.nextFocus(
+            current: focusedVaultKey, keys: filteredKeys, direction: direction
+        ) {
+            focusedVaultKey = next
+        } else {
+            focusedVaultKey = nil
+            searchFocused = true
+        }
     }
 
     var body: some View {
@@ -900,9 +902,18 @@ struct SelectiveRemoteTeamVaultFilterControl: View {
                     text: $searchText
                 )
                 .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .onKeyPress(.downArrow) {
+                    moveFocus(.down)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    isPresented = false
+                    return .handled
+                }
 
                 Button {
-                    rawSelection = SelectiveRemoteTeamHostVaultFilter.clearAll()
+                    rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
                 } label: {
                     Label(
                         UpdateLocalization.text(ru: "Все Vault", en: "All Vaults"),
@@ -915,9 +926,9 @@ struct SelectiveRemoteTeamVaultFilterControl: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 3) {
                         ForEach(filteredVaults) { vault in
-                            let key = SelectiveRemoteTeamHostVaultFilter.key(for: vault)
+                            let key = SelectiveRemoteTeamVaultFilterState.key(for: vault)
                             Button {
-                                rawSelection = SelectiveRemoteTeamHostVaultFilter.toggle(
+                                rawSelection = SelectiveRemoteTeamVaultFilterState.toggle(
                                     raw: rawSelection, key: key
                                 )
                             } label: {
@@ -938,6 +949,22 @@ struct SelectiveRemoteTeamVaultFilterControl: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("\(vault.teamName) / \(vault.vaultName)")
+                            .accessibilityValue(selectedKeys.contains(key)
+                                ? UpdateLocalization.text(ru: "Выбрано", en: "Selected")
+                                : UpdateLocalization.text(ru: "Не выбрано", en: "Not selected"))
+                            .focused($focusedVaultKey, equals: key)
+                            .onKeyPress(.upArrow) {
+                                moveFocus(.up)
+                                return .handled
+                            }
+                            .onKeyPress(.downArrow) {
+                                moveFocus(.down)
+                                return .handled
+                            }
+                            .onKeyPress(.escape) {
+                                isPresented = false
+                                return .handled
+                            }
                         }
                     }
                 }
@@ -952,20 +979,21 @@ struct SelectiveRemoteTeamVaultFilterControl: View {
                     .foregroundStyle(.secondary)
                     Spacer()
                     Button(UpdateLocalization.text(ru: "Выбрать найденные", en: "Select All Filtered")) {
-                        rawSelection = SelectiveRemoteTeamHostVaultFilter.selectAllFiltered(
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.selectAllFiltered(
                             raw: rawSelection, vaults: filteredVaults
                         )
                     }
                     .disabled(filteredVaults.isEmpty)
                     Button(UpdateLocalization.text(ru: "Очистить", en: "Clear All")) {
-                        rawSelection = SelectiveRemoteTeamHostVaultFilter.clearAll()
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
                     }
-                    .disabled(SelectiveRemoteTeamHostVaultFilter.decode(rawSelection).isEmpty)
+                    .disabled(SelectiveRemoteTeamVaultFilterState.decode(rawSelection).isEmpty)
                 }
                 .controlSize(.small)
             }
             .padding(14)
             .frame(width: 360)
+            .onAppear { searchFocused = true }
         }
     }
 }

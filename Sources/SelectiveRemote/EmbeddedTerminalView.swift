@@ -954,7 +954,8 @@ struct SSHTerminalView: View {
     private var terminalHeaderRegular: some View {
         let tab = workspace.selectedTab
         let state = sessionState(for: tab)
-        return HStack(spacing: 12) {
+        return SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 220, spacing: 12) {
+            HStack(spacing: 12) {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(paneColor(for: tab).opacity(0.16))
@@ -1000,11 +1001,12 @@ struct SSHTerminalView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
-            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .layoutPriority(0)
-
-            Spacer(minLength: 12)
-
+            }
+            .clipped()
+        } trailing: {
+            HStack(spacing: 12) {
             if broadcastsInput {
                 Label("BROADCAST", systemImage: "antenna.radiowaves.left.and.right")
                     .font(.caption2.weight(.bold))
@@ -1162,13 +1164,15 @@ struct SSHTerminalView: View {
                 }
                 .buttonStyle(.bordered)
             }
+            }
         }
         .terminalToolbarContainer()
     }
 
     private func terminalHeaderCompact(showsIcon: Bool) -> some View {
         let tab = workspace.selectedTab
-        return HStack(spacing: 8) {
+        return SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 180) {
+            HStack(spacing: 8) {
             if showsIcon {
                 Image(systemName: "terminal.fill")
                     .foregroundStyle(paneColor(for: tab))
@@ -1186,7 +1190,10 @@ struct SSHTerminalView: View {
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             .layoutPriority(0)
             .help(tab.title)
-
+            }
+            .clipped()
+        } trailing: {
+            HStack(spacing: 8) {
             Button {
                 if tab.session.isRunning { reconnectTab(tab.id) }
                 else { requestConnection(for: tab) }
@@ -1293,6 +1300,7 @@ struct SSHTerminalView: View {
             }
             .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
                 TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
+            }
             }
         }
         .terminalToolbarContainer()
