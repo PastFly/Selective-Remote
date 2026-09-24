@@ -405,7 +405,8 @@ struct CloudTeamHostsTests {
 
         let profile = try #require(hosts.first { $0.recordID == host.id }?.profile)
         let organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
-            in: document, recordID: host.id, profile: profile, role: .editor,
+            in: document, recordID: host.id, profile: profile,
+            expectedModifiedAt: host.modifiedAt, role: .editor,
             deviceID: deviceID, modifiedAt: "2026-09-10T00:03:00.000Z"
         )
         let organizedHost = try #require(organized.records.first { $0.id == host.id })
@@ -715,6 +716,7 @@ struct CloudTeamHostsTests {
             in: created,
             recordID: recordID,
             profile: profile,
+            expectedModifiedAt: "2026-09-11T11:00:00.000Z",
             role: .editor,
             deviceID: deviceID,
             modifiedAt: "2026-09-11T11:01:00.000Z"
@@ -725,6 +727,69 @@ struct CloudTeamHostsTests {
         #expect(store.hosts.first?.profile.group == "Infrastructure/Production")
         #expect(store.hosts.first?.profile.sortIndex == 4)
         #expect(store.hosts.first?.profile.folderOrderPath == [1, 2])
+    }
+
+    @Test("Team Host organization preserves fresh endpoint and security settings")
+    func organizationPreservesFreshHostFields() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let recordID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        var fresh = ConnectionProfile(connectionType: .ssh)
+        fresh.id = recordID
+        fresh.friendlyName = "Current Host"
+        fresh.host = "current.example.invalid"
+        fresh.sshHostKeyPolicy = .strict
+        fresh.sshAgentForwarding = true
+        let document = try SelectiveRemoteTeamHostDocumentMutation.create(
+            profile: fresh, role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-24T20:00:00.000Z"
+        )
+        var stale = fresh
+        stale.host = "old.example.invalid"
+        stale.sshHostKeyPolicy = .acceptNew
+        stale.sshAgentForwarding = false
+        stale.group = "Moved"
+        stale.sortIndex = 4
+        stale.folderOrderPath = [2]
+
+        let organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
+            in: document, recordID: recordID, profile: stale,
+            expectedModifiedAt: "2026-09-24T20:00:00.000Z", role: .editor,
+            deviceID: deviceID, modifiedAt: "2026-09-24T20:01:00.000Z"
+        )
+        let record = try #require(organized.records.first { $0.id == recordID })
+        guard case let .object(fields) = record.data,
+              case let .string(encoded)? = fields["profile"],
+              let bytes = Data(selectiveRemoteBase64URL: encoded)
+        else { Issue.record("Organized Host lost its native profile"); return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let result = try decoder.decode(ConnectionProfile.self, from: bytes)
+        #expect(result.host == fresh.host)
+        #expect(result.sshHostKeyPolicy == .strict)
+        #expect(result.sshAgentForwarding)
+        #expect(result.group == "Moved")
+        #expect(result.sortIndex == 4)
+        #expect(result.folderOrderPath == [2])
+        #expect(fields["address"] == .string(fresh.host))
+    }
+
+    @Test("Team Host organization rejects a stale Vault record")
+    func organizationRejectsStaleRecord() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.host = "current.example.invalid"
+        let document = try SelectiveRemoteTeamHostDocumentMutation.create(
+            profile: profile, role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-24T20:00:00.000Z"
+        )
+        profile.group = "Moved"
+        #expect(throws: SelectiveRemoteTeamHostMutationError.syncConflict) {
+            try SelectiveRemoteTeamHostDocumentMutation.organize(
+                in: document, recordID: profile.id, profile: profile,
+                expectedModifiedAt: "2026-09-24T19:59:00.000Z", role: .editor,
+                deviceID: deviceID, modifiedAt: "2026-09-24T20:01:00.000Z"
+            )
+        }
     }
 
     @MainActor
@@ -766,6 +831,7 @@ struct CloudTeamHostsTests {
         for update in plan.updates {
             organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
                 in: organized, recordID: update.recordID, profile: update.profile,
+                expectedModifiedAt: update.expectedModifiedAt,
                 role: .editor, deviceID: deviceID,
                 modifiedAt: "2026-09-11T11:01:00.000Z"
             )

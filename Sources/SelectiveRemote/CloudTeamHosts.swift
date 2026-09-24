@@ -1957,7 +1957,8 @@ struct SelectiveRemoteTeamHostsView: View {
         profile.group = SelectiveRemoteHostFolderPath.normalize(
             [selectedFolder, component].filter { !$0.isEmpty }.joined(separator: "/")
         )
-        mutate(.organize([.init(recordID: host.recordID, profile: profile)]),
+        mutate(.organize([.init(recordID: host.recordID, profile: profile,
+                                expectedModifiedAt: host.modifiedAt)]),
                context: context, selectedRecordID: host.recordID)
         showsFolderCreator = false
     }
@@ -2514,7 +2515,8 @@ struct SelectiveRemoteTeamHostsView: View {
             let updates = zip(scopedHosts, arranged).compactMap { current, profile in
                 current.profile == profile ? nil
                     : SelectiveRemoteTeamHostOrganizationUpdate(
-                        recordID: current.recordID, profile: profile
+                        recordID: current.recordID, profile: profile,
+                        expectedModifiedAt: current.modifiedAt
                     )
             }
             guard !updates.isEmpty else { return false }

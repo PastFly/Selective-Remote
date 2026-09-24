@@ -1756,7 +1756,8 @@ struct ContentView: View {
         let updates = zip(scopedHosts, updatedProfiles).compactMap { host, profile in
             host.profile == profile ? nil
                 : SelectiveRemoteTeamHostOrganizationUpdate(
-                    recordID: host.recordID, profile: profile
+                    recordID: host.recordID, profile: profile,
+                    expectedModifiedAt: host.modifiedAt
                 )
         }
         guard !updates.isEmpty else { return false }

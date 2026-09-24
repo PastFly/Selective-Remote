@@ -102,6 +102,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         in document: SelectiveRemoteVaultDocument,
         recordID: UUID,
         profile: ConnectionProfile,
+        expectedModifiedAt: String,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -113,21 +114,43 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         guard existing.type == .host else {
             throw SelectiveRemoteTeamHostMutationError.recordIsNotHost
         }
-        var exportedProfile = profile
-        exportedProfile.id = recordID
-        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
-            profiles: [exportedProfile],
-            credentials: [],
-            snippets: [],
-            forwarding: [],
-            deviceID: deviceID
-        ).document.records[0]
+        guard existing.modifiedAt == expectedModifiedAt,
+              case var .object(fields) = existing.data
+        else { throw SelectiveRemoteTeamHostMutationError.syncConflict }
+
+        if let embeddedProfile = fields["profile"] {
+            guard case let .string(encoded) = embeddedProfile else {
+                throw SelectiveRemoteTeamHostMutationError.syncConflict
+            }
+            guard let bytes = Data(selectiveRemoteBase64URL: encoded),
+                  var current = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+            else { throw SelectiveRemoteTeamHostMutationError.syncConflict }
+            current["group"] = profile.group
+            current["sortIndex"] = profile.sortIndex
+            current["folderOrderPath"] = profile.folderOrderPath
+            let updated = try JSONSerialization.data(withJSONObject: current, options: [.sortedKeys])
+            fields["profile"] = .string(updated.selectiveRemoteBase64URL)
+            fields["folder"] = .string(profile.group)
+        } else {
+            // Browser-shaped Hosts have no embedded profile. Keep their existing
+            // conversion path, but only when the record is still the one dragged.
+            var exportedProfile = profile
+            exportedProfile.id = recordID
+            let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+                profiles: [exportedProfile], credentials: [], snippets: [],
+                forwarding: [], deviceID: deviceID
+            ).document.records[0]
+            guard case let .object(exportedFields) = exported.data else {
+                throw SelectiveRemoteTeamHostMutationError.syncConflict
+            }
+            fields = exportedFields
+        }
         let replacement = try SelectiveRemoteVaultRecord(
             id: recordID,
             type: .host,
             version: existing.version.incrementing(deviceID),
             modifiedAt: modifiedAt,
-            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: exported.data, from: existing)
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object(fields), from: existing)
         )
         return try .init(
             records: document.records.map { $0.id == recordID ? replacement : $0 },
@@ -316,6 +339,7 @@ enum SelectiveRemoteTeamHostMutationChange {
 struct SelectiveRemoteTeamHostOrganizationUpdate {
     let recordID: UUID
     let profile: ConnectionProfile
+    let expectedModifiedAt: String
 }
 
 struct SelectiveRemoteTeamHostMovePlan {
@@ -349,7 +373,8 @@ struct SelectiveRemoteTeamHostMovePlan {
         let updates = zip(scoped, arranged).compactMap { host, profile in
             host.profile == profile ? nil
                 : SelectiveRemoteTeamHostOrganizationUpdate(
-                    recordID: host.recordID, profile: profile
+                    recordID: host.recordID, profile: profile,
+                    expectedModifiedAt: host.modifiedAt
                 )
         }
         guard !updates.isEmpty else { return nil }
@@ -515,6 +540,7 @@ final class SelectiveRemoteTeamHostMutationService {
                     in: partial,
                     recordID: update.recordID,
                     profile: update.profile,
+                    expectedModifiedAt: update.expectedModifiedAt,
                     role: role,
                     deviceID: deviceID,
                     modifiedAt: timestamp
