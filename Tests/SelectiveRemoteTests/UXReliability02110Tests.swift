@@ -150,7 +150,8 @@ struct UXReliability02110Tests {
         #expect(content.contains("SelectiveRemote.sidebar-host-quick-access-visible.v1"))
         #expect(content.contains("private var showsHostQuickAccess: Bool {\n        sidebarHostQuickAccessVisible\n    }"))
         #expect(content.contains("ru: \"Показывать Host Shelf\""))
-        #expect(content.contains("if showsHostQuickAccess {\n                Picker(\"\", selection: $hostScope)"))
+        #expect(content.contains("if showsHostQuickAccess {\n                Divider()"))
+        #expect(content.contains("Picker(\"\", selection: $hostScope)"))
         #expect(!content.contains("same reserved sidebar height"))
         #expect(!content.contains("if scope == .team {\n                        setMainArea(.hosts)"))
     }

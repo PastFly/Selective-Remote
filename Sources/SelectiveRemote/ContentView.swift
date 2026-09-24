@@ -173,6 +173,8 @@ struct ContentView: View {
     @State private var sidebarTeamMutationInProgress = false
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
+    @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
+    private var teamHostNavigatorVisible = true
     @AppStorage("SelectiveRemote.personal-host.detail-visible.v1")
     private var personalHostDetailVisible = true
     @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
@@ -725,6 +727,38 @@ struct ContentView: View {
             .padding(.bottom, 8)
 
             if showsHostQuickAccess {
+                Divider()
+                    .padding(.horizontal, 12)
+                HStack(spacing: 7) {
+                    Image(systemName: "server.rack")
+                        .foregroundStyle(Color.accentColor)
+                    Text(UpdateLocalization.text(ru: "ХОСТЫ", en: "HOSTS"))
+                        .font(.caption2.weight(.bold))
+                        .tracking(1)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    if mainArea == .hosts {
+                        Button {
+                            if hostScope == .personal {
+                                personalHostNavigatorVisible.toggle()
+                            } else {
+                                teamHostNavigatorVisible.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .foregroundStyle((hostScope == .personal
+                                    ? personalHostNavigatorVisible : teamHostNavigatorVisible)
+                                    ? Color.accentColor : Color.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help((hostScope == .personal
+                            ? personalHostNavigatorVisible : teamHostNavigatorVisible)
+                            ? UpdateLocalization.text(ru: "Скрыть каталог хостов", en: "Hide Host Catalog")
+                            : UpdateLocalization.text(ru: "Показать каталог хостов", en: "Show Host Catalog"))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -966,6 +1000,7 @@ struct ContentView: View {
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contextMenu { personalHostEmptySpaceContextMenu }
         } else if model.profileCollectionDisplayMode == .list {
             List {
                 SelectiveRemotePersistentOutlineRows(
@@ -1041,6 +1076,7 @@ struct ContentView: View {
             .onChange(of: model.profiles.map { "\($0.id.uuidString):\($0.group)" }) { _, _ in
                 sanitizePersonalFolderExpansion()
             }
+            .contextMenu { personalHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
@@ -1101,6 +1137,29 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .contextMenu { personalHostEmptySpaceContextMenu }
+        }
+    }
+
+    @ViewBuilder
+    private var personalHostEmptySpaceContextMenu: some View {
+        Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+            Button("SSH") { addPersonalHostInCurrentFolder(.ssh) }
+            Button("RDP") { addPersonalHostInCurrentFolder(.rdp) }
+            Button("Telnet") { addPersonalHostInCurrentFolder(.telnet) }
+            Button("Serial") { addPersonalHostInCurrentFolder(.serial) }
+        }
+        Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+            preparePersonalFolderCreator()
+        }
+        .disabled(model.profiles.isEmpty)
+    }
+
+    private func addPersonalHostInCurrentFolder(_ type: ConnectionType) {
+        let folder = model.profiles.isEmpty ? "" : model.selectedProfile.group
+        model.addProfile(connectionType: type)
+        if !folder.isEmpty {
+            model.moveProfile(profileID: model.selectedProfile.id, toFolder: folder)
         }
     }
 
@@ -1264,6 +1323,7 @@ struct ContentView: View {
             .scrollContentBackground(.hidden)
             .id("sidebar-team-list-\(teamHostSortMode.rawValue)")
             .onAppear { restoreOrInitializeSidebarTeamExpansion() }
+            .contextMenu { teamHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -1319,6 +1379,20 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
+            }
+            .contextMenu { teamHostEmptySpaceContextMenu }
+        }
+    }
+
+    @ViewBuilder
+    private var teamHostEmptySpaceContextMenu: some View {
+        if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+           SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            Button(UpdateLocalization.text(ru: "Новый Host", en: "New Host"), systemImage: "plus") {
+                requestTeamHostAction(.create, for: host)
+            }
+            Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+                requestTeamHostAction(.createFolder, for: host)
             }
         }
     }
@@ -1658,8 +1732,11 @@ struct ContentView: View {
     private var personalHostsManagementDetail: some View {
         GeometryReader { available in
           HSplitView {
-            if personalHostNavigatorVisible
-                && (available.size.width >= 820 || !personalHostDetailVisible) {
+            if SelectiveRemoteHostCatalogLayout.showsCatalog(
+                preference: personalHostNavigatorVisible,
+                availableWidth: available.size.width,
+                detailVisible: personalHostDetailVisible
+            ) {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1743,10 +1820,10 @@ struct ContentView: View {
                 profileDetail
                     .frame(minWidth: min(520, available.size.width), maxWidth: .infinity, maxHeight: .infinity)
                     .overlay(alignment: .topLeading) {
-                        if !personalHostNavigatorVisible || available.size.width < 820 {
+                        if !personalHostNavigatorVisible || available.size.width < 760 {
                             Button {
                                 personalHostNavigatorVisible = true
-                                if available.size.width < 820 {
+                                if available.size.width < 760 {
                                     personalHostDetailVisible = false
                                 }
                             } label: {
@@ -1795,7 +1872,7 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 160) {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1818,7 +1895,8 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .frame(minHeight: 32)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-
+            } controls: {
+              HStack(spacing: 8) {
                 Menu {
                     Button(
                         UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
@@ -1864,6 +1942,26 @@ struct ContentView: View {
                     ru: "Сортировка хостов",
                     en: "Sort Hosts"
                 ))
+              }
+            } overflow: {
+                Menu {
+                    Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $model.profileCollectionDisplayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                        ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Действия с хостами", en: "Host actions"))
             }
         }
         .padding(.horizontal, 12)
@@ -5788,7 +5886,7 @@ private struct ProfileRow: View {
     var body: some View {
         if compact {
             rowContent
-                .frame(minHeight: 38, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(
@@ -5809,7 +5907,7 @@ private struct ProfileRow: View {
                 .contentShape(Rectangle())
         } else {
             rowContent
-                .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)

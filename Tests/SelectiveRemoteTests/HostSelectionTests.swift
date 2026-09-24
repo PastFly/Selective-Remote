@@ -33,5 +33,6 @@ struct HostSelectionTests {
         #expect(SelectiveRemoteHostSelectionModel.clearFiltered(
             current: Set(selected), visibleIDs: visible
         ) == [selected[2]])
+        #expect(SelectiveRemoteHostSelectionModel.clearAll(current: Set(selected)).isEmpty)
     }
 }

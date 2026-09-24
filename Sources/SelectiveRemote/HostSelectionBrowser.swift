@@ -69,6 +69,10 @@ enum SelectiveRemoteHostSelectionModel {
     static func clearFiltered(current: Set<UUID>, visibleIDs: [UUID]) -> Set<UUID> {
         current.subtracting(visibleIDs)
     }
+
+    static func clearAll(current: Set<UUID>) -> Set<UUID> {
+        []
+    }
 }
 
 struct SelectiveRemoteHostSelectionBrowser: View {
@@ -144,6 +148,10 @@ struct SelectiveRemoteHostSelectionBrowser: View {
                         )
                     }
                     .disabled(visible.isEmpty)
+                    Button(UpdateLocalization.text(ru: "Сбросить всё", en: "Clear All")) {
+                        selection = SelectiveRemoteHostSelectionModel.clearAll(current: selection)
+                    }
+                    .disabled(selection.isEmpty)
                 }
                 .buttonStyle(.link)
             }

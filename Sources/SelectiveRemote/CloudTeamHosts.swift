@@ -746,6 +746,8 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
 }
 
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
+    case create
+    case createFolder
     case edit
     case delete
     case personalSettings
@@ -875,6 +877,8 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
     @State private var teamHostDropTargetID: String?
     @State private var selectedFolder = ""
+    @State private var newFolderName = ""
+    @State private var showsFolderCreator = false
     @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
     private var hostNavigatorVisible = true
     @AppStorage("SelectiveRemote.team-host.detail-visible.v1")
@@ -976,8 +980,11 @@ struct SelectiveRemoteTeamHostsView: View {
     var body: some View {
         GeometryReader { available in
           HSplitView {
-            if hostNavigatorVisible
-                && (available.size.width >= 780 || !hostDetailVisible) {
+            if SelectiveRemoteHostCatalogLayout.showsCatalog(
+                preference: hostNavigatorVisible,
+                availableWidth: available.size.width,
+                detailVisible: hostDetailVisible
+            ) {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1060,6 +1067,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                 en: "Unlock the app and wait for a safe Team Vault sync."
                             ))
                         )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contextMenu { teamHostEmptySpaceContextMenu }
                     } else {
                         teamHostNavigatorCollection
                     }
@@ -1133,10 +1142,10 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
                 .frame(minWidth: min(480, available.size.width), maxWidth: .infinity, maxHeight: .infinity)
                 .overlay(alignment: .topLeading) {
-                    if !hostNavigatorVisible || available.size.width < 780 {
+                    if !hostNavigatorVisible || available.size.width < 760 {
                         Button {
                             hostNavigatorVisible = true
-                            if available.size.width < 780 {
+                            if available.size.width < 760 {
                                 hostDetailVisible = false
                             }
                         } label: {
@@ -1192,6 +1201,30 @@ struct SelectiveRemoteTeamHostsView: View {
                     selectedRecordID: profile.id
                 )
             }
+        }
+        .sheet(isPresented: $showsFolderCreator) {
+            VStack(alignment: .leading, spacing: 14) {
+                Label(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus")
+                    .font(.title2.bold())
+                Text(UpdateLocalization.text(
+                    ru: "Выбранный Team Host будет перемещён в новую папку этого Vault.",
+                    en: "The selected Team Host will move into a new folder in this Vault."
+                ))
+                .foregroundStyle(.secondary)
+                TextField(UpdateLocalization.text(ru: "Название папки", en: "Folder Name"), text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { showsFolderCreator = false }
+                    Button(UpdateLocalization.text(ru: "Создать и переместить", en: "Create and Move")) {
+                        createFolderForSelectedHost()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(SelectiveRemoteHostFolderPath.normalize(newFolderName).isEmpty)
+                }
+            }
+            .padding(24)
+            .frame(minWidth: 440)
         }
         .sheet(item: $personalSettingsHost, onDismiss: resetConnectionFields) { host in
             SelectiveRemoteTeamHostPersonalSettingsView(
@@ -1277,7 +1310,7 @@ struct SelectiveRemoteTeamHostsView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            HStack(spacing: 8) {
+            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 160) {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1300,7 +1333,8 @@ struct SelectiveRemoteTeamHostsView: View {
                 .padding(.horizontal, 10)
                 .frame(minHeight: 32)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-
+            } controls: {
+              HStack(spacing: 8) {
                 Menu {
                     ForEach(writableVaults) { vault in
                         Button("\(vault.teamName) / \(vault.vaultName)") {
@@ -1337,6 +1371,27 @@ struct SelectiveRemoteTeamHostsView: View {
                     ru: "Сортировка Team Hosts",
                     en: "Sort Team Hosts"
                 ))
+              }
+            } overflow: {
+                Menu {
+                    if !writableVaults.isEmpty {
+                        Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                            ForEach(writableVaults) { vault in
+                                Button("\(vault.teamName) / \(vault.vaultName)") {
+                                    editorRequest = .init(context: vault, host: nil)
+                                }
+                            }
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $displayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                        ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Действия с Team Hosts", en: "Team Host actions"))
             }
         }
         .padding(.horizontal, 12)
@@ -1422,6 +1477,7 @@ struct SelectiveRemoteTeamHostsView: View {
             }
             .listStyle(.sidebar)
             .id("team-host-list-\(displayMode.rawValue)-\(hostDetailVisible)")
+            .contextMenu { teamHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -1508,7 +1564,45 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
                 .padding(12)
             }
+            .contextMenu { teamHostEmptySpaceContextMenu }
         }
+    }
+
+    @ViewBuilder
+    private var teamHostEmptySpaceContextMenu: some View {
+        if !writableVaults.isEmpty && !isMutating {
+            Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                ForEach(writableVaults) { vault in
+                    Button("\(vault.teamName) / \(vault.vaultName)") {
+                        editorRequest = .init(context: vault, host: nil)
+                    }
+                }
+            }
+            if let host = selectedHost,
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+                    newFolderName = ""
+                    showsFolderCreator = true
+                }
+            }
+        }
+    }
+
+    private func createFolderForSelectedHost() {
+        guard let host = selectedHost,
+              let context = context(for: host),
+              SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role),
+              !isMutating
+        else { return }
+        let component = SelectiveRemoteHostFolderPath.normalize(newFolderName)
+        guard !component.isEmpty else { return }
+        var profile = host.profile
+        profile.group = SelectiveRemoteHostFolderPath.normalize(
+            [selectedFolder, component].filter { !$0.isEmpty }.joined(separator: "/")
+        )
+        mutate(.organize([.init(recordID: host.recordID, profile: profile)]),
+               context: context, selectedRecordID: host.recordID)
+        showsFolderCreator = false
     }
 
     private func teamHostGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -1582,6 +1676,16 @@ struct SelectiveRemoteTeamHostsView: View {
         selectedHostID = host.id
         hostDetailVisible = true
         switch request.action {
+        case .create:
+            if let context = context(for: host),
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
+                editorRequest = .init(context: context, host: nil)
+            }
+        case .createFolder:
+            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                newFolderName = ""
+                showsFolderCreator = true
+            }
         case .edit:
             if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
                let context = context(for: host) {
@@ -1626,10 +1730,12 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .selectiveRemoteWorkspaceSurface(
             cornerRadius: 11,
             selected: selectedHostID == host.id
         )
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder

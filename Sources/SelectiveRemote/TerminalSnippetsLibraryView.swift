@@ -226,9 +226,9 @@ struct TerminalSnippetsLibraryView: View {
         ViewThatFits(in: .horizontal) {
             HStack(alignment: .center, spacing: 16) {
                 headerTitle
-                    .frame(minWidth: 300, maxWidth: 520, alignment: .leading)
-                Spacer(minLength: 8)
+                    .fixedSize(horizontal: true, vertical: false)
                 headerActions
+                Spacer(minLength: 0)
             }
             VStack(alignment: .leading, spacing: 12) {
                 headerTitle
@@ -324,7 +324,8 @@ struct TerminalSnippetsLibraryView: View {
 
     private var libraryBrowser: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
+            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 130) {
+              HStack(spacing: 8) {
                 if selectedGroup != nil {
                     Button {
                         openRoot()
@@ -338,7 +339,9 @@ struct TerminalSnippetsLibraryView: View {
                     .foregroundStyle(.secondary)
                 TextField("Поиск сниппетов", text: $query)
                     .textFieldStyle(.plain)
-                Spacer(minLength: 6)
+              }
+            } controls: {
+              HStack(spacing: 8) {
                 Picker("Вид", selection: Binding(
                     get: { viewMode },
                     set: { viewMode = $0 }
@@ -365,6 +368,28 @@ struct TerminalSnippetsLibraryView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .help("Сортировка")
+              }
+            } overflow: {
+                Menu {
+                    Picker("Вид", selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Text(mode == .list ? "Список" : "Плитка").tag(mode)
+                        }
+                    }
+                    Picker("Сортировка", selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in
+                            Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+                        }
+                    }
+                    Button(sortAscending ? "По убыванию" : "По возрастанию") { sortAscending.toggle() }
+                    Button("Новый сниппет") { presentEditor(nil, preferredGroupID: selectedGroupID) }
+                    Button("Новая группа") {
+                        groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                        groupEditorPresented = true
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
             }
             .padding(10)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
@@ -424,6 +449,16 @@ struct TerminalSnippetsLibraryView: View {
                 }
             }
             .background(Color.clear.contentShape(Rectangle()))
+            .contextMenu {
+                Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet"), systemImage: "plus") {
+                    presentEditor(nil, preferredGroupID: selectedGroupID)
+                }
+                Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus") {
+                    groupEditor = nil
+                    groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                    groupEditorPresented = true
+                }
+            }
         }
     }
 
@@ -670,7 +705,7 @@ struct TerminalSnippetsLibraryView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(8)
                     }
-                    .frame(minHeight: 130)
+                    .frame(height: SelectiveRemoteSnippetCommandLayout.height(for: snippet.command))
                 }
 
                 GroupBox("Targets") {
@@ -708,7 +743,6 @@ struct TerminalSnippetsLibraryView: View {
                     }
                 }
 
-                Spacer()
                 Button {
                     _ = model.runTerminalSnippet(snippet)
                 } label: {
