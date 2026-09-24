@@ -32,7 +32,11 @@ struct TunnelsRenderedLayoutTests {
     @Test("Tunnels create, actions, search and filter keep usable nonoverlapping bounds")
     func toolbarBounds() throws {
         let model = AppModel()
+        let languageKey = "SelectiveRemote.applicationLanguage.v1"
+        let previousLanguage = UserDefaults.standard.object(forKey: languageKey)
+        defer { UserDefaults.standard.set(previousLanguage, forKey: languageKey) }
         for locale in ["ru_RU", "en_US"] {
+            UserDefaults.standard.set(locale == "en_US" ? "english" : "russian", forKey: languageKey)
             for scheme in [ColorScheme.light, .dark] {
                 for width in [670, 790, 900, 1200, 1500] {
                     let view = ForwardingManagerView(
