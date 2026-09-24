@@ -894,6 +894,10 @@ struct ContentView: View {
                     if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
                        SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                         Button {
+                            requestTeamHostAction(.create, for: host)
+                        } label: { Image(systemName: "plus") }
+                        .help(UpdateLocalization.text(ru: "Новый Team Host", en: "New Team Host"))
+                        Button {
                             requestTeamHostAction(.duplicate, for: host)
                         } label: { Image(systemName: "doc.on.doc") }
                         .help(UpdateLocalization.text(ru: "Создать копию Team Host", en: "Duplicate Team Host"))
@@ -1057,6 +1061,7 @@ struct ContentView: View {
                     case let .profile(item):
                         SelectiveRemoteDraggableHostCard(
                             identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                            previewTitle: item.friendlyName,
                             select: { openProfile(item.id) }
                         ) {
                             ProfileRow(
@@ -1139,6 +1144,7 @@ struct ContentView: View {
                                 ForEach(group.profiles) { item in
                                     SelectiveRemoteDraggableHostCard(
                                         identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                                        previewTitle: item.friendlyName,
                                         select: { openProfile(item.id) }
                                     ) {
                                         ProfileGridCard(
@@ -1302,7 +1308,7 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if teamHostDisplayMode == .list {
-            List(selection: $selectedTeamHostID) {
+            List {
                 ForEach(sidebarTeamIDs, id: \.self) { teamID in
                     DisclosureGroup(
                         isExpanded: sidebarTeamExpansionBinding(teamID)
@@ -1388,6 +1394,7 @@ struct ContentView: View {
                                     }) { host in
                                         SelectiveRemoteDraggableHostCard(
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            previewTitle: host.profile.friendlyName,
                                             select: { openTeamHostCard(host) }
                                         ) {
                                             teamHostSidebarGridCard(host)
@@ -1428,6 +1435,7 @@ struct ContentView: View {
     private func teamHostSidebarRow(_ host: SelectiveRemoteTeamHost) -> some View {
         SelectiveRemoteDraggableHostCard(
             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+            previewTitle: host.profile.friendlyName,
             select: { openTeamHostCard(host) }
         ) {
             VStack(alignment: .leading, spacing: 3) {
@@ -1555,6 +1563,15 @@ struct ContentView: View {
     }
 
     private func openTeamHostCard(_ host: SelectiveRemoteTeamHost) {
+        let detailVisible = UserDefaults.standard.bool(
+            forKey: "SelectiveRemote.team-host.detail-visible.v1"
+        )
+        guard SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: selectedTeamHostID?.uuidString,
+            requestedID: host.id.uuidString,
+            detailsVisible: detailVisible,
+            alreadyInHosts: hostScope == .team && mainArea == .hosts
+        ) else { return }
         hostScope = .team
         selectedTeamHostID = host.id
         UserDefaults.standard.set(
@@ -2132,6 +2149,12 @@ struct ContentView: View {
     }
 
     private func openProfile(_ profileID: UUID) {
+        guard SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: model.selectedProfileID?.uuidString,
+            requestedID: profileID.uuidString,
+            detailsVisible: personalHostDetailVisible,
+            alreadyInHosts: hostScope == .personal && mainArea == .hosts
+        ) else { return }
         model.selectProfile(profileID)
         personalHostDetailVisible = true
         openPersonalHosts()

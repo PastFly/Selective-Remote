@@ -3,6 +3,43 @@ import Testing
 @testable import SelectiveRemote
 
 struct WorkspaceUXFollowupTests {
+    @Test("A Host card click never starts a drag, while movement starts exactly one")
+    func hostCardPointerSequence() {
+        var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
+        pointer.press(at: CGPoint(x: 8, y: 8))
+        #expect(pointer.move(to: CGPoint(x: 10, y: 10)) == .none)
+        #expect(pointer.release() == .select)
+
+        pointer.press(at: CGPoint(x: 50, y: 20))
+        #expect(pointer.move(to: CGPoint(x: 55, y: 20)) == .beginDrag)
+        #expect(pointer.move(to: CGPoint(x: 80, y: 20)) == .none)
+        #expect(pointer.release() == .none)
+    }
+
+    @Test("Card pointer behavior is independent of content position and collection surface")
+    func hostCardPointerCoverage() {
+        for start in [CGPoint(x: 2, y: 2), CGPoint(x: 35, y: 15),
+                      CGPoint(x: 130, y: 40), CGPoint(x: 265, y: 65)] {
+            var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
+            pointer.press(at: start)
+            #expect(pointer.move(to: CGPoint(x: start.x + 6, y: start.y)) == .beginDrag)
+            #expect(pointer.release() == .none)
+        }
+    }
+
+    @Test("Selecting the current Host does not request another workspace transition")
+    func hostSelectionTransition() {
+        #expect(!SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: "a", requestedID: "a", detailsVisible: true, alreadyInHosts: true
+        ))
+        #expect(SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: "a", requestedID: "b", detailsVisible: true, alreadyInHosts: true
+        ))
+        #expect(SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: "a", requestedID: "a", detailsVisible: false, alreadyInHosts: true
+        ))
+    }
+
     @Test("Host drag identities remain scoped to their authentication collection")
     func hostDragIdentities() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
@@ -32,6 +69,22 @@ struct WorkspaceUXFollowupTests {
         #expect(request.host == nil)
         #expect(request.seedProfile?.id != profile.id)
         #expect(request.seedProfile?.connectionType == profile.connectionType)
+    }
+
+    @Test("Team Host creation keeps the selected Vault and folder without copying secrets")
+    func teamHostCreateDraft() {
+        let vaultID = UUID()
+        let context = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: UUID(), teamName: "Synthetic",
+            role: .owner, vaultID: vaultID, vaultName: "Synthetic"
+        )
+        let request = SelectiveRemoteTeamHostEditorRequest.newDraft(
+            in: "Parent/Child", context: context
+        )
+        #expect(request.context.vaultID == vaultID)
+        #expect(request.host == nil)
+        #expect(request.seedProfile?.group == "Parent/Child")
+        #expect(request.seedProfile?.username.isEmpty == true)
     }
 
     @Test("Host catalog respects saved collapse preference and compact width")

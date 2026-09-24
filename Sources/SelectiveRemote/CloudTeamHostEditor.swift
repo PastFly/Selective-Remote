@@ -20,6 +20,14 @@ struct SelectiveRemoteTeamHostEditorRequest: Identifiable {
         copy.friendlyName += UpdateLocalization.text(ru: " — копия", en: " — copy")
         return .init(context: context, host: nil, seedProfile: copy)
     }
+
+    static func newDraft(
+        in folder: String, context: SelectiveRemoteTeamHostVaultContext
+    ) -> Self {
+        var profile = ConnectionProfile(connectionType: .ssh)
+        profile.group = folder
+        return .init(context: context, host: nil, seedProfile: profile)
+    }
 }
 
 struct SelectiveRemoteTeamHostMutationMessage: Identifiable {

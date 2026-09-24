@@ -1402,7 +1402,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ViewBuilder
     private var teamHostNavigatorCollection: some View {
         if displayMode == .list {
-            List(selection: $selectedHostID) {
+            List {
                 ForEach(teamIDs, id: \.self) { teamID in
                     DisclosureGroup(isExpanded: expansionBinding(for: teamID)) {
                         SelectiveRemotePersistentOutlineRows(
@@ -1436,7 +1436,10 @@ struct SelectiveRemoteTeamHostsView: View {
                                 let targetID = teamHostHostDropTargetID(host.id)
                                 SelectiveRemoteDraggableHostCard(
                                     identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
-                                    select: { selectedHostID = host.id }
+                                    previewTitle: host.profile.friendlyName,
+                                    select: {
+                                        if selectedHostID != host.id { selectedHostID = host.id }
+                                    }
                                 ) {
                                     hostRow(host)
                                 }
@@ -1534,7 +1537,10 @@ struct SelectiveRemoteTeamHostsView: View {
                                     }) { host in
                                         SelectiveRemoteDraggableHostCard(
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
-                                            select: { selectedHostID = host.id }
+                                            previewTitle: host.profile.friendlyName,
+                                            select: {
+                                                if selectedHostID != host.id { selectedHostID = host.id }
+                                            }
                                         ) {
                                             teamHostGridCard(host)
                                         }
@@ -1682,7 +1688,7 @@ struct SelectiveRemoteTeamHostsView: View {
         case .create:
             if let context = context(for: host),
                SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
-                editorRequest = .init(context: context, host: nil)
+                editorRequest = .newDraft(in: host.profile.group, context: context)
             }
         case .createFolder:
             if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {

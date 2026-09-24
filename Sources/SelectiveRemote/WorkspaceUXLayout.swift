@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import Foundation
 import SwiftUI
@@ -18,28 +19,156 @@ enum SelectiveRemoteHostDragIdentity {
     }
 }
 
-/// Keeps selection and native drag on the same card surface, including in lists.
+/// A left click commits only on mouse-up; moving past the threshold starts one drag.
+struct SelectiveRemoteHostCardPointerSequence {
+    enum Action: Equatable { case none, select, beginDrag }
+
+    let threshold: CGFloat
+    private var origin: CGPoint?
+    private var dragging = false
+
+    mutating func press(at point: CGPoint) {
+        origin = point
+        dragging = false
+    }
+
+    mutating func move(to point: CGPoint) -> Action {
+        guard let origin, !dragging,
+              hypot(point.x - origin.x, point.y - origin.y) >= threshold
+        else { return .none }
+        dragging = true
+        return .beginDrag
+    }
+
+    mutating func release() -> Action {
+        defer { origin = nil; dragging = false }
+        return origin != nil && !dragging ? .select : .none
+    }
+
+    mutating func cancel() {
+        origin = nil
+        dragging = false
+    }
+}
+
+enum SelectiveRemoteHostSelectionTransition {
+    static func needsTransition(
+        currentID: String?, requestedID: String, detailsVisible: Bool, alreadyInHosts: Bool
+    ) -> Bool {
+        currentID != requestedID || !detailsVisible || !alreadyInHosts
+    }
+}
+
+/// AppKit owns the whole card's left pointer path; the SwiftUI content remains visual only.
+private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
+    let identity: String
+    let previewTitle: String
+    let select: () -> Void
+
+    func makeNSView(context: Context) -> PointerView {
+        PointerView()
+    }
+
+    func updateNSView(_ view: PointerView, context: Context) {
+        view.identity = identity
+        view.previewTitle = previewTitle
+        view.select = select
+    }
+
+    final class PointerView: NSView, NSDraggingSource {
+        var identity = ""
+        var previewTitle = ""
+        var select: (() -> Void)?
+        private var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
+
+        override var acceptsFirstResponder: Bool { true }
+        override var isOpaque: Bool { false }
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            // Let the card's SwiftUI context menu handle secondary clicks.
+            if NSApp.currentEvent?.type == .rightMouseDown { return nil }
+            return super.hitTest(point)
+        }
+
+        override func mouseDown(with event: NSEvent) {
+            guard event.clickCount == 1 else {
+                pointer.cancel()
+                return
+            }
+            pointer.press(at: convert(event.locationInWindow, from: nil))
+        }
+
+        override func mouseDragged(with event: NSEvent) {
+            let point = convert(event.locationInWindow, from: nil)
+            guard pointer.move(to: point) == .beginDrag else { return }
+            let item = NSPasteboardItem()
+            item.setString(identity, forType: .string)
+            let draggingItem = NSDraggingItem(pasteboardWriter: item)
+            draggingItem.setDraggingFrame(bounds, contents: dragPreview())
+            beginDraggingSession(with: [draggingItem], event: event, source: self)
+        }
+
+        override func mouseUp(with event: NSEvent) {
+            if pointer.release() == .select {
+                window?.makeFirstResponder(self)
+                select?()
+            }
+        }
+
+        override func keyDown(with event: NSEvent) {
+            if event.charactersIgnoringModifiers == "\r" || event.charactersIgnoringModifiers == " " {
+                select?()
+            } else {
+                super.keyDown(with: event)
+            }
+        }
+
+        func draggingSession(
+            _ session: NSDraggingSession,
+            sourceOperationMaskFor context: NSDraggingContext
+        ) -> NSDragOperation { .move }
+
+        func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint,
+                             operation: NSDragOperation) {
+            pointer.cancel()
+        }
+
+        private func dragPreview() -> NSImage {
+            let size = NSSize(width: max(120, bounds.width), height: max(38, bounds.height))
+            let image = NSImage(size: size)
+            image.lockFocus()
+            NSColor.controlBackgroundColor.setFill()
+            NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 9, yRadius: 9).fill()
+            NSColor.controlAccentColor.setStroke()
+            NSBezierPath(roundedRect: NSRect(origin: .zero, size: size), xRadius: 9, yRadius: 9).stroke()
+            (previewTitle as NSString).draw(
+                in: NSRect(x: 12, y: (size.height - 20) / 2, width: size.width - 24, height: 20),
+                withAttributes: [.font: NSFont.systemFont(ofSize: 13, weight: .medium),
+                                 .foregroundColor: NSColor.labelColor]
+            )
+            image.unlockFocus()
+            return image
+        }
+    }
+}
+
+/// Keeps selection and native drag on the same complete card surface.
 struct SelectiveRemoteDraggableHostCard<Content: View>: View {
     let identity: String
+    let previewTitle: String
     let select: () -> Void
     @ViewBuilder let content: () -> Content
 
     var body: some View {
         content()
             .contentShape(Rectangle())
-            .onTapGesture(perform: select)
-            .focusable()
-            .onKeyPress(.return) {
-                select()
-                return .handled
-            }
-            .onKeyPress(.space) {
-                select()
-                return .handled
+            .overlay {
+                SelectiveRemoteHostCardPointerSurface(
+                    identity: identity, previewTitle: previewTitle, select: select
+                )
             }
             .accessibilityAddTraits(.isButton)
             .accessibilityAction(.default, select)
-            .draggable(identity)
     }
 }
 
