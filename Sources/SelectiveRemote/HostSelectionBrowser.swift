@@ -202,9 +202,15 @@ struct SelectiveRemoteHostSelectionBrowser: View {
                                     .padding(.vertical, 6)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .background(
-                                        index == highlightedIndex ? Color.accentColor.opacity(0.11) : .clear,
+                                        selection.contains(item.id) ? Color.accentColor.opacity(0.11)
+                                            : index == highlightedIndex ? Color.accentColor.opacity(0.05) : .clear,
                                         in: RoundedRectangle(cornerRadius: 7)
                                     )
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 7)
+                                            .strokeBorder(index == highlightedIndex
+                                                ? Color.accentColor.opacity(0.55) : .clear)
+                                    }
                                 }
                                 .buttonStyle(.plain)
                                 .id(item.id)

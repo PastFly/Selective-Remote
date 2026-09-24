@@ -512,7 +512,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         )
                     }
                 }
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .onAppear { normalizeSelection() }

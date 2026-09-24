@@ -2,16 +2,9 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
-enum SelectiveRemoteHostCardDragPolicy {
-    static let minimumDistance: CGFloat = 8
-
-    static func shouldStart(
-        horizontal: CGFloat,
-        vertical: CGFloat,
-        isInteractiveControl: Bool
-    ) -> Bool {
-        guard !isInteractiveControl else { return false }
-        return hypot(horizontal, vertical) >= minimumDistance
+enum SelectiveRemoteHostDragPayload {
+    static func provider(for identity: String) -> NSItemProvider {
+        NSItemProvider(object: identity as NSString)
     }
 }
 
@@ -33,7 +26,43 @@ enum SelectiveRemoteAdaptiveToolbarLayout {
     }
 
     static func searchWidth(availableWidth: CGFloat, reservedWidth: CGFloat) -> CGFloat {
-        min(420, max(190, availableWidth - reservedWidth - 8))
+        min(780, max(0, availableWidth - reservedWidth - 8))
+    }
+}
+
+enum SelectiveRemoteSSHHeaderLayout {
+    enum Mode { case regular, compact, minimum }
+
+    static func minimumWidth(for mode: Mode) -> CGFloat {
+        switch mode {
+        case .regular: 760
+        case .compact: 400
+        case .minimum: 0
+        }
+    }
+
+    static func mode(width: CGFloat) -> Mode {
+        if width >= minimumWidth(for: .regular) { return .regular }
+        if width >= minimumWidth(for: .compact) { return .compact }
+        return .minimum
+    }
+}
+
+enum SelectiveRemoteTerminalToolbarLayout {
+    enum Mode { case regular, compact, minimum }
+
+    static func minimumWidth(for mode: Mode) -> CGFloat {
+        switch mode {
+        case .regular: 1000
+        case .compact: 480
+        case .minimum: 0
+        }
+    }
+
+    static func mode(width: CGFloat) -> Mode {
+        if width >= minimumWidth(for: .regular) { return .regular }
+        if width >= minimumWidth(for: .compact) { return .compact }
+        return .minimum
     }
 }
 

@@ -1,19 +1,34 @@
 import Foundation
+import CoreTransferable
 import Testing
 @testable import SelectiveRemote
 
 struct WorkspaceUXFollowupTests {
-    @Test("Host drag waits for movement and ignores interactive controls")
-    func hostCardDragThreshold() {
-        #expect(!SelectiveRemoteHostCardDragPolicy.shouldStart(
-            horizontal: 7, vertical: 0, isInteractiveControl: false
-        ))
-        #expect(SelectiveRemoteHostCardDragPolicy.shouldStart(
-            horizontal: 8, vertical: 0, isInteractiveControl: false
-        ))
-        #expect(!SelectiveRemoteHostCardDragPolicy.shouldStart(
-            horizontal: 20, vertical: 0, isInteractiveControl: true
-        ))
+    @Test("Native Host drag provider preserves scoped String identity for existing drop targets")
+    func nativeHostDragProvider() async throws {
+        let value = "team-host:11111111-2222-3333-4444-555555555555"
+        let provider = SelectiveRemoteHostDragPayload.provider(for: value)
+        let loaded = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadTransferable(type: String.self) { result in
+                continuation.resume(with: result)
+            }
+        }
+        #expect(loaded == value)
+    }
+
+    @Test("Team Host duplication prepares a new record without carrying shared credentials")
+    func teamHostDuplicateDraft() {
+        let profile = ConnectionProfile(connectionType: .ssh)
+        let request = SelectiveRemoteTeamHostEditorRequest.duplicateDraft(
+            profile: profile,
+            context: .init(
+                id: UUID(), teamID: UUID(), teamName: "Synthetic",
+                role: .owner, vaultID: UUID(), vaultName: "Synthetic"
+            )
+        )
+        #expect(request.host == nil)
+        #expect(request.seedProfile?.id != profile.id)
+        #expect(request.seedProfile?.connectionType == profile.connectionType)
     }
 
     @Test("Host catalog respects saved collapse preference and compact width")
@@ -42,10 +57,30 @@ struct WorkspaceUXFollowupTests {
         ) == .compact)
         #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
             availableWidth: 1080, reservedWidth: 590
-        ) == 420)
+        ) == 482)
+        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
+            availableWidth: 1080, reservedWidth: 160
+        ) == 780)
         #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
             availableWidth: 300, reservedWidth: 44
         ) >= 190)
+        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
+            availableWidth: 220, reservedWidth: 44
+        ) <= 168)
+    }
+
+    @Test("SSH Host header prioritizes reachable controls at compact widths")
+    func compactSSHHeaderModes() {
+        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 960) == .regular)
+        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 650) == .compact)
+        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 390) == .minimum)
+    }
+
+    @Test("Terminal toolbar places secondary actions into overflow before clipping")
+    func compactTerminalToolbarModes() {
+        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 1100) == .regular)
+        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 620) == .compact)
+        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 360) == .minimum)
     }
 
     @Test("Snippet command uses bounded height for one or many lines")

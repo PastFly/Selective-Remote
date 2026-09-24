@@ -748,6 +748,7 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
     case create
     case createFolder
+    case duplicate
     case edit
     case delete
     case personalSettings
@@ -1416,7 +1417,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     path: path
                                 )
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                                    .draggable(teamFolderDragValue(teamID: teamID, path: path))
+                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: teamFolderDragValue(teamID: teamID, path: path)) }
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .background {
@@ -1440,7 +1441,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     .contentShape(Rectangle())
                                     .focusEffectDisabled()
                                     .contextMenu { teamHostContextMenu(host) }
-                                    .draggable("team-host:\(host.id.uuidString)")
+                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                     .overlay(alignment: .top) {
                                         teamHostInsertionIndicator(for: targetID)
                                     }
@@ -1494,7 +1495,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
-                                .draggable(teamFolderDragValue(teamID: teamID, path: folder))
+                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: teamFolderDragValue(teamID: teamID, path: folder)) }
                                 .background {
                                     teamHostDropHighlight(
                                         for: teamHostFolderDropTargetID(
@@ -1535,7 +1536,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                         .buttonStyle(.plain)
                                         .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
-                                        .draggable("team-host:\(host.id.uuidString)")
+                                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                         .overlay(alignment: .top) {
                                             teamHostInsertionIndicator(
                                                 for: teamHostHostDropTargetID(host.id)
@@ -1685,6 +1686,11 @@ struct SelectiveRemoteTeamHostsView: View {
             if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 newFolderName = ""
                 showsFolderCreator = true
+            }
+        case .duplicate:
+            if let context = context(for: host),
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
+                editorRequest = .duplicateDraft(profile: host.profile, context: context)
             }
         case .edit:
             if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),

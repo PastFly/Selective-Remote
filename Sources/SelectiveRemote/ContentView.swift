@@ -789,16 +789,16 @@ struct ContentView: View {
                 Divider()
                 HStack(spacing: 9) {
                 Menu {
-                    Button("Новое RDP", systemImage: "desktopcomputer") {
+                    Button(UpdateLocalization.text(ru: "Новое RDP", en: "New RDP"), systemImage: "desktopcomputer") {
                         model.addProfile(connectionType: .rdp)
                     }
-                    Button("Новое SSH", systemImage: "terminal") {
+                    Button(UpdateLocalization.text(ru: "Новое SSH", en: "New SSH"), systemImage: "terminal") {
                         model.addProfile(connectionType: .ssh)
                     }
-                    Button("Новое Telnet", systemImage: "network") {
+                    Button(UpdateLocalization.text(ru: "Новое Telnet", en: "New Telnet"), systemImage: "network") {
                         model.addProfile(connectionType: .telnet)
                     }
-                    Button("Новое Serial", systemImage: "cable.connector") {
+                    Button(UpdateLocalization.text(ru: "Новое Serial", en: "New Serial"), systemImage: "cable.connector") {
                         model.addProfile(connectionType: .serial)
                     }
                     Divider()
@@ -814,13 +814,15 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("Новое подключение")
+                .help(UpdateLocalization.text(ru: "Новое подключение", en: "New Connection"))
                 Button { model.duplicateSelectedProfile() } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Создать копию")
+                .disabled(model.selectedProfileID == nil)
+                .help(UpdateLocalization.text(ru: "Создать копию", en: "Duplicate Host"))
                 Button { model.deleteSelectedProfile() } label: { Image(systemName: "trash") }
-                    .help("Удалить")
+                    .disabled(model.selectedProfileID == nil)
+                    .help(UpdateLocalization.text(ru: "Удалить Host", en: "Delete Host"))
 
                 Spacer()
 
@@ -829,7 +831,7 @@ struct ContentView: View {
                 )
 
                 Menu {
-                    Button("Импортировать…", systemImage: "square.and.arrow.down") {
+                    Button(UpdateLocalization.text(ru: "Импортировать…", en: "Import…"), systemImage: "square.and.arrow.down") {
                         model.importProfiles()
                     }
                     Divider()
@@ -842,17 +844,17 @@ struct ContentView: View {
                     ) {
                         model.exportAllProfiles()
                     }
-                    Button("Выбранный профиль как .rdp…", systemImage: "doc") {
+                    Button(UpdateLocalization.text(ru: "Выбранный профиль как .rdp…", en: "Selected Profile as .rdp…"), systemImage: "doc") {
                         model.exportSelectedRDP()
                     }
                     .disabled(profile.connectionType != .rdp)
                 } label: {
                     Image(systemName: "square.and.arrow.up.on.square")
                 }
-                .help("Импорт и экспорт без паролей и SSH-ключей")
+                .help(UpdateLocalization.text(ru: "Импорт и экспорт без паролей и SSH-ключей", en: "Import and export without passwords or SSH keys"))
 
                 Menu {
-                    Picker("Сортировка", selection: $model.profileSortMode) {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
                         ForEach(ProfileSortMode.allCases) { mode in
                             Text(LocalizedStringKey(mode.title)).tag(mode)
                         }
@@ -860,13 +862,24 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
-                .help("Сортировка подключений")
+                .help(UpdateLocalization.text(ru: "Сортировка подключений", en: "Sort Connections"))
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
             } else if showsHostQuickAccess {
                 Divider()
                 HStack(spacing: 9) {
+                    if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                       SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                        Button {
+                            requestTeamHostAction(.duplicate, for: host)
+                        } label: { Image(systemName: "doc.on.doc") }
+                        .help(UpdateLocalization.text(ru: "Создать копию Team Host", en: "Duplicate Team Host"))
+                        Button {
+                            requestTeamHostAction(.delete, for: host)
+                        } label: { Image(systemName: "trash") }
+                        .help(UpdateLocalization.text(ru: "Удалить Team Host", en: "Delete Team Host"))
+                    }
                     Button {
                         NotificationCenter.default.post(
                             name: .selectiveRemoteTeamVaultSyncNow,
@@ -1011,7 +1024,7 @@ struct ContentView: View {
                     switch outline.kind {
                     case let .folder(path, name):
                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
-                            .draggable("personal-folder:\(path)")
+                            .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-folder:\(path)") }
                             .font(.headline)
                             .dropDestination(for: String.self) { values, location in
                                 movePersonalProfile(
@@ -1045,7 +1058,7 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle())
                         .contextMenu { profileContextMenu(item) }
-                        .draggable("personal-host:\(item.id.uuidString)")
+                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-host:\(item.id.uuidString)") }
                         .dropDestination(for: String.self) { values, _ in
                             setPersonalHostDropTarget(nil)
                             return movePersonalProfile(
@@ -1090,7 +1103,7 @@ struct ContentView: View {
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
-                                .draggable("personal-folder:\(groupPath)")
+                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-folder:\(groupPath)") }
                                 .dropDestination(for: String.self) { values, location in
                                     movePersonalProfile(
                                         values,
@@ -1121,7 +1134,7 @@ struct ContentView: View {
                                     .buttonStyle(.plain)
                                     .focusEffectDisabled()
                                     .contextMenu { profileContextMenu(item) }
-                                    .draggable("personal-host:\(item.id.uuidString)")
+                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "personal-host:\(item.id.uuidString)") }
                                     .dropDestination(for: String.self) { values, _ in
                                         movePersonalProfile(
                                             values,
@@ -1287,7 +1300,7 @@ struct ContentView: View {
                                     name,
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
-                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
+                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: sidebarTeamFolderDragValue(teamID: teamID, path: path)) }
                                 .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
                                             ? Color.accentColor.opacity(0.14) : Color.clear)
                                 .dropDestination(for: String.self) { values, location in
@@ -1304,7 +1317,7 @@ struct ContentView: View {
                                 teamHostSidebarRow(host)
                                     .tag(host.id)
                                     .contextMenu { teamHostContextMenu(host) }
-                                    .draggable("team-host:\(host.id.uuidString)")
+                                    .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                     .dropDestination(for: String.self) { values, _ in
                                         moveSidebarTeamItem(
                                             values, toFolder: host.profile.group,
@@ -1341,7 +1354,7 @@ struct ContentView: View {
                                 )
                                 .font(.caption2.bold())
                                 .foregroundStyle(.secondary)
-                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: folder))
+                                .onDrag { SelectiveRemoteHostDragPayload.provider(for: sidebarTeamFolderDragValue(teamID: teamID, path: folder)) }
                                 .dropDestination(for: String.self) { values, location in
                                     moveSidebarTeamItem(
                                         values, toFolder: folder, teamID: teamID,
@@ -1364,7 +1377,7 @@ struct ContentView: View {
                                         .buttonStyle(.plain)
                                         .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
-                                        .draggable("team-host:\(host.id.uuidString)")
+                                        .onDrag { SelectiveRemoteHostDragPayload.provider(for: "team-host:\(host.id.uuidString)") }
                                         .dropDestination(for: String.self) { values, _ in
                                             moveSidebarTeamItem(
                                                 values, toFolder: host.profile.group,
@@ -2633,7 +2646,58 @@ struct ContentView: View {
     }
 
     private var sshCompactWorkspaceHeader: some View {
-        HStack(spacing: 12) {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                sshHeaderIdentity
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                sshWorkspaceSwitcher.frame(width: 300)
+                sshHeaderActions
+            }
+            .frame(minWidth: SelectiveRemoteSSHHeaderLayout.minimumWidth(for: .regular))
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    sshHeaderIdentity
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    sshHeaderActions
+                }
+                sshWorkspaceSwitcher
+            }
+            .frame(minWidth: SelectiveRemoteSSHHeaderLayout.minimumWidth(for: .compact))
+
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    sshHeaderIdentity
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    sshHeaderActions
+                }
+                Menu {
+                    ForEach(sshWorkspaceTabs) { tab in
+                        Button {
+                            selectedTab = tab
+                        } label: {
+                            Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                        }
+                    }
+                } label: {
+                    Label(rdpTabTitle(selectedTab), systemImage: selectedTab.systemImage)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityLabel(UpdateLocalization.text(ru: "Рабочая область", en: "Workspace"))
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+        }
+    }
+
+    private var sshHeaderIdentity: some View {
+        HStack(spacing: 10) {
             ZStack {
                 RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(
@@ -2654,6 +2718,7 @@ struct ContentView: View {
                     Text(profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName)
                         .font(.headline)
                         .lineLimit(1)
+                        .truncationMode(.middle)
                     Text("SSH")
                         .font(.caption2.bold())
                         .foregroundStyle(Color.indigo)
@@ -2667,10 +2732,14 @@ struct ContentView: View {
                     .lineLimit(1)
                     .textSelection(.enabled)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minWidth: 0)
+        .help(profile.friendlyName)
+    }
 
-            Spacer(minLength: 12)
-            sshWorkspaceSwitcher
-
+    private var sshHeaderActions: some View {
+        HStack(spacing: 7) {
             Button {
                 selectedTab = .general
             } label: {
@@ -2700,14 +2769,6 @@ struct ContentView: View {
                 )
             )
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.06))
-                .frame(height: 1)
-        }
     }
 
     private var sshWorkspaceSwitcher: some View {
@@ -2722,7 +2783,7 @@ struct ContentView: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-        .frame(width: 300)
+        .frame(maxWidth: .infinity)
     }
 
     private var sshWorkspaceHeader: some View {

@@ -123,7 +123,7 @@ struct TerminalSnippetsLibraryView: View {
                             .frame(width: max(430, proxy.size.width * 0.56))
                         Divider()
                         inspector
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     }
                 }
             } else {
@@ -199,15 +199,18 @@ struct TerminalSnippetsLibraryView: View {
             Text(UpdateLocalization.formatted("terminal.snippets.delete.confirm",
                 english: language.selection.usesEnglish, snippet.title))
         }
-        .alert("Отключить SSH Targets?", isPresented: $showsDisconnectConfirmation) {
-            Button("Отключить", role: .destructive) {
+        .alert(UpdateLocalization.text(ru: "Отключить SSH-сессии хостов?", en: "Disconnect SSH Targets?"), isPresented: $showsDisconnectConfirmation) {
+            Button(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"), role: .destructive) {
                 model.disconnectTerminalSnippetTargets(
                     model.latestSnippetRun?.targets.map(\.profileID) ?? []
                 )
             }
-            Button("Отмена", role: .cancel) {}
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
         } message: {
-            Text("Активные SSH-сессии Targets последнего запуска будут завершены. Выполняющаяся команда может быть прервана.")
+            Text(UpdateLocalization.text(
+                ru: "Активные SSH-сессии хостов последнего запуска будут завершены. Выполняющаяся команда может быть прервана.",
+                en: "Active SSH sessions for targets from the latest run will close. A running command may be interrupted."
+            ))
         }
         .onAppear {
             restoreNavigation()
@@ -280,14 +283,14 @@ struct TerminalSnippetsLibraryView: View {
                         } ?? ""
                         groupEditorPresented = true
                     } label: {
-                        Label("Новая группа", systemImage: "folder.badge.plus")
+                        Label(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus")
                             .frame(width: 112)
                     }
                 } else {
                     Button {
                         teamCreateFolderRequest += 1
                     } label: {
-                        Label("Новая группа", systemImage: "folder.badge.plus")
+                        Label(UpdateLocalization.text(ru: "Новая группа", en: "New Group"), systemImage: "folder.badge.plus")
                         .frame(width: 112)
                     }
                 }
@@ -333,16 +336,16 @@ struct TerminalSnippetsLibraryView: View {
                         Image(systemName: "chevron.left")
                     }
                     .buttonStyle(.borderless)
-                    .help("Вернуться ко всем группам")
+                    .help(UpdateLocalization.text(ru: "Вернуться ко всем группам", en: "Back to all groups"))
                 }
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
-                TextField("Поиск сниппетов", text: $query)
+                TextField(UpdateLocalization.text(ru: "Поиск сниппетов", en: "Search Snippets"), text: $query)
                     .textFieldStyle(.plain)
               }
             } controls: {
               HStack(spacing: 8) {
-                Picker("Вид", selection: Binding(
+                Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(
                     get: { viewMode },
                     set: { viewMode = $0 }
                 )) {
@@ -354,36 +357,42 @@ struct TerminalSnippetsLibraryView: View {
                 .labelsHidden()
                 .frame(width: 82)
                 Menu {
-                    Picker("Сортировка", selection: $sortRaw) {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
                         ForEach(SnippetLibrarySort.allCases) { option in
                             Text(LocalizedStringKey(option.title)).tag(option.rawValue)
                         }
                     }
                     Divider()
-                    Button(sortAscending ? "По убыванию" : "По возрастанию") {
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) {
                         sortAscending.toggle()
                     }
                 } label: {
                     Image(systemName: sortAscending ? "arrow.up.arrow.down.circle" : "arrow.down.arrow.up.circle")
                 }
                 .menuStyle(.borderlessButton)
-                .help("Сортировка")
+                .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
               }
             } overflow: {
                 Menu {
-                    Picker("Вид", selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
                         ForEach(SnippetLibraryViewMode.allCases) { mode in
-                            Text(mode == .list ? "Список" : "Плитка").tag(mode)
+                            Text(mode == .list
+                                ? UpdateLocalization.text(ru: "Список", en: "List")
+                                : UpdateLocalization.text(ru: "Плитка", en: "Grid")).tag(mode)
                         }
                     }
-                    Picker("Сортировка", selection: $sortRaw) {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
                         ForEach(SnippetLibrarySort.allCases) { option in
                             Text(LocalizedStringKey(option.title)).tag(option.rawValue)
                         }
                     }
-                    Button(sortAscending ? "По убыванию" : "По возрастанию") { sortAscending.toggle() }
-                    Button("Новый сниппет") { presentEditor(nil, preferredGroupID: selectedGroupID) }
-                    Button("Новая группа") {
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) { sortAscending.toggle() }
+                    Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) { presentEditor(nil, preferredGroupID: selectedGroupID) }
+                    Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
                         groupEditor = nil
                         groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
                         groupEditorPresented = true
@@ -396,7 +405,7 @@ struct TerminalSnippetsLibraryView: View {
             .padding(14)
 
             HStack(spacing: 6) {
-                Button("Все сниппеты") { openRoot() }
+                Button(UpdateLocalization.text(ru: "Все сниппеты", en: "All Snippets")) { openRoot() }
                     .buttonStyle(.plain)
                     .foregroundStyle(selectedGroup == nil ? Color.primary : Color.accentColor)
                 if let selectedGroup {
@@ -697,7 +706,7 @@ struct TerminalSnippetsLibraryView: View {
                     }
                 }
 
-                GroupBox("Script") {
+                GroupBox(UpdateLocalization.text(ru: "Команда", en: "Command")) {
                     ScrollView {
                         Text(snippet.command)
                             .font(.body.monospaced())
@@ -708,7 +717,7 @@ struct TerminalSnippetsLibraryView: View {
                     .frame(height: SelectiveRemoteSnippetCommandLayout.height(for: snippet.command))
                 }
 
-                GroupBox("Targets") {
+                GroupBox(UpdateLocalization.text(ru: "Хосты", en: "Targets")) {
                     VStack(alignment: .leading, spacing: 8) {
                         ForEach(targetProfiles(for: snippet)) { profile in
                             Label {
@@ -723,7 +732,7 @@ struct TerminalSnippetsLibraryView: View {
                             }
                         }
                         if snippet.includesLocalTerminal {
-                            Label("Локальный терминал", systemImage: "terminal")
+                            Label(UpdateLocalization.text(ru: "Локальный терминал", en: "Local Terminal"), systemImage: "terminal")
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -732,7 +741,7 @@ struct TerminalSnippetsLibraryView: View {
 
                 if let summary = model.latestSnippetRun,
                    summary.snippetID == snippet.id {
-                    GroupBox("Последний запуск") {
+                    GroupBox(UpdateLocalization.text(ru: "Последний запуск", en: "Latest Run")) {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(summary.targets) { target in
                                 targetRunStatusRow(target)
@@ -756,7 +765,7 @@ struct TerminalSnippetsLibraryView: View {
             }
             .padding(22)
         } else {
-            ContentUnavailableView("Выберите сниппет", systemImage: "curlybraces")
+            ContentUnavailableView(UpdateLocalization.text(ru: "Выберите сниппет", en: "Select a Snippet"), systemImage: "curlybraces")
         }
     }
 
@@ -913,7 +922,7 @@ struct TerminalSnippetsLibraryView: View {
                     english: language.selection.usesEnglish, failed), systemImage: "xmark.octagon.fill")
                     .foregroundStyle(.orange)
             }
-            Button("Отключить SSH Targets") {
+            Button(UpdateLocalization.text(ru: "Отключить SSH-сессии", en: "Disconnect SSH Targets")) {
                 showsDisconnectConfirmation = true
             }
             .disabled(summary.targets.isEmpty)
@@ -1036,9 +1045,9 @@ private struct TerminalSnippetEditorView: View {
                     }
                 }
 
-                Section("Targets · до 8 целей") {
+                Section(UpdateLocalization.text(ru: "Хосты · до 8 целей", en: "Targets · up to 8")) {
                     Toggle(isOn: targetBinding(.localTerminal)) {
-                        Label("Локальный терминал", systemImage: "terminal")
+                        Label(UpdateLocalization.text(ru: "Локальный терминал", en: "Local Terminal"), systemImage: "terminal")
                     }
                     .disabled(!targets.contains(.localTerminal) && targets.count >= 8)
                     SelectiveRemoteHostSelectionBrowser(

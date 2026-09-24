@@ -4,6 +4,22 @@ struct SelectiveRemoteTeamHostEditorRequest: Identifiable {
     let id = UUID()
     let context: SelectiveRemoteTeamHostVaultContext
     let host: SelectiveRemoteTeamHost?
+    let seedProfile: ConnectionProfile?
+
+    init(context: SelectiveRemoteTeamHostVaultContext, host: SelectiveRemoteTeamHost?,
+         seedProfile: ConnectionProfile? = nil) {
+        self.context = context
+        self.host = host
+        self.seedProfile = seedProfile
+    }
+
+    static func duplicateDraft(profile: ConnectionProfile,
+                               context: SelectiveRemoteTeamHostVaultContext) -> Self {
+        var copy = profile
+        copy.id = UUID()
+        copy.friendlyName += UpdateLocalization.text(ru: " — копия", en: " — copy")
+        return .init(context: context, host: nil, seedProfile: copy)
+    }
 }
 
 struct SelectiveRemoteTeamHostMutationMessage: Identifiable {
@@ -34,7 +50,7 @@ struct SelectiveRemoteTeamHostEditorView: View {
     ) {
         self.request = request
         self.onSave = onSave
-        let profile = request.host?.profile
+        let profile = request.host?.profile ?? request.seedProfile
         _title = State(initialValue: profile?.friendlyName ?? "")
         _address = State(initialValue: profile.map(Self.address) ?? "")
         _username = State(initialValue: profile?.username ?? "")
@@ -225,7 +241,8 @@ struct SelectiveRemoteTeamHostEditorView: View {
     }
 
     private func profile() -> ConnectionProfile {
-        var profile = request.host?.profile ?? ConnectionProfile(connectionType: connectionType)
+        var profile = request.host?.profile ?? request.seedProfile
+            ?? ConnectionProfile(connectionType: connectionType)
         profile.id = request.host?.recordID ?? UUID()
         profile.friendlyName = title
         profile.username = username

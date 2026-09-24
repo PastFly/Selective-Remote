@@ -944,6 +944,16 @@ struct SSHTerminalView: View {
     }
 
     private var terminalHeader: some View {
+        ViewThatFits(in: .horizontal) {
+            terminalHeaderRegular
+                .frame(minWidth: SelectiveRemoteTerminalToolbarLayout.minimumWidth(for: .regular))
+            terminalHeaderCompact(showsIcon: true)
+                .frame(minWidth: SelectiveRemoteTerminalToolbarLayout.minimumWidth(for: .compact))
+            terminalHeaderCompact(showsIcon: false)
+        }
+    }
+
+    private var terminalHeaderRegular: some View {
         let tab = workspace.selectedTab
         let state = sessionState(for: tab)
         return HStack(spacing: 12) {
@@ -1146,6 +1156,136 @@ struct SSHTerminalView: View {
                     tab.session.stop()
                 }
                 .buttonStyle(.bordered)
+            }
+        }
+        .terminalToolbarContainer()
+    }
+
+    private func terminalHeaderCompact(showsIcon: Bool) -> some View {
+        let tab = workspace.selectedTab
+        return HStack(spacing: 8) {
+            if showsIcon {
+                Image(systemName: "terminal.fill")
+                    .foregroundStyle(paneColor(for: tab))
+                    .frame(width: 28, height: 28)
+                    .background(paneColor(for: tab).opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                Text(tab.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                terminalStatusBadge(for: tab, compact: true)
+            }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .help(tab.title)
+
+            Button {
+                if tab.session.isRunning { reconnectTab(tab.id) }
+                else { requestConnection(for: tab) }
+            } label: {
+                Image(systemName: tab.session.isRunning ? "arrow.clockwise" : "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(reconnectingTabIDs.contains(tab.id))
+            .help(tab.session.isRunning
+                ? UpdateLocalization.text(ru: "Переподключить", en: "Reconnect")
+                : UpdateLocalization.text(ru: "Подключиться", en: "Connect"))
+
+            Menu {
+                Button(UpdateLocalization.text(ru: "Дублировать с подключением", en: "Duplicate and Connect"), systemImage: "plus.square.on.square") {
+                    _ = duplicateAndConnect(tab.id)
+                }
+                .disabled(workspace.displayedTabs.count >= 8 || workspace.isEmptyState)
+                Button(UpdateLocalization.text(ru: "Команды сервера", en: "Server Commands"), systemImage: "server.rack") {
+                    showsServerCommands = true
+                    if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
+                        refreshRemoteContext(for: tab.id)
+                    }
+                }
+                .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
+                Button(UpdateLocalization.text(ru: "Обновить контекст сервера", en: "Refresh Server Context"), systemImage: "arrow.clockwise") {
+                    refreshRemoteContext()
+                }
+                .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection)
+                    || refreshingContextTabIDs.contains(workspace.selectedTabID))
+                Button(UpdateLocalization.text(ru: "Открыть в SFTP", en: "Open in SFTP"), systemImage: "folder.badge.gearshape") {
+                    openSFTP(tab)
+                }
+                .disabled(workspace.isEmptyState || !supportsSSHFeatures(tab.connection))
+                Button(UpdateLocalization.text(ru: "История и подсказки", en: "History and Suggestions"), systemImage: "clock.arrow.circlepath") {
+                    showsSnippets = false
+                    showsHistory.toggle()
+                }
+                Button(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"), systemImage: "curlybraces") {
+                    showsHistory = false
+                    showsSnippets.toggle()
+                }
+                Button(UpdateLocalization.text(ru: "Оформление терминала", en: "Terminal Appearance"), systemImage: "paintpalette.fill") {
+                    showsPaneAppearance.toggle()
+                }
+                Divider()
+                Button(broadcastsInput
+                    ? UpdateLocalization.text(ru: "Выключить групповой ввод", en: "Turn Off Broadcast Input")
+                    : UpdateLocalization.text(ru: "Включить групповой ввод", en: "Turn On Broadcast Input"),
+                    systemImage: "antenna.radiowaves.left.and.right") {
+                    if broadcastsInput { broadcastsInput = false }
+                    else { showsBroadcastConfirmation = true }
+                }
+                .disabled(workspace.runningSessionCount < 2)
+                Button(UpdateLocalization.text(ru: "Очистить терминал", en: "Clear Terminal"), systemImage: "eraser") {
+                    tab.session.clear()
+                }
+                Button(UpdateLocalization.text(ru: "Палитра действий", en: "Command Palette"), systemImage: "command") {
+                    showsCommandPalette = true
+                }
+                Button(UpdateLocalization.text(ru: "Оформление", en: "Appearance"), systemImage: "paintpalette") {
+                    showsAppearance.toggle()
+                }
+                if hasInstallableKey && tab.isPrimary && !tab.session.isRunning {
+                    Button(UpdateLocalization.text(ru: "Установить SSH-ключ", en: "Install SSH Key"), systemImage: "key.horizontal") {
+                        installKey()
+                    }
+                }
+                Divider()
+                Button(
+                    isFocusMode
+                        ? UpdateLocalization.text(ru: "Вернуть интерфейс", en: "Restore Interface")
+                        : UpdateLocalization.text(ru: "Развернуть терминал", en: "Expand Terminal"),
+                    systemImage: isFocusMode
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right"
+                ) { toggleFocusMode() }
+                Button(UpdateLocalization.text(ru: "Изменить подключение…", en: "Edit Connection…"), systemImage: "slider.horizontal.3") {
+                    connectionEditorRequest = TerminalConnectionEditorRequest(
+                        tabID: tab.id, initialConnection: tab.connection
+                    )
+                }
+                .disabled(tab.session.isRunning || (tab.isPrimary && locksPrimaryConnection))
+                if tab.session.isRunning {
+                    Divider()
+                    Button(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"), systemImage: "stop.fill", role: .destructive) {
+                        reconnectingTabIDs.remove(tab.id)
+                        tab.session.stop()
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help(UpdateLocalization.text(ru: "Дополнительные действия", en: "More Actions"))
+            .popover(isPresented: $showsPaneAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(
+                    store: tab.appearance,
+                    appAppearance: appAppearance,
+                    includesApplicationSettings: false,
+                    individualTitle: tab.title,
+                    copyFrom: appearance
+                )
+            }
+            .popover(isPresented: $showsAppearance, arrowEdge: .bottom) {
+                TerminalAppearanceView(store: appearance, appAppearance: appAppearance)
             }
         }
         .terminalToolbarContainer()

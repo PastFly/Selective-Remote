@@ -436,7 +436,7 @@ test("macOS Team Hosts expose nested shared folders, tags, filtering, and drag-a
   assert.match(hosts, /selectedFolder/u);
   assert.match(hosts, /SelectiveRemotePersistentOutlineRows\([\s\S]*outlineItems\(in: teamID\)/u);
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-folders\.v1/u);
-  assert.match(hosts, /\.draggable\("team-host:/u);
+  assert.match(hosts, /\.onDrag \{ SelectiveRemoteHostDragPayload\.provider\(for: "team-host:/u);
   assert.match(hosts, /moveTeamItem/u);
   assert.match(hosts, /SelectiveRemoteHostFolderOrganizer\.move/u);
   assert.match(tree, /SelectiveRemoteTeamHostOutlineItem/u);
@@ -559,8 +559,9 @@ test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-fo
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
   ]);
-  const personalRow = content.match(/\.tag\(item\.id\)[\s\S]*?\.draggable\("personal-host:/u)?.[0] ?? "";
-  assert.doesNotMatch(personalRow, /\.onTapGesture/u);
+  const personalDragSources = [...content.matchAll(/\.onDrag \{ SelectiveRemoteHostDragPayload\.provider\(for: "personal-host:/gu)];
+  assert.ok(personalDragSources.length >= 2);
+  assert.match(content, /\.dropDestination\(for: String\.self\)/u);
   assert.match(content, /Новая папка для выбранного Host/u);
   assert.match(content, /Родительская папка/u);
   assert.match(content, /Работа\/Серверы\/Linux/u);

@@ -216,7 +216,7 @@ struct ProfileOrganizationAndSecurityTests {
         #expect(content.contains("GridItem(.adaptive(minimum: 100)"))
         #expect(content.contains("Создать свой тег"))
         #expect(content.contains("ConnectionActivityView"))
-        #expect(content.contains(".draggable(\"personal-host:"))
+        #expect(content.contains(".onDrag { SelectiveRemoteHostDragPayload.provider(for: \"personal-host:"))
         #expect(content.contains("movePersonalProfile"))
     }
 }
