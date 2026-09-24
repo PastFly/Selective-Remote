@@ -327,7 +327,7 @@ struct TerminalSnippetsLibraryView: View {
 
     private var libraryBrowser: some View {
         VStack(spacing: 0) {
-            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 130) {
+            SelectiveRemoteAdaptiveToolbar {
               HStack(spacing: 8) {
                 if selectedGroup != nil {
                     Button {

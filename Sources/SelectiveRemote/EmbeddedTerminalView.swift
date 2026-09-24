@@ -946,9 +946,7 @@ struct SSHTerminalView: View {
     private var terminalHeader: some View {
         ViewThatFits(in: .horizontal) {
             terminalHeaderRegular
-                .frame(minWidth: SelectiveRemoteTerminalToolbarLayout.minimumWidth(for: .regular))
             terminalHeaderCompact(showsIcon: true)
-                .frame(minWidth: SelectiveRemoteTerminalToolbarLayout.minimumWidth(for: .compact))
             terminalHeaderCompact(showsIcon: false)
         }
     }
@@ -971,6 +969,8 @@ struct SSHTerminalView: View {
                     Text(tab.title)
                         .font(.headline)
                         .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     if tab.isPinned {
                         Image(systemName: "pin.fill")
                             .font(.caption2)
@@ -982,9 +982,12 @@ struct SSHTerminalView: View {
                 HStack(spacing: 7) {
                     Label(connectionHost(for: tab), systemImage: "server.rack")
                         .labelStyle(.titleAndIcon)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                     Text("·")
                     Text(connectionLabel(for: tab))
                         .monospaced()
+                        .lineLimit(1)
                     if tab.session.startedAt != nil, state != .disconnected {
                         Text("·")
                         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -997,6 +1000,8 @@ struct SSHTerminalView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
             }
+            .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
 
             Spacer(minLength: 12)
 
@@ -1169,6 +1174,7 @@ struct SSHTerminalView: View {
                     .foregroundStyle(paneColor(for: tab))
                     .frame(width: 28, height: 28)
                     .background(paneColor(for: tab).opacity(0.14), in: RoundedRectangle(cornerRadius: 8))
+                    .fixedSize()
             }
             VStack(alignment: .leading, spacing: 2) {
                 Text(tab.title)
@@ -1178,6 +1184,7 @@ struct SSHTerminalView: View {
                 terminalStatusBadge(for: tab, compact: true)
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
             .help(tab.title)
 
             Button {

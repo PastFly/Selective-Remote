@@ -466,8 +466,8 @@ struct SFTPWorkspaceView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 10) {
                 workspaceToolbarTitle
-                Spacer()
-                workspaceToolbarActions
+                    .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+                workspaceToolbarActions.fixedSize()
             }
 
             VStack(alignment: .leading, spacing: 8) {

@@ -789,6 +789,187 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum SelectiveRemoteTeamHostVaultFilter {
+    static let preferenceKey = "SelectiveRemote.team-host.vault-filter.v1"
+
+    static func key(for vault: SelectiveRemoteTeamHostVaultContext) -> String {
+        "\(vault.teamID.canonicalCloudString)/\(vault.vaultID.canonicalCloudString)"
+    }
+
+    static func key(for host: SelectiveRemoteTeamHost) -> String {
+        "\(host.teamID.canonicalCloudString)/\(host.vaultID.canonicalCloudString)"
+    }
+
+    static func decode(_ raw: String) -> Set<String> {
+        guard let data = raw.data(using: .utf8),
+              let values = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return Set(values)
+    }
+
+    static func encode(_ keys: Set<String>) -> String {
+        guard !keys.isEmpty,
+              let data = try? JSONEncoder().encode(keys.sorted()),
+              let value = String(data: data, encoding: .utf8)
+        else { return "" }
+        return value
+    }
+
+    static func effectiveKeys(
+        raw: String, available: [SelectiveRemoteTeamHostVaultContext]
+    ) -> Set<String> {
+        // A saved selection from another account must not hide every Vault here.
+        decode(raw).intersection(Set(available.map(key(for:))))
+    }
+
+    static func includes(_ host: SelectiveRemoteTeamHost, selected: Set<String>) -> Bool {
+        selected.isEmpty || selected.contains(key(for: host))
+    }
+
+    static func search(
+        _ vaults: [SelectiveRemoteTeamHostVaultContext], query: String
+    ) -> [SelectiveRemoteTeamHostVaultContext] {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return vaults.filter {
+            term.isEmpty || $0.teamName.localizedCaseInsensitiveContains(term)
+                || $0.vaultName.localizedCaseInsensitiveContains(term)
+        }.sorted {
+            let team = $0.teamName.localizedStandardCompare($1.teamName)
+            if team != .orderedSame { return team == .orderedAscending }
+            let vault = $0.vaultName.localizedStandardCompare($1.vaultName)
+            return vault == .orderedSame
+                ? key(for: $0) < key(for: $1)
+                : vault == .orderedAscending
+        }
+    }
+
+    static func selectAllFiltered(
+        raw: String, vaults: [SelectiveRemoteTeamHostVaultContext]
+    ) -> String {
+        encode(decode(raw).union(vaults.map(key(for:))))
+    }
+
+    static func toggle(raw: String, key: String) -> String {
+        var selected = decode(raw)
+        if !selected.insert(key).inserted { selected.remove(key) }
+        return encode(selected)
+    }
+
+    static func clearAll() -> String { "" }
+}
+
+struct SelectiveRemoteTeamVaultFilterControl: View {
+    let vaults: [SelectiveRemoteTeamHostVaultContext]
+    @Binding var rawSelection: String
+    @State private var isPresented = false
+    @State private var searchText = ""
+
+    private var selectedKeys: Set<String> {
+        SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: rawSelection, available: vaults)
+    }
+
+    private var filteredVaults: [SelectiveRemoteTeamHostVaultContext] {
+        SelectiveRemoteTeamHostVaultFilter.search(vaults, query: searchText)
+    }
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal.decrease")
+                if !selectedKeys.isEmpty {
+                    Text("\(selectedKeys.count)")
+                        .font(.caption.bold())
+                }
+            }
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .help(UpdateLocalization.text(ru: "Фильтр Team Vault", en: "Filter Team Vaults"))
+        .accessibilityLabel(selectedKeys.isEmpty
+            ? UpdateLocalization.text(ru: "Все Vault", en: "All Vaults")
+            : UpdateLocalization.text(ru: "Выбрано Vault: \(selectedKeys.count)",
+                                      en: "Vaults selected: \(selectedKeys.count)"))
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(UpdateLocalization.text(ru: "Хранилища Team", en: "Team Vaults"))
+                    .font(.headline)
+                TextField(
+                    UpdateLocalization.text(ru: "Поиск Vault", en: "Search Vaults"),
+                    text: $searchText
+                )
+                .textFieldStyle(.roundedBorder)
+
+                Button {
+                    rawSelection = SelectiveRemoteTeamHostVaultFilter.clearAll()
+                } label: {
+                    Label(
+                        UpdateLocalization.text(ru: "Все Vault", en: "All Vaults"),
+                        systemImage: selectedKeys.isEmpty ? "checkmark.circle.fill" : "circle"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 3) {
+                        ForEach(filteredVaults) { vault in
+                            let key = SelectiveRemoteTeamHostVaultFilter.key(for: vault)
+                            Button {
+                                rawSelection = SelectiveRemoteTeamHostVaultFilter.toggle(
+                                    raw: rawSelection, key: key
+                                )
+                            } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: selectedKeys.contains(key)
+                                          ? "checkmark.square.fill" : "square")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(vault.vaultName).fontWeight(.medium)
+                                        Text(vault.teamName)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(vault.teamName) / \(vault.vaultName)")
+                        }
+                    }
+                }
+                .frame(height: 260)
+
+                HStack {
+                    Text(UpdateLocalization.text(
+                        ru: "Выбрано: \(selectedKeys.count)",
+                        en: "Selected: \(selectedKeys.count)"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(UpdateLocalization.text(ru: "Выбрать найденные", en: "Select All Filtered")) {
+                        rawSelection = SelectiveRemoteTeamHostVaultFilter.selectAllFiltered(
+                            raw: rawSelection, vaults: filteredVaults
+                        )
+                    }
+                    .disabled(filteredVaults.isEmpty)
+                    Button(UpdateLocalization.text(ru: "Очистить", en: "Clear All")) {
+                        rawSelection = SelectiveRemoteTeamHostVaultFilter.clearAll()
+                    }
+                    .disabled(SelectiveRemoteTeamHostVaultFilter.decode(rawSelection).isEmpty)
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .frame(width: 360)
+        }
+    }
+}
+
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
     case create
     case createFolder
@@ -932,6 +1113,8 @@ struct SelectiveRemoteTeamHostsView: View {
     private var displayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
     private var sortMode = SelectiveRemoteTeamHostSortMode.manual
+    @AppStorage(SelectiveRemoteTeamHostVaultFilter.preferenceKey)
+    private var selectedVaultsRaw = ""
     @State private var expandedTeamIDs = Set(
         (UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.team-host.expanded-teams.v1"
@@ -974,8 +1157,17 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private var folderNames: [String] {
-        Array(Set(store.hosts.map { $0.profile.group }))
+        Array(Set(vaultFilteredHosts.map { $0.profile.group }))
             .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
+    }
+
+    private var vaultFilteredHosts: [SelectiveRemoteTeamHost] {
+        let selected = SelectiveRemoteTeamHostVaultFilter.effectiveKeys(
+            raw: selectedVaultsRaw, available: store.vaults
+        )
+        return store.hosts.filter {
+            SelectiveRemoteTeamHostVaultFilter.includes($0, selected: selected)
+        }
     }
 
     private var teamIDs: [UUID] {
@@ -1007,7 +1199,7 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private var visibleHosts: [SelectiveRemoteTeamHost] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return store.hosts.filter { host in
+        return vaultFilteredHosts.filter { host in
             (selectedFolder.isEmpty || host.profile.group == selectedFolder)
                 && (query.isEmpty || [
                     host.profile.friendlyName,
@@ -1110,6 +1302,17 @@ struct SelectiveRemoteTeamHostsView: View {
                             description: Text(UpdateLocalization.text(
                                 ru: "Разблокируйте приложение и дождитесь безопасного Team Vault sync.",
                                 en: "Unlock the app and wait for a safe Team Vault sync."
+                            ))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contextMenu { teamHostEmptySpaceContextMenu }
+                    } else if visibleHosts.isEmpty {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(ru: "Team Hosts не найдены", en: "No Team Hosts Found"),
+                            systemImage: "line.3.horizontal.decrease",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Измените поиск, папку или фильтр Vault.",
+                                en: "Change the search, folder or Vault filter."
                             ))
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1218,6 +1421,11 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .onChange(of: requestedAction) { _, _ in
             handleRequestedAction()
+        }
+        .onChange(of: selectedVaultsRaw) { _, _ in
+            if !selectedFolder.isEmpty && !folderNames.contains(selectedFolder) {
+                selectedFolder = ""
+            }
         }
         .onChange(of: store.hosts.map { "\($0.id.uuidString):\($0.profile.group)" }) { _, _ in
             normalizeSelection()
@@ -1355,7 +1563,8 @@ struct SelectiveRemoteTeamHostsView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 160) {
+            HStack(spacing: 8) {
+            SelectiveRemoteAdaptiveToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1437,6 +1646,10 @@ struct SelectiveRemoteTeamHostsView: View {
                 } label: { Image(systemName: "ellipsis.circle") }
                 .menuStyle(.borderlessButton)
                 .help(UpdateLocalization.text(ru: "Действия с Team Hosts", en: "Team Host actions"))
+            }
+            SelectiveRemoteTeamVaultFilterControl(
+                vaults: store.vaults, rawSelection: $selectedVaultsRaw
+            )
             }
         }
         .padding(.horizontal, 12)

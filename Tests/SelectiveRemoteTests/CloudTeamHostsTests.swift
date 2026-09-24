@@ -33,6 +33,82 @@ struct CloudTeamHostsTests {
         #expect(arranged.map(\.vaultID) == [firstVault, firstVault, secondVault])
     }
 
+    @Test("Team Vault filter persists a scoped multi-selection independently of sort")
+    func teamVaultFilterSelection() {
+        let teamA = UUID()
+        let teamB = UUID()
+        let sharedVaultID = UUID()
+        let alpha = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: teamA, teamName: "Alpha Team", role: .owner,
+            vaultID: sharedVaultID, vaultName: "Operations"
+        )
+        let beta = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: teamB, teamName: "Beta Team", role: .viewer,
+            vaultID: sharedVaultID, vaultName: "Operations"
+        )
+        let other = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: teamA, teamName: "Alpha Team", role: .editor,
+            vaultID: UUID(), vaultName: "Development"
+        )
+        let all = [alpha, beta, other]
+        #expect(SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: "", available: all).isEmpty)
+
+        let alphaKey = SelectiveRemoteTeamHostVaultFilter.key(for: alpha)
+        let betaKey = SelectiveRemoteTeamHostVaultFilter.key(for: beta)
+        #expect(alphaKey != betaKey)
+        let stored = SelectiveRemoteTeamHostVaultFilter.encode([alphaKey, betaKey])
+        #expect(SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: stored, available: all)
+            == [alphaKey, betaKey])
+        #expect(SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: stored, available: [other]).isEmpty)
+        #expect(SelectiveRemoteTeamHostSortMode.vault.rawValue == "vault")
+    }
+
+    @Test("Team Vault filter searches names and selects only filtered Vaults")
+    func teamVaultFilterSearch() {
+        let team = UUID()
+        let prod = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: team, teamName: "Platform", role: .owner,
+            vaultID: UUID(), vaultName: "Production"
+        )
+        let test = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: team, teamName: "Platform", role: .viewer,
+            vaultID: UUID(), vaultName: "Test"
+        )
+        let filtered = SelectiveRemoteTeamHostVaultFilter.search([prod, test], query: "prod")
+        #expect(filtered.map(\.vaultID) == [prod.vaultID])
+        let selected = SelectiveRemoteTeamHostVaultFilter.selectAllFiltered(
+            raw: "", vaults: filtered
+        )
+        #expect(SelectiveRemoteTeamHostVaultFilter.effectiveKeys(
+            raw: selected, available: [prod, test]
+        ) == [SelectiveRemoteTeamHostVaultFilter.key(for: prod)])
+        #expect(SelectiveRemoteTeamHostVaultFilter.clearAll() == "")
+    }
+
+    @Test("Team Vault filter includes only matching Host identities")
+    func teamVaultFilterHostIdentity() {
+        let teamID = UUID()
+        let selectedVaultID = UUID()
+        let otherVaultID = UUID()
+        let selectedVault = SelectiveRemoteTeamHostVaultContext(
+            id: UUID(), teamID: teamID, teamName: "Platform", role: .owner,
+            vaultID: selectedVaultID, vaultName: "Production"
+        )
+        func host(vaultID: UUID) -> SelectiveRemoteTeamHost {
+            let profile = ConnectionProfile(connectionType: .ssh)
+            return .init(
+                id: UUID(), recordID: UUID(), teamID: teamID, teamName: "Platform",
+                role: .owner, vaultID: vaultID, vaultName: "Production",
+                revision: 1, keyGeneration: 1, modifiedAt: "2026-09-24T00:00:00Z",
+                address: "synthetic.example.invalid", profile: profile, credentials: .empty
+            )
+        }
+        let selected = Set([SelectiveRemoteTeamHostVaultFilter.key(for: selectedVault)])
+        #expect(SelectiveRemoteTeamHostVaultFilter.includes(host(vaultID: selectedVaultID), selected: selected))
+        #expect(!SelectiveRemoteTeamHostVaultFilter.includes(host(vaultID: otherVaultID), selected: selected))
+        #expect(SelectiveRemoteTeamHostVaultFilter.includes(host(vaultID: otherVaultID), selected: []))
+    }
+
     @MainActor
     @Test("browser and macOS host records materialize into one separate read-only projection")
     func crossClientFixture() throws {

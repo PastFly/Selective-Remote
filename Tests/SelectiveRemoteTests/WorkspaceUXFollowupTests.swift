@@ -1,4 +1,6 @@
 import Foundation
+import AppKit
+import SwiftUI
 import Testing
 @testable import SelectiveRemote
 
@@ -131,37 +133,56 @@ struct WorkspaceUXFollowupTests {
     @Test("Toolbar keeps search useful and moves secondary actions into overflow")
     func adaptiveToolbarContract() {
         #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
+            availableWidth: 380, regularControlsWidth: 160
+        ) == .compact)
+        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
+            availableWidth: 295, regularControlsWidth: 160
+        ) == .overflow)
+        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
             availableWidth: 1080, regularControlsWidth: 590
         ) == .regular)
         #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
             availableWidth: 540, regularControlsWidth: 590
+        ) == .overflow)
+        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
+            availableWidth: 620, regularControlsWidth: 460
         ) == .compact)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
-            availableWidth: 1080, reservedWidth: 590
-        ) == 482)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
-            availableWidth: 1080, reservedWidth: 160
-        ) == 780)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
-            availableWidth: 300, reservedWidth: 44
-        ) >= 190)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.searchWidth(
-            availableWidth: 220, reservedWidth: 44
-        ) <= 168)
     }
 
-    @Test("SSH Host header prioritizes reachable controls at compact widths")
-    func compactSSHHeaderModes() {
-        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 960) == .regular)
-        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 650) == .compact)
-        #expect(SelectiveRemoteSSHHeaderLayout.mode(width: 390) == .minimum)
-    }
+    @MainActor
+    @Test("Adaptive toolbar keeps visible controls until its measured row stops fitting")
+    func adaptiveToolbarRenderedFit() {
+        func trailingColor(at width: CGFloat) -> NSColor {
+            let view = SelectiveRemoteAdaptiveToolbar {
+                Color.gray.frame(height: 32)
+            } controls: {
+                Color.red.frame(width: 160, height: 32)
+            } overflow: {
+                Color.blue.frame(width: 44, height: 32)
+            }
+            let host = NSHostingView(rootView: view)
+            host.frame = CGRect(x: 0, y: 0, width: width, height: 36)
+            let window = NSWindow(
+                contentRect: host.frame, styleMask: [.borderless],
+                backing: .buffered, defer: false
+            )
+            window.contentView = host
+            window.layoutIfNeeded()
+            host.layoutSubtreeIfNeeded()
+            let image = NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: Int(width), pixelsHigh: 36,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                isPlanar: false, colorSpaceName: .deviceRGB,
+                bytesPerRow: 0, bitsPerPixel: 0
+            )!
+            host.cacheDisplay(in: host.bounds, to: image)
+            return image.colorAt(x: Int(width) - 20, y: 18)!.usingColorSpace(.deviceRGB)!
+        }
 
-    @Test("Terminal toolbar places secondary actions into overflow before clipping")
-    func compactTerminalToolbarModes() {
-        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 1100) == .regular)
-        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 620) == .compact)
-        #expect(SelectiveRemoteTerminalToolbarLayout.mode(width: 360) == .minimum)
+        let medium = trailingColor(at: 380)
+        #expect(medium.redComponent > medium.blueComponent)
+        let minimum = trailingColor(at: 295)
+        #expect(minimum.blueComponent > minimum.redComponent)
     }
 
     @Test("Snippet command uses bounded height for one or many lines")

@@ -503,10 +503,7 @@ struct ForwardingManagerView: View {
             header
             summary(snapshot, compact: compact)
             if compact {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    toolbar(items: items)
-                        .frame(minWidth: 760)
-                }
+                toolbar(items: items)
                 compactTunnelList(items: items, now: now)
             } else {
                 toolbar(items: items)
@@ -662,30 +659,62 @@ struct ForwardingManagerView: View {
     }
 
     private func toolbar(items: [ForwardingManagerItem]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            toolbarRow(items: items, compact: false, minimum: false)
+            toolbarRow(items: items, compact: true, minimum: false)
+            toolbarRow(items: items, compact: true, minimum: true)
+        }
+        .controlSize(.small)
+    }
+
+    private func toolbarRow(
+        items: [ForwardingManagerItem], compact: Bool, minimum: Bool
+    ) -> some View {
         let selected = selectedItem(from: items)
         return HStack(spacing: 8) {
             Button {
                 if let selected { start(selected) }
             } label: {
-                Label("Запустить", systemImage: "play.fill")
+                if compact { Image(systemName: "play.fill") }
+                else { Label("Запустить", systemImage: "play.fill") }
             }
             .disabled(selected?.state.canStart != true)
+            .help("Запустить")
 
-            Button {
-                if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
-            } label: {
-                Label("Остановить", systemImage: "stop.fill")
+            if !minimum {
+                Button {
+                    if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
+                } label: {
+                    if compact { Image(systemName: "stop.fill") }
+                    else { Label("Остановить", systemImage: "stop.fill") }
+                }
+                .disabled(selected?.state.canStop != true)
+                .help("Остановить")
             }
-            .disabled(selected?.state.canStop != true)
 
-            Button {
-                if let selected { restart(selected) }
-            } label: {
-                Label("Перезапустить", systemImage: "arrow.clockwise")
+            if !minimum {
+                Button {
+                    if let selected { restart(selected) }
+                } label: {
+                    if compact { Image(systemName: "arrow.clockwise") }
+                    else { Label("Перезапустить", systemImage: "arrow.clockwise") }
+                }
+                .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
+                .help("Перезапустить")
             }
-            .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
 
-            Menu("Ещё") {
+            Menu {
+                if minimum {
+                    Button("Остановить", systemImage: "stop.fill") {
+                        if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
+                    }
+                    .disabled(selected?.state.canStop != true)
+                    Button("Перезапустить", systemImage: "arrow.clockwise") {
+                        if let selected { restart(selected) }
+                    }
+                    .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
+                    Divider()
+                }
                 if let selected {
                     Button("Open Terminal", systemImage: "terminal") {
                         onOpenTerminal(selected.connection)
@@ -715,8 +744,12 @@ struct ForwardingManagerView: View {
                     }
                     .disabled(!selected.state.canEdit)
                 }
+            } label: {
+                if compact { Image(systemName: "ellipsis.circle") }
+                else { Text("Ещё") }
             }
             .disabled(selected == nil)
+            .help("Ещё")
 
             Spacer(minLength: 12)
 
@@ -736,23 +769,37 @@ struct ForwardingManagerView: View {
                 }
             }
             .padding(.horizontal, 9)
-            .frame(minWidth: 160, idealWidth: 220, maxWidth: 280, minHeight: 32)
+            .frame(minWidth: minimum ? 100 : compact ? 130 : 160,
+                   idealWidth: compact ? 160 : 220,
+                   maxWidth: 280, minHeight: 32)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.07))
             }
 
-            Picker("Фильтр", selection: $filter) {
-                ForEach(ForwardingManagerFilter.allCases) { option in
-                    Text(LocalizedStringKey(option.rawValue)).tag(option)
+            if compact {
+                Menu {
+                    Picker("Фильтр", selection: $filter) {
+                        ForEach(ForwardingManagerFilter.allCases) { option in
+                            Text(LocalizedStringKey(option.rawValue)).tag(option)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
                 }
+                .help("Фильтр")
+            } else {
+                Picker("Фильтр", selection: $filter) {
+                    ForEach(ForwardingManagerFilter.allCases) { option in
+                        Text(LocalizedStringKey(option.rawValue)).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 230)
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 230)
         }
-        .controlSize(.small)
     }
 
     private func compactTunnelList(

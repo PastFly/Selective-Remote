@@ -169,6 +169,8 @@ struct ContentView: View {
     private var teamHostDisplayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
     private var teamHostSortMode = SelectiveRemoteTeamHostSortMode.manual
+    @AppStorage(SelectiveRemoteTeamHostVaultFilter.preferenceKey)
+    private var selectedTeamVaultsRaw = ""
     @State private var personalHostDropTargetID: UUID?
     @State private var sidebarTeamDropTargetID: String?
     @State private var sidebarTeamMutationInProgress = false
@@ -890,6 +892,7 @@ struct ContentView: View {
                 .padding(12)
             } else if showsHostQuickAccess {
                 Divider()
+                ViewThatFits(in: .horizontal) {
                 HStack(spacing: 9) {
                     if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
                        SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
@@ -920,6 +923,10 @@ struct ContentView: View {
                     ))
 
                     Spacer()
+
+                    SelectiveRemoteTeamVaultFilterControl(
+                        vaults: teamHosts.vaults, rawSelection: $selectedTeamVaultsRaw
+                    )
 
                     ProfileCollectionDisplayModePicker(selection: $teamHostDisplayMode)
 
@@ -954,6 +961,57 @@ struct ContentView: View {
                         ru: "Управление Team Vaults",
                         en: "Manage Team Vaults"
                     ))
+                }
+                HStack(spacing: 8) {
+                    if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                       SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                        Button {
+                            requestTeamHostAction(.create, for: host)
+                        } label: { Image(systemName: "plus") }
+                        .help(UpdateLocalization.text(ru: "Новый Team Host", en: "New Team Host"))
+                    }
+                    SelectiveRemoteTeamVaultFilterControl(
+                        vaults: teamHosts.vaults, rawSelection: $selectedTeamVaultsRaw
+                    )
+                    ProfileCollectionDisplayModePicker(selection: $teamHostDisplayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                               selection: $teamHostSortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                    } label: { Image(systemName: "arrow.up.arrow.down") }
+                    .help(UpdateLocalization.text(ru: "Сортировка Team Hosts", en: "Sort Team Hosts"))
+                    Menu {
+                        if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                           SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                            Button(UpdateLocalization.text(ru: "Создать копию", en: "Duplicate"),
+                                   systemImage: "doc.on.doc") {
+                                requestTeamHostAction(.duplicate, for: host)
+                            }
+                            Button(UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                                   systemImage: "trash", role: .destructive) {
+                                requestTeamHostAction(.delete, for: host)
+                            }
+                            Divider()
+                        }
+                        Button(UpdateLocalization.text(ru: "Синхронизировать", en: "Sync"),
+                               systemImage: "arrow.triangle.2.circlepath") {
+                            NotificationCenter.default.post(
+                                name: .selectiveRemoteTeamVaultSyncNow, object: nil
+                            )
+                        }
+                        Button(UpdateLocalization.text(ru: "Team Vaults", en: "Team Vaults"),
+                               systemImage: "cloud") {
+                            refreshCloudSessionAvailability()
+                            if cloudSessionAvailable { showsCloudManagement = true }
+                            else { showsCloudOnboarding = true }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .help(UpdateLocalization.text(ru: "Другие действия", en: "More Actions"))
+                    Spacer(minLength: 0)
+                }
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
@@ -1246,8 +1304,12 @@ struct ContentView: View {
 
     private var visibleSidebarTeamHosts: [SelectiveRemoteTeamHost] {
         let query = teamHostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedVaults = SelectiveRemoteTeamHostVaultFilter.effectiveKeys(
+            raw: selectedTeamVaultsRaw, available: teamHosts.vaults
+        )
         return teamHosts.hosts.filter { host in
-            query.isEmpty || [
+            SelectiveRemoteTeamHostVaultFilter.includes(host, selected: selectedVaults)
+                && (query.isEmpty || [
                 host.profile.friendlyName,
                 host.address,
                 host.profile.username,
@@ -1255,7 +1317,7 @@ struct ContentView: View {
                 host.vaultName,
                 host.profile.group,
                 host.profile.tags.joined(separator: " ")
-            ].contains { $0.localizedCaseInsensitiveContains(query) }
+            ].contains { $0.localizedCaseInsensitiveContains(query) })
         }
         .sorted { lhs, rhs in sidebarTeamHostComesBefore(lhs, rhs) }
     }
@@ -1302,10 +1364,10 @@ struct ContentView: View {
                 Text(UpdateLocalization.text(
                     ru: teamHosts.hosts.isEmpty
                         ? "Синхронизируйте Team Vault или переключитесь на личные хосты."
-                        : "Измените строку поиска.",
+                        : "Измените поиск или фильтр Vault.",
                     en: teamHosts.hosts.isEmpty
                         ? "Synchronize a Team Vault or switch to Personal Hosts."
-                        : "Change the search query."
+                        : "Change the search or Vault filter."
                 ))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1919,7 +1981,7 @@ struct ContentView: View {
                 }
             }
 
-            SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 160) {
+            SelectiveRemoteAdaptiveToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -2688,27 +2750,25 @@ struct ContentView: View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 12) {
                 sshHeaderIdentity
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                sshWorkspaceSwitcher.frame(width: 300)
-                sshHeaderActions
+                    .frame(minWidth: 180, maxWidth: .infinity, alignment: .leading)
+                sshWorkspaceSwitcher.frame(width: 260)
+                sshHeaderActions.fixedSize()
             }
-            .frame(minWidth: SelectiveRemoteSSHHeaderLayout.minimumWidth(for: .regular))
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     sshHeaderIdentity
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    sshHeaderActions
+                        .frame(minWidth: 140, maxWidth: .infinity, alignment: .leading)
+                    sshHeaderActions.fixedSize()
                 }
                 sshWorkspaceSwitcher
             }
-            .frame(minWidth: SelectiveRemoteSSHHeaderLayout.minimumWidth(for: .compact))
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     sshHeaderIdentity
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    sshHeaderActions
+                    sshHeaderActions.fixedSize()
                 }
                 Menu {
                     ForEach(sshWorkspaceTabs) { tab in
@@ -2751,6 +2811,7 @@ struct ContentView: View {
                     .foregroundStyle(.white)
             }
             .frame(width: 40, height: 40)
+            .fixedSize()
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 7) {
@@ -2758,17 +2819,21 @@ struct ContentView: View {
                         .font(.headline)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     Text("SSH")
                         .font(.caption2.bold())
                         .foregroundStyle(Color.indigo)
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(Color.indigo.opacity(0.10), in: Capsule())
+                        .fixedSize()
                 }
                 Text(sshEndpointLabel)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)

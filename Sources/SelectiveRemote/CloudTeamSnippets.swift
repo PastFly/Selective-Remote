@@ -641,7 +641,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     }
 
     private var controls: some View {
-        SelectiveRemoteAdaptiveToolbar(regularControlsWidth: 460) {
+        SelectiveRemoteAdaptiveToolbar {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
