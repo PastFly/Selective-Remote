@@ -318,6 +318,69 @@ struct SelectiveRemoteTeamHostOrganizationUpdate {
     let profile: ConnectionProfile
 }
 
+struct SelectiveRemoteTeamHostMovePlan {
+    let selectedRecordID: UUID
+    let vaultID: UUID
+    let profiles: [ConnectionProfile]
+    let updates: [SelectiveRemoteTeamHostOrganizationUpdate]
+
+    static func make(
+        hosts: [SelectiveRemoteTeamHost], sourceID: UUID,
+        targetTeamID: UUID, toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) -> Self? {
+        guard let source = hosts.first(where: { $0.id == sourceID }),
+              source.teamID == targetTeamID else { return nil }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        if targetID == sourceID && folder == source.profile.group { return nil }
+        let scoped = hosts.filter {
+            $0.teamID == targetTeamID && $0.vaultID == source.vaultID
+        }
+        guard folder.isEmpty || scoped.contains(where: {
+            $0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/")
+        }) else { return nil }
+        if let targetID, !scoped.contains(where: { $0.id == targetID }) {
+            return nil
+        }
+        guard let arranged = SelectiveRemoteHostOrder.move(
+            profiles: scoped.map(\.profile), profileID: sourceID,
+            toFolder: folder, before: targetID
+        ) else { return nil }
+        let updates = zip(scoped, arranged).compactMap { host, profile in
+            host.profile == profile ? nil
+                : SelectiveRemoteTeamHostOrganizationUpdate(
+                    recordID: host.recordID, profile: profile
+                )
+        }
+        guard !updates.isEmpty else { return nil }
+        return .init(selectedRecordID: source.recordID,
+                     vaultID: source.vaultID, profiles: arranged, updates: updates)
+    }
+
+    static func crossesVault(
+        hosts: [SelectiveRemoteTeamHost], sourceID: UUID,
+        targetTeamID: UUID, toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) -> Bool {
+        guard let source = hosts.first(where: { $0.id == sourceID }),
+              source.teamID == targetTeamID else { return false }
+        if let targetID, let target = hosts.first(where: { $0.id == targetID }) {
+            return target.teamID == targetTeamID && target.vaultID != source.vaultID
+        }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        guard !folder.isEmpty else { return false }
+        let inSourceVault = hosts.contains {
+            $0.teamID == targetTeamID && $0.vaultID == source.vaultID &&
+            ($0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/"))
+        }
+        let inOtherVault = hosts.contains {
+            $0.teamID == targetTeamID && $0.vaultID != source.vaultID &&
+            ($0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/"))
+        }
+        return !inSourceVault && inOtherVault
+    }
+}
+
 @MainActor
 final class SelectiveRemoteTeamHostMutationService {
     private let remote: any SelectiveRemoteTeamVaultRemote

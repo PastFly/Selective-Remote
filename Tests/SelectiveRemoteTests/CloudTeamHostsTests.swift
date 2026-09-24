@@ -623,6 +623,81 @@ struct CloudTeamHostsTests {
     }
 
     @MainActor
+    @Test("Team Host drop between folders in one Vault persists without changing credentials")
+    func teamHostDropBetweenFolders() throws {
+        let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
+        let sourceID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+        let targetID = try #require(UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
+        var source = ConnectionProfile(connectionType: .ssh)
+        source.id = sourceID
+        source.host = "source.example.invalid"
+        source.group = "Source"
+        var target = ConnectionProfile(connectionType: .ssh)
+        target.id = targetID
+        target.host = "target.example.invalid"
+        target.group = "Target"
+        let initial = try SelectiveRemoteTeamHostDocumentMutation.create(
+            profile: source,
+            credentials: .init(password: "synthetic-only", gatewayPassword: nil),
+            role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-11T11:00:00.000Z"
+        )
+        let document = try SelectiveRemoteTeamHostDocumentMutation.create(
+            in: initial, profile: target, role: .editor, deviceID: deviceID,
+            modifiedAt: "2026-09-11T11:00:00.000Z"
+        )
+        let credentialBefore = try #require(document.records.first { $0.type == .credential })
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [Self.snapshot(payload: try document.encoded(), role: .editor)])
+        let materializedSource = try #require(store.hosts.first { $0.recordID == sourceID })
+        let plan = try #require(SelectiveRemoteTeamHostMovePlan.make(
+            hosts: store.hosts,
+            sourceID: materializedSource.id,
+            targetTeamID: materializedSource.teamID,
+            toFolder: "Target"
+        ))
+        #expect(plan.selectedRecordID == sourceID)
+        var organized = document
+        for update in plan.updates {
+            organized = try SelectiveRemoteTeamHostDocumentMutation.organize(
+                in: organized, recordID: update.recordID, profile: update.profile,
+                role: .editor, deviceID: deviceID,
+                modifiedAt: "2026-09-11T11:01:00.000Z"
+            )
+        }
+        #expect(organized.records.first { $0.type == .credential } == credentialBefore)
+        store.replaceVault(with: Self.snapshot(payload: try organized.encoded(), role: .editor))
+        #expect(store.hosts.first { $0.recordID == sourceID }?.profile.group == "Target")
+    }
+
+    @MainActor
+    @Test("Team Host drop identifies a folder belonging only to another Vault")
+    func teamHostDropRejectsOtherVaultFolder() throws {
+        let store = SelectiveRemoteTeamHostStore()
+        store.replace(with: [Self.snapshot(payload: try Self.fixtureData(), role: .editor)])
+        let source = try #require(store.hosts.first)
+        var otherProfile = source.profile
+        otherProfile.id = UUID()
+        otherProfile.group = "OtherVaultFolder"
+        let other = SelectiveRemoteTeamHost(
+            id: otherProfile.id, recordID: UUID(), teamID: source.teamID,
+            teamName: source.teamName, role: .editor,
+            vaultID: UUID(), vaultName: "Other Vault", revision: 1,
+            keyGeneration: 1, modifiedAt: "2026-09-11T11:00:00.000Z",
+            address: "other.example.invalid", profile: otherProfile,
+            credentials: .empty
+        )
+        #expect(SelectiveRemoteTeamHostMovePlan.make(
+            hosts: store.hosts + [other], sourceID: source.id,
+            targetTeamID: source.teamID, toFolder: "OtherVaultFolder"
+        ) == nil)
+        #expect(SelectiveRemoteTeamHostMovePlan.crossesVault(
+            hosts: store.hosts + [other], sourceID: source.id,
+            targetTeamID: source.teamID, toFolder: "OtherVaultFolder"
+        ))
+    }
+
+    @MainActor
     @Test("Team Host credentials are encrypted records, materialize for connection, and delete causally")
     func sharedCredentialLifecycle() throws {
         let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))

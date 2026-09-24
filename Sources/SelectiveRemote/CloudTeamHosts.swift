@@ -1504,30 +1504,6 @@ struct SelectiveRemoteTeamHostsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .draggable(teamFolderDragValue(teamID: teamID, path: folder))
-                                .background {
-                                    teamHostDropHighlight(
-                                        for: teamHostFolderDropTargetID(
-                                            teamID: teamID,
-                                            path: folder
-                                        )
-                                    )
-                                }
-                                .dropDestination(for: String.self) { values, location in
-                                    setTeamHostDropTarget(nil)
-                                    return moveTeamItem(
-                                        values, toFolder: folder, targetTeamID: teamID,
-                                        beforeFolder: location.y < 12 ? folder : nil
-                                    )
-                                } isTargeted: { isTargeted in
-                                    setTeamHostDropTarget(
-                                        isTargeted
-                                            ? teamHostFolderDropTargetID(
-                                                teamID: teamID,
-                                                path: folder
-                                            )
-                                            : nil
-                                    )
-                                }
 
                                 LazyVGrid(
                                     columns: [GridItem(.adaptive(minimum: 190), spacing: 10)],
@@ -1569,6 +1545,29 @@ struct SelectiveRemoteTeamHostsView: View {
                                         }
                                     }
                                 }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background {
+                                teamHostDropHighlight(
+                                    for: teamHostFolderDropTargetID(
+                                        teamID: teamID, path: folder
+                                    )
+                                )
+                            }
+                            .dropDestination(for: String.self) { values, location in
+                                setTeamHostDropTarget(nil)
+                                return moveTeamItem(
+                                    values, toFolder: folder, targetTeamID: teamID,
+                                    beforeFolder: location.y < 12 ? folder : nil
+                                )
+                            } isTargeted: { isTargeted in
+                                setTeamHostDropTarget(
+                                    isTargeted
+                                        ? teamHostFolderDropTargetID(
+                                            teamID: teamID, path: folder
+                                        ) : nil
+                                )
                             }
                         }
                     }
@@ -2208,30 +2207,26 @@ struct SelectiveRemoteTeamHostsView: View {
               let context = context(for: host),
               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
         else { return false }
-
-        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
-        if targetID == hostID && folder == host.profile.group { return false }
+        guard let plan = SelectiveRemoteTeamHostMovePlan.make(
+            hosts: store.hosts, sourceID: hostID,
+            targetTeamID: targetTeamID, toFolder: rawFolder,
+            before: targetID
+        ) else {
+            if SelectiveRemoteTeamHostMovePlan.crossesVault(
+                hosts: store.hosts, sourceID: hostID,
+                targetTeamID: targetTeamID, toFolder: rawFolder,
+                before: targetID
+            ) {
+                mutationMessage = .init(text: UpdateLocalization.text(
+                    ru: "Папка находится в другом Team Vault. Перенос Host между Vaults не поддерживается.",
+                    en: "This folder is in another Team Vault. Moving a Host between Vaults is not supported."
+                ), isError: true)
+            }
+            return false
+        }
         sortMode = .manual
-        let scopedHosts = store.hosts.filter {
-            $0.teamID == host.teamID && $0.vaultID == host.vaultID
-        }
-        guard folder.isEmpty || scopedHosts.contains(where: {
-            $0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/")
-        }) else { return false }
-        if let targetID,
-           !scopedHosts.contains(where: { $0.id == targetID }) { return false }
-        guard let arranged = SelectiveRemoteHostOrder.move(
-            profiles: scopedHosts.map(\.profile), profileID: host.id,
-            toFolder: folder, before: targetID
-        ) else { return false }
-        let updates = zip(scopedHosts, arranged).compactMap { candidate, profile in
-            candidate.profile == profile ? nil
-                : SelectiveRemoteTeamHostOrganizationUpdate(
-                    recordID: candidate.recordID, profile: profile
-                )
-        }
-        guard !updates.isEmpty else { return false }
-        mutate(.organize(updates), context: context, selectedRecordID: host.recordID)
+        mutate(.organize(plan.updates), context: context,
+               selectedRecordID: plan.selectedRecordID)
         return true
     }
 

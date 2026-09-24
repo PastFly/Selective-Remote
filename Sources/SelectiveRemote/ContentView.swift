@@ -1327,6 +1327,8 @@ struct ContentView: View {
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
                                 .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                                 .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
                                             ? Color.accentColor.opacity(0.14) : Color.clear)
                                 .dropDestination(for: String.self) { values, location in
@@ -1379,13 +1381,9 @@ struct ContentView: View {
                                 )
                                 .font(.caption2.bold())
                                 .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                                 .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: folder))
-                                .dropDestination(for: String.self) { values, location in
-                                    moveSidebarTeamItem(
-                                        values, toFolder: folder, teamID: teamID,
-                                        beforeFolder: location.y < 12 ? folder : nil
-                                    )
-                                }
 
                                 LazyVGrid(
                                     columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
@@ -1411,6 +1409,20 @@ struct ContentView: View {
                                         }
                                     }
                                 }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(folder)"
+                                        ? Color.accentColor.opacity(0.14) : Color.clear)
+                            .dropDestination(for: String.self) { values, location in
+                                sidebarTeamDropTargetID = nil
+                                return moveSidebarTeamItem(
+                                    values, toFolder: folder, teamID: teamID,
+                                    beforeFolder: location.y < 12 ? folder : nil
+                                )
+                            } isTargeted: { targeted in
+                                sidebarTeamDropTargetID = targeted
+                                    ? "\(teamID.uuidString):\(folder)" : nil
                             }
                         }
                     }
@@ -1672,20 +1684,28 @@ struct ContentView: View {
                   let hostID = UUID(uuidString: String(value.dropFirst("team-host:".count))),
                   let host = teamHosts.hosts.first(where: { $0.id == hostID }),
                   host.teamID == teamID {
+            guard let plan = SelectiveRemoteTeamHostMovePlan.make(
+                hosts: teamHosts.hosts, sourceID: hostID,
+                targetTeamID: teamID, toFolder: folder,
+                before: targetID
+            ) else {
+                if SelectiveRemoteTeamHostMovePlan.crossesVault(
+                    hosts: teamHosts.hosts, sourceID: hostID,
+                    targetTeamID: teamID, toFolder: folder,
+                    before: targetID
+                ) {
+                    model.errorMessage = UpdateLocalization.text(
+                        ru: "Папка находится в другом Team Vault. Перенос Host между Vaults не поддерживается.",
+                        en: "This folder is in another Team Vault. Moving a Host between Vaults is not supported."
+                    )
+                }
+                return false
+            }
             scopedHosts = teamHosts.hosts.filter {
                 $0.teamID == host.teamID && $0.vaultID == host.vaultID
             }
-            guard targetID != hostID,
-                  targetID == nil || scopedHosts.contains(where: { $0.id == targetID }),
-                  folder.isEmpty || scopedHosts.contains(where: {
-                      $0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/")
-                  }) else { return false }
-            selectedRecordID = host.recordID
-            guard let arranged = SelectiveRemoteHostOrder.move(
-                profiles: scopedHosts.map(\.profile), profileID: host.id,
-                toFolder: folder, before: targetID
-            ) else { return false }
-            updatedProfiles = arranged
+            selectedRecordID = plan.selectedRecordID
+            updatedProfiles = plan.profiles
         } else { return false }
 
         guard let source = scopedHosts.first,
