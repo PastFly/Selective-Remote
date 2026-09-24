@@ -197,7 +197,10 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         }
 
         private static func cards(in view: NSView) -> [PointerView] {
-            var result = view.subviews.flatMap(cards(in:))
+            var result: [PointerView] = []
+            for child in view.subviews {
+                result.append(contentsOf: cards(in: child))
+            }
             if let card = view as? PointerView { result.append(card) }
             return result
         }
