@@ -1061,6 +1061,7 @@ struct ContentView: View {
                     case let .profile(item):
                         SelectiveRemoteDraggableHostCard(
                             identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                            navigationScope: "personal-\(surface.rawValue)",
                             previewTitle: item.friendlyName,
                             select: { openProfile(item.id) }
                         ) {
@@ -1144,6 +1145,7 @@ struct ContentView: View {
                                 ForEach(group.profiles) { item in
                                     SelectiveRemoteDraggableHostCard(
                                         identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                                        navigationScope: "personal-\(surface.rawValue)",
                                         previewTitle: item.friendlyName,
                                         select: { openProfile(item.id) }
                                     ) {
@@ -1394,6 +1396,7 @@ struct ContentView: View {
                                     }) { host in
                                         SelectiveRemoteDraggableHostCard(
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            navigationScope: "team-sidebar",
                                             previewTitle: host.profile.friendlyName,
                                             select: { openTeamHostCard(host) }
                                         ) {
@@ -1435,6 +1438,7 @@ struct ContentView: View {
     private func teamHostSidebarRow(_ host: SelectiveRemoteTeamHost) -> some View {
         SelectiveRemoteDraggableHostCard(
             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+            navigationScope: "team-sidebar",
             previewTitle: host.profile.friendlyName,
             select: { openTeamHostCard(host) }
         ) {

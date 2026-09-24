@@ -1436,6 +1436,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 let targetID = teamHostHostDropTargetID(host.id)
                                 SelectiveRemoteDraggableHostCard(
                                     identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                    navigationScope: "team-catalog",
                                     previewTitle: host.profile.friendlyName,
                                     select: {
                                         if selectedHostID != host.id { selectedHostID = host.id }
@@ -1537,6 +1538,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                     }) { host in
                                         SelectiveRemoteDraggableHostCard(
                                             identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            navigationScope: "team-catalog",
                                             previewTitle: host.profile.friendlyName,
                                             select: {
                                                 if selectedHostID != host.id { selectedHostID = host.id }

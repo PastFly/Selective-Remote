@@ -40,6 +40,31 @@ struct WorkspaceUXFollowupTests {
         ))
     }
 
+    @Test("Arrow keys choose a card in the requested direction within one surface")
+    func hostCardKeyboardNavigation() {
+        let cards = [
+            CGRect(x: 0, y: 100, width: 100, height: 40),
+            CGRect(x: 110, y: 100, width: 100, height: 40),
+            CGRect(x: 0, y: 20, width: 100, height: 40),
+            CGRect(x: 110, y: 20, width: 100, height: 40)
+        ]
+        #expect(SelectiveRemoteHostCardNavigation.nextIndex(
+            from: 0, direction: .right, frames: cards
+        ) == 1)
+        #expect(SelectiveRemoteHostCardNavigation.nextIndex(
+            from: 0, direction: .down, frames: cards
+        ) == 2)
+        #expect(SelectiveRemoteHostCardNavigation.nextIndex(
+            from: 3, direction: .up, frames: cards
+        ) == 1)
+        #expect(SelectiveRemoteHostCardNavigation.nextIndex(
+            from: 3, direction: .left, frames: cards
+        ) == 2)
+        #expect(SelectiveRemoteHostCardNavigation.nextIndex(
+            from: 0, direction: .up, frames: cards
+        ) == nil)
+    }
+
     @Test("Host drag identities remain scoped to their authentication collection")
     func hostDragIdentities() {
         let id = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!

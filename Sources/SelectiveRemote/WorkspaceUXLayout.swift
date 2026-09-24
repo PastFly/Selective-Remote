@@ -27,6 +27,10 @@ struct SelectiveRemoteHostCardPointerSequence {
     private var origin: CGPoint?
     private var dragging = false
 
+    init(threshold: CGFloat) {
+        self.threshold = threshold
+    }
+
     mutating func press(at point: CGPoint) {
         origin = point
         dragging = false
@@ -59,9 +63,43 @@ enum SelectiveRemoteHostSelectionTransition {
     }
 }
 
+enum SelectiveRemoteHostCardNavigation {
+    enum Direction { case up, down, left, right }
+
+    static func nextIndex(
+        from index: Int, direction: Direction, frames: [CGRect]
+    ) -> Int? {
+        guard frames.indices.contains(index) else { return nil }
+        let current = frames[index]
+        return frames.indices.filter { $0 != index }.compactMap { candidate -> (Int, CGFloat)? in
+            let frame = frames[candidate]
+            let primary: CGFloat
+            let transverse: CGFloat
+            switch direction {
+            case .up:
+                primary = frame.midY - current.midY
+                transverse = abs(frame.midX - current.midX)
+            case .down:
+                primary = current.midY - frame.midY
+                transverse = abs(frame.midX - current.midX)
+            case .left:
+                primary = current.midX - frame.midX
+                transverse = abs(frame.midY - current.midY)
+            case .right:
+                primary = frame.midX - current.midX
+                transverse = abs(frame.midY - current.midY)
+            }
+            guard primary > 1 else { return nil }
+            return (candidate, primary + transverse * 2)
+        }
+        .min { $0.1 < $1.1 }?.0
+    }
+}
+
 /// AppKit owns the whole card's left pointer path; the SwiftUI content remains visual only.
 private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
     let identity: String
+    let navigationScope: String
     let previewTitle: String
     let select: () -> Void
 
@@ -71,12 +109,14 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
 
     func updateNSView(_ view: PointerView, context: Context) {
         view.identity = identity
+        view.navigationScope = navigationScope
         view.previewTitle = previewTitle
         view.select = select
     }
 
     final class PointerView: NSView, NSDraggingSource {
         var identity = ""
+        var navigationScope = ""
         var previewTitle = ""
         var select: (() -> Void)?
         private var pointer = SelectiveRemoteHostCardPointerSequence(threshold: 4)
@@ -118,9 +158,48 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             if event.charactersIgnoringModifiers == "\r" || event.charactersIgnoringModifiers == " " {
                 select?()
+            } else if event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+                      let direction = Self.direction(for: event.keyCode),
+                      navigate(direction) {
+                return
             } else {
                 super.keyDown(with: event)
             }
+        }
+
+        private static func direction(for keyCode: UInt16) -> SelectiveRemoteHostCardNavigation.Direction? {
+            switch keyCode {
+            case 123: .left
+            case 124: .right
+            case 125: .down
+            case 126: .up
+            default: nil
+            }
+        }
+
+        private func navigate(_ direction: SelectiveRemoteHostCardNavigation.Direction) -> Bool {
+            guard let contentView = window?.contentView else { return false }
+            let cards = Self.cards(in: contentView).filter {
+                $0.navigationScope == navigationScope && $0.window === window
+                    && !$0.isHidden && !$0.visibleRect.isEmpty
+            }
+            guard let index = cards.firstIndex(where: { $0 === self }),
+                  let next = SelectiveRemoteHostCardNavigation.nextIndex(
+                    from: index, direction: direction,
+                    frames: cards.map { $0.convert($0.bounds, to: nil) }
+                  )
+            else { return false }
+            let target = cards[next]
+            target.scrollToVisible(target.bounds)
+            window?.makeFirstResponder(target)
+            target.select?()
+            return true
+        }
+
+        private static func cards(in view: NSView) -> [PointerView] {
+            var result = view.subviews.flatMap(cards(in:))
+            if let card = view as? PointerView { result.append(card) }
+            return result
         }
 
         func draggingSession(
@@ -155,6 +234,7 @@ private struct SelectiveRemoteHostCardPointerSurface: NSViewRepresentable {
 /// Keeps selection and native drag on the same complete card surface.
 struct SelectiveRemoteDraggableHostCard<Content: View>: View {
     let identity: String
+    let navigationScope: String
     let previewTitle: String
     let select: () -> Void
     @ViewBuilder let content: () -> Content
@@ -164,7 +244,8 @@ struct SelectiveRemoteDraggableHostCard<Content: View>: View {
             .contentShape(Rectangle())
             .overlay {
                 SelectiveRemoteHostCardPointerSurface(
-                    identity: identity, previewTitle: previewTitle, select: select
+                    identity: identity, navigationScope: navigationScope,
+                    previewTitle: previewTitle, select: select
                 )
             }
             .accessibilityAddTraits(.isButton)
