@@ -1840,12 +1840,13 @@ struct ContentView: View {
 
     private var personalHostsManagementDetail: some View {
         GeometryReader { available in
+          let catalogVisible = SelectiveRemoteHostCatalogLayout.showsCatalog(
+              preference: personalHostNavigatorVisible,
+              availableWidth: available.size.width,
+              detailVisible: personalHostDetailVisible
+          )
           HSplitView {
-            if SelectiveRemoteHostCatalogLayout.showsCatalog(
-                preference: personalHostNavigatorVisible,
-                availableWidth: available.size.width,
-                detailVisible: personalHostDetailVisible
-            ) {
+            if catalogVisible {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1927,7 +1928,15 @@ struct ContentView: View {
 
             if personalHostDetailVisible || !personalHostNavigatorVisible {
                 profileDetail
-                    .frame(minWidth: min(520, available.size.width), maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(
+                        minWidth: SelectiveRemoteSplitColumnLayout.detailMinimumWidth(
+                            preferred: 520,
+                            availableWidth: available.size.width,
+                            leadingVisible: catalogVisible,
+                            leadingMinimumWidth: 300
+                        ),
+                        maxWidth: .infinity, maxHeight: .infinity
+                    )
                     .overlay(alignment: .topLeading) {
                         if !personalHostNavigatorVisible || available.size.width < 760 {
                             Button {

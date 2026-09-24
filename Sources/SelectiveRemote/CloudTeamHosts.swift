@@ -978,16 +978,25 @@ struct SelectiveRemoteTeamVaultFilterControl<Vault: SelectiveRemoteTeamVaultFilt
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     Spacer()
+                    Button(UpdateLocalization.text(ru: "Очистить", en: "Clear All")) {
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
+                    }
+                    .disabled(SelectiveRemoteTeamVaultFilterState.decode(rawSelection).isEmpty)
+                }
+                HStack {
                     Button(UpdateLocalization.text(ru: "Выбрать найденные", en: "Select All Filtered")) {
                         rawSelection = SelectiveRemoteTeamVaultFilterState.selectAllFiltered(
                             raw: rawSelection, vaults: filteredVaults
                         )
                     }
                     .disabled(filteredVaults.isEmpty)
-                    Button(UpdateLocalization.text(ru: "Очистить", en: "Clear All")) {
-                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
+                    Button(UpdateLocalization.text(ru: "Очистить найденные", en: "Clear Filtered")) {
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearFiltered(
+                            raw: rawSelection, vaults: filteredVaults
+                        )
                     }
-                    .disabled(SelectiveRemoteTeamVaultFilterState.decode(rawSelection).isEmpty)
+                    .disabled(filteredKeys.allSatisfy { !selectedKeys.contains($0) })
+                    Spacer(minLength: 0)
                 }
                 .controlSize(.small)
             }
@@ -1244,12 +1253,13 @@ struct SelectiveRemoteTeamHostsView: View {
 
     var body: some View {
         GeometryReader { available in
+          let catalogVisible = SelectiveRemoteHostCatalogLayout.showsCatalog(
+              preference: hostNavigatorVisible,
+              availableWidth: available.size.width,
+              detailVisible: hostDetailVisible
+          )
           HSplitView {
-            if SelectiveRemoteHostCatalogLayout.showsCatalog(
-                preference: hostNavigatorVisible,
-                availableWidth: available.size.width,
-                detailVisible: hostDetailVisible
-            ) {
+            if catalogVisible {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1416,7 +1426,15 @@ struct SelectiveRemoteTeamHostsView: View {
                         )
                     }
                 }
-                .frame(minWidth: min(480, available.size.width), maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: SelectiveRemoteSplitColumnLayout.detailMinimumWidth(
+                        preferred: 480,
+                        availableWidth: available.size.width,
+                        leadingVisible: catalogVisible,
+                        leadingMinimumWidth: 290
+                    ),
+                    maxWidth: .infinity, maxHeight: .infinity
+                )
                 .overlay(alignment: .topLeading) {
                     if !hostNavigatorVisible || available.size.width < 760 {
                         Button {

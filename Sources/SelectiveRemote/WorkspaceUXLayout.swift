@@ -266,6 +266,22 @@ enum SelectiveRemoteHostCatalogLayout {
     }
 }
 
+enum SelectiveRemoteSplitColumnLayout {
+    // HSplitView has a thin divider between columns.
+    private static let dividerReserve: CGFloat = 2
+
+    static func detailMinimumWidth(
+        preferred: CGFloat,
+        availableWidth: CGFloat,
+        leadingVisible: Bool,
+        leadingMinimumWidth: CGFloat
+    ) -> CGFloat {
+        let leadingReservation = leadingVisible
+            ? leadingMinimumWidth + dividerReserve : 0
+        return max(0, min(preferred, availableWidth - leadingReservation))
+    }
+}
+
 enum SelectiveRemoteSnippetCommandLayout {
     static func height(for command: String) -> CGFloat {
         let lineCount = command.split(separator: "\n", omittingEmptySubsequences: false).count

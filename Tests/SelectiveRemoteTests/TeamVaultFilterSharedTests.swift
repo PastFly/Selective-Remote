@@ -101,5 +101,18 @@ struct TeamVaultFilterSharedTests {
         #expect(!SelectiveRemoteTeamVaultFilterState.includes(
             teamID: teamID, vaultID: vaults[119].vaultID, selected: selected
         ))
+        let outside = SelectiveRemoteTeamVaultFilterState.selectAllFiltered(
+            raw: raw, vaults: [vaults[119]]
+        )
+        let cleared = SelectiveRemoteTeamVaultFilterState.clearFiltered(
+            raw: outside, vaults: found
+        )
+        #expect(SelectiveRemoteTeamVaultFilterState.effectiveKeys(
+            raw: cleared, available: vaults
+        ) == [SelectiveRemoteTeamVaultFilterState.key(for: vaults[119])])
+        // The empty selection is the existing "All Vaults" state.
+        #expect(SelectiveRemoteTeamVaultFilterState.clearFiltered(
+            raw: raw, vaults: found
+        ) == SelectiveRemoteTeamVaultFilterState.clearAll())
     }
 }

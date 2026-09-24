@@ -73,6 +73,14 @@ enum SelectiveRemoteTeamVaultFilterState {
         }))
     }
 
+    static func clearFiltered<Vault: SelectiveRemoteTeamVaultFilterItem>(
+        raw: String, vaults: [Vault]
+    ) -> String {
+        encode(decode(raw).subtracting(vaults.map {
+            key(teamID: $0.teamID, vaultID: $0.vaultID)
+        }))
+    }
+
     static func toggle(raw: String, key: String) -> String {
         var selected = decode(raw)
         if !selected.insert(key).inserted { selected.remove(key) }

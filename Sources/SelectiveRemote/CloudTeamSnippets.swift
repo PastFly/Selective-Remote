@@ -528,7 +528,16 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         )
                     }
                 }
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .frame(
+                    minWidth: SelectiveRemoteSplitColumnLayout.detailMinimumWidth(
+                        preferred: 420,
+                        availableWidth: proxy.size.width,
+                        leadingVisible: true,
+                        leadingMinimumWidth: 340
+                    ),
+                    maxWidth: .infinity, maxHeight: .infinity,
+                    alignment: .topLeading
+                )
             }
         }
         .onAppear { normalizeSelection() }
