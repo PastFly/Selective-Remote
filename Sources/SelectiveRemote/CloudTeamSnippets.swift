@@ -659,7 +659,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-        SelectiveRemoteAdaptiveToolbar {
+        SelectiveRemoteMeasuredPriorityToolbar {
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
@@ -728,6 +728,68 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 }
                 .menuStyle(.borderlessButton)
                 .disabled(writableVaults.isEmpty || isMutating)
+            }
+        } priority: {
+            HStack(spacing: 7) {
+                ProfileCollectionDisplayModePicker(selection: $displayMode)
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                        ForEach(SelectiveRemoteTeamSnippetSortMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                } label: { Image(systemName: "arrow.up.arrow.down") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
+                Menu {
+                    ForEach(writableVaults) { vault in
+                        Button("\(vault.teamName) / \(vault.vaultName)") {
+                            editorRequest = .init(context: vault, snippet: nil, preferredFolder: selectedFolder ?? "")
+                        }
+                    }
+                } label: {
+                    Label(UpdateLocalization.text(ru: "Добавить", en: "Add"), systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(writableVaults.isEmpty || isMutating)
+                Menu {
+                    Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) { selectedFolder = nil }
+                    ForEach(availableFolders, id: \.self) { folder in
+                        Button(folderTitle(folder)) { selectedFolder = folder }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Папка", en: "Folder"))
+            }
+        } primary: {
+            HStack(spacing: 7) {
+                Menu {
+                    ForEach(writableVaults) { vault in
+                        Button("\(vault.teamName) / \(vault.vaultName)") {
+                            editorRequest = .init(context: vault, snippet: nil, preferredFolder: selectedFolder ?? "")
+                        }
+                    }
+                } label: {
+                    Label(UpdateLocalization.text(ru: "Добавить", en: "Add"), systemImage: "plus")
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(writableVaults.isEmpty || isMutating)
+                Menu {
+                    Menu(UpdateLocalization.text(ru: "Папка", en: "Folder")) {
+                        Button(UpdateLocalization.text(ru: "Все папки", en: "All Folders")) { selectedFolder = nil }
+                        ForEach(availableFolders, id: \.self) { folder in
+                            Button(folderTitle(folder)) { selectedFolder = folder }
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $displayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                        ForEach(SelectiveRemoteTeamSnippetSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Дополнительные действия", en: "More Actions"))
             }
         } overflow: {
             Menu {

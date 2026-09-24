@@ -327,7 +327,7 @@ struct TerminalSnippetsLibraryView: View {
 
     private var libraryBrowser: some View {
         VStack(spacing: 0) {
-            SelectiveRemoteAdaptiveToolbar {
+            SelectiveRemoteMeasuredPriorityToolbar {
               HStack(spacing: 8) {
                 if selectedGroup != nil {
                     Button {
@@ -374,6 +374,68 @@ struct TerminalSnippetsLibraryView: View {
                 .menuStyle(.borderlessButton)
                 .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
               }
+            } priority: {
+                HStack(spacing: 8) {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(
+                        get: { viewMode }, set: { viewMode = $0 }
+                    )) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Image(systemName: mode.systemImage).tag(mode)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 82)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                            ForEach(SnippetLibrarySort.allCases) { option in
+                                Text(LocalizedStringKey(option.title)).tag(option.rawValue)
+                            }
+                        }
+                        Button(sortAscending
+                            ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                            : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) {
+                            sortAscending.toggle()
+                        }
+                        Divider()
+                        Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) {
+                            presentEditor(nil, preferredGroupID: selectedGroupID)
+                        }
+                        Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
+                            groupEditor = nil
+                            groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                            groupEditorPresented = true
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка", en: "Sort"))
+                }
+            } primary: {
+                Menu {
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {
+                        ForEach(SnippetLibraryViewMode.allCases) { mode in
+                            Text(mode == .list
+                                ? UpdateLocalization.text(ru: "Список", en: "List")
+                                : UpdateLocalization.text(ru: "Плитка", en: "Grid")).tag(mode)
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortRaw) {
+                        ForEach(SnippetLibrarySort.allCases) { option in Text(LocalizedStringKey(option.title)).tag(option.rawValue) }
+                    }
+                    Button(sortAscending
+                        ? UpdateLocalization.text(ru: "По убыванию", en: "Descending")
+                        : UpdateLocalization.text(ru: "По возрастанию", en: "Ascending")) { sortAscending.toggle() }
+                    Divider()
+                    Button(UpdateLocalization.text(ru: "Новый сниппет", en: "New Snippet")) {
+                        presentEditor(nil, preferredGroupID: selectedGroupID)
+                    }
+                    Button(UpdateLocalization.text(ru: "Новая группа", en: "New Group")) {
+                        groupEditor = nil
+                        groupEditorSuggestedPath = selectedGroup.map { "\($0.name)/" } ?? ""
+                        groupEditorPresented = true
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
             } overflow: {
                 Menu {
                     Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: Binding(get: { viewMode }, set: { viewMode = $0 })) {

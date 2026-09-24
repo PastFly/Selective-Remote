@@ -946,8 +946,15 @@ struct SSHTerminalView: View {
     private var terminalHeader: some View {
         ViewThatFits(in: .horizontal) {
             terminalHeaderRegular
-            terminalHeaderCompact(showsIcon: true)
-            terminalHeaderCompact(showsIcon: false)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 6)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 5)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 4)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 3)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 2)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 1)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 0)
+            terminalHeaderCompact(showsIcon: true, visibleQuickActions: 0, showsDisconnect: false)
+            terminalHeaderCompact(showsIcon: false, visibleQuickActions: 0, showsDisconnect: false)
         }
     }
 
@@ -1116,13 +1123,6 @@ struct SSHTerminalView: View {
                     )
                 }
                 .disabled(tab.session.isRunning || (tab.isPrimary && locksPrimaryConnection))
-                Button("Команды сервера", systemImage: "server.rack") {
-                    showsServerCommands = true
-                    if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
-                        refreshRemoteContext(for: tab.id)
-                    }
-                }
-                .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
                 Button("Обновить контекст сервера", systemImage: "arrow.clockwise") { refreshRemoteContext() }
                     .disabled(
                         !tab.session.isRunning
@@ -1169,7 +1169,9 @@ struct SSHTerminalView: View {
         .terminalToolbarContainer()
     }
 
-    private func terminalHeaderCompact(showsIcon: Bool) -> some View {
+    private func terminalHeaderCompact(
+        showsIcon: Bool, visibleQuickActions: Int, showsDisconnect: Bool = true
+    ) -> some View {
         let tab = workspace.selectedTab
         return SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 180) {
             HStack(spacing: 8) {
@@ -1206,18 +1208,92 @@ struct SSHTerminalView: View {
                 ? UpdateLocalization.text(ru: "Переподключить", en: "Reconnect")
                 : UpdateLocalization.text(ru: "Подключиться", en: "Connect"))
 
-            Menu {
-                Button(UpdateLocalization.text(ru: "Дублировать с подключением", en: "Duplicate and Connect"), systemImage: "plus.square.on.square") {
-                    _ = duplicateAndConnect(tab.id)
+            if tab.session.isRunning && showsDisconnect {
+                Button(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"),
+                       systemImage: "stop.fill", role: .destructive) {
+                    reconnectingTabIDs.remove(tab.id)
+                    tab.session.stop()
                 }
-                .disabled(workspace.displayedTabs.count >= 8 || workspace.isEmptyState)
-                Button(UpdateLocalization.text(ru: "Команды сервера", en: "Server Commands"), systemImage: "server.rack") {
+                .labelStyle(.iconOnly)
+                .buttonStyle(.bordered)
+                .help(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"))
+            }
+
+            if visibleQuickActions >= 1 {
+                Button {
+                    showsSnippets = false
+                    showsHistory.toggle()
+                } label: { Image(systemName: "clock.arrow.circlepath") }
+                .buttonStyle(.bordered)
+                .help(UpdateLocalization.text(ru: "История и подсказки", en: "History and Suggestions"))
+            }
+
+            if visibleQuickActions >= 2 {
+                Button {
+                    showsHistory = false
+                    showsSnippets.toggle()
+                } label: { Image(systemName: "curlybraces") }
+                .buttonStyle(.bordered)
+                .help(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"))
+            }
+
+            if visibleQuickActions >= 3 {
+                Button {
                     showsServerCommands = true
                     if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
                         refreshRemoteContext(for: tab.id)
                     }
-                }
+                } label: { Image(systemName: "server.rack") }
+                .buttonStyle(.bordered)
                 .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
+                .help(UpdateLocalization.text(ru: "Команды сервера", en: "Server Commands"))
+            }
+
+            if visibleQuickActions >= 4 {
+                Button { _ = duplicateAndConnect(tab.id) } label: {
+                    Image(systemName: "plus.square.on.square")
+                }
+                .buttonStyle(.bordered)
+                .disabled(workspace.displayedTabs.count >= 8 || workspace.isEmptyState)
+                .help(UpdateLocalization.text(ru: "Дублировать с подключением", en: "Duplicate and Connect"))
+            }
+
+            if visibleQuickActions >= 5 {
+                Button { showsPaneAppearance.toggle() } label: {
+                    Image(systemName: "paintpalette.fill")
+                }
+                .buttonStyle(.bordered)
+                .help(UpdateLocalization.text(ru: "Оформление терминала", en: "Terminal Appearance"))
+            }
+
+            if visibleQuickActions >= 6 {
+                Button { toggleFocusMode() } label: {
+                    Image(systemName: isFocusMode
+                        ? "arrow.down.right.and.arrow.up.left"
+                        : "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.bordered)
+                .help(isFocusMode
+                    ? UpdateLocalization.text(ru: "Вернуть интерфейс", en: "Restore Interface")
+                    : UpdateLocalization.text(ru: "Развернуть терминал", en: "Expand Terminal"))
+            }
+
+            Menu {
+                if visibleQuickActions < 4 {
+                    Button(UpdateLocalization.text(ru: "Дублировать с подключением", en: "Duplicate and Connect"), systemImage: "plus.square.on.square") {
+                        _ = duplicateAndConnect(tab.id)
+                    }
+                    .disabled(workspace.displayedTabs.count >= 8 || workspace.isEmptyState)
+                }
+                if visibleQuickActions < 3 {
+                    Button(UpdateLocalization.text(ru: "Команды сервера", en: "Server Commands"), systemImage: "server.rack") {
+                        showsServerCommands = true
+                        if workspace.remoteContext(for: tab.id)?.refreshedAt == nil {
+                            refreshRemoteContext(for: tab.id)
+                        }
+                    }
+                    .disabled(!tab.session.isRunning || !supportsSSHFeatures(tab.connection))
+                }
                 Button(UpdateLocalization.text(ru: "Обновить контекст сервера", en: "Refresh Server Context"), systemImage: "arrow.clockwise") {
                     refreshRemoteContext()
                 }
@@ -1227,16 +1303,22 @@ struct SSHTerminalView: View {
                     openSFTP(tab)
                 }
                 .disabled(workspace.isEmptyState || !supportsSSHFeatures(tab.connection))
-                Button(UpdateLocalization.text(ru: "История и подсказки", en: "History and Suggestions"), systemImage: "clock.arrow.circlepath") {
-                    showsSnippets = false
-                    showsHistory.toggle()
+                if visibleQuickActions < 1 {
+                    Button(UpdateLocalization.text(ru: "История и подсказки", en: "History and Suggestions"), systemImage: "clock.arrow.circlepath") {
+                        showsSnippets = false
+                        showsHistory.toggle()
+                    }
                 }
-                Button(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"), systemImage: "curlybraces") {
-                    showsHistory = false
-                    showsSnippets.toggle()
+                if visibleQuickActions < 2 {
+                    Button(UpdateLocalization.text(ru: "Сниппеты", en: "Snippets"), systemImage: "curlybraces") {
+                        showsHistory = false
+                        showsSnippets.toggle()
+                    }
                 }
-                Button(UpdateLocalization.text(ru: "Оформление терминала", en: "Terminal Appearance"), systemImage: "paintpalette.fill") {
-                    showsPaneAppearance.toggle()
+                if visibleQuickActions < 5 {
+                    Button(UpdateLocalization.text(ru: "Оформление терминала", en: "Terminal Appearance"), systemImage: "paintpalette.fill") {
+                        showsPaneAppearance.toggle()
+                    }
                 }
                 Divider()
                 Button(broadcastsInput
@@ -1262,21 +1344,23 @@ struct SSHTerminalView: View {
                     }
                 }
                 Divider()
-                Button(
-                    isFocusMode
-                        ? UpdateLocalization.text(ru: "Вернуть интерфейс", en: "Restore Interface")
-                        : UpdateLocalization.text(ru: "Развернуть терминал", en: "Expand Terminal"),
-                    systemImage: isFocusMode
-                        ? "arrow.down.right.and.arrow.up.left"
-                        : "arrow.up.left.and.arrow.down.right"
-                ) { toggleFocusMode() }
+                if visibleQuickActions < 6 {
+                    Button(
+                        isFocusMode
+                            ? UpdateLocalization.text(ru: "Вернуть интерфейс", en: "Restore Interface")
+                            : UpdateLocalization.text(ru: "Развернуть терминал", en: "Expand Terminal"),
+                        systemImage: isFocusMode
+                            ? "arrow.down.right.and.arrow.up.left"
+                            : "arrow.up.left.and.arrow.down.right"
+                    ) { toggleFocusMode() }
+                }
                 Button(UpdateLocalization.text(ru: "Изменить подключение…", en: "Edit Connection…"), systemImage: "slider.horizontal.3") {
                     connectionEditorRequest = TerminalConnectionEditorRequest(
                         tabID: tab.id, initialConnection: tab.connection
                     )
                 }
                 .disabled(tab.session.isRunning || (tab.isPrimary && locksPrimaryConnection))
-                if tab.session.isRunning {
+                if tab.session.isRunning && !showsDisconnect {
                     Divider()
                     Button(UpdateLocalization.text(ru: "Отключить", en: "Disconnect"), systemImage: "stop.fill", role: .destructive) {
                         reconnectingTabIDs.remove(tab.id)

@@ -1981,7 +1981,7 @@ struct ContentView: View {
                 }
             }
 
-            SelectiveRemoteAdaptiveToolbar {
+            SelectiveRemoteMeasuredPriorityToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -2052,6 +2052,46 @@ struct ContentView: View {
                     en: "Sort Hosts"
                 ))
               }
+            } priority: {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    ProfileCollectionDisplayModePicker(selection: $model.profileCollectionDisplayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                            ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка хостов", en: "Sort Hosts"))
+                }
+            } primary: {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $model.profileCollectionDisplayMode) {
+                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                            ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Действия с хостами", en: "Host actions"))
+                }
             } overflow: {
                 Menu {
                     Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {

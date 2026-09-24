@@ -1592,7 +1592,7 @@ struct SelectiveRemoteTeamHostsView: View {
             .labelsHidden()
 
             HStack(spacing: 8) {
-            SelectiveRemoteAdaptiveToolbar {
+            SelectiveRemoteMeasuredPriorityToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1654,6 +1654,50 @@ struct SelectiveRemoteTeamHostsView: View {
                     en: "Sort Team Hosts"
                 ))
               }
+            } priority: {
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(writableVaults) { vault in
+                            Button("\(vault.teamName) / \(vault.vaultName)") {
+                                editorRequest = .init(context: vault, host: nil)
+                            }
+                        }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(writableVaults.isEmpty || isMutating)
+                    ProfileCollectionDisplayModePicker(selection: $displayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка Team Hosts", en: "Sort Team Hosts"))
+                }
+            } primary: {
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(writableVaults) { vault in
+                            Button("\(vault.teamName) / \(vault.vaultName)") {
+                                editorRequest = .init(context: vault, host: nil)
+                            }
+                        }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(writableVaults.isEmpty || isMutating)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $displayMode) {
+                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Действия с Team Hosts", en: "Team Host actions"))
+                }
             } overflow: {
                 Menu {
                     if !writableVaults.isEmpty {

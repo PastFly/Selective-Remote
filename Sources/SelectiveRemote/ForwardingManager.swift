@@ -662,13 +662,15 @@ struct ForwardingManagerView: View {
         ViewThatFits(in: .horizontal) {
             toolbarRow(items: items, compact: false, minimum: false)
             toolbarRow(items: items, compact: true, minimum: false)
+            toolbarRow(items: items, compact: true, minimum: false, hidesRestart: true)
             toolbarRow(items: items, compact: true, minimum: true)
         }
         .controlSize(.small)
     }
 
     private func toolbarRow(
-        items: [ForwardingManagerItem], compact: Bool, minimum: Bool
+        items: [ForwardingManagerItem], compact: Bool, minimum: Bool,
+        hidesRestart: Bool = false
     ) -> some View {
         let selected = selectedItem(from: items)
         return HStack(spacing: 8) {
@@ -692,7 +694,7 @@ struct ForwardingManagerView: View {
                 .help("Остановить")
             }
 
-            if !minimum {
+            if !minimum && !hidesRestart {
                 Button {
                     if let selected { restart(selected) }
                 } label: {
@@ -709,6 +711,8 @@ struct ForwardingManagerView: View {
                         if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
                     }
                     .disabled(selected?.state.canStop != true)
+                }
+                if minimum || hidesRestart {
                     Button("Перезапустить", systemImage: "arrow.clockwise") {
                         if let selected { restart(selected) }
                     }

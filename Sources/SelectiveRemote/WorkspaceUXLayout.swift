@@ -266,19 +266,6 @@ enum SelectiveRemoteHostCatalogLayout {
     }
 }
 
-enum SelectiveRemoteAdaptiveToolbarLayout {
-    enum Mode { case regular, compact, overflow }
-
-    static let regularSearchMinimum: CGFloat = 220
-    static let compactSearchMinimum: CGFloat = 130
-
-    static func mode(availableWidth: CGFloat, regularControlsWidth: CGFloat) -> Mode {
-        if availableWidth >= regularControlsWidth + regularSearchMinimum + 8 { return .regular }
-        if availableWidth >= regularControlsWidth + compactSearchMinimum + 8 { return .compact }
-        return .overflow
-    }
-}
-
 enum SelectiveRemoteSnippetCommandLayout {
     static func height(for command: String) -> CGFloat {
         let lineCount = command.split(separator: "\n", omittingEmptySubsequences: false).count
@@ -286,38 +273,48 @@ enum SelectiveRemoteSnippetCommandLayout {
     }
 }
 
-/// Uses each toolbar's real proposed width and the controls' intrinsic width.
-struct SelectiveRemoteAdaptiveToolbar<Search: View, Controls: View, Overflow: View>: View {
+/// Keeps action groups visible in priority order using the toolbar's proposed width.
+struct SelectiveRemoteMeasuredPriorityToolbar<
+    Search: View, Full: View, Priority: View, Primary: View, Overflow: View
+>: View {
     @ViewBuilder let search: () -> Search
-    @ViewBuilder let controls: () -> Controls
+    @ViewBuilder let full: () -> Full
+    @ViewBuilder let priority: () -> Priority
+    @ViewBuilder let primary: () -> Primary
     @ViewBuilder let overflow: () -> Overflow
+
+    init(
+        @ViewBuilder _ search: @escaping () -> Search,
+        @ViewBuilder controls full: @escaping () -> Full,
+        @ViewBuilder priority: @escaping () -> Priority,
+        @ViewBuilder primary: @escaping () -> Primary,
+        @ViewBuilder overflow: @escaping () -> Overflow
+    ) {
+        self.search = search
+        self.full = full
+        self.priority = priority
+        self.primary = primary
+        self.overflow = overflow
+    }
 
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            row(minimumSearchWidth: SelectiveRemoteAdaptiveToolbarLayout.regularSearchMinimum) {
-                controls()
-            }
-            row(minimumSearchWidth: SelectiveRemoteAdaptiveToolbarLayout.compactSearchMinimum) {
-                controls()
-            }
-            row(minimumSearchWidth: 0) {
-                overflow()
-            }
+            row(minimumSearchWidth: 220, actions: full)
+            row(minimumSearchWidth: 130, actions: full)
+            row(minimumSearchWidth: 130, actions: priority)
+            row(minimumSearchWidth: 130, actions: primary)
+            row(minimumSearchWidth: 0, actions: overflow)
         }
         .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
     }
 
     private func row<Actions: View>(
-        minimumSearchWidth: CGFloat,
-        @ViewBuilder actions: () -> Actions
+        minimumSearchWidth: CGFloat, @ViewBuilder actions: @escaping () -> Actions
     ) -> some View {
-        HStack(spacing: 8) {
+        SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: minimumSearchWidth) {
             search()
-                .frame(minWidth: minimumSearchWidth, maxWidth: .infinity)
-                .layoutPriority(1)
-            actions()
-                .fixedSize(horizontal: true, vertical: false)
+        } trailing: {
+            actions().fixedSize(horizontal: true, vertical: false)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

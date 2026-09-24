@@ -130,42 +130,24 @@ struct WorkspaceUXFollowupTests {
         ))
     }
 
-    @Test("Toolbar keeps search useful and moves secondary actions into overflow")
-    func adaptiveToolbarContract() {
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
-            availableWidth: 380, regularControlsWidth: 160
-        ) == .compact)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
-            availableWidth: 295, regularControlsWidth: 160
-        ) == .overflow)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
-            availableWidth: 1080, regularControlsWidth: 590
-        ) == .regular)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
-            availableWidth: 540, regularControlsWidth: 590
-        ) == .overflow)
-        #expect(SelectiveRemoteAdaptiveToolbarLayout.mode(
-            availableWidth: 620, regularControlsWidth: 460
-        ) == .compact)
-    }
-
     @MainActor
-    @Test("Adaptive toolbar keeps visible controls until its measured row stops fitting")
-    func adaptiveToolbarRenderedFit() {
-        func trailingColor(at width: CGFloat) -> NSColor {
-            let view = SelectiveRemoteAdaptiveToolbar {
+    @Test("Measured toolbar keeps priority actions before reducing to overflow")
+    func measuredPriorityToolbarRenderedFit() {
+        func actionColor(at width: CGFloat) -> NSColor {
+            let view = SelectiveRemoteMeasuredPriorityToolbar {
                 Color.gray.frame(height: 32)
             } controls: {
-                Color.red.frame(width: 160, height: 32)
+                Color.red.frame(width: 260, height: 32)
+            } priority: {
+                Color.green.frame(width: 120, height: 32)
+            } primary: {
+                Color.orange.frame(width: 50, height: 32)
             } overflow: {
-                Color.blue.frame(width: 44, height: 32)
+                Color.blue.frame(width: 35, height: 32)
             }
             let host = NSHostingView(rootView: view)
             host.frame = CGRect(x: 0, y: 0, width: width, height: 36)
-            let window = NSWindow(
-                contentRect: host.frame, styleMask: [.borderless],
-                backing: .buffered, defer: false
-            )
+            let window = NSWindow(contentRect: host.frame, styleMask: [.borderless], backing: .buffered, defer: false)
             window.contentView = host
             window.layoutIfNeeded()
             host.layoutSubtreeIfNeeded()
@@ -179,10 +161,10 @@ struct WorkspaceUXFollowupTests {
             return image.colorAt(x: Int(width) - 20, y: 18)!.usingColorSpace(.deviceRGB)!
         }
 
-        let medium = trailingColor(at: 380)
-        #expect(medium.redComponent > medium.blueComponent)
-        let minimum = trailingColor(at: 295)
-        #expect(minimum.blueComponent > minimum.redComponent)
+        #expect(actionColor(at: 500).redComponent > 0.8)
+        #expect(actionColor(at: 380).greenComponent > 0.4)
+        #expect(actionColor(at: 210).redComponent > 0.8) // orange primary action
+        #expect(actionColor(at: 140).blueComponent > 0.8)
     }
 
     @Test("Snippet command uses bounded height for one or many lines")
