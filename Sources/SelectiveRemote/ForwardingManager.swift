@@ -527,6 +527,9 @@ struct ForwardingManagerView: View {
             }
             Spacer()
             newTunnelMenu
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.create"))
+#endif
         }
     }
 
@@ -575,6 +578,7 @@ struct ForwardingManagerView: View {
             Label("Новый туннель", systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func summary(
@@ -666,6 +670,9 @@ struct ForwardingManagerView: View {
             toolbarRow(items: items, compact: true, minimum: true)
         }
         .controlSize(.small)
+#if DEBUG
+        .background(SelectiveRemoteLayoutProbe(name: "tunnels.toolbar"))
+#endif
     }
 
     private func toolbarRow(
@@ -682,6 +689,10 @@ struct ForwardingManagerView: View {
             }
             .disabled(selected?.state.canStart != true)
             .help("Запустить")
+            .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.start"))
+#endif
 
             if !minimum {
                 Button {
@@ -692,6 +703,10 @@ struct ForwardingManagerView: View {
                 }
                 .disabled(selected?.state.canStop != true)
                 .help("Остановить")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.stop"))
+#endif
             }
 
             if !minimum && !hidesRestart {
@@ -703,6 +718,10 @@ struct ForwardingManagerView: View {
                 }
                 .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
                 .help("Перезапустить")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.restart"))
+#endif
             }
 
             Menu {
@@ -754,6 +773,10 @@ struct ForwardingManagerView: View {
             }
             .disabled(selected == nil)
             .help("Ещё")
+            .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.more"))
+#endif
 
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
@@ -779,6 +802,9 @@ struct ForwardingManagerView: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.07))
             }
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.search"))
+#endif
 
             if compact {
                 Menu {
@@ -791,6 +817,10 @@ struct ForwardingManagerView: View {
                     Image(systemName: "line.3.horizontal.decrease")
                 }
                 .help("Фильтр")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.filter"))
+#endif
             } else {
                 Picker("Фильтр", selection: $filter) {
                     ForEach(ForwardingManagerFilter.allCases) { option in
@@ -800,6 +830,10 @@ struct ForwardingManagerView: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(width: 230)
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.filter"))
+#endif
             }
         }
     }

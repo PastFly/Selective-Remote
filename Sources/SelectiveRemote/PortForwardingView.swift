@@ -79,8 +79,14 @@ struct PortForwardingView: View {
             )
 
             addTunnelMenu
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "profile-tunnels.create"))
+#endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if DEBUG
+        .background(SelectiveRemoteLayoutProbe(name: "profile-tunnels.empty"))
+#endif
     }
 
     private var addTunnelMenu: some View {
@@ -97,6 +103,7 @@ struct PortForwardingView: View {
             Label("Новый туннель", systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var ruleList: some View {

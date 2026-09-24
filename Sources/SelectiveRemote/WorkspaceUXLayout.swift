@@ -3,6 +3,20 @@ import CoreGraphics
 import Foundation
 import SwiftUI
 
+#if DEBUG
+struct SelectiveRemoteLayoutProbe: NSViewRepresentable {
+    let name: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        view.identifier = NSUserInterfaceItemIdentifier(name)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {}
+}
+#endif
+
 enum SelectiveRemoteHostDragIdentity {
     case personalHost(UUID)
     case personalFolder(String)
