@@ -140,6 +140,7 @@ struct ContentView: View {
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
     @State private var profileToShare: ConnectionProfile?
+    @State private var personalHostPendingDeletion: ConnectionProfile?
     @State private var showsPersonalFolderCreator = false
     @State private var newPersonalFolderName = ""
     @State private var newPersonalFolderParent = ""
@@ -256,6 +257,23 @@ struct ContentView: View {
         .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Удалить Host?", en: "Delete Host?"),
+            isPresented: Binding(
+                get: { personalHostPendingDeletion != nil },
+                set: { if !$0 { personalHostPendingDeletion = nil } }
+            ),
+            presenting: personalHostPendingDeletion
+        ) { profile in
+            Button(UpdateLocalization.text(ru: "Удалить", en: "Delete"), role: .destructive) {
+                model.selectProfile(profile.id)
+                model.deleteSelectedProfile()
+                personalHostPendingDeletion = nil
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        } message: { profile in
+            Text(profile.friendlyName)
+        }
         .onChange(of: hostScope) { _, scope in
             UserDefaults.standard.set(
                 scope.rawValue, forKey: "SelectiveRemote.host-shelf.scope.v1"
@@ -820,7 +838,11 @@ struct ContentView: View {
                 }
                 .disabled(model.selectedProfileID == nil)
                 .help(UpdateLocalization.text(ru: "Создать копию", en: "Duplicate Host"))
-                Button { model.deleteSelectedProfile() } label: { Image(systemName: "trash") }
+                Button {
+                    personalHostPendingDeletion = model.profiles.first {
+                        $0.id == model.selectedProfileID
+                    }
+                } label: { Image(systemName: "trash") }
                     .disabled(model.selectedProfileID == nil)
                     .help(UpdateLocalization.text(ru: "Удалить Host", en: "Delete Host"))
 
@@ -2346,8 +2368,7 @@ struct ContentView: View {
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) {
-            model.selectProfile(item.id)
-            model.deleteSelectedProfile()
+            personalHostPendingDeletion = item
         }
     }
 

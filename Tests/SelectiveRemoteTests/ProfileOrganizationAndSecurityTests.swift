@@ -17,6 +17,14 @@ struct ProfileOrganizationAndSecurityTests {
         )
     }
 
+    @Test("Host Shelf Personal delete requires a confirmation dialog")
+    func personalHostShelfDeleteConfirmation() throws {
+        let content = try source("Sources/SelectiveRemote/ContentView.swift")
+        #expect(content.contains("personalHostPendingDeletion"))
+        #expect(content.contains(".confirmationDialog("))
+        #expect(!content.contains("Button { model.deleteSelectedProfile() } label: { Image(systemName: \"trash\") }"))
+    }
+
     @Test("Пользовательские теги сохраняются и старые профили мигрируют без потерь")
     func customTagsPersistAndLegacyProfilesMigrate() throws {
         var profile = ConnectionProfile(connectionType: .ssh)
