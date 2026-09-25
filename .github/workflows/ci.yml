@@ -14,6 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  site:
+    name: Product Pages checks and preview bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check localized Pages and assets
+        run: python3 -m unittest Tests/PagesTests/test_site.py -v
+
+      - name: Upload unpublished Pages preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: product-pages-preview
+          path: docs/
+          if-no-files-found: error
+
   cloud-postgres:
     name: Team storage on PostgreSQL 16
     runs-on: ubuntu-24.04

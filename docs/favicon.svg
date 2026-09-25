@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Selective Remote">
+  <rect width="64" height="64" rx="16" fill="#101915"/>
+  <path d="M17 15h20c7 0 12 5 12 12v10c0 7-5 12-12 12H27c-7 0-12-5-12-12V17c0-1 1-2 2-2Z" fill="#b9f3ce"/>
+  <path d="M27 29h13M27 36h9" stroke="#183527" stroke-linecap="round" stroke-width="4"/>
+</svg>
