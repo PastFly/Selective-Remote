@@ -14,7 +14,6 @@ Saved RDP, SSH, Telnet, and Serial connections support groups, favorites, and mu
 
 **Connection Center** presents the real state of active RDP, SSH, local Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
 
-
 ### RDP
 
 - SDL-FreeRDP with windowed mode and true macOS fullscreen;
@@ -102,7 +101,6 @@ The global SSH forwarding workspace combines profile tunnels and independent tun
 - keepalive and port-open error diagnostics;
 - an Inspector with parameters and a visual route diagram;
 - quick start/stop/restart and context actions.
-
 
 ### Keychain
 
