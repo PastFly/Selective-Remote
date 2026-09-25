@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct VirtualMonitorLayoutEditor: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     let displays: [DisplayDescriptor]
     let placements: [DisplayPlacement]
     let editable: Bool
@@ -20,7 +21,7 @@ struct VirtualMonitorLayoutEditor: View {
                     let display = displays.first(where: { $0.id == placement.id })
                     let offset = dragOffsets[placement.id] ?? .zero
                     monitorCard(
-                        name: display?.name ?? "Дисплей",
+                        name: RDPDisplayLabels.name(for: display),
                         placement: placement
                     )
                     .frame(

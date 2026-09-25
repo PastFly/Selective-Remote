@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct MonitorMapView: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     let displays: [DisplayDescriptor]
     let selectedIDs: Set<String>
     let primaryID: String?

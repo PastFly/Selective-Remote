@@ -36,8 +36,86 @@ struct DisplayDescriptor: Identifiable, Hashable {
     var rdpHeightHint: Int { max(1, Int(frame.height.rounded())) }
 
     var refreshText: String {
-        refreshRate > 0 ? "\(Int(refreshRate.rounded())) Гц" : "частота неизвестна"
+        refreshRate > 0
+            ? "\(Int(refreshRate.rounded())) \(UpdateLocalization.text(ru: "Гц", en: "Hz"))"
+            : UpdateLocalization.text(ru: "частота неизвестна", en: "refresh rate unknown")
     }
+}
+
+enum RDPDisplayStatus: Equatable, Sendable {
+    case discovered(Int)
+    case changing
+    case updated(Int)
+    case monitorDisconnected
+    case macBookClosed
+    case teamHostDisconnected
+    case topologyChanged
+    case topologyChangedShort
+    case selectedMonitorReturned
+    case reconnecting(Int, Int)
+    case reconnectExhausted(Int)
+
+    var text: String {
+        switch self {
+        case .discovered(let count):
+            UpdateLocalization.text(ru: "Обнаружено дисплеев: \(count)", en: "Displays found: \(count)")
+        case .changing:
+            UpdateLocalization.text(
+                ru: "Конфигурация дисплеев меняется — ожидаем стабилизацию",
+                en: "Display configuration is changing — waiting for it to stabilize"
+            )
+        case .updated(let count):
+            UpdateLocalization.text(ru: "Конфигурация дисплеев обновлена: \(count)", en: "Display configuration updated: \(count)")
+        case .monitorDisconnected:
+            UpdateLocalization.text(
+                ru: "Монитор отключён — подключитесь повторно, чтобы использовать доступные дисплеи",
+                en: "Monitor disconnected — reconnect to use the available displays"
+            )
+        case .macBookClosed:
+            UpdateLocalization.text(
+                ru: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи",
+                en: "MacBook screen closed — moving RDP to external displays"
+            )
+        case .teamHostDisconnected:
+            UpdateLocalization.text(
+                ru: "Team Host отключён после изменения конфигурации мониторов",
+                en: "The Team Host disconnected after the monitor configuration changed"
+            )
+        case .topologyChanged:
+            UpdateLocalization.text(
+                ru: "Конфигурация мониторов изменилась — перестраиваем RDP на доступных дисплеях",
+                en: "Monitor configuration changed — rebuilding RDP for the available displays"
+            )
+        case .topologyChangedShort:
+            UpdateLocalization.text(ru: "Конфигурация мониторов изменилась", en: "Monitor configuration changed")
+        case .selectedMonitorReturned:
+            UpdateLocalization.text(
+                ru: "Выбранный монитор подключён — восстанавливаем RDP-схему",
+                en: "Selected monitor connected — restoring the RDP layout"
+            )
+        case .reconnecting(let attempt, let maximum):
+            UpdateLocalization.text(
+                ru: "RDP: переподключение, попытка \(attempt)/\(maximum)",
+                en: "RDP: reconnecting, attempt \(attempt)/\(maximum)"
+            )
+        case .reconnectExhausted(let maximum):
+            UpdateLocalization.text(
+                ru: "RDP не восстановлен после \(maximum) попыток",
+                en: "RDP did not reconnect after \(maximum) attempts"
+            )
+        }
+    }
+}
+
+enum RDPDisplayLabels {
+    static func name(for display: DisplayDescriptor?) -> String {
+        display?.name ?? UpdateLocalization.text(ru: "Дисплей", en: "Display")
+    }
+}
+
+enum HostScopeLabels {
+    static var personal: String { UpdateLocalization.text(ru: "Личные", en: "Personal") }
+    static var team: String { UpdateLocalization.text(ru: "Командные", en: "Team") }
 }
 
 enum DisplaySnapshotStability {
