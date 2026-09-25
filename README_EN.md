@@ -16,11 +16,15 @@ A native Mac app that keeps connections, files, and commands together. Work acro
 
 ## Connect. Organize. Work.
 
-- **Connect:** SSH and RDP, including multiple displays; Telnet and Serial when needed.
+- **Connect:** SSH and RDP on your chosen Mac displays; Telnet and Serial when needed.
 - **Organize:** profiles, groups, favorites, and tags keep infrastructure easy to find.
 - **Work:** Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app.
 
 Available now in **v0.31.0**: SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
+
+### RDP across two or more displays
+
+Choose which Mac displays show the remote desktop for each RDP profile: one, two, or more. Set the primary Windows monitor and arrange the virtual displays automatically or by hand. Your selection is saved with the profile. [Multi-monitor RDP guide](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html).
 
 ### Terminal and commands
 
