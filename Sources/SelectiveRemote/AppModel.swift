@@ -1883,34 +1883,12 @@ final class AppModel: NSObject, ObservableObject {
         toFolder rawFolder: String,
         before targetID: UUID? = nil
     ) {
-        guard let sourceIndex = profiles.firstIndex(where: { $0.id == profileID }) else { return }
-        let oldFolder = SelectiveRemoteHostFolderPath.normalize(profiles[sourceIndex].group)
         let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
-        profiles[sourceIndex].group = folder
-
-        var destinationIDs = profiles
-            .filter {
-                $0.id != profileID
-                    && SelectiveRemoteHostFolderPath.normalize($0.group) == folder
-            }
-            .sorted { lhs, rhs in
-                if lhs.sortIndex != rhs.sortIndex { return lhs.sortIndex < rhs.sortIndex }
-                return lhs.friendlyName.localizedCaseInsensitiveCompare(rhs.friendlyName)
-                    == .orderedAscending
-            }
-            .map(\.id)
-        let insertionIndex = targetID.flatMap { destinationIDs.firstIndex(of: $0) }
-            ?? destinationIDs.endIndex
-        destinationIDs.insert(profileID, at: insertionIndex)
-        reindexProfiles(destinationIDs)
-
-        if oldFolder != folder {
-            let oldIDs = profiles
-                .filter { SelectiveRemoteHostFolderPath.normalize($0.group) == oldFolder }
-                .sorted { $0.sortIndex < $1.sortIndex }
-                .map(\.id)
-            reindexProfiles(oldIDs)
-        }
+        guard let updated = SelectiveRemoteHostOrder.move(
+            profiles: profiles, profileID: profileID,
+            toFolder: folder, before: targetID
+        ) else { return }
+        profiles = updated
         profileSortMode = .manual
         statusMessage = folder.isEmpty
             ? UpdateLocalization.text(ru: "Host перемещён без папки", en: "Host moved to No Folder")
@@ -1920,11 +1898,16 @@ final class AppModel: NSObject, ObservableObject {
             )
     }
 
-    private func reindexProfiles(_ ids: [UUID]) {
-        for (sortIndex, id) in ids.enumerated() {
-            guard let index = profiles.firstIndex(where: { $0.id == id }) else { continue }
-            profiles[index].sortIndex = sortIndex
-        }
+    @discardableResult
+    func moveProfileFolder(
+        _ folder: String, toParent parent: String, before target: String? = nil
+    ) -> Bool {
+        guard let updated = try? SelectiveRemoteHostFolderOrganizer.move(
+            profiles: profiles, folder: folder, toParent: parent, before: target
+        ), updated != profiles else { return false }
+        profiles = updated
+        profileSortMode = .manual
+        return true
     }
 
     var profileGroups: [ProfileGroupSection] {
@@ -1973,8 +1956,9 @@ final class AppModel: NSObject, ObservableObject {
             case (_, .ungrouped):
                 return false
             case let (.named(left), .named(right)):
-                let comparison = left.localizedCaseInsensitiveCompare(right)
-                return comparison == .orderedSame ? left < right : comparison == .orderedAscending
+                return SelectiveRemoteHostFolderOrganizer.folderComesBefore(
+                    left, right, profiles: filtered
+                )
             }
         }.map { group in
             let name: String

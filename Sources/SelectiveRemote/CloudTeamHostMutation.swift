@@ -102,6 +102,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         in document: SelectiveRemoteVaultDocument,
         recordID: UUID,
         profile: ConnectionProfile,
+        expectedModifiedAt: String,
         role: SelectiveRemoteCloudTeamRole,
         deviceID: UUID,
         modifiedAt: String
@@ -113,21 +114,43 @@ enum SelectiveRemoteTeamHostDocumentMutation {
         guard existing.type == .host else {
             throw SelectiveRemoteTeamHostMutationError.recordIsNotHost
         }
-        var exportedProfile = profile
-        exportedProfile.id = recordID
-        let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
-            profiles: [exportedProfile],
-            credentials: [],
-            snippets: [],
-            forwarding: [],
-            deviceID: deviceID
-        ).document.records[0]
+        guard existing.modifiedAt == expectedModifiedAt,
+              case var .object(fields) = existing.data
+        else { throw SelectiveRemoteTeamHostMutationError.syncConflict }
+
+        if let embeddedProfile = fields["profile"] {
+            guard case let .string(encoded) = embeddedProfile else {
+                throw SelectiveRemoteTeamHostMutationError.syncConflict
+            }
+            guard let bytes = Data(selectiveRemoteBase64URL: encoded),
+                  var current = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any]
+            else { throw SelectiveRemoteTeamHostMutationError.syncConflict }
+            current["group"] = profile.group
+            current["sortIndex"] = profile.sortIndex
+            current["folderOrderPath"] = profile.folderOrderPath
+            let updated = try JSONSerialization.data(withJSONObject: current, options: [.sortedKeys])
+            fields["profile"] = .string(updated.selectiveRemoteBase64URL)
+            fields["folder"] = .string(profile.group)
+        } else {
+            // Browser-shaped Hosts have no embedded profile. Keep their existing
+            // conversion path, but only when the record is still the one dragged.
+            var exportedProfile = profile
+            exportedProfile.id = recordID
+            let exported = try SelectiveRemotePersonalVaultExporter.makeExport(
+                profiles: [exportedProfile], credentials: [], snippets: [],
+                forwarding: [], deviceID: deviceID
+            ).document.records[0]
+            guard case let .object(exportedFields) = exported.data else {
+                throw SelectiveRemoteTeamHostMutationError.syncConflict
+            }
+            fields = exportedFields
+        }
         let replacement = try SelectiveRemoteVaultRecord(
             id: recordID,
             type: .host,
             version: existing.version.incrementing(deviceID),
             modifiedAt: modifiedAt,
-            data: exported.data
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object(fields), from: existing)
         )
         return try .init(
             records: document.records.map { $0.id == recordID ? replacement : $0 },
@@ -208,7 +231,7 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             version: try priorVersion?.incrementing(deviceID)
                 ?? SelectiveRemoteVaultVersion([deviceID: 1]),
             modifiedAt: modifiedAt,
-            data: exported.data
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: exported.data, from: existing)
         )
         let previous = document.records.filter { isCredential($0, for: recordID) }
         let credentialRecords = try makeCredentials(
@@ -253,19 +276,24 @@ enum SelectiveRemoteTeamHostDocumentMutation {
             guard !secret.isEmpty else { return nil }
             let id = credentialID(sourceID: recordID, kind: kind)
             let old = previous.first(where: { $0.id == id })
+            let metadataSource = old ?? previous.first { record in
+                guard case let .object(data) = record.data,
+                      case let .string(previousKind)? = data["kind"] else { return false }
+                return previousKind == kind.rawValue
+            }
             return try SelectiveRemoteVaultRecord(
                 id: id,
                 type: .credential,
                 version: try old?.version.incrementing(deviceID)
                     ?? SelectiveRemoteVaultVersion([deviceID: 1]),
                 modifiedAt: modifiedAt,
-                data: .object([
+                data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object([
                     "title": .string("\(profile.friendlyName) · \(kind.rawValue)"),
                     "username": .string(kind == .gateway ? profile.gatewayUsername : profile.username),
                     "secret": .string(secret),
                     "kind": .string(kind.rawValue),
                     "sourceID": .string(recordID.canonicalCloudString)
-                ])
+                ]), from: metadataSource)
             )
         }
     }
@@ -311,6 +339,71 @@ enum SelectiveRemoteTeamHostMutationChange {
 struct SelectiveRemoteTeamHostOrganizationUpdate {
     let recordID: UUID
     let profile: ConnectionProfile
+    let expectedModifiedAt: String
+}
+
+struct SelectiveRemoteTeamHostMovePlan {
+    let selectedRecordID: UUID
+    let vaultID: UUID
+    let profiles: [ConnectionProfile]
+    let updates: [SelectiveRemoteTeamHostOrganizationUpdate]
+
+    static func make(
+        hosts: [SelectiveRemoteTeamHost], sourceID: UUID,
+        targetTeamID: UUID, toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) -> Self? {
+        guard let source = hosts.first(where: { $0.id == sourceID }),
+              source.teamID == targetTeamID else { return nil }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        if targetID == sourceID && folder == source.profile.group { return nil }
+        let scoped = hosts.filter {
+            $0.teamID == targetTeamID && $0.vaultID == source.vaultID
+        }
+        guard folder.isEmpty || scoped.contains(where: {
+            $0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/")
+        }) else { return nil }
+        if let targetID, !scoped.contains(where: { $0.id == targetID }) {
+            return nil
+        }
+        guard let arranged = SelectiveRemoteHostOrder.move(
+            profiles: scoped.map(\.profile), profileID: sourceID,
+            toFolder: folder, before: targetID
+        ) else { return nil }
+        let updates = zip(scoped, arranged).compactMap { host, profile in
+            host.profile == profile ? nil
+                : SelectiveRemoteTeamHostOrganizationUpdate(
+                    recordID: host.recordID, profile: profile,
+                    expectedModifiedAt: host.modifiedAt
+                )
+        }
+        guard !updates.isEmpty else { return nil }
+        return .init(selectedRecordID: source.recordID,
+                     vaultID: source.vaultID, profiles: arranged, updates: updates)
+    }
+
+    static func crossesVault(
+        hosts: [SelectiveRemoteTeamHost], sourceID: UUID,
+        targetTeamID: UUID, toFolder rawFolder: String,
+        before targetID: UUID? = nil
+    ) -> Bool {
+        guard let source = hosts.first(where: { $0.id == sourceID }),
+              source.teamID == targetTeamID else { return false }
+        if let targetID, let target = hosts.first(where: { $0.id == targetID }) {
+            return target.teamID == targetTeamID && target.vaultID != source.vaultID
+        }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        guard !folder.isEmpty else { return false }
+        let inSourceVault = hosts.contains {
+            $0.teamID == targetTeamID && $0.vaultID == source.vaultID &&
+            ($0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/"))
+        }
+        let inOtherVault = hosts.contains {
+            $0.teamID == targetTeamID && $0.vaultID != source.vaultID &&
+            ($0.profile.group == folder || $0.profile.group.hasPrefix(folder + "/"))
+        }
+        return !inSourceVault && inOtherVault
+    }
 }
 
 @MainActor
@@ -447,6 +540,7 @@ final class SelectiveRemoteTeamHostMutationService {
                     in: partial,
                     recordID: update.recordID,
                     profile: update.profile,
+                    expectedModifiedAt: update.expectedModifiedAt,
                     role: role,
                     deviceID: deviceID,
                     modifiedAt: timestamp

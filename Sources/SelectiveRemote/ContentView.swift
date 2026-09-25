@@ -129,7 +129,9 @@ struct ContentView: View {
     @State private var selectedTab = ProfileTab.general
     @State private var profileTabs: [UUID: ProfileTab] = [:]
     @State private var mainArea = MainArea.hosts
-    @State private var hostScope = HostScope.personal
+    @State private var hostScope = HostScope(rawValue:
+        UserDefaults.standard.string(forKey: "SelectiveRemote.host-shelf.scope.v1") ?? ""
+    ) ?? .personal
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var terminalFocusMode = false
     @State private var showsCaptureDiagnostics = false
@@ -138,6 +140,7 @@ struct ContentView: View {
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
     @State private var profileToShare: ConnectionProfile?
+    @State private var personalHostPendingDeletion: ConnectionProfile?
     @State private var showsPersonalFolderCreator = false
     @State private var newPersonalFolderName = ""
     @State private var newPersonalFolderParent = ""
@@ -145,7 +148,9 @@ struct ContentView: View {
     @State private var showsCloudOnboarding = false
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
-    @State private var selectedTeamHostID: UUID?
+    @State private var selectedTeamHostID = UserDefaults.standard
+        .string(forKey: "SelectiveRemote.host-shelf.team-selection.v1")
+        .flatMap(UUID.init(uuidString:))
     @State private var requestedTeamHostAction: SelectiveRemoteTeamHostActionRequest?
     @State private var hostScopePresentationID = UUID()
     @State private var personalHostSidebarPresentationID = UUID()
@@ -164,15 +169,19 @@ struct ContentView: View {
     private var teamHostDisplayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
     private var teamHostSortMode = SelectiveRemoteTeamHostSortMode.manual
+    @AppStorage(SelectiveRemoteTeamHostVaultFilter.preferenceKey)
+    private var selectedTeamVaultsRaw = ""
     @State private var personalHostDropTargetID: UUID?
+    @State private var sidebarTeamDropTargetID: String?
+    @State private var sidebarTeamMutationInProgress = false
     @AppStorage("SelectiveRemote.personal-host.navigator-visible.v1")
     private var personalHostNavigatorVisible = true
+    @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
+    private var teamHostNavigatorVisible = true
     @AppStorage("SelectiveRemote.personal-host.detail-visible.v1")
     private var personalHostDetailVisible = true
     @AppStorage("SelectiveRemote.sidebar-host-quick-access-visible.v1")
     private var sidebarHostQuickAccessVisible = true
-    @AppStorage("SelectiveRemote.sidebar-host-scope-picker-visible.v1")
-    private var sidebarHostScopePickerVisible = true
     @State private var expandedPersonalFolderIDs = Set(
         UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.personal-host.expanded-folders.v1"
@@ -180,6 +189,8 @@ struct ContentView: View {
     )
     @AppStorage("SelectiveRemote.cloud.endpoint.v1")
     private var cloudEndpoint = SelectiveRemoteCloudEndpoint.production
+    @AppStorage("SelectiveRemote.cloud.device-id.v1")
+    private var cloudDeviceID = ""
 
     private let cloudClient = SelectiveRemoteCloudAPIClient()
 
@@ -191,7 +202,7 @@ struct ContentView: View {
     ]
 
     private var showsHostQuickAccess: Bool {
-        sidebarHostQuickAccessVisible && mainArea != .hosts
+        sidebarHostQuickAccessVisible
     }
 
     private var profile: ConnectionProfile { model.selectedProfile }
@@ -248,6 +259,34 @@ struct ContentView: View {
         .appTextSize(appAppearance.textSize)
         .controlSize(appAppearance.density.controlSize)
         .tint(.accentColor)
+        .confirmationDialog(
+            UpdateLocalization.text(ru: "Удалить Host?", en: "Delete Host?"),
+            isPresented: Binding(
+                get: { personalHostPendingDeletion != nil },
+                set: { if !$0 { personalHostPendingDeletion = nil } }
+            ),
+            presenting: personalHostPendingDeletion
+        ) { profile in
+            Button(UpdateLocalization.text(ru: "Удалить", en: "Delete"), role: .destructive) {
+                model.selectProfile(profile.id)
+                model.deleteSelectedProfile()
+                personalHostPendingDeletion = nil
+            }
+            Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel"), role: .cancel) {}
+        } message: { profile in
+            Text(profile.friendlyName)
+        }
+        .onChange(of: hostScope) { _, scope in
+            UserDefaults.standard.set(
+                scope.rawValue, forKey: "SelectiveRemote.host-shelf.scope.v1"
+            )
+        }
+        .onChange(of: selectedTeamHostID) { _, id in
+            UserDefaults.standard.set(
+                id?.uuidString,
+                forKey: "SelectiveRemote.host-shelf.team-selection.v1"
+            )
+        }
         .alert("Ошибка", isPresented: Binding(
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
@@ -592,15 +631,6 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 10)
-            } else if sidebarHostQuickAccessVisible {
-                // Hosts owns its search field in the navigator column. Keep the
-                // same reserved sidebar height so the primary navigation does
-                // not jump when moving between Hosts and another workspace.
-                Color.clear
-                    .frame(height: 38)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 10)
-                    .accessibilityHidden(true)
             }
 
             VStack(spacing: 5) {
@@ -688,19 +718,11 @@ struct ContentView: View {
                     Section(UpdateLocalization.text(ru: "Боковая панель", en: "Sidebar")) {
                         Toggle(
                             UpdateLocalization.text(
-                                ru: "Показывать быстрый список Hosts",
-                                en: "Show Quick Host List"
+                                ru: "Показывать Host Shelf",
+                                en: "Show Host Shelf"
                             ),
                             isOn: $sidebarHostQuickAccessVisible
                         )
-                        Toggle(
-                            UpdateLocalization.text(
-                                ru: "Показывать Personal / Team",
-                                en: "Show Personal / Team"
-                            ),
-                            isOn: $sidebarHostScopePickerVisible
-                        )
-                        .disabled(!sidebarHostQuickAccessVisible)
                     }
                 } label: {
                     HStack(spacing: 10) {
@@ -724,8 +746,39 @@ struct ContentView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
 
-            if showsHostQuickAccess && sidebarHostScopePickerVisible
-                && (cloudSessionAvailable || !teamHosts.hosts.isEmpty) {
+            if showsHostQuickAccess {
+                Divider()
+                    .padding(.horizontal, 12)
+                HStack(spacing: 7) {
+                    Image(systemName: "server.rack")
+                        .foregroundStyle(Color.accentColor)
+                    Text(UpdateLocalization.text(ru: "ХОСТЫ", en: "HOSTS"))
+                        .font(.caption2.weight(.bold))
+                        .tracking(1)
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                    if mainArea == .hosts {
+                        Button {
+                            if hostScope == .personal {
+                                personalHostNavigatorVisible.toggle()
+                            } else {
+                                teamHostNavigatorVisible.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "sidebar.left")
+                                .foregroundStyle((hostScope == .personal
+                                    ? personalHostNavigatorVisible : teamHostNavigatorVisible)
+                                    ? Color.accentColor : Color.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .help((hostScope == .personal
+                            ? personalHostNavigatorVisible : teamHostNavigatorVisible)
+                            ? UpdateLocalization.text(ru: "Скрыть каталог хостов", en: "Hide Host Catalog")
+                            : UpdateLocalization.text(ru: "Показать каталог хостов", en: "Show Host Catalog"))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.bottom, 4)
                 Picker("", selection: $hostScope) {
                     ForEach(HostScope.allCases) { scope in
                         Text(scope.title).tag(scope)
@@ -756,16 +809,16 @@ struct ContentView: View {
                 Divider()
                 HStack(spacing: 9) {
                 Menu {
-                    Button("Новое RDP", systemImage: "desktopcomputer") {
+                    Button(UpdateLocalization.text(ru: "Новое RDP", en: "New RDP"), systemImage: "desktopcomputer") {
                         model.addProfile(connectionType: .rdp)
                     }
-                    Button("Новое SSH", systemImage: "terminal") {
+                    Button(UpdateLocalization.text(ru: "Новое SSH", en: "New SSH"), systemImage: "terminal") {
                         model.addProfile(connectionType: .ssh)
                     }
-                    Button("Новое Telnet", systemImage: "network") {
+                    Button(UpdateLocalization.text(ru: "Новое Telnet", en: "New Telnet"), systemImage: "network") {
                         model.addProfile(connectionType: .telnet)
                     }
-                    Button("Новое Serial", systemImage: "cable.connector") {
+                    Button(UpdateLocalization.text(ru: "Новое Serial", en: "New Serial"), systemImage: "cable.connector") {
                         model.addProfile(connectionType: .serial)
                     }
                     Divider()
@@ -781,13 +834,19 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "plus")
                 }
-                .help("Новое подключение")
+                .help(UpdateLocalization.text(ru: "Новое подключение", en: "New Connection"))
                 Button { model.duplicateSelectedProfile() } label: {
                     Image(systemName: "doc.on.doc")
                 }
-                .help("Создать копию")
-                Button { model.deleteSelectedProfile() } label: { Image(systemName: "trash") }
-                    .help("Удалить")
+                .disabled(model.selectedProfileID == nil)
+                .help(UpdateLocalization.text(ru: "Создать копию", en: "Duplicate Host"))
+                Button {
+                    personalHostPendingDeletion = model.profiles.first {
+                        $0.id == model.selectedProfileID
+                    }
+                } label: { Image(systemName: "trash") }
+                    .disabled(model.selectedProfileID == nil)
+                    .help(UpdateLocalization.text(ru: "Удалить Host", en: "Delete Host"))
 
                 Spacer()
 
@@ -796,7 +855,7 @@ struct ContentView: View {
                 )
 
                 Menu {
-                    Button("Импортировать…", systemImage: "square.and.arrow.down") {
+                    Button(UpdateLocalization.text(ru: "Импортировать…", en: "Import…"), systemImage: "square.and.arrow.down") {
                         model.importProfiles()
                     }
                     Divider()
@@ -809,17 +868,17 @@ struct ContentView: View {
                     ) {
                         model.exportAllProfiles()
                     }
-                    Button("Выбранный профиль как .rdp…", systemImage: "doc") {
+                    Button(UpdateLocalization.text(ru: "Выбранный профиль как .rdp…", en: "Selected Profile as .rdp…"), systemImage: "doc") {
                         model.exportSelectedRDP()
                     }
                     .disabled(profile.connectionType != .rdp)
                 } label: {
                     Image(systemName: "square.and.arrow.up.on.square")
                 }
-                .help("Импорт и экспорт без паролей и SSH-ключей")
+                .help(UpdateLocalization.text(ru: "Импорт и экспорт без паролей и SSH-ключей", en: "Import and export without passwords or SSH keys"))
 
                 Menu {
-                    Picker("Сортировка", selection: $model.profileSortMode) {
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
                         ForEach(ProfileSortMode.allCases) { mode in
                             Text(LocalizedStringKey(mode.title)).tag(mode)
                         }
@@ -827,13 +886,29 @@ struct ContentView: View {
                 } label: {
                     Image(systemName: "arrow.up.arrow.down")
                 }
-                .help("Сортировка подключений")
+                .help(UpdateLocalization.text(ru: "Сортировка подключений", en: "Sort Connections"))
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
             } else if showsHostQuickAccess {
                 Divider()
+                ViewThatFits(in: .horizontal) {
                 HStack(spacing: 9) {
+                    if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                       SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                        Button {
+                            requestTeamHostAction(.create, for: host)
+                        } label: { Image(systemName: "plus") }
+                        .help(UpdateLocalization.text(ru: "Новый Team Host", en: "New Team Host"))
+                        Button {
+                            requestTeamHostAction(.duplicate, for: host)
+                        } label: { Image(systemName: "doc.on.doc") }
+                        .help(UpdateLocalization.text(ru: "Создать копию Team Host", en: "Duplicate Team Host"))
+                        Button {
+                            requestTeamHostAction(.delete, for: host)
+                        } label: { Image(systemName: "trash") }
+                        .help(UpdateLocalization.text(ru: "Удалить Team Host", en: "Delete Team Host"))
+                    }
                     Button {
                         NotificationCenter.default.post(
                             name: .selectiveRemoteTeamVaultSyncNow,
@@ -848,6 +923,10 @@ struct ContentView: View {
                     ))
 
                     Spacer()
+
+                    SelectiveRemoteTeamVaultFilterControl(
+                        vaults: teamHosts.vaults, rawSelection: $selectedTeamVaultsRaw
+                    )
 
                     ProfileCollectionDisplayModePicker(selection: $teamHostDisplayMode)
 
@@ -882,6 +961,57 @@ struct ContentView: View {
                         ru: "Управление Team Vaults",
                         en: "Manage Team Vaults"
                     ))
+                }
+                HStack(spacing: 8) {
+                    if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                       SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                        Button {
+                            requestTeamHostAction(.create, for: host)
+                        } label: { Image(systemName: "plus") }
+                        .help(UpdateLocalization.text(ru: "Новый Team Host", en: "New Team Host"))
+                    }
+                    SelectiveRemoteTeamVaultFilterControl(
+                        vaults: teamHosts.vaults, rawSelection: $selectedTeamVaultsRaw
+                    )
+                    ProfileCollectionDisplayModePicker(selection: $teamHostDisplayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"),
+                               selection: $teamHostSortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in
+                                Text(mode.title).tag(mode)
+                            }
+                        }
+                    } label: { Image(systemName: "arrow.up.arrow.down") }
+                    .help(UpdateLocalization.text(ru: "Сортировка Team Hosts", en: "Sort Team Hosts"))
+                    Menu {
+                        if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+                           SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                            Button(UpdateLocalization.text(ru: "Создать копию", en: "Duplicate"),
+                                   systemImage: "doc.on.doc") {
+                                requestTeamHostAction(.duplicate, for: host)
+                            }
+                            Button(UpdateLocalization.text(ru: "Удалить", en: "Delete"),
+                                   systemImage: "trash", role: .destructive) {
+                                requestTeamHostAction(.delete, for: host)
+                            }
+                            Divider()
+                        }
+                        Button(UpdateLocalization.text(ru: "Синхронизировать", en: "Sync"),
+                               systemImage: "arrow.triangle.2.circlepath") {
+                            NotificationCenter.default.post(
+                                name: .selectiveRemoteTeamVaultSyncNow, object: nil
+                            )
+                        }
+                        Button(UpdateLocalization.text(ru: "Team Vaults", en: "Team Vaults"),
+                               systemImage: "cloud") {
+                            refreshCloudSessionAvailability()
+                            if cloudSessionAvailable { showsCloudManagement = true }
+                            else { showsCloudOnboarding = true }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .help(UpdateLocalization.text(ru: "Другие действия", en: "More Actions"))
+                    Spacer(minLength: 0)
+                }
                 }
                 .buttonStyle(.borderless)
                 .padding(12)
@@ -967,6 +1097,7 @@ struct ContentView: View {
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contextMenu { personalHostEmptySpaceContextMenu }
         } else if model.profileCollectionDisplayMode == .list {
             List {
                 SelectiveRemotePersistentOutlineRows(
@@ -977,14 +1108,21 @@ struct ContentView: View {
                     switch outline.kind {
                     case let .folder(path, name):
                         Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                            .draggable(SelectiveRemoteHostDragIdentity.personalFolder(path).value)
                             .font(.headline)
-                            .dropDestination(for: String.self) { values, _ in
-                                movePersonalProfile(values, toFolder: path)
+                            .dropDestination(for: String.self) { values, location in
+                                movePersonalProfile(
+                                    values, toFolder: path,
+                                    beforeFolder: location.y < 12 ? path : nil
+                                )
                             }
                     case let .profile(item):
-                        Button {
-                            openProfile(item.id)
-                        } label: {
+                        SelectiveRemoteDraggableHostCard(
+                            identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                            navigationScope: "personal-\(surface.rawValue)",
+                            previewTitle: item.friendlyName,
+                            select: { openProfile(item.id) }
+                        ) {
                             ProfileRow(
                                 profile: item,
                                 isSelected: showsPersonalHostSelection(on: surface)
@@ -995,8 +1133,6 @@ struct ContentView: View {
                                 compact: surface == .sidebar
                             )
                         }
-                        .buttonStyle(.plain)
-                        .focusEffectDisabled()
                         .id("\(surface.rawValue)-profile:\(item.id.uuidString)")
                         .listRowBackground(
                             Color.clear
@@ -1007,7 +1143,6 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle())
                         .contextMenu { profileContextMenu(item) }
-                        .draggable("personal-host:\(item.id.uuidString)")
                         .dropDestination(for: String.self) { values, _ in
                             setPersonalHostDropTarget(nil)
                             return movePersonalProfile(
@@ -1038,19 +1173,27 @@ struct ContentView: View {
             .onChange(of: model.profiles.map { "\($0.id.uuidString):\($0.group)" }) { _, _ in
                 sanitizePersonalFolderExpansion()
             }
+            .contextMenu { personalHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
-                    ForEach(model.profileGroups) { group in
+                    ForEach(personalGridGroups) { group in
                         VStack(alignment: .leading, spacing: 8) {
+                            let groupPath: String = {
+                                if case let .named(path) = group.id { return path }
+                                return ""
+                            }()
                             Text(group.name)
                                 .font(.caption.bold())
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal, 2)
-                                .dropDestination(for: String.self) { values, _ in
+                                .draggable(SelectiveRemoteHostDragIdentity.personalFolder(groupPath).value)
+                                .dropDestination(for: String.self) { values, location in
                                     movePersonalProfile(
                                         values,
-                                        toFolder: group.profiles.first?.group ?? ""
+                                        toFolder: groupPath,
+                                        beforeFolder: location.y < 12
+                                            ? groupPath : nil
                                     )
                                 }
                             LazyVGrid(
@@ -1058,9 +1201,12 @@ struct ContentView: View {
                                 spacing: 9
                             ) {
                                 ForEach(group.profiles) { item in
-                                    Button {
-                                        openProfile(item.id)
-                                    } label: {
+                                    SelectiveRemoteDraggableHostCard(
+                                        identity: SelectiveRemoteHostDragIdentity.personalHost(item.id).value,
+                                        navigationScope: "personal-\(surface.rawValue)",
+                                        previewTitle: item.friendlyName,
+                                        select: { openProfile(item.id) }
+                                    ) {
                                         ProfileGridCard(
                                             profile: item,
                                             isSelected: showsPersonalHostSelection(on: surface)
@@ -1072,10 +1218,7 @@ struct ContentView: View {
                                             activeTunnelCount: activeTunnelCount(for: item.id)
                                         )
                                     }
-                                    .buttonStyle(.plain)
-                                    .focusEffectDisabled()
                                     .contextMenu { profileContextMenu(item) }
-                                    .draggable("personal-host:\(item.id.uuidString)")
                                     .dropDestination(for: String.self) { values, _ in
                                         movePersonalProfile(
                                             values,
@@ -1091,7 +1234,57 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
             }
+            .contextMenu { personalHostEmptySpaceContextMenu }
         }
+    }
+
+    @ViewBuilder
+    private var personalHostEmptySpaceContextMenu: some View {
+        Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+            Button("SSH") { addPersonalHostInCurrentFolder(.ssh) }
+            Button("RDP") { addPersonalHostInCurrentFolder(.rdp) }
+            Button("Telnet") { addPersonalHostInCurrentFolder(.telnet) }
+            Button("Serial") { addPersonalHostInCurrentFolder(.serial) }
+        }
+        Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+            preparePersonalFolderCreator()
+        }
+        .disabled(model.profiles.isEmpty)
+    }
+
+    private func addPersonalHostInCurrentFolder(_ type: ConnectionType) {
+        let folder = model.profiles.isEmpty ? "" : model.selectedProfile.group
+        model.addProfile(connectionType: type)
+        if !folder.isEmpty {
+            model.moveProfile(profileID: model.selectedProfile.id, toFolder: folder)
+        }
+    }
+
+    private var personalGridGroups: [ProfileGroupSection] {
+        let groups = model.profileGroups
+        var byPath: [String: ProfileGroupSection] = [:]
+        var ungrouped: ProfileGroupSection?
+        for group in groups {
+            switch group.id {
+            case .ungrouped:
+                ungrouped = group
+            case let .named(path):
+                byPath[path] = group
+                let parts = SelectiveRemoteHostFolderPath.components(path)
+                for depth in 1 ..< parts.count {
+                    let prefix = parts.prefix(depth).joined(separator: "/")
+                    if byPath[prefix] == nil {
+                        byPath[prefix] = .init(name: prefix, profiles: [])
+                    }
+                }
+            }
+        }
+        let ordered = byPath.keys.sorted {
+            SelectiveRemoteHostFolderOrganizer.folderComesBefore(
+                $0, $1, profiles: groups.flatMap(\.profiles)
+            )
+        }.compactMap { byPath[$0] }
+        return ungrouped.map { [$0] + ordered } ?? ordered
     }
 
     private var sidebarHostSearchBinding: Binding<String> {
@@ -1111,8 +1304,12 @@ struct ContentView: View {
 
     private var visibleSidebarTeamHosts: [SelectiveRemoteTeamHost] {
         let query = teamHostSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let selectedVaults = SelectiveRemoteTeamHostVaultFilter.effectiveKeys(
+            raw: selectedTeamVaultsRaw, available: teamHosts.vaults
+        )
         return teamHosts.hosts.filter { host in
-            query.isEmpty || [
+            SelectiveRemoteTeamHostVaultFilter.includes(host, selected: selectedVaults)
+                && (query.isEmpty || [
                 host.profile.friendlyName,
                 host.address,
                 host.profile.username,
@@ -1120,7 +1317,7 @@ struct ContentView: View {
                 host.vaultName,
                 host.profile.group,
                 host.profile.tags.joined(separator: " ")
-            ].contains { $0.localizedCaseInsensitiveContains(query) }
+            ].contains { $0.localizedCaseInsensitiveContains(query) })
         }
         .sorted { lhs, rhs in sidebarTeamHostComesBefore(lhs, rhs) }
     }
@@ -1139,11 +1336,10 @@ struct ContentView: View {
     }
 
     private func sidebarTeamFolders(_ teamID: UUID) -> [String] {
-        Array(Set(visibleSidebarTeamHosts.filter { $0.teamID == teamID }.map {
-            $0.profile.group
-        })).sorted {
-            $0.localizedCaseInsensitiveCompare($1) == .orderedAscending
-        }
+        SelectiveRemoteHostFolderOrganizer.visibleFolderPaths(
+            profiles: visibleSidebarTeamHosts.filter { $0.teamID == teamID }
+                .map(\.profile)
+        )
     }
 
     private func sidebarTeamOutlineItems(
@@ -1168,15 +1364,15 @@ struct ContentView: View {
                 Text(UpdateLocalization.text(
                     ru: teamHosts.hosts.isEmpty
                         ? "Синхронизируйте Team Vault или переключитесь на личные хосты."
-                        : "Измените строку поиска.",
+                        : "Измените поиск или фильтр Vault.",
                     en: teamHosts.hosts.isEmpty
                         ? "Synchronize a Team Vault or switch to Personal Hosts."
-                        : "Change the search query."
+                        : "Change the search or Vault filter."
                 ))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if teamHostDisplayMode == .list {
-            List(selection: $selectedTeamHostID) {
+            List {
                 ForEach(sidebarTeamIDs, id: \.self) { teamID in
                     DisclosureGroup(
                         isExpanded: sidebarTeamExpansionBinding(teamID)
@@ -1192,10 +1388,31 @@ struct ContentView: View {
                                     name,
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
+                                            ? Color.accentColor.opacity(0.14) : Color.clear)
+                                .dropDestination(for: String.self) { values, location in
+                                    sidebarTeamDropTargetID = nil
+                                    return moveSidebarTeamItem(
+                                        values, toFolder: path, teamID: teamID,
+                                        beforeFolder: location.y < 12 ? path : nil
+                                    )
+                                } isTargeted: { targeted in
+                                    sidebarTeamDropTargetID = targeted
+                                        ? "\(teamID.uuidString):\(path)" : nil
+                                }
                             case let .host(host):
                                 teamHostSidebarRow(host)
                                     .tag(host.id)
                                     .contextMenu { teamHostContextMenu(host) }
+                                    .dropDestination(for: String.self) { values, _ in
+                                        moveSidebarTeamItem(
+                                            values, toFolder: host.profile.group,
+                                            teamID: teamID, before: host.id
+                                        )
+                                    }
                             }
                         }
                     } label: {
@@ -1208,6 +1425,7 @@ struct ContentView: View {
             .scrollContentBackground(.hidden)
             .id("sidebar-team-list-\(teamHostSortMode.rawValue)")
             .onAppear { restoreOrInitializeSidebarTeamExpansion() }
+            .contextMenu { teamHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 12) {
@@ -1225,6 +1443,9 @@ struct ContentView: View {
                                 )
                                 .font(.caption2.bold())
                                 .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: folder))
 
                                 LazyVGrid(
                                     columns: [GridItem(.adaptive(minimum: 118), spacing: 8)],
@@ -1233,16 +1454,37 @@ struct ContentView: View {
                                     ForEach(visibleSidebarTeamHosts.filter {
                                         $0.teamID == teamID && $0.profile.group == folder
                                     }) { host in
-                                        Button {
-                                            openTeamHostCard(host)
-                                        } label: {
+                                        SelectiveRemoteDraggableHostCard(
+                                            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            navigationScope: "team-sidebar",
+                                            previewTitle: host.profile.friendlyName,
+                                            select: { openTeamHostCard(host) }
+                                        ) {
                                             teamHostSidebarGridCard(host)
                                         }
-                                        .buttonStyle(.plain)
-                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
+                                        .dropDestination(for: String.self) { values, _ in
+                                            moveSidebarTeamItem(
+                                                values, toFolder: host.profile.group,
+                                                teamID: teamID, before: host.id
+                                            )
+                                        }
                                     }
                                 }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(folder)"
+                                        ? Color.accentColor.opacity(0.14) : Color.clear)
+                            .dropDestination(for: String.self) { values, location in
+                                sidebarTeamDropTargetID = nil
+                                return moveSidebarTeamItem(
+                                    values, toFolder: folder, teamID: teamID,
+                                    beforeFolder: location.y < 12 ? folder : nil
+                                )
+                            } isTargeted: { targeted in
+                                sidebarTeamDropTargetID = targeted
+                                    ? "\(teamID.uuidString):\(folder)" : nil
                             }
                         }
                     }
@@ -1250,21 +1492,46 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
+            .contextMenu { teamHostEmptySpaceContextMenu }
+        }
+    }
+
+    @ViewBuilder
+    private var teamHostEmptySpaceContextMenu: some View {
+        if let host = teamHosts.hosts.first(where: { $0.id == selectedTeamHostID }),
+           SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            Button(UpdateLocalization.text(ru: "Новый Host", en: "New Host"), systemImage: "plus") {
+                requestTeamHostAction(.create, for: host)
+            }
+            Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+                requestTeamHostAction(.createFolder, for: host)
+            }
         }
     }
 
     private func teamHostSidebarRow(_ host: SelectiveRemoteTeamHost) -> some View {
-        Button {
-            openTeamHostCard(host)
-        } label: {
+        SelectiveRemoteDraggableHostCard(
+            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+            navigationScope: "team-sidebar",
+            previewTitle: host.profile.friendlyName,
+            select: { openTeamHostCard(host) }
+        ) {
             VStack(alignment: .leading, spacing: 3) {
-                Label(
-                    host.profile.friendlyName.isEmpty
-                        ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
-                        : host.profile.friendlyName,
-                    systemImage: host.profile.connectionType.systemImage
-                )
-                .font(.headline)
+                HStack(spacing: 6) {
+                    Label(
+                        host.profile.friendlyName.isEmpty
+                            ? UpdateLocalization.text(ru: "Без названия", en: "Untitled")
+                            : host.profile.friendlyName,
+                        systemImage: host.profile.connectionType.systemImage
+                    )
+                    .font(.headline)
+                    if model.isSSHTerminalRunning(profileID: host.id) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 7))
+                            .foregroundStyle(.green)
+                            .accessibilityLabel(UpdateLocalization.text(ru: "Активная сессия", en: "Active Session"))
+                    }
+                }
                 Text("\(host.vaultName) · \(host.profile.connectionType.title)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -1278,8 +1545,6 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .focusEffectDisabled()
     }
 
     private func teamHostSidebarGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -1294,6 +1559,11 @@ struct ContentView: View {
                 .font(.caption2.monospaced())
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if model.isSSHTerminalRunning(profileID: host.id) {
+                Label(UpdateLocalization.text(ru: "Активно", en: "Active"), systemImage: "circle.fill")
+                    .font(.caption2)
+                    .foregroundStyle(.green)
+            }
         }
         .frame(maxWidth: .infinity, minHeight: 76, alignment: .topLeading)
         .padding(9)
@@ -1371,6 +1641,15 @@ struct ContentView: View {
     }
 
     private func openTeamHostCard(_ host: SelectiveRemoteTeamHost) {
+        let detailVisible = UserDefaults.standard.bool(
+            forKey: "SelectiveRemote.team-host.detail-visible.v1"
+        )
+        guard SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: selectedTeamHostID?.uuidString,
+            requestedID: host.id.uuidString,
+            detailsVisible: detailVisible,
+            alreadyInHosts: hostScope == .team && mainArea == .hosts
+        ) else { return }
         hostScope = .team
         selectedTeamHostID = host.id
         UserDefaults.standard.set(
@@ -1392,30 +1671,122 @@ struct ContentView: View {
         _ lhs: SelectiveRemoteTeamHost,
         _ rhs: SelectiveRemoteTeamHost
     ) -> Bool {
-        switch teamHostSortMode {
-        case .manual:
-            if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                return lhs.profile.sortIndex < rhs.profile.sortIndex
+        teamHostSortMode.comesBefore(lhs, rhs)
+    }
+
+    private func sidebarTeamFolderDragValue(teamID: UUID, path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let vaultIDs = Set(teamHosts.hosts.filter {
+            $0.teamID == teamID
+                && ($0.profile.group == path || $0.profile.group.hasPrefix(path + "/"))
+        }.map(\.vaultID))
+        guard vaultIDs.count == 1, let vaultID = vaultIDs.first else { return "" }
+        return SelectiveRemoteHostDragIdentity.teamFolder(
+            vaultID: vaultID, path: path
+        ).value
+    }
+
+    private func moveSidebarTeamItem(
+        _ values: [String], toFolder rawFolder: String, teamID: UUID,
+        beforeFolder: String? = nil, before targetID: UUID? = nil
+    ) -> Bool {
+        guard !sidebarTeamMutationInProgress, let value = values.first else { return false }
+        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
+        let scopedHosts: [SelectiveRemoteTeamHost]
+        let selectedRecordID: UUID
+        let updatedProfiles: [ConnectionProfile]
+
+        if value.hasPrefix("team-folder:") {
+            let suffix = String(value.dropFirst("team-folder:".count))
+            guard suffix.count > 37,
+                  let vaultID = UUID(uuidString: String(suffix.prefix(36))),
+                  suffix[suffix.index(suffix.startIndex, offsetBy: 36)] == ":"
+            else { return false }
+            let source = String(suffix.dropFirst(37))
+            scopedHosts = teamHosts.hosts.filter {
+                $0.teamID == teamID && $0.vaultID == vaultID
             }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameAscending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameDescending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedDescending
-        case .address:
-            let order = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
-            return order == .orderedSame
-                ? lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                    rhs.profile.friendlyName
-                ) == .orderedAscending
-                : order == .orderedAscending
+            guard let selected = scopedHosts.first(where: {
+                $0.profile.group == source || $0.profile.group.hasPrefix(source + "/")
+            }) else { return false }
+            selectedRecordID = selected.recordID
+            let parent = beforeFolder == nil ? folder
+                : folder.split(separator: "/").dropLast().joined(separator: "/")
+            guard parent.isEmpty || scopedHosts.contains(where: {
+                $0.profile.group == parent || $0.profile.group.hasPrefix(parent + "/")
+            }), let arranged = try? SelectiveRemoteHostFolderOrganizer.move(
+                profiles: scopedHosts.map(\.profile), folder: source,
+                toParent: parent, before: beforeFolder
+            ) else { return false }
+            updatedProfiles = arranged
+        } else if value.hasPrefix("team-host:"),
+                  let hostID = UUID(uuidString: String(value.dropFirst("team-host:".count))),
+                  let host = teamHosts.hosts.first(where: { $0.id == hostID }),
+                  host.teamID == teamID {
+            guard let plan = SelectiveRemoteTeamHostMovePlan.make(
+                hosts: teamHosts.hosts, sourceID: hostID,
+                targetTeamID: teamID, toFolder: folder,
+                before: targetID
+            ) else {
+                if SelectiveRemoteTeamHostMovePlan.crossesVault(
+                    hosts: teamHosts.hosts, sourceID: hostID,
+                    targetTeamID: teamID, toFolder: folder,
+                    before: targetID
+                ) {
+                    model.errorMessage = UpdateLocalization.text(
+                        ru: "Папка находится в другом Team Vault. Перенос Host между Vaults не поддерживается.",
+                        en: "This folder is in another Team Vault. Moving a Host between Vaults is not supported."
+                    )
+                }
+                return false
+            }
+            scopedHosts = teamHosts.hosts.filter {
+                $0.teamID == host.teamID && $0.vaultID == host.vaultID
+            }
+            selectedRecordID = plan.selectedRecordID
+            updatedProfiles = plan.profiles
+        } else { return false }
+
+        guard let source = scopedHosts.first,
+              let context = teamHosts.vaults.first(where: {
+                  $0.teamID == source.teamID && $0.vaultID == source.vaultID
+              }),
+              SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
+        else { return false }
+        let updates = zip(scopedHosts, updatedProfiles).compactMap { host, profile in
+            host.profile == profile ? nil
+                : SelectiveRemoteTeamHostOrganizationUpdate(
+                    recordID: host.recordID, profile: profile,
+                    expectedModifiedAt: host.modifiedAt
+                )
         }
+        guard !updates.isEmpty else { return false }
+        sidebarTeamMutationInProgress = true
+        teamHostSortMode = .manual
+        Task { @MainActor in
+            defer { sidebarTeamMutationInProgress = false }
+            do {
+                let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+                let deviceID = UUID(uuidString: cloudDeviceID)
+                    .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
+                cloudDeviceID = deviceID.canonicalCloudString
+                let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
+                    .identity(endpoint: endpoint, deviceID: deviceID)
+                let service = try SelectiveRemoteTeamHostMutationService()
+                let snapshot = try await service.apply(
+                    .organize(updates), to: context, endpoint: endpoint,
+                    identity: identity
+                )
+                teamHosts.replaceVault(with: snapshot)
+                selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                    teamID: context.teamID, vaultID: context.vaultID,
+                    recordID: selectedRecordID
+                )
+            } catch {
+                model.errorMessage = error.localizedDescription
+            }
+        }
+        return true
     }
 
     private func sidebarTeamExpansionBinding(_ teamID: UUID) -> Binding<Bool> {
@@ -1469,8 +1840,14 @@ struct ContentView: View {
     }
 
     private var personalHostsManagementDetail: some View {
-        HSplitView {
-            if personalHostNavigatorVisible {
+        GeometryReader { available in
+          let catalogVisible = SelectiveRemoteHostCatalogLayout.showsCatalog(
+              preference: personalHostNavigatorVisible,
+              availableWidth: available.size.width,
+              detailVisible: personalHostDetailVisible
+          )
+          HSplitView {
+            if catalogVisible {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -1550,13 +1927,24 @@ struct ContentView: View {
                 )
             }
 
-            if personalHostDetailVisible {
+            if personalHostDetailVisible || !personalHostNavigatorVisible {
                 profileDetail
-                    .frame(minWidth: 520, maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(
+                        minWidth: SelectiveRemoteSplitColumnLayout.detailMinimumWidth(
+                            preferred: 520,
+                            availableWidth: available.size.width,
+                            leadingVisible: catalogVisible,
+                            leadingMinimumWidth: 300
+                        ),
+                        maxWidth: .infinity, maxHeight: .infinity
+                    )
                     .overlay(alignment: .topLeading) {
-                        if !personalHostNavigatorVisible {
+                        if !personalHostNavigatorVisible || available.size.width < 760 {
                             Button {
                                 personalHostNavigatorVisible = true
+                                if available.size.width < 760 {
+                                    personalHostDetailVisible = false
+                                }
                             } label: {
                                 Label(
                                     UpdateLocalization.text(ru: "Хосты", en: "Hosts"),
@@ -1573,6 +1961,7 @@ struct ContentView: View {
                         }
                     }
             }
+          }
         }
         .animation(
             reduceMotion ? nil : .easeInOut(duration: 0.18),
@@ -1602,7 +1991,7 @@ struct ContentView: View {
                 }
             }
 
-            HStack(spacing: 8) {
+            SelectiveRemoteMeasuredPriorityToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1625,7 +2014,8 @@ struct ContentView: View {
                 .padding(.horizontal, 10)
                 .frame(minHeight: 32)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-
+            } controls: {
+              HStack(spacing: 8) {
                 Menu {
                     Button(
                         UpdateLocalization.text(ru: "Новый RDP", en: "New RDP"),
@@ -1671,6 +2061,66 @@ struct ContentView: View {
                     ru: "Сортировка хостов",
                     en: "Sort Hosts"
                 ))
+              }
+            } priority: {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    ProfileCollectionDisplayModePicker(selection: $model.profileCollectionDisplayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                            ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка хостов", en: "Sort Hosts"))
+                }
+            } primary: {
+                HStack(spacing: 8) {
+                    Menu {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $model.profileCollectionDisplayMode) {
+                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                            ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Действия с хостами", en: "Host actions"))
+                }
+            } overflow: {
+                Menu {
+                    Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                        Button("SSH") { model.addProfile(connectionType: .ssh) }
+                        Button("RDP") { model.addProfile(connectionType: .rdp) }
+                        Button("Telnet") { model.addProfile(connectionType: .telnet) }
+                        Button("Serial") { model.addProfile(connectionType: .serial) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $model.profileCollectionDisplayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $model.profileSortMode) {
+                        ForEach(ProfileSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Действия с хостами", en: "Host actions"))
             }
         }
         .padding(.horizontal, 12)
@@ -1682,7 +2132,7 @@ struct ContentView: View {
     ) -> Bool {
         switch surface {
         case .sidebar:
-            return mainArea != .hosts || !personalHostNavigatorVisible
+            return true
         case .navigator:
             return true
         }
@@ -1812,7 +2262,14 @@ struct ContentView: View {
     }
 
     private func openProfile(_ profileID: UUID) {
+        guard SelectiveRemoteHostSelectionTransition.needsTransition(
+            currentID: model.selectedProfileID?.uuidString,
+            requestedID: profileID.uuidString,
+            detailsVisible: personalHostDetailVisible,
+            alreadyInHosts: hostScope == .personal && mainArea == .hosts
+        ) else { return }
         model.selectProfile(profileID)
+        personalHostDetailVisible = true
         openPersonalHosts()
     }
 
@@ -1827,10 +2284,21 @@ struct ContentView: View {
     private func movePersonalProfile(
         _ values: [String],
         toFolder folder: String,
-        before targetID: UUID? = nil
+        before targetID: UUID? = nil,
+        beforeFolder: String? = nil
     ) -> Bool {
-        guard let value = values.first,
-              value.hasPrefix("personal-host:"),
+        guard let value = values.first else { return false }
+        if value.hasPrefix("personal-folder:") {
+            let source = String(value.dropFirst("personal-folder:".count))
+            let parent: String
+            if beforeFolder != nil {
+                parent = folder.split(separator: "/").dropLast().joined(separator: "/")
+            } else {
+                parent = folder
+            }
+            return model.moveProfileFolder(source, toParent: parent, before: beforeFolder)
+        }
+        guard value.hasPrefix("personal-host:"),
               let profileID = UUID(uuidString: String(value.dropFirst("personal-host:".count)))
         else { return false }
         model.moveProfile(profileID: profileID, toFolder: folder, before: targetID)
@@ -2030,8 +2498,7 @@ struct ContentView: View {
         }
         Divider()
         Button("Удалить", systemImage: "trash", role: .destructive) {
-            model.selectProfile(item.id)
-            model.deleteSelectedProfile()
+            personalHostPendingDeletion = item
         }
     }
 
@@ -2330,44 +2797,66 @@ struct ContentView: View {
     }
 
     private var sshCompactWorkspaceHeader: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.indigo, Color.purple],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
-                Image(systemName: "terminal.fill")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(.white)
-            }
-            .frame(width: 40, height: 40)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 7) {
-                    Text(profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName)
-                        .font(.headline)
-                        .lineLimit(1)
-                    Text("SSH")
-                        .font(.caption2.bold())
-                        .foregroundStyle(Color.indigo)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.indigo.opacity(0.10), in: Capsule())
+        ViewThatFits(in: .horizontal) {
+            SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 220, spacing: 12) {
+                sshHeaderIdentity(showsBadge: true)
+            } trailing: {
+                HStack(spacing: 12) {
+                    sshWorkspaceSwitcher.frame(width: 260)
+                    sshHeaderActions
                 }
-                Text(sshEndpointLabel)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .textSelection(.enabled)
             }
 
-            Spacer(minLength: 12)
-            sshWorkspaceSwitcher
+            VStack(alignment: .leading, spacing: 8) {
+                SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 220) {
+                    sshHeaderIdentity(showsBadge: false)
+                } trailing: {
+                    sshHeaderActions
+                }
+                sshWorkspaceSwitcher
+            }
 
+            VStack(alignment: .leading, spacing: 8) {
+                SelectiveRemoteMeasuredHeaderRow(minimumIdentityWidth: 180) {
+                    sshHeaderIdentity(showsBadge: false)
+                } trailing: {
+                    sshHeaderActions
+                }
+                Menu {
+                    ForEach(sshWorkspaceTabs) { tab in
+                        Button {
+                            selectedTab = tab
+                        } label: {
+                            Label(rdpTabTitle(tab), systemImage: tab.systemImage)
+                        }
+                    }
+                } label: {
+                    Label(rdpTabTitle(selectedTab), systemImage: selectedTab.systemImage)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .accessibilityLabel(UpdateLocalization.text(ru: "Рабочая область", en: "Workspace"))
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.primary.opacity(0.06))
+                .frame(height: 1)
+        }
+    }
+
+    private func sshHeaderIdentity(showsBadge: Bool) -> some View {
+        SelectiveRemoteSSHHeaderIdentity(
+            title: profile.friendlyName.isEmpty ? "SSH" : profile.friendlyName,
+            endpoint: sshEndpointLabel,
+            showsBadge: showsBadge
+        )
+    }
+
+    private var sshHeaderActions: some View {
+        HStack(spacing: 7) {
             Button {
                 selectedTab = .general
             } label: {
@@ -2397,14 +2886,6 @@ struct ContentView: View {
                 )
             )
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 10)
-        .background(.regularMaterial)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.primary.opacity(0.06))
-                .frame(height: 1)
-        }
     }
 
     private var sshWorkspaceSwitcher: some View {
@@ -2419,7 +2900,7 @@ struct ContentView: View {
         }
         .labelsHidden()
         .pickerStyle(.segmented)
-        .frame(width: 300)
+        .frame(maxWidth: .infinity)
     }
 
     private var sshWorkspaceHeader: some View {
@@ -5583,7 +6064,7 @@ private struct ProfileRow: View {
     var body: some View {
         if compact {
             rowContent
-                .frame(minHeight: 38, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: 38, alignment: .leading)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 2)
                 .background(
@@ -5604,7 +6085,7 @@ private struct ProfileRow: View {
                 .contentShape(Rectangle())
         } else {
             rowContent
-                .frame(minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
+                .frame(maxWidth: .infinity, minHeight: profile.tags.isEmpty ? 48 : 64, alignment: .leading)
                 .padding(.horizontal, 9)
                 .padding(.vertical, 5)
                 .selectiveRemoteWorkspaceSurface(cornerRadius: 11, selected: isSelected)

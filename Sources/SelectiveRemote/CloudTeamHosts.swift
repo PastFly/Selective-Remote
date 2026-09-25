@@ -82,7 +82,9 @@ enum SelectiveRemoteTeamHostMaterializer {
             else { throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord }
 
             var input: ConnectionProfile
-            let keys = Set(data.keys)
+            guard let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) else {
+                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
+            }
             let structuralKeys = keys.subtracting(organizationKeys)
             if structuralKeys == browserKeys {
                 input = try browserProfile(
@@ -151,15 +153,13 @@ enum SelectiveRemoteTeamHostMaterializer {
     ) throws -> [UUID: SelectiveRemoteTeamHostCredentials] {
         var result: [UUID: SelectiveRemoteTeamHostCredentials] = [:]
         for record in records where record.type == .credential {
-            guard case let .object(data) = record.data else {
-                throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
-            }
-            // Standalone Team Credentials belong to the credential projection. They are
-            // intentionally independent from the credential envelopes linked to Team Hosts.
-            if Set(data.keys) == Set(["title", "username", "secret"])
-                || Set(data.keys) == Set(["title", "username", "secret", "folder", "tags"])
-            { continue }
-            guard Set(data.keys) == Set(["title", "username", "secret", "kind", "sourceID"]),
+            // Only an explicit sourceID makes a Credential part of the Host
+            // projection. Standalone Credential shapes are validated by their own
+            // projection and must never hide otherwise valid Hosts.
+            guard case let .object(data) = record.data,
+                  data["sourceID"] != nil else { continue }
+            guard SelectiveRemoteVaultBrowserMetadata.coreKeys(data)
+                    == Set(["title", "username", "secret", "kind", "sourceID"]),
                   let source = string(data["sourceID"]),
                   let sourceID = UUID(uuidString: source),
                   sourceID.isSelectiveRemoteCloudUUID,
@@ -274,6 +274,8 @@ enum SelectiveRemoteTeamHostMaterializer {
               !input.gatewayHost.contains(where: { $0.isNewline }),
               !input.gatewayUsername.contains(where: { $0.isNewline }),
               validOptionalName(input.group),
+              input.folderOrderPath.count <= SelectiveRemoteHostFolderPath.maximumDepth,
+              input.folderOrderPath.allSatisfy({ (0 ... 10_000).contains($0) }),
               input.tags.count <= 64,
               Set(input.tags).count == input.tags.count,
               input.tags.allSatisfy(validTag),
@@ -360,6 +362,7 @@ enum SelectiveRemoteTeamHostMaterializer {
         safe.operatingSystemDetectedAt = nil
         safe.group = input.group
         safe.sortIndex = input.sortIndex
+        safe.folderOrderPath = input.folderOrderPath
         safe.tags = input.tags
         safe.profileDescription = input.profileDescription
         safe.createdAt = Date(timeIntervalSince1970: 0)
@@ -367,11 +370,11 @@ enum SelectiveRemoteTeamHostMaterializer {
         return safe
     }
 
-    private static func exportedAddress(_ profile: ConnectionProfile) -> String {
+    fileprivate static func exportedAddress(_ profile: ConnectionProfile) -> String {
         profile.connectionType == .serial ? profile.serialDevicePath : profile.host
     }
 
-    private static func exportedTitle(_ profile: ConnectionProfile, address: String) -> String {
+    fileprivate static func exportedTitle(_ profile: ConnectionProfile, address: String) -> String {
         let normalized = profile.friendlyName.trimmingCharacters(in: .whitespacesAndNewlines)
         return String((normalized.isEmpty ? address : normalized).prefix(120))
     }
@@ -469,6 +472,103 @@ struct SelectiveRemoteTeamHostMaterializationIssue: Identifiable, Equatable {
     let vaultName: String?
     let category: Category
     let lastAttempt: Date
+    let safeDiagnostic: String?
+}
+
+enum SelectiveRemoteTeamHostShapeDiagnostic {
+    // Only fixed schema field names and aggregate statuses leave this method. Never
+    // include record values, record IDs, unknown field names, or decoded profiles.
+    private static let knownFields: Set<String> = [
+        "title", "address", "username", "connectionType", "profile",
+        "folder", "tags", "description", "port", "protocol",
+        "secret", "kind", "sourceID", "favorite"
+    ]
+    private static let hostCore: Set<String> = ["title", "address"]
+    private static let nativeCore: Set<String> = [
+        "title", "address", "username", "connectionType", "profile"
+    ]
+    private static let organization: Set<String> = ["folder", "tags", "description"]
+
+    static func describe(_ snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot) -> String {
+        guard let document = try? SelectiveRemoteVaultDocument.decode(snapshot.payload) else {
+            return "Vault document: schema/record decode failed; no record values shown"
+        }
+        let hosts = document.records.filter { $0.type == .host }
+        let credentials = document.records.filter { $0.type == .credential }
+        let snippets = document.records.filter { $0.type == .snippet }
+        var lines = [
+            "Vault schema v\(SelectiveRemoteVaultDocument.schemaVersion); Host records: \(hosts.count); Credential records: \(credentials.count); Snippet records: \(snippets.count)"
+        ]
+        for (index, record) in hosts.prefix(8).enumerated() {
+            lines.append(recordLine(record, label: "Host \(index + 1)"))
+        }
+        for (index, record) in credentials.prefix(8).enumerated() {
+            lines.append(recordLine(record, label: "Credential \(index + 1)"))
+        }
+        if hosts.count > 8 || credentials.count > 8 {
+            lines.append("Additional records omitted")
+        }
+        lines.append("Snippet projection: \((try? SelectiveRemoteTeamSnippetMaterializer.materialize(snapshot)) != nil ? "readable" : "invalid")")
+        lines.append("Credential projection: \((try? SelectiveRemoteTeamCredentialMaterializer.materialize(snapshot)) != nil ? "readable" : "invalid or Host dependent")")
+        return lines.joined(separator: "\n")
+    }
+
+    private static func recordLine(_ record: SelectiveRemoteVaultRecord, label: String) -> String {
+        guard case let .object(data) = record.data else {
+            return "\(label): data is not an object"
+        }
+        let allKeys = Set(data.keys)
+        let keys = SelectiveRemoteVaultBrowserMetadata.coreKeys(data) ?? allKeys
+        let visible = allKeys.intersection(knownFields).sorted().joined(separator: ", ")
+        let unknownCount = allKeys.subtracting(knownFields).count
+        let shape: String
+        var validation = ""
+        if data["favorite"] != nil,
+           SelectiveRemoteVaultBrowserMetadata.coreKeys(data) == nil {
+            validation = "favorite metadata has invalid type"
+        }
+        if record.type == .host {
+            let core = keys.subtracting(organization)
+            if core == hostCore { shape = "browser" }
+            else if core == nativeCore { shape = "native" }
+            else { shape = "unsupported" }
+            if core == nativeCore {
+                if case let .string(encoded)? = data["profile"],
+                   encoded.utf8.count <= 512_000,
+                   let profileData = Data(selectiveRemoteBase64URL: encoded) {
+                    let decoder = JSONDecoder()
+                    decoder.dateDecodingStrategy = .iso8601
+                    if let profile = try? decoder.decode(ConnectionProfile.self, from: profileData) {
+                        var mismatches: [String] = []
+                        if profile.id != record.id { mismatches.append("identity") }
+                        if case let .string(type)? = data["connectionType"],
+                           type != profile.connectionType.rawValue { mismatches.append("connectionType") }
+                        if case let .string(username)? = data["username"],
+                           username != profile.username { mismatches.append("username") }
+                        if case let .string(address)? = data["address"] {
+                            if address != SelectiveRemoteTeamHostMaterializer.exportedAddress(profile) {
+                                mismatches.append("address")
+                            }
+                            if case let .string(title)? = data["title"],
+                               title != SelectiveRemoteTeamHostMaterializer.exportedTitle(profile, address: address) {
+                                mismatches.append("title")
+                            }
+                        }
+                        validation = mismatches.isEmpty ? "profile outer fields match"
+                            : "profile outer-field mismatch: \(mismatches.joined(separator: ", "))"
+                    } else {
+                        validation = "profile JSON decode failed"
+                    }
+                } else {
+                    validation = "profile base64 decode failed"
+                }
+            }
+        } else {
+            shape = keys.contains("sourceID") ? "Host-linked" : "standalone"
+        }
+        let suffix = validation.isEmpty ? "" : "; \(validation)"
+        return "\(label): \(shape) shape; fields: [\(visible)]; unknown fields: \(unknownCount); version entries: \(record.version.counters.count)\(suffix)"
+    }
 }
 
 enum SelectiveRemoteTeamHostWarningCopy {
@@ -596,7 +696,8 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
                     teamName: safeName(snapshot.teamName),
                     vaultName: safeName(snapshot.vaultName),
                     category: category,
-                    lastAttempt: now
+                    lastAttempt: now,
+                    safeDiagnostic: SelectiveRemoteTeamHostShapeDiagnostic.describe(snapshot)
                 ))
             }
         }
@@ -631,6 +732,7 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
     case nameAscending
     case nameDescending
     case address
+    case vault
 
     var id: String { rawValue }
 
@@ -640,11 +742,275 @@ enum SelectiveRemoteTeamHostSortMode: String, CaseIterable, Identifiable {
         case .nameAscending: UpdateLocalization.text(ru: "Название: А–Я", en: "Name: A–Z")
         case .nameDescending: UpdateLocalization.text(ru: "Название: Я–А", en: "Name: Z–A")
         case .address: UpdateLocalization.text(ru: "Адрес", en: "Address")
+        case .vault: UpdateLocalization.text(ru: "Хранилище", en: "Vault")
+        }
+    }
+
+    func comesBefore(_ lhs: SelectiveRemoteTeamHost, _ rhs: SelectiveRemoteTeamHost) -> Bool {
+        switch self {
+        case .manual:
+            if lhs.profile.sortIndex != rhs.profile.sortIndex {
+                return lhs.profile.sortIndex < rhs.profile.sortIndex
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameAscending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .nameDescending:
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedDescending
+        case .address:
+            let addressOrder = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
+            if addressOrder != .orderedSame {
+                return addressOrder == .orderedAscending
+            }
+            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            ) == .orderedAscending
+        case .vault:
+            let vaultOrder = lhs.vaultName.localizedCaseInsensitiveCompare(rhs.vaultName)
+            if vaultOrder != .orderedSame {
+                return vaultOrder == .orderedAscending
+            }
+            if lhs.vaultID != rhs.vaultID {
+                return lhs.vaultID.uuidString < rhs.vaultID.uuidString
+            }
+            let hostOrder = lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
+                rhs.profile.friendlyName
+            )
+            return hostOrder == .orderedSame
+                ? lhs.recordID.uuidString < rhs.recordID.uuidString
+                : hostOrder == .orderedAscending
+        }
+    }
+}
+
+enum SelectiveRemoteTeamHostVaultFilter {
+    static let preferenceKey = "SelectiveRemote.team-host.vault-filter.v1"
+
+    static func key(for vault: SelectiveRemoteTeamHostVaultContext) -> String {
+        SelectiveRemoteTeamVaultFilterState.key(for: vault)
+    }
+
+    static func key(for host: SelectiveRemoteTeamHost) -> String {
+        SelectiveRemoteTeamVaultFilterState.key(teamID: host.teamID, vaultID: host.vaultID)
+    }
+
+    static func decode(_ raw: String) -> Set<String> {
+        SelectiveRemoteTeamVaultFilterState.decode(raw)
+    }
+
+    static func encode(_ keys: Set<String>) -> String {
+        SelectiveRemoteTeamVaultFilterState.encode(keys)
+    }
+
+    static func effectiveKeys(
+        raw: String, available: [SelectiveRemoteTeamHostVaultContext]
+    ) -> Set<String> {
+        SelectiveRemoteTeamVaultFilterState.effectiveKeys(raw: raw, available: available)
+    }
+
+    static func includes(_ host: SelectiveRemoteTeamHost, selected: Set<String>) -> Bool {
+        SelectiveRemoteTeamVaultFilterState.includes(
+            teamID: host.teamID, vaultID: host.vaultID, selected: selected
+        )
+    }
+
+    static func search(
+        _ vaults: [SelectiveRemoteTeamHostVaultContext], query: String
+    ) -> [SelectiveRemoteTeamHostVaultContext] {
+        SelectiveRemoteTeamVaultFilterState.search(vaults, query: query)
+    }
+
+    static func selectAllFiltered(
+        raw: String, vaults: [SelectiveRemoteTeamHostVaultContext]
+    ) -> String {
+        SelectiveRemoteTeamVaultFilterState.selectAllFiltered(raw: raw, vaults: vaults)
+    }
+
+    static func toggle(raw: String, key: String) -> String {
+        SelectiveRemoteTeamVaultFilterState.toggle(raw: raw, key: key)
+    }
+
+    static func clearAll() -> String { SelectiveRemoteTeamVaultFilterState.clearAll() }
+}
+
+struct SelectiveRemoteTeamVaultFilterControl<Vault: SelectiveRemoteTeamVaultFilterItem>: View {
+    let vaults: [Vault]
+    @Binding var rawSelection: String
+    @State private var isPresented = false
+    @State private var searchText = ""
+    @FocusState private var searchFocused: Bool
+    @FocusState private var focusedVaultKey: String?
+
+    private var selectedKeys: Set<String> {
+        SelectiveRemoteTeamVaultFilterState.effectiveKeys(raw: rawSelection, available: vaults)
+    }
+
+    private var filteredVaults: [Vault] {
+        SelectiveRemoteTeamVaultFilterState.search(vaults, query: searchText)
+    }
+
+    private var filteredKeys: [String] {
+        filteredVaults.map {
+            SelectiveRemoteTeamVaultFilterState.key(
+                teamID: $0.teamID, vaultID: $0.vaultID
+            )
+        }
+    }
+
+    private func moveFocus(_ direction: SelectiveRemoteTeamVaultFilterState.FocusDirection) {
+        if let next = SelectiveRemoteTeamVaultFilterState.nextFocus(
+            current: focusedVaultKey, keys: filteredKeys, direction: direction
+        ) {
+            focusedVaultKey = next
+        } else {
+            focusedVaultKey = nil
+            searchFocused = true
+        }
+    }
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "line.3.horizontal.decrease")
+                if !selectedKeys.isEmpty {
+                    Text("\(selectedKeys.count)")
+                        .font(.caption.bold())
+                }
+            }
+        }
+        .buttonStyle(.bordered)
+        .fixedSize()
+        .help(UpdateLocalization.text(ru: "Фильтр Team Vault", en: "Filter Team Vaults"))
+        .accessibilityLabel(selectedKeys.isEmpty
+            ? UpdateLocalization.text(ru: "Все Vault", en: "All Vaults")
+            : UpdateLocalization.text(ru: "Выбрано Vault: \(selectedKeys.count)",
+                                      en: "Vaults selected: \(selectedKeys.count)"))
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(UpdateLocalization.text(ru: "Хранилища Team", en: "Team Vaults"))
+                    .font(.headline)
+                TextField(
+                    UpdateLocalization.text(ru: "Поиск Vault", en: "Search Vaults"),
+                    text: $searchText
+                )
+                .textFieldStyle(.roundedBorder)
+                .focused($searchFocused)
+                .onKeyPress(.downArrow) {
+                    moveFocus(.down)
+                    return .handled
+                }
+                .onKeyPress(.escape) {
+                    isPresented = false
+                    return .handled
+                }
+
+                Button {
+                    rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
+                } label: {
+                    Label(
+                        UpdateLocalization.text(ru: "Все Vault", en: "All Vaults"),
+                        systemImage: selectedKeys.isEmpty ? "checkmark.circle.fill" : "circle"
+                    )
+                }
+                .buttonStyle(.plain)
+
+                Divider()
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 3) {
+                        ForEach(filteredVaults) { vault in
+                            let key = SelectiveRemoteTeamVaultFilterState.key(for: vault)
+                            Button {
+                                rawSelection = SelectiveRemoteTeamVaultFilterState.toggle(
+                                    raw: rawSelection, key: key
+                                )
+                            } label: {
+                                HStack(spacing: 9) {
+                                    Image(systemName: selectedKeys.contains(key)
+                                          ? "checkmark.square.fill" : "square")
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(vault.vaultName).fontWeight(.medium)
+                                        Text(vault.teamName)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, 5)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("\(vault.teamName) / \(vault.vaultName)")
+                            .accessibilityValue(selectedKeys.contains(key)
+                                ? UpdateLocalization.text(ru: "Выбрано", en: "Selected")
+                                : UpdateLocalization.text(ru: "Не выбрано", en: "Not selected"))
+                            .focused($focusedVaultKey, equals: key)
+                            .onKeyPress(.upArrow) {
+                                moveFocus(.up)
+                                return .handled
+                            }
+                            .onKeyPress(.downArrow) {
+                                moveFocus(.down)
+                                return .handled
+                            }
+                            .onKeyPress(.escape) {
+                                isPresented = false
+                                return .handled
+                            }
+                        }
+                    }
+                }
+                .frame(height: 260)
+
+                HStack {
+                    Text(UpdateLocalization.text(
+                        ru: "Выбрано: \(selectedKeys.count)",
+                        en: "Selected: \(selectedKeys.count)"
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    Spacer()
+                    Button(UpdateLocalization.text(ru: "Очистить", en: "Clear All")) {
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearAll()
+                    }
+                    .disabled(SelectiveRemoteTeamVaultFilterState.decode(rawSelection).isEmpty)
+                }
+                HStack {
+                    Button(UpdateLocalization.text(ru: "Выбрать найденные", en: "Select All Filtered")) {
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.selectAllFiltered(
+                            raw: rawSelection, vaults: filteredVaults
+                        )
+                    }
+                    .disabled(filteredVaults.isEmpty)
+                    Button(UpdateLocalization.text(ru: "Очистить найденные", en: "Clear Filtered")) {
+                        rawSelection = SelectiveRemoteTeamVaultFilterState.clearFiltered(
+                            raw: rawSelection, vaults: filteredVaults
+                        )
+                    }
+                    .disabled(filteredKeys.allSatisfy { !selectedKeys.contains($0) })
+                    Spacer(minLength: 0)
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .frame(width: 360)
+            .onAppear { searchFocused = true }
         }
     }
 }
 
 enum SelectiveRemoteTeamHostRequestedAction: Equatable {
+    case create
+    case createFolder
+    case duplicate
     case edit
     case delete
     case personalSettings
@@ -726,6 +1092,13 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
                         issue.category, english: UpdateLocalization.usesEnglish
                     ))
                     .foregroundStyle(.secondary)
+                    if let diagnostic = issue.safeDiagnostic {
+                        Text(diagnostic)
+                            .font(.caption.monospaced())
+                            .textSelection(.enabled)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel(diagnostic)
+                    }
                     Text(UpdateLocalization.text(
                         ru: "Последняя попытка: \(UpdateLocalization.dateTime(issue.lastAttempt))",
                         en: "Last attempt: \(UpdateLocalization.dateTime(issue.lastAttempt))"
@@ -767,6 +1140,8 @@ struct SelectiveRemoteTeamHostsView: View {
     @State private var mutationMessage: SelectiveRemoteTeamHostMutationMessage?
     @State private var teamHostDropTargetID: String?
     @State private var selectedFolder = ""
+    @State private var newFolderName = ""
+    @State private var showsFolderCreator = false
     @AppStorage("SelectiveRemote.team-host.navigator-visible.v1")
     private var hostNavigatorVisible = true
     @AppStorage("SelectiveRemote.team-host.detail-visible.v1")
@@ -775,6 +1150,8 @@ struct SelectiveRemoteTeamHostsView: View {
     private var displayMode = ProfileCollectionDisplayMode.list
     @AppStorage("SelectiveRemote.team-host.sort-mode.v1")
     private var sortMode = SelectiveRemoteTeamHostSortMode.manual
+    @AppStorage(SelectiveRemoteTeamHostVaultFilter.preferenceKey)
+    private var selectedVaultsRaw = ""
     @State private var expandedTeamIDs = Set(
         (UserDefaults.standard.stringArray(
             forKey: "SelectiveRemote.team-host.expanded-teams.v1"
@@ -817,8 +1194,17 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private var folderNames: [String] {
-        Array(Set(store.hosts.map { $0.profile.group }))
+        Array(Set(vaultFilteredHosts.map { $0.profile.group }))
             .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
+    }
+
+    private var vaultFilteredHosts: [SelectiveRemoteTeamHost] {
+        let selected = SelectiveRemoteTeamHostVaultFilter.effectiveKeys(
+            raw: selectedVaultsRaw, available: store.vaults
+        )
+        return store.hosts.filter {
+            SelectiveRemoteTeamHostVaultFilter.includes($0, selected: selected)
+        }
     }
 
     private var teamIDs: [UUID] {
@@ -835,8 +1221,9 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func folders(in teamID: UUID) -> [String] {
-        Array(Set(visibleHosts.filter { $0.teamID == teamID }.map { $0.profile.group }))
-            .sorted { folderTitle($0).localizedCaseInsensitiveCompare(folderTitle($1)) == .orderedAscending }
+        SelectiveRemoteHostFolderOrganizer.visibleFolderPaths(
+            profiles: visibleHosts.filter { $0.teamID == teamID }.map(\.profile)
+        )
     }
 
     private func outlineItems(in teamID: UUID) -> [SelectiveRemoteTeamHostOutlineItem] {
@@ -849,7 +1236,7 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private var visibleHosts: [SelectiveRemoteTeamHost] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        return store.hosts.filter { host in
+        return vaultFilteredHosts.filter { host in
             (selectedFolder.isEmpty || host.profile.group == selectedFolder)
                 && (query.isEmpty || [
                     host.profile.friendlyName,
@@ -865,8 +1252,14 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     var body: some View {
-        HSplitView {
-            if hostNavigatorVisible {
+        GeometryReader { available in
+          let catalogVisible = SelectiveRemoteHostCatalogLayout.showsCatalog(
+              preference: hostNavigatorVisible,
+              availableWidth: available.size.width,
+              detailVisible: hostDetailVisible
+          )
+          HSplitView {
+            if catalogVisible {
                 VStack(spacing: 0) {
                     HStack(spacing: 12) {
                         ZStack {
@@ -949,6 +1342,19 @@ struct SelectiveRemoteTeamHostsView: View {
                                 en: "Unlock the app and wait for a safe Team Vault sync."
                             ))
                         )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contextMenu { teamHostEmptySpaceContextMenu }
+                    } else if visibleHosts.isEmpty {
+                        ContentUnavailableView(
+                            UpdateLocalization.text(ru: "Team Hosts не найдены", en: "No Team Hosts Found"),
+                            systemImage: "line.3.horizontal.decrease",
+                            description: Text(UpdateLocalization.text(
+                                ru: "Измените поиск, папку или фильтр Vault.",
+                                en: "Change the search, folder or Vault filter."
+                            ))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .contextMenu { teamHostEmptySpaceContextMenu }
                     } else {
                         teamHostNavigatorCollection
                     }
@@ -1009,7 +1415,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 )
             }
 
-            if hostDetailVisible {
+            if hostDetailVisible || !hostNavigatorVisible {
                 Group {
                     if let host = selectedHost {
                         hostDetail(host)
@@ -1020,11 +1426,22 @@ struct SelectiveRemoteTeamHostsView: View {
                         )
                     }
                 }
-                .frame(minWidth: 480, maxWidth: .infinity, maxHeight: .infinity)
+                .frame(
+                    minWidth: SelectiveRemoteSplitColumnLayout.detailMinimumWidth(
+                        preferred: 480,
+                        availableWidth: available.size.width,
+                        leadingVisible: catalogVisible,
+                        leadingMinimumWidth: 290
+                    ),
+                    maxWidth: .infinity, maxHeight: .infinity
+                )
                 .overlay(alignment: .topLeading) {
-                    if !hostNavigatorVisible {
+                    if !hostNavigatorVisible || available.size.width < 760 {
                         Button {
                             hostNavigatorVisible = true
+                            if available.size.width < 760 {
+                                hostDetailVisible = false
+                            }
                         } label: {
                             Label(
                                 UpdateLocalization.text(ru: "Team Hosts", en: "Team Hosts"),
@@ -1041,6 +1458,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     }
                 }
             }
+          }
         }
         .onAppear {
             normalizeSelection()
@@ -1049,6 +1467,11 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .onChange(of: requestedAction) { _, _ in
             handleRequestedAction()
+        }
+        .onChange(of: selectedVaultsRaw) { _, _ in
+            if !selectedFolder.isEmpty && !folderNames.contains(selectedFolder) {
+                selectedFolder = ""
+            }
         }
         .onChange(of: store.hosts.map { "\($0.id.uuidString):\($0.profile.group)" }) { _, _ in
             normalizeSelection()
@@ -1077,6 +1500,30 @@ struct SelectiveRemoteTeamHostsView: View {
                     selectedRecordID: profile.id
                 )
             }
+        }
+        .sheet(isPresented: $showsFolderCreator) {
+            VStack(alignment: .leading, spacing: 14) {
+                Label(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus")
+                    .font(.title2.bold())
+                Text(UpdateLocalization.text(
+                    ru: "Выбранный Team Host будет перемещён в новую папку этого Vault.",
+                    en: "The selected Team Host will move into a new folder in this Vault."
+                ))
+                .foregroundStyle(.secondary)
+                TextField(UpdateLocalization.text(ru: "Название папки", en: "Folder Name"), text: $newFolderName)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button(UpdateLocalization.text(ru: "Отмена", en: "Cancel")) { showsFolderCreator = false }
+                    Button(UpdateLocalization.text(ru: "Создать и переместить", en: "Create and Move")) {
+                        createFolderForSelectedHost()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(SelectiveRemoteHostFolderPath.normalize(newFolderName).isEmpty)
+                }
+            }
+            .padding(24)
+            .frame(minWidth: 440)
         }
         .sheet(item: $personalSettingsHost, onDismiss: resetConnectionFields) { host in
             SelectiveRemoteTeamHostPersonalSettingsView(
@@ -1163,6 +1610,7 @@ struct SelectiveRemoteTeamHostsView: View {
             .labelsHidden()
 
             HStack(spacing: 8) {
+            SelectiveRemoteMeasuredPriorityToolbar {
                 HStack(spacing: 7) {
                     Image(systemName: "magnifyingglass")
                         .foregroundStyle(.secondary)
@@ -1185,7 +1633,8 @@ struct SelectiveRemoteTeamHostsView: View {
                 .padding(.horizontal, 10)
                 .frame(minHeight: 32)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 9))
-
+            } controls: {
+              HStack(spacing: 8) {
                 Menu {
                     ForEach(writableVaults) { vault in
                         Button("\(vault.teamName) / \(vault.vaultName)") {
@@ -1222,6 +1671,75 @@ struct SelectiveRemoteTeamHostsView: View {
                     ru: "Сортировка Team Hosts",
                     en: "Sort Team Hosts"
                 ))
+              }
+            } priority: {
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(writableVaults) { vault in
+                            Button("\(vault.teamName) / \(vault.vaultName)") {
+                                editorRequest = .init(context: vault, host: nil)
+                            }
+                        }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(writableVaults.isEmpty || isMutating)
+                    ProfileCollectionDisplayModePicker(selection: $displayMode)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Сортировка Team Hosts", en: "Sort Team Hosts"))
+                }
+            } primary: {
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(writableVaults) { vault in
+                            Button("\(vault.teamName) / \(vault.vaultName)") {
+                                editorRequest = .init(context: vault, host: nil)
+                            }
+                        }
+                    } label: { SelectiveRemoteCompactAddMenuLabel() }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(writableVaults.isEmpty || isMutating)
+                    Menu {
+                        Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $displayMode) {
+                            ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                        Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                            ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle") }
+                    .menuStyle(.borderlessButton)
+                    .help(UpdateLocalization.text(ru: "Действия с Team Hosts", en: "Team Host actions"))
+                }
+            } overflow: {
+                Menu {
+                    if !writableVaults.isEmpty {
+                        Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                            ForEach(writableVaults) { vault in
+                                Button("\(vault.teamName) / \(vault.vaultName)") {
+                                    editorRequest = .init(context: vault, host: nil)
+                                }
+                            }
+                        }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Вид", en: "View"), selection: $displayMode) {
+                        ForEach(ProfileCollectionDisplayMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                    Picker(UpdateLocalization.text(ru: "Сортировка", en: "Sort"), selection: $sortMode) {
+                        ForEach(SelectiveRemoteTeamHostSortMode.allCases) { mode in Text(mode.title).tag(mode) }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .help(UpdateLocalization.text(ru: "Действия с Team Hosts", en: "Team Host actions"))
+            }
+            SelectiveRemoteTeamVaultFilterControl(
+                vaults: store.vaults, rawSelection: $selectedVaultsRaw
+            )
             }
         }
         .padding(.horizontal, 12)
@@ -1231,7 +1749,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ViewBuilder
     private var teamHostNavigatorCollection: some View {
         if displayMode == .list {
-            List(selection: $selectedHostID) {
+            List {
                 ForEach(teamIDs, id: \.self) { teamID in
                     DisclosureGroup(isExpanded: expansionBinding(for: teamID)) {
                         SelectiveRemotePersistentOutlineRows(
@@ -1246,35 +1764,48 @@ struct SelectiveRemoteTeamHostsView: View {
                                     path: path
                                 )
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                    .draggable(teamFolderDragValue(teamID: teamID, path: path))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
                                     .background {
                                         teamHostDropHighlight(for: targetID)
                                     }
-                                    .dropDestination(for: String.self) { values, _ in
+                                    .dropDestination(for: String.self) { values, location in
                                         setTeamHostDropTarget(nil)
-                                        return moveTeamHost(values, toFolder: path)
+                                        return moveTeamItem(
+                                            values, toFolder: path, targetTeamID: teamID,
+                                            beforeFolder: location.y < 12 ? path : nil
+                                        )
                                     } isTargeted: { isTargeted in
                                         setTeamHostDropTarget(isTargeted ? targetID : nil)
                                     }
                             case let .host(host):
                                 let targetID = teamHostHostDropTargetID(host.id)
-                                hostRow(host)
+                                SelectiveRemoteDraggableHostCard(
+                                    identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                    navigationScope: "team-catalog",
+                                    previewTitle: host.profile.friendlyName,
+                                    select: {
+                                        if selectedHostID != host.id { selectedHostID = host.id }
+                                    }
+                                ) {
+                                    hostRow(host)
+                                }
                                     .tag(host.id)
                                     .listRowBackground(Color.clear)
                                     .listRowSeparator(.hidden)
                                     .contentShape(Rectangle())
                                     .focusEffectDisabled()
                                     .contextMenu { teamHostContextMenu(host) }
-                                    .draggable("team-host:\(host.id.uuidString)")
                                     .overlay(alignment: .top) {
                                         teamHostInsertionIndicator(for: targetID)
                                     }
                                     .dropDestination(for: String.self) { values, _ in
                                         setTeamHostDropTarget(nil)
-                                        return moveTeamHost(
+                                        return moveTeamItem(
                                             values,
                                             toFolder: host.profile.group,
+                                            targetTeamID: teamID,
                                             before: host.id
                                         )
                                     } isTargeted: { isTargeted in
@@ -1293,7 +1824,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             }
                             .dropDestination(for: String.self) { values, _ in
                                 setTeamHostDropTarget(nil)
-                                return moveTeamHost(values, toFolder: "")
+                                return moveTeamItem(values, toFolder: "", targetTeamID: teamID)
                             } isTargeted: { isTargeted in
                                 setTeamHostDropTarget(isTargeted ? targetID : nil)
                             }
@@ -1302,6 +1833,7 @@ struct SelectiveRemoteTeamHostsView: View {
             }
             .listStyle(.sidebar)
             .id("team-host-list-\(displayMode.rawValue)-\(hostDetailVisible)")
+            .contextMenu { teamHostEmptySpaceContextMenu }
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16) {
@@ -1318,27 +1850,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
-                                .background {
-                                    teamHostDropHighlight(
-                                        for: teamHostFolderDropTargetID(
-                                            teamID: teamID,
-                                            path: folder
-                                        )
-                                    )
-                                }
-                                .dropDestination(for: String.self) { values, _ in
-                                    setTeamHostDropTarget(nil)
-                                    return moveTeamHost(values, toFolder: folder)
-                                } isTargeted: { isTargeted in
-                                    setTeamHostDropTarget(
-                                        isTargeted
-                                            ? teamHostFolderDropTargetID(
-                                                teamID: teamID,
-                                                path: folder
-                                            )
-                                            : nil
-                                    )
-                                }
+                                .draggable(teamFolderDragValue(teamID: teamID, path: folder))
 
                                 LazyVGrid(
                                     columns: [GridItem(.adaptive(minimum: 190), spacing: 10)],
@@ -1347,15 +1859,17 @@ struct SelectiveRemoteTeamHostsView: View {
                                     ForEach(visibleHosts.filter {
                                         $0.teamID == teamID && $0.profile.group == folder
                                     }) { host in
-                                        Button {
-                                            selectedHostID = host.id
-                                        } label: {
+                                        SelectiveRemoteDraggableHostCard(
+                                            identity: SelectiveRemoteHostDragIdentity.teamHost(host.id).value,
+                                            navigationScope: "team-catalog",
+                                            previewTitle: host.profile.friendlyName,
+                                            select: {
+                                                if selectedHostID != host.id { selectedHostID = host.id }
+                                            }
+                                        ) {
                                             teamHostGridCard(host)
                                         }
-                                        .buttonStyle(.plain)
-                                        .focusEffectDisabled()
                                         .contextMenu { teamHostContextMenu(host) }
-                                        .draggable("team-host:\(host.id.uuidString)")
                                         .overlay(alignment: .top) {
                                             teamHostInsertionIndicator(
                                                 for: teamHostHostDropTargetID(host.id)
@@ -1363,9 +1877,10 @@ struct SelectiveRemoteTeamHostsView: View {
                                         }
                                         .dropDestination(for: String.self) { values, _ in
                                             setTeamHostDropTarget(nil)
-                                            return moveTeamHost(
+                                            return moveTeamItem(
                                                 values,
                                                 toFolder: host.profile.group,
+                                                targetTeamID: teamID,
                                                 before: host.id
                                             )
                                         } isTargeted: { isTargeted in
@@ -1378,12 +1893,74 @@ struct SelectiveRemoteTeamHostsView: View {
                                     }
                                 }
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                            .background {
+                                teamHostDropHighlight(
+                                    for: teamHostFolderDropTargetID(
+                                        teamID: teamID, path: folder
+                                    )
+                                )
+                            }
+                            .dropDestination(for: String.self) { values, location in
+                                setTeamHostDropTarget(nil)
+                                return moveTeamItem(
+                                    values, toFolder: folder, targetTeamID: teamID,
+                                    beforeFolder: location.y < 12 ? folder : nil
+                                )
+                            } isTargeted: { isTargeted in
+                                setTeamHostDropTarget(
+                                    isTargeted
+                                        ? teamHostFolderDropTargetID(
+                                            teamID: teamID, path: folder
+                                        ) : nil
+                                )
+                            }
                         }
                     }
                 }
                 .padding(12)
             }
+            .contextMenu { teamHostEmptySpaceContextMenu }
         }
+    }
+
+    @ViewBuilder
+    private var teamHostEmptySpaceContextMenu: some View {
+        if !writableVaults.isEmpty && !isMutating {
+            Menu(UpdateLocalization.text(ru: "Новый Host", en: "New Host")) {
+                ForEach(writableVaults) { vault in
+                    Button("\(vault.teamName) / \(vault.vaultName)") {
+                        editorRequest = .init(context: vault, host: nil)
+                    }
+                }
+            }
+            if let host = selectedHost,
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
+                    newFolderName = ""
+                    showsFolderCreator = true
+                }
+            }
+        }
+    }
+
+    private func createFolderForSelectedHost() {
+        guard let host = selectedHost,
+              let context = context(for: host),
+              SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role),
+              !isMutating
+        else { return }
+        let component = SelectiveRemoteHostFolderPath.normalize(newFolderName)
+        guard !component.isEmpty else { return }
+        var profile = host.profile
+        profile.group = SelectiveRemoteHostFolderPath.normalize(
+            [selectedFolder, component].filter { !$0.isEmpty }.joined(separator: "/")
+        )
+        mutate(.organize([.init(recordID: host.recordID, profile: profile,
+                                expectedModifiedAt: host.modifiedAt)]),
+               context: context, selectedRecordID: host.recordID)
+        showsFolderCreator = false
     }
 
     private func teamHostGridCard(_ host: SelectiveRemoteTeamHost) -> some View {
@@ -1423,31 +2000,7 @@ struct SelectiveRemoteTeamHostsView: View {
         _ lhs: SelectiveRemoteTeamHost,
         _ rhs: SelectiveRemoteTeamHost
     ) -> Bool {
-        switch sortMode {
-        case .manual:
-            if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                return lhs.profile.sortIndex < rhs.profile.sortIndex
-            }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameAscending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        case .nameDescending:
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedDescending
-        case .address:
-            let addressOrder = lhs.address.localizedCaseInsensitiveCompare(rhs.address)
-            if addressOrder != .orderedSame {
-                return addressOrder == .orderedAscending
-            }
-            return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                rhs.profile.friendlyName
-            ) == .orderedAscending
-        }
+        sortMode.comesBefore(lhs, rhs)
     }
 
     private func handleRequestedAction() {
@@ -1457,6 +2010,21 @@ struct SelectiveRemoteTeamHostsView: View {
         selectedHostID = host.id
         hostDetailVisible = true
         switch request.action {
+        case .create:
+            if let context = context(for: host),
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
+                editorRequest = .newDraft(in: host.profile.group, context: context)
+            }
+        case .createFolder:
+            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                newFolderName = ""
+                showsFolderCreator = true
+            }
+        case .duplicate:
+            if let context = context(for: host),
+               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role) {
+                editorRequest = .duplicateDraft(profile: host.profile, context: context)
+            }
         case .edit:
             if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
                let context = context(for: host) {
@@ -1501,10 +2069,12 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .selectiveRemoteWorkspaceSurface(
             cornerRadius: 11,
             selected: selectedHostID == host.id
         )
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -1895,65 +2465,93 @@ struct SelectiveRemoteTeamHostsView: View {
         }
     }
 
-    private func moveTeamHost(
+    private func teamFolderDragValue(teamID: UUID, path: String) -> String {
+        guard !path.isEmpty else { return "" }
+        let vaults = Set(store.hosts.filter {
+            $0.teamID == teamID &&
+            ($0.profile.group == path || $0.profile.group.hasPrefix(path + "/"))
+        }.map(\.vaultID))
+        guard vaults.count == 1, let vaultID = vaults.first else { return "" }
+        return SelectiveRemoteHostDragIdentity.teamFolder(
+            vaultID: vaultID, path: path
+        ).value
+    }
+
+    private func moveTeamItem(
         _ values: [String],
         toFolder rawFolder: String,
+        targetTeamID: UUID,
+        beforeFolder: String? = nil,
         before targetID: UUID? = nil
     ) -> Bool {
+        guard !isMutating, let value = values.first else { return false }
+        if value.hasPrefix("team-folder:") {
+            let suffix = String(value.dropFirst("team-folder:".count))
+            guard suffix.count > 37,
+                  let vaultID = UUID(uuidString: String(suffix.prefix(36))),
+                  suffix[suffix.index(suffix.startIndex, offsetBy: 36)] == ":"
+            else { return false }
+            let source = String(suffix.dropFirst(37))
+            guard let host = store.hosts.first(where: {
+                $0.vaultID == vaultID && $0.teamID == targetTeamID
+                    && ($0.profile.group == source
+                        || $0.profile.group.hasPrefix(source + "/"))
+            }), let context = context(for: host),
+                  SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
+            else { return false }
+            let parent = beforeFolder == nil ? rawFolder
+                : rawFolder.split(separator: "/").dropLast().joined(separator: "/")
+            let scopedHosts = store.hosts.filter {
+                $0.teamID == host.teamID && $0.vaultID == vaultID
+            }
+            let paths = scopedHosts.map { $0.profile.group }
+            guard parent.isEmpty || paths.contains(where: {
+                $0 == parent || $0.hasPrefix(parent + "/")
+            }) else { return false }
+            guard let arranged = try? SelectiveRemoteHostFolderOrganizer.move(
+                profiles: scopedHosts.map(\.profile), folder: source,
+                toParent: parent, before: beforeFolder
+            ) else { return false }
+            let updates = zip(scopedHosts, arranged).compactMap { current, profile in
+                current.profile == profile ? nil
+                    : SelectiveRemoteTeamHostOrganizationUpdate(
+                        recordID: current.recordID, profile: profile,
+                        expectedModifiedAt: current.modifiedAt
+                    )
+            }
+            guard !updates.isEmpty else { return false }
+            sortMode = .manual
+            mutate(.organize(updates), context: context, selectedRecordID: host.recordID)
+            return true
+        }
         guard !isMutating,
-              let value = values.first,
               value.hasPrefix("team-host:"),
               let hostID = UUID(uuidString: String(value.dropFirst("team-host:".count))),
               let host = store.hosts.first(where: { $0.id == hostID }),
+              host.teamID == targetTeamID,
               let context = context(for: host),
               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: context.role)
         else { return false }
-
-        let folder = SelectiveRemoteHostFolderPath.normalize(rawFolder)
-        if targetID != nil {
-            sortMode = .manual
-        }
-        let scopedHosts = store.hosts.filter {
-            $0.teamID == host.teamID && $0.vaultID == host.vaultID
-        }
-        let grouped = Dictionary(grouping: scopedHosts) { candidate in
-            candidate.id == host.id
-                ? folder
-                : SelectiveRemoteHostFolderPath.normalize(candidate.profile.group)
-        }
-        var updates: [SelectiveRemoteTeamHostOrganizationUpdate] = []
-        for path in grouped.keys.sorted() {
-            var ordered = (grouped[path] ?? []).sorted { lhs, rhs in
-                if lhs.profile.sortIndex != rhs.profile.sortIndex {
-                    return lhs.profile.sortIndex < rhs.profile.sortIndex
-                }
-                return lhs.profile.friendlyName.localizedCaseInsensitiveCompare(
-                    rhs.profile.friendlyName
-                ) == .orderedAscending
+        guard let plan = SelectiveRemoteTeamHostMovePlan.make(
+            hosts: store.hosts, sourceID: hostID,
+            targetTeamID: targetTeamID, toFolder: rawFolder,
+            before: targetID
+        ) else {
+            if SelectiveRemoteTeamHostMovePlan.crossesVault(
+                hosts: store.hosts, sourceID: hostID,
+                targetTeamID: targetTeamID, toFolder: rawFolder,
+                before: targetID
+            ) {
+                mutationMessage = .init(text: UpdateLocalization.text(
+                    ru: "Папка находится в другом Team Vault. Перенос Host между Vaults не поддерживается.",
+                    en: "This folder is in another Team Vault. Moving a Host between Vaults is not supported."
+                ), isError: true)
             }
-            if path == folder,
-               let source = ordered.firstIndex(where: { $0.id == host.id }) {
-                let moving = ordered.remove(at: source)
-                let destination = targetID.flatMap { id in
-                    ordered.firstIndex(where: { $0.id == id })
-                } ?? ordered.endIndex
-                ordered.insert(moving, at: destination)
-            }
-            for (sortIndex, candidate) in ordered.enumerated() {
-                var profile = candidate.profile
-                profile.group = path
-                profile.sortIndex = sortIndex
-                guard profile.group != candidate.profile.group
-                        || profile.sortIndex != candidate.profile.sortIndex
-                else { continue }
-                updates.append(.init(
-                    recordID: candidate.recordID,
-                    profile: profile
-                ))
-            }
+            return false
         }
-        guard !updates.isEmpty else { return false }
-        mutate(.organize(updates), context: context, selectedRecordID: host.recordID)
+        sortMode = .manual
+        mutate(.organize(plan.updates), context: context,
+               selectedRecordID: plan.selectedRecordID)
         return true
     }
 

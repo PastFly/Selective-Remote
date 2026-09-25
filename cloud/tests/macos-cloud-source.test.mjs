@@ -237,10 +237,9 @@ test("macOS keeps Hosts navigation stable and gates Team UI behind a Cloud sessi
   assert.match(content, /private let secondaryMainAreas[\s\S]*\.sessionLogs/u);
   assert.match(content, /sidebarHostSearchBinding/u);
   assert.match(content, /SelectiveRemote\.sidebar-host-quick-access-visible\.v1/u);
-  assert.match(content, /SelectiveRemote\.sidebar-host-scope-picker-visible\.v1/u);
-  assert.match(content, /sidebarHostQuickAccessVisible && mainArea != \.hosts/u);
-  assert.match(content, /Показывать быстрый список Hosts/u);
-  assert.match(content, /Показывать Personal \/ Team/u);
+  assert.match(content, /private var showsHostQuickAccess: Bool \{\s*sidebarHostQuickAccessVisible\s*\}/u);
+  assert.match(content, /Показывать Host Shelf/u);
+  assert.match(content, /if showsHostQuickAccess \{[\s\S]*Picker\("", selection: \$hostScope\)/u);
   assert.match(content, /if cloudSessionAvailable \|\| !teamHosts\.hosts\.isEmpty/u);
   assert.match(content, /SelectiveRemoteCloudOnboardingSheet/u);
   assert.match(content, /personalHostsManagementDetail/u);
@@ -437,8 +436,9 @@ test("macOS Team Hosts expose nested shared folders, tags, filtering, and drag-a
   assert.match(hosts, /selectedFolder/u);
   assert.match(hosts, /SelectiveRemotePersistentOutlineRows\([\s\S]*outlineItems\(in: teamID\)/u);
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-folders\.v1/u);
-  assert.match(hosts, /\.draggable\("team-host:/u);
-  assert.match(hosts, /moveTeamHost/u);
+  assert.match(hosts, /identity: SelectiveRemoteHostDragIdentity\.teamHost\(host\.id\)\.value/u);
+  assert.match(hosts, /moveTeamItem/u);
+  assert.match(hosts, /SelectiveRemoteHostFolderOrganizer\.move/u);
   assert.match(tree, /SelectiveRemoteTeamHostOutlineItem/u);
   assert.match(tree, /"\\\(parent\)\/\\\(component\)"/u);
   assert.match(editor, /Теги через запятую/u);
@@ -559,8 +559,9 @@ test("macOS Personal Hosts use an unambiguous drag gesture and visible nested-fo
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamHostEditor.swift", sourceRoot), "utf8"),
   ]);
-  const personalRow = content.match(/\.tag\(item\.id\)[\s\S]*?\.draggable\("personal-host:/u)?.[0] ?? "";
-  assert.doesNotMatch(personalRow, /\.onTapGesture/u);
+  const personalDragSources = [...content.matchAll(/SelectiveRemoteHostDragIdentity\.personalHost\(item\.id\)\.value/gu)];
+  assert.ok(personalDragSources.length >= 2);
+  assert.match(content, /\.dropDestination\(for: String\.self\)/u);
   assert.match(content, /Новая папка для выбранного Host/u);
   assert.match(content, /Родительская папка/u);
   assert.match(content, /Работа\/Серверы\/Linux/u);
@@ -683,7 +684,7 @@ test("macOS Team Host second column exposes actions and visible drag-and-drop ta
   assert.match(hosts, /teamHostFolderDropTargetID/u);
   assert.match(hosts, /teamHostInsertionIndicator/u);
   assert.match(hosts, /isTargeted: \{ isTargeted in/u);
-  assert.match(hosts, /if targetID != nil \{[\s\S]*sortMode = \.manual/u);
+  assert.match(hosts, /private func moveTeamItem\([\s\S]*sortMode = \.manual/u);
 });
 
 test("macOS Team Snippets use a separate fail-closed memory-only projection", async () => {
@@ -735,7 +736,7 @@ test("macOS Team Credentials use the shared sync lifecycle and a separate memory
     readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
   ]);
   assert.match(credentials, /selective-remote\/team-credential\/v1/u);
-  assert.match(credentials, /let keys = Set\(data\.keys\)/u);
+  assert.match(credentials, /let keys = SelectiveRemoteVaultBrowserMetadata\.coreKeys\(data\)/u);
   assert.match(credentials, /keys == hostCredentialKeys/u);
   assert.match(credentials, /keys == credentialKeys/u);
   assert.match(credentials, /NSPasteboard\.general/u);
@@ -757,5 +758,6 @@ test("macOS Team Credentials use the shared sync lifecycle and a separate memory
   assert.match(vault, /SelectiveRemote\.credentials\.scope\.v1/u);
   assert.match(vault, /Picker\([\s\S]*CredentialVaultScope\.allCases/u);
   assert.match(vault, /SelectiveRemoteTeamCredentialsView\(store: teamCredentials\)/u);
-  assert.match(hosts, /Standalone Team Credentials belong to the credential projection/u);
+  assert.match(hosts, /Only an explicit sourceID makes a Credential part of the Host/u);
+  assert.match(hosts, /data\["sourceID"\] != nil else \{ continue \}/u);
 });

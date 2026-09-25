@@ -22,19 +22,24 @@ struct PortForwardingView: View {
             if currentProfile.portForwards.isEmpty {
                 emptyState
             } else {
-                HSplitView {
-                    ruleList
-                        .frame(minWidth: 280, idealWidth: 330, maxWidth: 420)
-
-                    if let rule = selectedRule {
-                        ruleInspector(rule)
-                            .frame(minWidth: 520)
+                GeometryReader { available in
+                    if AdaptiveWorkspaceLayout.usesStackedProfileForwarding(
+                        width: available.size.width
+                    ) {
+                        VStack(spacing: 0) {
+                            ruleList
+                                .frame(height: min(220, available.size.height * 0.35))
+                            Divider()
+                            forwardingDetail
+                                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
                     } else {
-                        ContentUnavailableView(
-                            "Выберите туннель",
-                            systemImage: "point.3.connected.trianglepath.dotted"
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        HSplitView {
+                            ruleList
+                                .frame(minWidth: 280, idealWidth: 330, maxWidth: 420)
+                            forwardingDetail
+                                .frame(minWidth: 520)
+                        }
                     }
                 }
             }
@@ -50,6 +55,19 @@ struct PortForwardingView: View {
         }
     }
 
+    @ViewBuilder
+    private var forwardingDetail: some View {
+        if let rule = selectedRule {
+            ruleInspector(rule)
+        } else {
+            ContentUnavailableView(
+                "Выберите туннель",
+                systemImage: "point.3.connected.trianglepath.dotted"
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
     private var emptyState: some View {
         VStack(spacing: 18) {
             ContentUnavailableView(
@@ -61,8 +79,14 @@ struct PortForwardingView: View {
             )
 
             addTunnelMenu
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "profile-tunnels.create"))
+#endif
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+#if DEBUG
+        .background(SelectiveRemoteLayoutProbe(name: "profile-tunnels.empty"))
+#endif
     }
 
     private var addTunnelMenu: some View {
@@ -79,6 +103,7 @@ struct PortForwardingView: View {
             Label("Новый туннель", systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var ruleList: some View {

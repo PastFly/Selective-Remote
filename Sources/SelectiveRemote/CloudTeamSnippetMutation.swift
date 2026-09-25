@@ -120,7 +120,8 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             body: body,
             folder: folder,
             deviceID: deviceID,
-            modifiedAt: modifiedAt
+            modifiedAt: modifiedAt,
+            previous: existing
         )
         return try .init(
             records: document.records.map { $0.id == recordID ? replacement : $0 },
@@ -160,7 +161,8 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
         body: String,
         folder: String,
         deviceID: UUID,
-        modifiedAt: String
+        modifiedAt: String,
+        previous: SelectiveRemoteVaultRecord? = nil
     ) throws -> SelectiveRemoteVaultRecord {
         guard validTitle(title), validBody(body), validFolder(folder) else {
             throw SelectiveRemoteTeamSnippetMutationError.invalidSnippet
@@ -171,11 +173,11 @@ enum SelectiveRemoteTeamSnippetDocumentMutation {
             version: try priorVersion?.incrementing(deviceID)
                 ?? SelectiveRemoteVaultVersion([deviceID: 1]),
             modifiedAt: modifiedAt,
-            data: .object([
+            data: SelectiveRemoteVaultBrowserMetadata.preservingFavorite(in: .object([
                 "title": .string(title),
                 "body": .string(body),
                 "folder": .string(folder)
-            ])
+            ]), from: previous)
         )
     }
 

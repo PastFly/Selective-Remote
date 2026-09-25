@@ -784,6 +784,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     var friendlyName: String
     var group: String
     var sortIndex: Int
+    var folderOrderPath: [Int]
     var tags: [String]
     var profileDescription: String
     var detectedOperatingSystem: String
@@ -870,6 +871,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         }
         group = ""
         sortIndex = 0
+        folderOrderPath = []
         tags = []
         profileDescription = ""
         detectedOperatingSystem = ""
@@ -943,7 +945,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, connectionType, friendlyName, group, sortIndex, tags, profileDescription
+        case id, connectionType, friendlyName, group, sortIndex, folderOrderPath, tags, profileDescription
         case detectedOperatingSystem, detectedOperatingSystemID
         case detectedOperatingSystemLike, operatingSystemDetectedAt
         case host, username
@@ -979,6 +981,8 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         group = try container.decodeIfPresent(String.self, forKey: .group) ?? defaults.group
         sortIndex = try container.decodeIfPresent(Int.self, forKey: .sortIndex)
             ?? defaults.sortIndex
+        folderOrderPath = try container.decodeIfPresent([Int].self, forKey: .folderOrderPath)
+            ?? defaults.folderOrderPath
         tags = try container.decodeIfPresent([String].self, forKey: .tags) ?? defaults.tags
         profileDescription = try container.decodeIfPresent(
             String.self,
@@ -1162,6 +1166,7 @@ struct ConnectionProfile: Codable, Equatable, Identifiable {
         try container.encode(friendlyName, forKey: .friendlyName)
         try container.encode(group, forKey: .group)
         try container.encode(sortIndex, forKey: .sortIndex)
+        try container.encode(folderOrderPath, forKey: .folderOrderPath)
         try container.encode(tags, forKey: .tags)
         try container.encode(profileDescription, forKey: .profileDescription)
         try container.encode(detectedOperatingSystem, forKey: .detectedOperatingSystem)

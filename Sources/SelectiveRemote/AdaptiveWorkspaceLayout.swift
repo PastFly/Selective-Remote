@@ -5,6 +5,7 @@ enum AdaptiveWorkspaceLayout {
     static let stackedSFTPPanesWidth: CGFloat = 1_100
     static let detailNavigationWidth: CGFloat = 1_180
     static let profileInspectorWidth: CGFloat = 1_120
+    static let profileForwardingSplitWidth: CGFloat = 280 + 520 + 2
 
     static func usesSingleColumnProfileEditor(width: CGFloat) -> Bool {
         width < singleColumnProfileWidth
@@ -24,5 +25,9 @@ enum AdaptiveWorkspaceLayout {
 
     static func showsProfileInspector(width: CGFloat) -> Bool {
         width >= profileInspectorWidth
+    }
+
+    static func usesStackedProfileForwarding(width: CGFloat) -> Bool {
+        width < profileForwardingSplitWidth
     }
 }

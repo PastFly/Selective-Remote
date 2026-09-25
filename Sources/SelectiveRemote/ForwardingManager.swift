@@ -503,10 +503,7 @@ struct ForwardingManagerView: View {
             header
             summary(snapshot, compact: compact)
             if compact {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    toolbar(items: items)
-                        .frame(minWidth: 760)
-                }
+                toolbar(items: items)
                 compactTunnelList(items: items, now: now)
             } else {
                 toolbar(items: items)
@@ -530,6 +527,9 @@ struct ForwardingManagerView: View {
             }
             Spacer()
             newTunnelMenu
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.create"))
+#endif
         }
     }
 
@@ -578,6 +578,7 @@ struct ForwardingManagerView: View {
             Label("Новый туннель", systemImage: "plus")
         }
         .buttonStyle(.borderedProminent)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func summary(
@@ -662,30 +663,81 @@ struct ForwardingManagerView: View {
     }
 
     private func toolbar(items: [ForwardingManagerItem]) -> some View {
+        ViewThatFits(in: .horizontal) {
+            toolbarRow(items: items, compact: false, minimum: false)
+            toolbarRow(items: items, compact: true, minimum: false)
+            toolbarRow(items: items, compact: true, minimum: false, hidesRestart: true)
+            toolbarRow(items: items, compact: true, minimum: true)
+        }
+        .controlSize(.small)
+#if DEBUG
+        .background(SelectiveRemoteLayoutProbe(name: "tunnels.toolbar"))
+#endif
+    }
+
+    private func toolbarRow(
+        items: [ForwardingManagerItem], compact: Bool, minimum: Bool,
+        hidesRestart: Bool = false
+    ) -> some View {
         let selected = selectedItem(from: items)
         return HStack(spacing: 8) {
             Button {
                 if let selected { start(selected) }
             } label: {
-                Label("Запустить", systemImage: "play.fill")
+                if compact { Image(systemName: "play.fill") }
+                else { Label("Запустить", systemImage: "play.fill") }
             }
             .disabled(selected?.state.canStart != true)
+            .help("Запустить")
+            .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.start"))
+#endif
 
-            Button {
-                if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
-            } label: {
-                Label("Остановить", systemImage: "stop.fill")
+            if !minimum {
+                Button {
+                    if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
+                } label: {
+                    if compact { Image(systemName: "stop.fill") }
+                    else { Label("Остановить", systemImage: "stop.fill") }
+                }
+                .disabled(selected?.state.canStop != true)
+                .help("Остановить")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.stop"))
+#endif
             }
-            .disabled(selected?.state.canStop != true)
 
-            Button {
-                if let selected { restart(selected) }
-            } label: {
-                Label("Перезапустить", systemImage: "arrow.clockwise")
+            if !minimum && !hidesRestart {
+                Button {
+                    if let selected { restart(selected) }
+                } label: {
+                    if compact { Image(systemName: "arrow.clockwise") }
+                    else { Label("Перезапустить", systemImage: "arrow.clockwise") }
+                }
+                .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
+                .help("Перезапустить")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.restart"))
+#endif
             }
-            .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
 
-            Menu("Ещё") {
+            Menu {
+                if minimum {
+                    Button("Остановить", systemImage: "stop.fill") {
+                        if let selected { model.stopSSHTunnel(selected.source.tunnelID) }
+                    }
+                    .disabled(selected?.state.canStop != true)
+                }
+                if minimum || hidesRestart {
+                    Button("Перезапустить", systemImage: "arrow.clockwise") {
+                        if let selected { restart(selected) }
+                    }
+                    .disabled(selected?.state.canRestart != true || selected?.state == .stopping)
+                    Divider()
+                }
                 if let selected {
                     Button("Open Terminal", systemImage: "terminal") {
                         onOpenTerminal(selected.connection)
@@ -715,10 +767,16 @@ struct ForwardingManagerView: View {
                     }
                     .disabled(!selected.state.canEdit)
                 }
+            } label: {
+                if compact { Image(systemName: "ellipsis.circle") }
+                else { Text("Ещё") }
             }
             .disabled(selected == nil)
-
-            Spacer(minLength: 12)
+            .help("Ещё")
+            .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.more"))
+#endif
 
             HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
@@ -736,23 +794,48 @@ struct ForwardingManagerView: View {
                 }
             }
             .padding(.horizontal, 9)
-            .frame(minWidth: 160, idealWidth: 220, maxWidth: 280, minHeight: 32)
+            .frame(minWidth: minimum ? 100 : compact ? 130 : 160,
+                   maxWidth: .infinity, minHeight: 32)
+            .layoutPriority(1)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(Color.primary.opacity(0.07))
             }
+#if DEBUG
+            .background(SelectiveRemoteLayoutProbe(name: "tunnels.search"))
+#endif
 
-            Picker("Фильтр", selection: $filter) {
-                ForEach(ForwardingManagerFilter.allCases) { option in
-                    Text(LocalizedStringKey(option.rawValue)).tag(option)
+            if compact {
+                Menu {
+                    Picker("Фильтр", selection: $filter) {
+                        ForEach(ForwardingManagerFilter.allCases) { option in
+                            Text(LocalizedStringKey(option.rawValue)).tag(option)
+                        }
+                    }
+                } label: {
+                    Image(systemName: "line.3.horizontal.decrease")
                 }
+                .help("Фильтр")
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.filter"))
+#endif
+            } else {
+                Picker("Фильтр", selection: $filter) {
+                    ForEach(ForwardingManagerFilter.allCases) { option in
+                        Text(LocalizedStringKey(option.rawValue)).tag(option)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(width: 230)
+                .fixedSize(horizontal: true, vertical: false)
+#if DEBUG
+                .background(SelectiveRemoteLayoutProbe(name: "tunnels.filter"))
+#endif
             }
-            .labelsHidden()
-            .pickerStyle(.segmented)
-            .frame(width: 230)
         }
-        .controlSize(.small)
     }
 
     private func compactTunnelList(
