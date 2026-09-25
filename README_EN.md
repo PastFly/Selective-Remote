@@ -1,274 +1,80 @@
 # Selective Remote
 
-**English** · [Русский](README.md)
+### Your infrastructure. One workspace.
 
-[![CI](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml/badge.svg)](https://github.com/PastFly/Selective-Remote/actions/workflows/ci.yml)
-[![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)](https://support.apple.com/macos)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Support the project](https://img.shields.io/badge/Support-project-ff5c8a?logo=githubsponsors&logoColor=white)](SUPPORT.md#english)
-[![Website](https://img.shields.io/badge/Website-Selective_Remote-2ea44f)](https://pastfly.github.io/Selective-Remote/)
-[![Telegram](https://img.shields.io/badge/Telegram-@SelectiveRemoteApp-229ED9?logo=telegram&logoColor=white)](https://t.me/SelectiveRemoteApp)
+[Русский](README.md) · **English**
 
-**Selective Remote** is a free, open-source RDP, SSH, Telnet, Serial, and SFTP client for macOS. It combines multi-monitor RDP with Retina support, an SSH Workspace, a local terminal, a shared Snippets library, dual-pane SFTP with Server → Server transfers, SSH port forwarding, diagnostics, SSH credential management, and encrypted backups in one app.
+A native Mac app that keeps connections, files, and commands together. Work across SSH, RDP, SFTP, and tunnels without losing context between tools.
 
-The project targets Apple Silicon and macOS 14+. The interface is available in English and Russian.
+**Current release: v0.31.0 (162)** · macOS 14+ · Apple Silicon · free and open source
 
-**Built for:** sysadmins, DevOps, homelabs, and anyone looking for an RDP client for macOS, SSH client for macOS, or SFTP client for macOS without switching between several apps.
+**[Download v0.31.0](https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0)** · [Website](https://pastfly.github.io/Selective-Remote/) · [Cloud](https://cloud.pastfly.ru/) · [Guides](https://pastfly.github.io/Selective-Remote/#guides)
 
-[Download the latest release](https://github.com/PastFly/Selective-Remote/releases/latest) · [Telegram channel](https://t.me/SelectiveRemoteApp) · [Project website](https://pastfly.github.io/Selective-Remote/) · [Русский README](README.md)
+> Every image below is a real capture of the **0.32.0 (163) candidate** with synthetic demo data. This interface has not been released; the available download is **v0.31.0 (162)**.
 
-## Main workspaces
+![Hosts workspace in the Selective Remote 0.32 candidate with synthetic demo hosts](docs/images/demo-032-en-hosts-hero.webp)
 
-### Profiles and tags
+## Connect. Organize. Work.
 
-Saved RDP, SSH, Telnet, and Serial connections support groups, favorites, and multiple custom tags per profile. Users create their own tags, can rename or delete them across every profile, and can use them in search and combined filtering. The connection catalog switches between list and grid presentation.
+- **Connect:** SSH and RDP on your chosen Mac displays; Telnet and Serial when needed.
+- **Organize:** profiles, groups, favorites, and tags keep infrastructure easy to find.
+- **Work:** Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app.
 
-### Connection Center
+Available now in **v0.31.0**: SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
 
-**Connection Center** presents the real state of active RDP, SSH, local Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
+### RDP across two or more displays
 
-![Connection Center](docs/images/connection-center.png)
+Choose which Mac displays show the remote desktop for each RDP profile: one, two, or more. Set the primary Windows monitor and arrange the virtual displays automatically or by hand. Your selection is saved with the profile. [Multi-monitor RDP guide](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html).
 
-### RDP
+![Real two-display RDP configuration in the Selective Remote 0.32 candidate with synthetic .example hosts](docs/images/demo-032-en-rdp-displays.webp)
 
-- SDL-FreeRDP with windowed mode and true macOS fullscreen;
-- Retina rendering without scaling the whole application window;
-- multi-monitor RDP across Retina and external displays;
-- manual monitor layout;
-- correct Windows taskbar visibility in fullscreen;
-- clipboard, audio, microphone, camera, printer, and folder redirection;
-- RDP Gateway;
-- Smart Reconnect after temporary network failures;
-- macOS-oriented Command, Option, and Fn behavior;
-- parallel RDP sessions for different profiles.
+### Terminal and commands
 
-### SSH Workspace
+Tabs and panes keep sessions close; Snippets store reusable commands. The local demo shell in this capture is intentionally stopped.
 
-The built-in SSH terminal uses the system `/usr/bin/ssh` and supports:
+![Selective Remote 0.32 candidate Terminal with a stopped demo shell](docs/images/demo-032-en-terminal.webp)
 
-- independent tabs and split/grid panes;
-- different servers in different tabs and panes;
-- persistent workspace layout;
-- command history, favorites, a built-in catalog, and suggestions;
-- automatically detected Server Commands for Linux, systemd, network, disk, and container tasks;
-- reconnect, duplicate, drag-and-drop ordering, and tab colors;
-- Broadcast Input with an explicit warning;
-- an action palette and quick SFTP handoff;
-- configurable terminal themes, fonts, text size, and cursor.
+### Files across Mac and servers
 
-In split/grid layouts, history, common commands, server commands, favorites, and Snippets share one full-size Inspector for the active pane.
+Dual-pane SFTP supports Mac ↔ Server and Server ↔ Server transfers. The capture shows only local test files; no server is connected.
 
-### Telnet and Serial
+![Selective Remote 0.32 candidate SFTP with local demo files and no server connection](docs/images/demo-032-en-sftp.webp)
 
-Telnet and Serial connections are created in the shared **Connections** catalog and open in the same Terminal Workspace with tabs, split/grid panes, themes, and Session Logs.
+### Snippets for repeatable work
 
-- Telnet supports a hostname/IP and custom port; the app explicitly warns that traffic and passwords are not encrypted.
-- Serial discovers `/dev/cu.*` devices and saves baud rate, data bits, parity, stop bits, and flow control.
-- Telnet usernames and passwords are entered directly in the terminal and are not stored in the profile.
+The command library is shared by SSH and the local terminal. The capture contains three synthetic demo commands.
 
-### Local Terminal
+![Selective Remote 0.32 candidate Snippets library with synthetic demo commands](docs/images/demo-032-en-snippets.webp)
 
-The separate **Terminal** workspace launches the current user's system login shell without SSH:
+## Coming in 0.32
 
-- up to eight independent tabs;
-- a separate working directory for every tab;
-- quick folder selection and screen clearing;
-- history, themes, and the shared Snippets library;
-- the native `⌘T` shortcut for a new tab.
+Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are planned for 0.32. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These are upcoming capabilities, not part of the current v0.31.0 download. Local work remains available without an account.
 
-### Snippets
+[Cloud architecture and trust model](docs/cloud-v0.32-architecture.md) · [Open Cloud](https://cloud.pastfly.ru/)
 
-The global **Snippets** library is shared by SSH Workspace and Local Terminal:
+## Security and open source
 
-- groups with back navigation and persisted folder selection;
-- list and grid presentation modes;
-- create, edit, duplicate, move, and delete commands;
-- multiline commands and scripts without losing line breaks;
-- assignment of one snippet to multiple SSH Targets;
-- run on Targets, run in the current terminal, insert without running, and copy.
-
-### SFTP
-
-A standalone dual-pane file manager with:
-
-- local Mac and remote server panes;
-- saved SSH profiles or temporary servers;
-- a persistent SSH master so a password is not requested for every operation;
-- upload and download of files and directories;
-- drag and drop between Finder and SFTP;
-- multi-selection;
-- recursive directory deletion;
-- folder creation, rename, and POSIX permissions;
-- large-transfer progress, transferred size, and speed;
-- periodic remote refresh;
-- path history and suggestions;
-- editing of remote UTF-8 files.
-
-### Forwarding Manager
-
-The global SSH forwarding workspace combines profile tunnels and independent tunnels while keeping their settings and runtime state separate.
-
-- Local forwarding;
-- Remote forwarding;
-- Dynamic / SOCKS5;
-- saved SSH profiles or temporary SSH targets;
-- Keychain/AskPass, SSH IDs, and ssh-agent;
-- keepalive and port-open error diagnostics;
-- an Inspector with parameters and a visual route diagram;
-- quick start/stop/restart and context actions.
-
-![Forwarding Manager](docs/images/forwarding-manager.png)
-
-### Keychain
-
-The global **Keychain** workspace brings together:
-
-- SSH IDs;
-- Touch ID Keys;
-- saved SSH passwords;
-- OpenSSH certificates;
-- SSH Certificate Authorities;
-- `~/.ssh/known_hosts`.
-
-SSH passwords and passphrases are stored in macOS Keychain. Saved SSH passwords can optionally require Touch ID confirmation before use.
-
-Selective Remote can create and import SSH keys, work with `ssh-agent`, install a public key without overwriting `authorized_keys`, inspect OpenSSH certificates, and verify saved host keys.
-
-In the community implementation, **Touch ID Key** requires biometrics before the selected ECDSA key is used, but the private key itself remains a regular OpenSSH file; it is not a Secure Enclave key.
-
-### Quick Connect, Jump Host, and Proxy
-
-**Quick Connect** can open a saved profile, `user@host`, or a temporary SSH target and optionally save it as a profile.
-
-For bastion scenarios, an SSH profile can use another saved profile as a **Jump Host / ProxyJump**. HTTP CONNECT and SOCKS5 proxies with authentication are also supported.
-
-### Diagnostics Center
-
-**Diagnostics Center** presents RDP, Terminal, SFTP, and Forwarding state, application environment information, and active problems. The diagnostic report can be copied or exported.
-
-The report intentionally does not read passwords, passphrases, Keychain values, proxy secrets, or private-key contents. SSH key and certificate paths are reduced to a basename where needed for a safe report.
-
-### Connection Activity
-
-The local activity history stores the time, duration, profile, address, route, and outcome of RDP and SSH connections. Errors are passed through the same secret redaction used by Diagnostics Center. Passwords, keys, commands, and terminal contents are never recorded. The history can be filtered, searched, and completely cleared.
-
-### Session Logs
-
-Selective Remote can optionally record readable output from SSH and Local Terminal sessions. Records stay local and support search plus configurable retention. Passwords entered through protected system mechanisms are not added to Session Logs.
-
-### Encrypted Backup & Restore
-
-**Settings → Backup** creates a portable encrypted archive of local configuration. By default it includes profiles, groups, Snippets, settings, Selective Remote entries from macOS Keychain, private SSH/CA keys, Session Logs, and Connection Activity.
-
-- the archive uses a separate password of at least 12 characters;
-- the archive password is never stored in the app or Keychain;
-- password, format, and attachment integrity are verified before restore;
-- a rollback archive of the current state is created before data is replaced;
-- secrets, private keys, and logs can each be excluded from the archive.
-
-Regular profile export still excludes passwords and private keys. Use an encrypted backup for a complete transfer between Macs, and share its password through a separate channel.
-
-### Appearance, language, and updates
-
-- system, light, and dark application themes;
-- separate terminal themes;
-- multiple text sizes and interface density options;
-- English and Russian UI;
-- a native **Settings** window for appearance, security, and updates;
-- built-in update checks;
-- automatic checks and optional automatic update downloads;
-- DMG download with SHA-256 verification;
-- update installation only after explicit user confirmation.
-
-## Security
-
-Selective Remote prefers native macOS and OpenSSH mechanisms:
-
-- SSH passwords and related secrets are stored in macOS Keychain;
-- optional App Lock protects the application interface with Touch ID on launch, after wake, when minimized, or after the selected inactivity interval;
-- exported profiles do not contain saved passwords;
-- new SSH host keys are not accepted automatically;
-- proxy passwords are not passed in OpenSSH command-line arguments;
-- Diagnostics Center redacts potential secrets before Copy/Export;
-- private SSH keys remain user-owned files and are not copied into application profiles;
-- full backups are encrypted before they are written to disk and never contain the decryption password.
-
-Verify trust in Jump Hosts, proxies, certificate authorities, and changed host keys before using them.
-
-## System requirements
-
-- macOS 14 or later;
-- Apple Silicon for the prebuilt arm64 DMG releases;
-- network access to the required RDP/SSH servers;
-- macOS microphone, camera, and other device permissions are needed only when the corresponding redirection is enabled.
+SSH secrets are stored in macOS Keychain; new SSH host keys are not accepted automatically. Profiles do not export saved passwords, and full backups are encrypted. The source is available under the [MIT license](LICENSE). [Security details](docs/FEATURES-EN.md#security) · [Report a vulnerability](SECURITY.md).
 
 ## Installation
 
-1. Download the DMG from the [latest GitHub Release](https://github.com/PastFly/Selective-Remote/releases/latest).
-2. Open the disk image.
-3. Drag **Selective Remote** to `Applications`.
-4. Launch the application.
+1. Download the DMG from [release v0.31.0](https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0).
+2. Open the image and drag **Selective Remote** into Applications.
+3. Launch the app. If macOS requests approval for a community build without Developer ID, allow it in **System Settings → Privacy & Security** or from Finder's context menu.
 
-Community releases without a Developer ID may use ad-hoc signing. In that case, macOS may require a one-time approval in **System Settings → Privacy & Security** or via Finder's context menu.
+The ready-made DMG targets **Apple Silicon** and **macOS 14 or newer**. Server access and permissions for redirected devices depend on your workflow.
 
-## Quick start
+For development: `swift test`, `swift build -c release`, then optionally `bash scripts/build_and_install.sh`. [Build instructions](BUILD-RU.md) · [Publishing](docs/PUBLISHING-RU.md) · [Release preparation](docs/RELEASING-RU.md).
 
-### RDP
+## Guides
 
-1. Create an RDP profile.
-2. Enter the computer, username, and optional RDP Gateway.
-3. Choose windowed/fullscreen mode and displays.
-4. Configure the required device redirection.
-5. Click **Connect**.
+- [Multi-monitor RDP on macOS](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html)
+- [Server-to-Server SFTP on Mac](https://pastfly.github.io/Selective-Remote/guides/server-to-server-sftp-macos.html)
+- [Features and quick start](docs/FEATURES-EN.md)
+- [Changelog](CHANGELOG_EN.md)
 
-### SSH
+## Community and support
 
-1. Create an SSH profile or open Quick Connect.
-2. Enter the hostname/IP, username, and port.
-3. Choose password, SSH ID, Touch ID Key, or the system `ssh-agent` / `~/.ssh/config`.
-4. Configure a Jump Host or Proxy when needed.
-5. Open Terminal, SFTP, or Forwarding.
+[Website](https://pastfly.github.io/Selective-Remote/) · [GitHub](https://github.com/PastFly/Selective-Remote) · [Telegram](https://t.me/SelectiveRemoteApp) · [Support the project](SUPPORT.md#english) · [Русский](README.md)
 
-### Local Terminal and Snippets
-
-1. Open **Terminal** to launch a local login shell.
-2. Use the folder button to select the active tab's working directory.
-3. Open **Snippets**, create a group, and add a command or multiline script.
-4. Run the snippet locally or assign it to one or more SSH Targets.
-
-## Building from source
-
-Basic project checks:
-
-```bash
-swift test
-swift build -c release
-```
-
-Build and install the app locally:
-
-```bash
-bash scripts/build_and_install.sh
-```
-
-Additional documentation:
-
-- [BUILD-RU.md](BUILD-RU.md)
-- [Publishing](docs/PUBLISHING-RU.md)
-- [Release preparation](docs/RELEASING-RU.md)
-
-## Project news
-
-New releases, concise update notes, and project news are published in the official [Selective Remote Telegram channel](https://t.me/SelectiveRemoteApp).
-
-## Support the project
-
-Selective Remote remains free and open source. If the application is useful to you, you can [support its continued development](SUPPORT.md#english). Support is entirely optional and does not unlock additional features.
-
-## Changelog
-
-Release-specific history lives in [CHANGELOG.md](CHANGELOG.md). The README describes the current product instead of duplicating release notes.
-
-## License
-
-The project is distributed under the [MIT License](LICENSE).
+Support is optional and does not unlock features. Release news is shared on [Telegram](https://t.me/SelectiveRemoteApp).

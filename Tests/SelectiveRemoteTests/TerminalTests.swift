@@ -483,14 +483,21 @@ func includesEnglishLocalizationAndDocumentation() throws {
         contentsOf: projectRoot.appendingPathComponent("README_EN.md"),
         encoding: .utf8
     )
+    let features = try String(
+        contentsOf: projectRoot.appendingPathComponent("docs/FEATURES-EN.md"),
+        encoding: .utf8
+    )
     #expect(localization.contains("\"Подключения\" = \"Connections\""))
     #expect(localization.contains("\"Другой сервер\" = \"Other server\""))
     #expect(localization.contains("\"Язык приложения\" = \"Application Language\""))
     #expect(localization.contains("\"SFTP не подключён\" = \"SFTP is not connected\""))
-    #expect(readme.contains("### SSH Workspace"))
-    #expect(readme.contains("### Local Terminal"))
-    #expect(readme.contains("### Snippets"))
-    #expect(readme.contains("### Forwarding Manager"))
+    #expect(readme.contains("Current release: v0.31.0 (162)"))
+    #expect(readme.contains("Coming in 0.32"))
+    #expect(readme.contains("(docs/FEATURES-EN.md)"))
+    #expect(features.contains("### SSH Workspace"))
+    #expect(features.contains("### Local Terminal"))
+    #expect(features.contains("### Snippets"))
+    #expect(features.contains("### Forwarding Manager"))
 }
 
 @Test("Защищённый SSH-запрос поддерживает вставку пароля")

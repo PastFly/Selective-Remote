@@ -1,0 +1,204 @@
+# Selective Remote features and quick start
+
+[Home](../README_EN.md) · [Русский](FEATURES-RU.md)
+
+Detailed reference for the app’s local workflows. Cloud and Vault capabilities planned for 0.32 are covered separately in the [Cloud architecture](cloud-v0.32-architecture.md).
+
+## Main workspaces
+
+### Profiles and tags
+
+Saved RDP, SSH, Telnet, and Serial connections support groups, favorites, and multiple custom tags per profile. Users create their own tags, can rename or delete them across every profile, and can use them in search and combined filtering. The connection catalog switches between list and grid presentation.
+
+### Connection Center
+
+**Connection Center** presents the real state of active RDP, SSH, local Terminal, SFTP, and Forwarding sessions in one place, including server, profile, authentication method, state, uptime, and available actions.
+
+### RDP
+
+- SDL-FreeRDP with windowed mode and true macOS fullscreen;
+- Retina rendering without scaling the whole application window;
+- multi-monitor RDP across Retina and external displays;
+- manual monitor layout;
+- correct Windows taskbar visibility in fullscreen;
+- clipboard, audio, microphone, camera, printer, and folder redirection;
+- RDP Gateway;
+- Smart Reconnect after temporary network failures;
+- macOS-oriented Command, Option, and Fn behavior;
+- parallel RDP sessions for different profiles.
+
+### SSH Workspace
+
+The built-in SSH terminal uses the system `/usr/bin/ssh` and supports:
+
+- independent tabs and split/grid panes;
+- different servers in different tabs and panes;
+- persistent workspace layout;
+- command history, favorites, a built-in catalog, and suggestions;
+- automatically detected Server Commands for Linux, systemd, network, disk, and container tasks;
+- reconnect, duplicate, drag-and-drop ordering, and tab colors;
+- Broadcast Input with an explicit warning;
+- an action palette and quick SFTP handoff;
+- configurable terminal themes, fonts, text size, and cursor.
+
+In split/grid layouts, history, common commands, server commands, favorites, and Snippets share one full-size Inspector for the active pane.
+
+### Telnet and Serial
+
+Telnet and Serial connections are created in the shared **Connections** catalog and open in the same Terminal Workspace with tabs, split/grid panes, themes, and Session Logs.
+
+- Telnet supports a hostname/IP and custom port; the app explicitly warns that traffic and passwords are not encrypted.
+- Serial discovers `/dev/cu.*` devices and saves baud rate, data bits, parity, stop bits, and flow control.
+- Telnet usernames and passwords are entered directly in the terminal and are not stored in the profile.
+
+### Local Terminal
+
+The separate **Terminal** workspace launches the current user's system login shell without SSH:
+
+- up to eight independent tabs;
+- a separate working directory for every tab;
+- quick folder selection and screen clearing;
+- history, themes, and the shared Snippets library;
+- the native `⌘T` shortcut for a new tab.
+
+### Snippets
+
+The global **Snippets** library is shared by SSH Workspace and Local Terminal:
+
+- groups with back navigation and persisted folder selection;
+- list and grid presentation modes;
+- create, edit, duplicate, move, and delete commands;
+- multiline commands and scripts without losing line breaks;
+- assignment of one snippet to multiple SSH Targets;
+- run on Targets, run in the current terminal, insert without running, and copy.
+
+### SFTP
+
+A standalone dual-pane file manager with:
+
+- local Mac and remote server panes;
+- saved SSH profiles or temporary servers;
+- a persistent SSH master so a password is not requested for every operation;
+- upload and download of files and directories;
+- drag and drop between Finder and SFTP;
+- multi-selection;
+- recursive directory deletion;
+- folder creation, rename, and POSIX permissions;
+- large-transfer progress, transferred size, and speed;
+- periodic remote refresh;
+- path history and suggestions;
+- editing of remote UTF-8 files.
+
+### Forwarding Manager
+
+The global SSH forwarding workspace combines profile tunnels and independent tunnels while keeping their settings and runtime state separate.
+
+- Local forwarding;
+- Remote forwarding;
+- Dynamic / SOCKS5;
+- saved SSH profiles or temporary SSH targets;
+- Keychain/AskPass, SSH IDs, and ssh-agent;
+- keepalive and port-open error diagnostics;
+- an Inspector with parameters and a visual route diagram;
+- quick start/stop/restart and context actions.
+
+### Keychain
+
+The global **Keychain** workspace brings together:
+
+- SSH IDs;
+- Touch ID Keys;
+- saved SSH passwords;
+- OpenSSH certificates;
+- SSH Certificate Authorities;
+- `~/.ssh/known_hosts`.
+
+SSH passwords and passphrases are stored in macOS Keychain. Saved SSH passwords can optionally require Touch ID confirmation before use.
+
+Selective Remote can create and import SSH keys, work with `ssh-agent`, install a public key without overwriting `authorized_keys`, inspect OpenSSH certificates, and verify saved host keys.
+
+In the community implementation, **Touch ID Key** requires biometrics before the selected ECDSA key is used, but the private key itself remains a regular OpenSSH file; it is not a Secure Enclave key.
+
+### Quick Connect, Jump Host, and Proxy
+
+**Quick Connect** can open a saved profile, `user@host`, or a temporary SSH target and optionally save it as a profile.
+
+For bastion scenarios, an SSH profile can use another saved profile as a **Jump Host / ProxyJump**. HTTP CONNECT and SOCKS5 proxies with authentication are also supported.
+
+### Diagnostics Center
+
+**Diagnostics Center** presents RDP, Terminal, SFTP, and Forwarding state, application environment information, and active problems. The diagnostic report can be copied or exported.
+
+The report intentionally does not read passwords, passphrases, Keychain values, proxy secrets, or private-key contents. SSH key and certificate paths are reduced to a basename where needed for a safe report.
+
+### Connection Activity
+
+The local activity history stores the time, duration, profile, address, route, and outcome of RDP and SSH connections. Errors are passed through the same secret redaction used by Diagnostics Center. Passwords, keys, commands, and terminal contents are never recorded. The history can be filtered, searched, and completely cleared.
+
+### Session Logs
+
+Selective Remote can optionally record readable output from SSH and Local Terminal sessions. Records stay local and support search plus configurable retention. Passwords entered through protected system mechanisms are not added to Session Logs.
+
+### Encrypted Backup & Restore
+
+**Settings → Backup** creates a portable encrypted archive of local configuration. By default it includes profiles, groups, Snippets, settings, Selective Remote entries from macOS Keychain, private SSH/CA keys, Session Logs, and Connection Activity.
+
+- the archive uses a separate password of at least 12 characters;
+- the archive password is never stored in the app or Keychain;
+- password, format, and attachment integrity are verified before restore;
+- a rollback archive of the current state is created before data is replaced;
+- secrets, private keys, and logs can each be excluded from the archive.
+
+Regular profile export still excludes passwords and private keys. Use an encrypted backup for a complete transfer between Macs, and share its password through a separate channel.
+
+### Appearance, language, and updates
+
+- system, light, and dark application themes;
+- separate terminal themes;
+- multiple text sizes and interface density options;
+- English and Russian UI;
+- a native **Settings** window for appearance, security, and updates;
+- built-in update checks;
+- automatic checks and optional automatic update downloads;
+- DMG download with SHA-256 verification;
+- update installation only after explicit user confirmation.
+
+## Security
+
+Selective Remote prefers native macOS and OpenSSH mechanisms:
+
+- SSH passwords and related secrets are stored in macOS Keychain;
+- optional App Lock protects the application interface with Touch ID on launch, after wake, when minimized, or after the selected inactivity interval;
+- exported profiles do not contain saved passwords;
+- new SSH host keys are not accepted automatically;
+- proxy passwords are not passed in OpenSSH command-line arguments;
+- Diagnostics Center redacts potential secrets before Copy/Export;
+- private SSH keys remain user-owned files and are not copied into application profiles;
+- full backups are encrypted before they are written to disk and never contain the decryption password.
+
+Verify trust in Jump Hosts, proxies, certificate authorities, and changed host keys before using them.
+
+## Quick start
+
+### RDP
+
+1. Create an RDP profile.
+2. Enter the computer, username, and optional RDP Gateway.
+3. Choose windowed/fullscreen mode and displays.
+4. Configure the required device redirection.
+5. Click **Connect**.
+
+### SSH
+
+1. Create an SSH profile or open Quick Connect.
+2. Enter the hostname/IP, username, and port.
+3. Choose password, SSH ID, Touch ID Key, or the system `ssh-agent` / `~/.ssh/config`.
+4. Configure a Jump Host or Proxy when needed.
+5. Open Terminal, SFTP, or Forwarding.
+
+### Local Terminal and Snippets
+
+1. Open **Terminal** to launch a local login shell.
+2. Use the folder button to select the active tab's working directory.
+3. Open **Snippets**, create a group, and add a command or multiline script.
+4. Run the snippet locally or assign it to one or more SSH Targets.
