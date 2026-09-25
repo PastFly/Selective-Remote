@@ -168,7 +168,7 @@ final class SelectiveRemoteTeamDeviceMemoryKeyStore: SelectiveRemoteTeamDeviceKe
     }
 
     func removePrivateKey(for endpoint: URL, deviceID: UUID) {
-        lock.withLock { keys.removeValue(forKey: account(endpoint: endpoint, deviceID: deviceID)) }
+        _ = lock.withLock { keys.removeValue(forKey: account(endpoint: endpoint, deviceID: deviceID)) }
     }
 
     private func account(endpoint: URL, deviceID: UUID) -> String {

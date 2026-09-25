@@ -81,6 +81,6 @@ final class SelectiveRemoteCloudMemoryTokenStore: SelectiveRemoteCloudTokenStore
     }
 
     func removeToken(for endpoint: URL) {
-        lock.withLock { tokens.removeValue(forKey: endpoint.absoluteString) }
+        _ = lock.withLock { tokens.removeValue(forKey: endpoint.absoluteString) }
     }
 }
