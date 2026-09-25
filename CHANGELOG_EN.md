@@ -1,10 +1,10 @@
 ## 0.32.0
 
-- **Selective Remote Cloud** — new in this public release: work with connections on your Mac and in the browser. Local use without an account remains available.
-- **Personal Vault** — Hosts, Credentials, and Snippets are protected with end-to-end encryption and synced across trusted devices.
-- **Team Vaults** — share Hosts, Credentials, and Snippets with teammates, with roles, invitations, and device access controls.
-- **Browser and devices** — manage personal data, teams, and devices in the browser; changes sync with your Mac.
-- **Everyday workflows** — Personal and Team Hosts share folders, search, sorting, list, and grid views. Forms, keyboard use, mobile layout, RU/EN, and light-theme readability are improved; official updates verify the publisher.
+- **Selective Remote Cloud** — in a public release for the first time: work with connections on Mac and in the browser; local use without an account remains available.
+- **Personal Vault** — Hosts, Credentials, and Snippets are encrypted on the device and synced across trusted devices.
+- **Team Vaults** — share Hosts, Credentials, and Snippets with roles, invitations, and device admission.
+- **Find Hosts faster** — use the persistent Host Shelf, nested folders, search, sorting, and scope aware Host moves.
+- **More reliable daily work** — SSH password entry, Jump Host, Snippets, and compact layouts improved; Keychain deletion and backup migration failures are handled safely.
 
 ## 0.31.0
 

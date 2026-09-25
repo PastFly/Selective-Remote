@@ -26,7 +26,7 @@ func releaseMetadataStaysSynchronized() throws {
         encoding: .utf8
     )
     let manifestData = try Data(
-        contentsOf: root.appendingPathComponent("Resources/updates.json")
+        contentsOf: root.appendingPathComponent("Resources/updates.candidate.json")
     )
     let manifest = try JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
 
