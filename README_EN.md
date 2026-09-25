@@ -26,6 +26,8 @@ Available now in **v0.31.0**: SSH Workspace, local Terminal, SFTP, Forwarding Ma
 
 Choose which Mac displays show the remote desktop for each RDP profile: one, two, or more. Set the primary Windows monitor and arrange the virtual displays automatically or by hand. Your selection is saved with the profile. [Multi-monitor RDP guide](https://pastfly.github.io/Selective-Remote/guides/multi-monitor-rdp-macos.html).
 
+![Real two-display RDP configuration in the Selective Remote 0.32 candidate with synthetic .example hosts](docs/images/demo-032-en-rdp-displays.webp)
+
 ### Terminal and commands
 
 Tabs and panes keep sessions close; Snippets store reusable commands. The local demo shell in this capture is intentionally stopped.
