@@ -27,9 +27,6 @@ export function validateOfficialReleasePreflight(input) {
   if (tag !== expectedTag) {
     throw new Error(`tag ${tag} does not match version ${version}`);
   }
-  if (input.releaseExists) {
-    throw new Error(`release ${tag} already exists`);
-  }
   if (tagCommit !== sourceCommit) {
     throw new Error(`tag ${tag} does not identify the exact source commit`);
   }
@@ -79,14 +76,13 @@ function releaseAssignment(source, name) {
 export async function runOfficialReleasePreflight(rootURL, environment = process.env) {
   const [buildScript, manifestText] = await Promise.all([
     readFile(new URL("scripts/build_app.sh", rootURL), "utf8"),
-    readFile(new URL("Resources/updates.json", rootURL), "utf8"),
+    readFile(new URL("Resources/updates.candidate.json", rootURL), "utf8"),
   ]);
   const manifest = JSON.parse(manifestText);
   return validateOfficialReleasePreflight({
     version: releaseAssignment(buildScript, "VERSION"),
     build: Number(releaseAssignment(buildScript, "BUILD_NUMBER")),
     tag: environment.TAG,
-    releaseExists: environment.RELEASE_EXISTS === "true",
     tagCommit: environment.TAG_COMMIT,
     sourceCommit: environment.SOURCE_COMMIT,
     manifestVersion: manifest.version,

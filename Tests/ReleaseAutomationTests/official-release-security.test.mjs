@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 
 import {
+  runOfficialReleasePreflight,
   validateOfficialReleasePreflight,
 } from "../../scripts/official_release_preflight.mjs";
 
@@ -52,10 +56,72 @@ test("accepts a complete exact official-release preflight", () => {
   });
 });
 
-test("blocks an already published release tag", () => {
+test("public update feed stays on the downloadable 0.31.0 release before 0.32.0 publication", async () => {
+  const publicFeed = JSON.parse(await readFile(
+    new URL("../../Resources/updates.json", import.meta.url), "utf8",
+  ));
+  assert.equal(publicFeed.version, "0.31.0");
+  assert.equal(publicFeed.build, 162);
+  assert.equal(publicFeed.downloadURL,
+    "https://github.com/PastFly/Selective-Remote/releases/download/"
+      + "v0.31.0/SelectiveRemote-0.31.0-arm64.dmg");
+});
+
+test("official preflight reads the tagged candidate while public feed remains 0.31.0", async () => {
+  const root = await mkdtemp(join(tmpdir(), "sr-release-preflight-"));
+  try {
+    await mkdir(join(root, "scripts"));
+    await mkdir(join(root, "Resources"));
+    await writeFile(join(root, "scripts/build_app.sh"),
+      'VERSION="0.32.0"\nBUILD_NUMBER="163"\n');
+    const publicFeed = {
+      version: "0.31.0", build: 162,
+      downloadURL: "https://github.com/PastFly/Selective-Remote/releases/download/"
+        + "v0.31.0/SelectiveRemote-0.31.0-arm64.dmg",
+      releaseNotesURL:
+        "https://github.com/PastFly/Selective-Remote/releases/tag/v0.31.0",
+    };
+    const candidate = {
+      ...publicFeed, version: "0.32.0", build: 163,
+      downloadURL: completeInput.manifestDownloadURL,
+      releaseNotesURL: completeInput.manifestReleaseNotesURL,
+    };
+    await writeFile(join(root, "Resources/updates.json"), JSON.stringify(publicFeed));
+    await writeFile(join(root, "Resources/updates.candidate.json"), JSON.stringify(candidate));
+    const env = {
+      TAG: completeInput.tag,
+      TAG_COMMIT: completeInput.tagCommit,
+      SOURCE_COMMIT: completeInput.sourceCommit,
+      RELEASE_EXISTS: "false",
+      EXPECTED_TEAM_ID: completeInput.expectedTeamID,
+      EXPECTED_SIGNING_IDENTITY: completeInput.signingIdentity,
+      P12_BASE64: completeInput.credentials.p12Base64,
+      P12_PASSWORD: completeInput.credentials.p12Password,
+      API_KEY_BASE64: completeInput.credentials.apiKeyBase64,
+      API_KEY_ID: completeInput.credentials.apiKeyID,
+      API_ISSUER_ID: completeInput.credentials.apiIssuerID,
+    };
+    const result = await runOfficialReleasePreflight(
+      pathToFileURL(root + "/"), env,
+    );
+    assert.equal(result.version, "0.32.0");
+    assert.equal(result.build, 163);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("permits retry preflight for an existing release while keeping exact tag checks", () => {
+  assert.equal(
+    validateOfficialReleasePreflight(withInput({ releaseExists: true })).tag,
+    "v0.32.0",
+  );
+});
+
+test("blocks a missing release tag before any build or publication", () => {
   assert.throws(
-    () => validateOfficialReleasePreflight(withInput({ releaseExists: true })),
-    /release v0\.32\.0 already exists/u,
+    () => validateOfficialReleasePreflight(withInput({ tag: "" })),
+    /release tag is required/u,
   );
 });
 

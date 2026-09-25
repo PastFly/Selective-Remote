@@ -52,15 +52,9 @@ jobs:
             echo "Tag $tag points to $tag_commit instead of checked-out $source_commit." >&2
             exit 1
           fi
-          if gh release view "$tag" >/dev/null 2>&1; then
-            release_exists=true
-          else
-            release_exists=false
-          fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "tag_commit=$tag_commit" >> "$GITHUB_OUTPUT"
           echo "source_commit=$source_commit" >> "$GITHUB_OUTPUT"
-          echo "release_exists=$release_exists" >> "$GITHUB_OUTPUT"
 
       - name: Select Swift 6 toolchain
         run: |
@@ -74,7 +68,6 @@ jobs:
           TAG: ${{ steps.release.outputs.tag }}
           TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
           SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
-          RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}
           EXPECTED_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
           EXPECTED_SIGNING_IDENTITY: ${{ vars.DEVELOPER_ID_APPLICATION_IDENTITY }}
           P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
@@ -133,9 +126,21 @@ jobs:
             --key-id "$API_KEY_ID" \
             --issuer "$API_ISSUER_ID"
 
-      - name: Build, sign and notarize DMG
+      - name: Build, verify and publish official release
+        id: publish
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.release.outputs.tag }}
+          TAG_COMMIT: ${{ steps.release.outputs.tag_commit }}
+          SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
+          EXPECTED_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          EXPECTED_SIGNING_IDENTITY: ${{ vars.DEVELOPER_ID_APPLICATION_IDENTITY }}
+          P12_BASE64: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.DEVELOPER_ID_APPLICATION_P12_PASSWORD }}
+          API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           SELECTIVEREMOTE_RELEASE_MODE: official
           SELECTIVEREMOTE_CODESIGN_IDENTITY: ${{ vars.DEVELOPER_ID_APPLICATION_IDENTITY }}
           SELECTIVEREMOTE_EXPECTED_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -143,46 +148,7 @@ jobs:
           SELECTIVEREMOTE_UPDATE_FEED_URL: https://raw.githubusercontent.com/PastFly/Selective-Remote/main/Resources/updates.json
         run: |
           set -euo pipefail
-          ./scripts/build_app.sh
-
-      - name: Publish GitHub Release assets
-        id: publish
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          SOURCE_COMMIT: ${{ steps.release.outputs.source_commit }}
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          dmgs=(dist/*.dmg)
-          hashes=(dist/*.dmg.sha256)
-          if [[ ${#dmgs[@]} -ne 1 || ${#hashes[@]} -ne 1 ]]; then
-            echo "Expected exactly one DMG and one SHA-256 file." >&2
-            exit 1
-          fi
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists. Increase VERSION and publish a new tag." >&2
-            exit 1
-          fi
-          tag_commit="$(git rev-list -n 1 "$TAG")"
-          if [[ "$tag_commit" != "$SOURCE_COMMIT" ]]; then
-            echo "Tag $TAG points to $tag_commit instead of checked-out $SOURCE_COMMIT." >&2
-            exit 1
-          fi
-          notes="$RUNNER_TEMP/release-notes.md"
-          python3 scripts/release_notes.py "${TAG#v}" > "$notes"
-          if [[ ! -s "$notes" ]]; then
-            echo "Release notes for $TAG are empty." >&2
-            exit 1
-          fi
-          gh release create "$TAG" "${dmgs[0]}" "${hashes[0]}" \
-            --verify-tag \
-            --title "Selective Remote ${TAG#v}" \
-            --notes-file "$notes" \
-            --fail-on-no-commits \
-            --latest
-          echo "published=true" >> "$GITHUB_OUTPUT"
+          node scripts/run_official_release.mjs
 
 
   announce-telegram:
