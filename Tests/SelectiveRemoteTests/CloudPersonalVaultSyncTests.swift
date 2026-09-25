@@ -92,7 +92,7 @@ struct CloudPersonalVaultSyncTests {
         let vaultID = try #require(UUID(uuidString: "77777777-7777-4777-8777-777777777777"))
         let token = String(repeating: "t", count: 43)
         let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
-        try tokenStore.saveToken(token, for: endpoint)
+        tokenStore.saveToken(token, for: endpoint)
         let stub = PersonalVaultHTTPStub { request in
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             switch (request.httpMethod, request.url?.path) {
@@ -198,7 +198,7 @@ struct CloudPersonalVaultSyncTests {
     func emptyVaultEnvelopeMarker() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
         let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
-        try tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
 
         for marker: Any in [NSNull(), 1] {
             let payload = try JSONSerialization.data(withJSONObject: Self.emptyVault(marker: marker))
@@ -231,7 +231,7 @@ struct CloudPersonalVaultSyncTests {
     func rejectsExtendedWrappedKey() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
         let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
-        try tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
         let document = try SelectiveRemoteVaultDocument(records: [Self.syntheticRecord()])
         let envelope = try SelectiveRemotePersonalVaultCrypto.seal(
             document,

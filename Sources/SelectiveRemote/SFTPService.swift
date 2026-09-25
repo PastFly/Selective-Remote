@@ -321,7 +321,7 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 Thread.sleep(forTimeInterval: 0.05)
             }
 
-            stateLock.withLock {
+            _ = stateLock.withLock {
                 ownedProcesses.removeValue(forKey: controlPath)
             }
 

@@ -67,7 +67,7 @@ struct CloudMacOSFoundationTests {
             device: .thisMac(id: deviceID, name: "Synthetic Mac")
         )
         #expect(user == SelectiveRemoteCloudUser(id: userID, email: "user@example.invalid", username: "user", displayName: "User"))
-        #expect(try store.token(for: endpoint) == token)
+        #expect(store.token(for: endpoint) == token)
         let hasStoredSession = await client.hasStoredSession(endpoint: endpoint)
         #expect(hasStoredSession)
         #expect(try await client.currentUser(endpoint: endpoint) == user)
@@ -82,7 +82,7 @@ struct CloudMacOSFoundationTests {
         #expect(await restoredClient.hasStoredSession(endpoint: endpoint))
         #expect(try await restoredClient.currentUser(endpoint: endpoint) == user)
         try await restoredClient.logout(endpoint: endpoint)
-        #expect(try store.token(for: endpoint) == nil)
+        #expect(store.token(for: endpoint) == nil)
     }
 
     @Test("native Team management creates Teams, invitations and Shared Vaults")
@@ -95,7 +95,7 @@ struct CloudMacOSFoundationTests {
         let linkInvitationID = try #require(UUID(uuidString: "88888888-8888-4888-8888-888888888888"))
         let vaultID = try #require(UUID(uuidString: "22222222-2222-4222-8222-222222222222"))
         let store = SelectiveRemoteCloudMemoryTokenStore()
-        try store.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        store.saveToken(String(repeating: "t", count: 43), for: endpoint)
         let stub = CloudHTTPStub { request in
             #expect(request.value(forHTTPHeaderField: "Idempotency-Key")?.hasPrefix("macos:") == true
                 || request.httpMethod == "GET")
@@ -264,7 +264,7 @@ struct CloudMacOSFoundationTests {
             password: "synthetic-password",
             device: .thisMac(id: deviceID, name: "Synthetic Mac")
         )
-        #expect(try store.token(for: endpoint) == nil)
+        #expect(store.token(for: endpoint) == nil)
     }
 
     @Test("registration rejects an extended or false verification response")
@@ -311,7 +311,7 @@ struct CloudMacOSFoundationTests {
         let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
         let teamID = try #require(UUID(uuidString: "11111111-1111-4111-8111-111111111111"))
         let store = SelectiveRemoteCloudMemoryTokenStore()
-        try store.saveToken(token, for: endpoint)
+        store.saveToken(token, for: endpoint)
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: store,
             dataLoader: { request in
@@ -352,7 +352,7 @@ struct CloudMacOSFoundationTests {
     func unauthorizedClearsSession() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
         let store = SelectiveRemoteCloudMemoryTokenStore()
-        try store.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        store.saveToken(String(repeating: "t", count: 43), for: endpoint)
         let client = SelectiveRemoteCloudAPIClient(
             tokenStore: store,
             dataLoader: { request in Self.response(request, status: 401, json: ["error": "unauthorized"]) }
@@ -360,7 +360,7 @@ struct CloudMacOSFoundationTests {
         await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) {
             try await client.currentUser(endpoint: endpoint)
         }
-        #expect(try store.token(for: endpoint) == nil)
+        #expect(store.token(for: endpoint) == nil)
     }
 
     @Test("browser and macOS use the same P-256 fingerprint and Team envelope context")
@@ -522,7 +522,7 @@ struct CloudMacOSFoundationTests {
         let wrapper = try Self.fixtureWrapper(fixture, identity: identity)
         let token = String(repeating: "t", count: 43)
         let store = SelectiveRemoteCloudMemoryTokenStore()
-        try store.saveToken(token, for: endpoint)
+        store.saveToken(token, for: endpoint)
         let stub = CloudHTTPStub { request in
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")
             switch (request.httpMethod, request.url?.path) {
