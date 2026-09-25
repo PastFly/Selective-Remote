@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct VirtualMonitorLayoutEditor: View {
+    @ObservedObject private var language = AppLanguageStore.shared
     let displays: [DisplayDescriptor]
     let placements: [DisplayPlacement]
     let editable: Bool
