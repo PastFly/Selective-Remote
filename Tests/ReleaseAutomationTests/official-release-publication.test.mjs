@@ -67,6 +67,7 @@ function scenario({ initialRelease = null, failAt = "", checksum = checksumText 
       maybeFail("publishDraft");
       remoteRelease = release({ draft: false });
     },
+    async verifyPublishedArtifact() { maybeFail("verifyPublishedArtifact"); },
     async promoteFeed() {
       maybeFail("promoteFeed");
       if (publicVersion === version) return false;
@@ -111,6 +112,7 @@ test("existing tag without a release stages and verifies assets before feed prom
   assert.equal(state.publicVersion, version);
   assert.equal(state.remoteRelease.draft, false);
   assert.ok(state.stages.indexOf("publishDraft") < state.stages.indexOf("promoteFeed"));
+  assert.ok(state.stages.indexOf("verifyPublishedArtifact") < state.stages.indexOf("promoteFeed"));
 });
 
 test("missing DMG on a published release blocks retry and keeps the previous feed", async () => {
@@ -157,6 +159,20 @@ test("feed push failure preserves the previous public version for retry", async 
   );
   assert.equal(state.remoteRelease.draft, false);
   assert.equal(state.publicVersion, "0.31.0");
+});
+
+test("an already published DMG failing signature/notary verification cannot advance the feed", async () => {
+  const state = scenario({
+    initialRelease: release({ draft: false }),
+    failAt: "verifyPublishedArtifact",
+  });
+  await assert.rejects(
+    runReleasePublication({ tag, version, sourceCommit,
+      operations: state.operations }),
+    /test-only verifyPublishedArtifact failure/u,
+  );
+  assert.equal(state.publicVersion, "0.31.0");
+  assert.ok(!state.stages.includes("promoteFeed"));
 });
 
 test("retry completes a published release whose feed promotion previously failed", async () => {

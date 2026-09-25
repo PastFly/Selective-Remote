@@ -118,6 +118,29 @@ function productionOperations({ version, sourceCommit }) {
       await visible("gh", ["release", "edit", tag,
         "--repo", releaseRepository, "--draft=false", "--latest"]);
     },
+    async verifyPublishedArtifact(tag, expectedDigest) {
+      const root = await mkdtemp(join(tmpdir(), "sr-release-verify-"));
+      const dmgName = `SelectiveRemote-${version}-arm64.dmg`;
+      const hashName = `${dmgName}.sha256`;
+      try {
+        await visible("gh", ["release", "download", tag,
+          "--repo", releaseRepository,
+          "--pattern", dmgName,
+          "--dir", root]);
+        const checksum = await downloadedChecksum(tag, version);
+        const hashPath = join(root, hashName);
+        await writeFile(hashPath, checksum);
+        const local = await validateLocalArtifacts(
+          join(root, dmgName), hashPath, version,
+        );
+        if (local.digest !== expectedDigest) {
+          throw new Error("downloaded release DMG differs from the published checksum");
+        }
+        await visible("./scripts/verify_official_release_asset.sh", [local.dmgPath]);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
     async promoteFeed(_tag, tagCommit) {
       return promotePublicFeed({ repositoryPath, tagCommit });
     },

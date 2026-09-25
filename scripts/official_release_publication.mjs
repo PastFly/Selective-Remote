@@ -111,9 +111,10 @@ export async function runReleasePublication({ tag, version, sourceCommit, operat
   if (!release || release.draft) {
     throw new Error("official release is not published");
   }
-  validateReleaseAssets(
+  const publishedDigest = validateReleaseAssets(
     release, await operations.readChecksumAsset(tag), version, localDigest,
   );
+  await operations.verifyPublishedArtifact(tag, publishedDigest);
   const feedAdvanced = await operations.promoteFeed(tag, sourceCommit);
   return { feedAdvanced };
 }
