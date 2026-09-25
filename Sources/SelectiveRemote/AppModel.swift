@@ -245,6 +245,7 @@ private final class ManagedRDPSession {
     var phase = RDPSessionPhase.starting
     var disconnectRequested = false
     var interruptionReason: String?
+    var displayInterruptionStatus: RDPDisplayStatus?
     var interruption = RDPSessionInterruption.userRequested
     var desktopReadyDetected = false
     var startupWarningShown = false
@@ -326,8 +327,34 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
     @Published var profileTagFilter: Set<String> = []
-    @Published var statusMessage = ""
-    @Published var errorMessage: String?
+    @Published private var statusBackingMessage = ""
+    private var displayStatus: RDPDisplayStatus?
+    var statusMessage: String {
+        get { displayStatus?.text ?? statusBackingMessage }
+        set {
+            displayStatus = nil
+            statusBackingMessage = newValue
+        }
+    }
+
+    private func setDisplayStatus(_ status: RDPDisplayStatus) {
+        displayStatus = status
+        statusBackingMessage = status.text
+    }
+    @Published private var errorBackingMessage: String?
+    private var displayErrorStatus: RDPDisplayStatus?
+    var errorMessage: String? {
+        get { displayErrorStatus?.text ?? errorBackingMessage }
+        set {
+            displayErrorStatus = nil
+            errorBackingMessage = newValue
+        }
+    }
+
+    func setDisplayErrorStatus(_ status: RDPDisplayStatus) {
+        displayErrorStatus = status
+        errorBackingMessage = status.text
+    }
     @Published private(set) var latestSnippetRun: TerminalSnippetRunSummary?
     @Published var updateMessage: String?
     @Published private(set) var isCheckingForUpdates = false
@@ -5380,12 +5407,13 @@ final class AppModel: NSObject, ObservableObject {
                     attempt: smartReconnectAttempt,
                     maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                     nextAttemptAt: nil,
-                    reason: UpdateLocalization.text(ru: "Восстановление RDP-сессии", en: "Reconnecting RDP session")
+                    reason: UpdateLocalization.text(ru: "Восстановление RDP-сессии", en: "Reconnecting RDP session"),
+                    displayReason: rdpReconnectProgress[profileID]?.displayReason
                 )
             }
             startSessionMonitorIfNeeded()
             if let smartReconnectAttempt {
-                statusMessage = UpdateLocalization.text(ru: "RDP: переподключение, попытка \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "RDP: reconnecting, attempt \(smartReconnectAttempt)/\(SmartReconnectPolicy.maximumAttempts)")
+                setDisplayStatus(.reconnecting(smartReconnectAttempt, SmartReconnectPolicy.maximumAttempts))
             } else if missingCount > 0 {
                 statusMessage = UpdateLocalization.text(ru: "FreeRDP запущен; недоступные мониторы временно пропущены: \(missingCount)", en: "FreeRDP started; \(missingCount) unavailable monitors temporarily skipped")
             } else {
@@ -5441,17 +5469,23 @@ final class AppModel: NSObject, ObservableObject {
     private func requestDisconnect(
         profileID: UUID,
         interruptionReason: String?,
-        interruption: RDPSessionInterruption = .userRequested
+        interruption: RDPSessionInterruption = .userRequested,
+        displayStatus: RDPDisplayStatus? = nil
     ) {
         guard let runtime = managedSessions[profileID] else { return }
         runtime.disconnectRequested = true
         runtime.interruptionReason = interruptionReason
+        runtime.displayInterruptionStatus = displayStatus
         runtime.interruption = interruption
         runtime.phase = .disconnecting
         sessions[profileID] = runtime.summary
         if let interruptionReason {
             reconnectCandidateProfileIDs.insert(profileID)
-            statusMessage = interruptionReason
+            if let displayStatus {
+                setDisplayStatus(displayStatus)
+            } else {
+                statusMessage = interruptionReason
+            }
         } else {
             statusMessage = UpdateLocalization.text(ru: "Завершаем «\(runtime.profileName)»…", en: "Ending “\(runtime.profileName)”…")
         }
@@ -5844,10 +5878,7 @@ final class AppModel: NSObject, ObservableObject {
         if interruption.shouldAttemptSmartReconnect {
             guard let profile = profiles.first(where: { $0.id == profileID }) else {
                 cancelRDPSmartReconnect(profileID)
-                statusMessage = UpdateLocalization.text(
-                    ru: "Team Host отключён после изменения конфигурации мониторов",
-                    en: "The Team Host disconnected after the monitor configuration changed"
-                )
+                setDisplayStatus(.teamHostDisconnected)
                 errorMessage = nil
                 return
             }
@@ -5857,8 +5888,9 @@ final class AppModel: NSObject, ObservableObject {
                 scheduleRDPSmartReconnect(
                     profileID: profileID,
                     attempt: (previousReconnectAttempt ?? 0) + 1,
-                    reason: UpdateLocalization.text(ru: "Конфигурация мониторов изменилась", en: "Monitor configuration changed"),
-                    fastTopologyRecovery: true
+                    reason: RDPDisplayStatus.topologyChangedShort.text,
+                    fastTopologyRecovery: true,
+                    displayReason: .topologyChangedShort
                 )
                 if selectedProfileID == profileID {
                     errorMessage = nil
@@ -5867,7 +5899,7 @@ final class AppModel: NSObject, ObservableObject {
             }
             cancelRDPSmartReconnect(profileID)
             if selectedProfileID == profileID {
-                statusMessage = UpdateLocalization.text(ru: "Монитор отключён — подключитесь повторно, чтобы использовать доступные дисплеи", en: "Monitor disconnected — reconnect to use the available displays")
+                setDisplayStatus(.monitorDisconnected)
                 errorMessage = nil
             }
             return
@@ -5893,7 +5925,11 @@ final class AppModel: NSObject, ObservableObject {
         cancelRDPSmartReconnect(profileID)
         if selectedProfileID == profileID {
             if endedNormally {
-                statusMessage = runtime.interruptionReason ?? UpdateLocalization.text(ru: "RDP-сессия завершена", en: "RDP session ended")
+                if let displayStatus = runtime.displayInterruptionStatus {
+                    setDisplayStatus(displayStatus)
+                } else {
+                    statusMessage = runtime.interruptionReason ?? UpdateLocalization.text(ru: "RDP-сессия завершена", en: "RDP session ended")
+                }
                 errorMessage = nil
             } else {
                 statusMessage = UpdateLocalization.text(ru: "FreeRDP завершился с кодом \(status)", en: "FreeRDP exited with code \(status)")
@@ -5906,14 +5942,19 @@ final class AppModel: NSObject, ObservableObject {
         profileID: UUID,
         attempt: Int,
         reason: String,
-        fastTopologyRecovery: Bool = false
+        fastTopologyRecovery: Bool = false,
+        displayReason: RDPDisplayStatus? = nil
     ) {
         guard attempt <= SmartReconnectPolicy.maximumAttempts else {
             cancelRDPSmartReconnect(profileID)
             reconnectCandidateProfileIDs.insert(profileID)
-            statusMessage = UpdateLocalization.text(ru: "RDP не восстановлен после \(SmartReconnectPolicy.maximumAttempts) попыток", en: "RDP did not reconnect after \(SmartReconnectPolicy.maximumAttempts) attempts")
+            setDisplayStatus(.reconnectExhausted(SmartReconnectPolicy.maximumAttempts))
             if selectedProfileID == profileID {
-                errorMessage = reason
+                if let displayReason {
+                    setDisplayErrorStatus(displayReason)
+                } else {
+                    errorMessage = reason
+                }
             }
             return
         }
@@ -5939,9 +5980,10 @@ final class AppModel: NSObject, ObservableObject {
             attempt: attempt,
             maximumAttempts: SmartReconnectPolicy.maximumAttempts,
             nextAttemptAt: reconnectDate,
-            reason: reason
+            reason: reason,
+            displayReason: displayReason
         )
-        statusMessage = UpdateLocalization.text(ru: "RDP: переподключение, попытка \(attempt)/\(SmartReconnectPolicy.maximumAttempts)", en: "RDP: reconnecting, attempt \(attempt)/\(SmartReconnectPolicy.maximumAttempts)")
+        setDisplayStatus(.reconnecting(attempt, SmartReconnectPolicy.maximumAttempts))
 
         rdpReconnectTasks[profileID] = Task { @MainActor [weak self] in
             do {
@@ -5958,7 +6000,8 @@ final class AppModel: NSObject, ObservableObject {
                 attempt: attempt,
                 maximumAttempts: SmartReconnectPolicy.maximumAttempts,
                 nextAttemptAt: nil,
-                reason: reason
+                reason: reason,
+                displayReason: displayReason
             )
             self.connectProfile(
                 profileID,
@@ -6213,7 +6256,7 @@ final class AppModel: NSObject, ObservableObject {
            selectedProfile.selectedDisplayIDs.isEmpty {
             mutateSelectedProfile { profile in configureDefaultDisplays(for: &profile) }
         }
-        statusMessage = UpdateLocalization.text(ru: "Обнаружено дисплеев: \(displays.count)", en: "Displays found: \(displays.count)")
+        setDisplayStatus(.discovered(displays.count))
     }
 
     private func refreshCameras(announce: Bool) {
@@ -6225,7 +6268,7 @@ final class AppModel: NSObject, ObservableObject {
         }
     }
 
-    private func handleConfirmedDisplayChange(
+    func handleConfirmedDisplayChange(
         previousIDs: Set<String>,
         firstSnapshot: [DisplayDescriptor],
         secondSnapshot: [DisplayDescriptor]
@@ -6239,7 +6282,7 @@ final class AppModel: NSObject, ObservableObject {
         // Do nothing until two separated snapshots agree on the same non-empty
         // physical topology.
         guard !currentIDs.isEmpty, firstIDs == currentIDs else {
-            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев меняется — ожидаем стабилизацию", en: "Display configuration is changing — waiting for it to stabilize")
+            setDisplayStatus(.changing)
             return
         }
 
@@ -6250,7 +6293,7 @@ final class AppModel: NSObject, ObservableObject {
         )
         let added = currentIDs.subtracting(previousIDs)
         guard !removed.isEmpty || !added.isEmpty else {
-            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев обновлена: \(displays.count)", en: "Display configuration updated: \(displays.count)")
+            setDisplayStatus(.updated(displays.count))
             return
         }
 
@@ -6266,8 +6309,9 @@ final class AppModel: NSObject, ObservableObject {
             restarting.insert(profileID)
             requestDisconnect(
                 profileID: profileID,
-                interruptionReason: UpdateLocalization.text(ru: "Конфигурация мониторов изменилась — перестраиваем RDP на доступных дисплеях", en: "Monitor configuration changed — rebuilding RDP for the available displays"),
-                interruption: .monitorTopologyChanged
+                interruptionReason: RDPDisplayStatus.topologyChanged.text,
+                interruption: .monitorTopologyChanged,
+                displayStatus: .topologyChanged
             )
         }
 
@@ -6287,14 +6331,15 @@ final class AppModel: NSObject, ObservableObject {
                 restarting.insert(profileID)
                 requestDisconnect(
                     profileID: profileID,
-                    interruptionReason: UpdateLocalization.text(ru: "Выбранный монитор подключён — восстанавливаем RDP-схему", en: "Selected monitor connected — restoring the RDP layout"),
-                    interruption: .monitorTopologyChanged
+                    interruptionReason: RDPDisplayStatus.selectedMonitorReturned.text,
+                    interruption: .monitorTopologyChanged,
+                    displayStatus: .selectedMonitorReturned
                 )
             }
         }
 
         if restarting.isEmpty {
-            statusMessage = UpdateLocalization.text(ru: "Конфигурация дисплеев обновлена: \(displays.count)", en: "Display configuration updated: \(displays.count)")
+            setDisplayStatus(.updated(displays.count))
         }
     }
 
@@ -6362,12 +6407,13 @@ final class AppModel: NSObject, ObservableObject {
                 && !runtime.selectedDisplayIDs.isDisjoint(with: immediateRemoved) {
                 requestDisconnect(
                     profileID: profileID,
-                    interruptionReason: UpdateLocalization.text(ru: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи", en: "MacBook screen closed — moving RDP to external displays"),
-                    interruption: .monitorTopologyChanged
+                    interruptionReason: RDPDisplayStatus.macBookClosed.text,
+                    interruption: .monitorTopologyChanged,
+                    displayStatus: .macBookClosed
                 )
             }
 
-            statusMessage = UpdateLocalization.text(ru: "Экран MacBook закрыт — перестраиваем RDP на внешние дисплеи", en: "MacBook screen closed — moving RDP to external displays")
+            setDisplayStatus(.macBookClosed)
             errorMessage = nil
             displayRefreshTask?.cancel()
             return

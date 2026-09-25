@@ -20,7 +20,7 @@ struct VirtualMonitorLayoutEditor: View {
                     let display = displays.first(where: { $0.id == placement.id })
                     let offset = dragOffsets[placement.id] ?? .zero
                     monitorCard(
-                        name: display?.name ?? "Дисплей",
+                        name: RDPDisplayLabels.name(for: display),
                         placement: placement
                     )
                     .frame(

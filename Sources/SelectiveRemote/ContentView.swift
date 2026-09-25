@@ -94,8 +94,8 @@ private enum HostScope: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .personal: UpdateLocalization.text(ru: "Личные", en: "Personal")
-        case .team: UpdateLocalization.text(ru: "Командные", en: "Team")
+        case .personal: HostScopeLabels.personal
+        case .team: HostScopeLabels.team
         }
     }
 }
@@ -785,6 +785,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .id(language.selection)
                 .labelsHidden()
                 .padding(.horizontal, 12)
                 .padding(.bottom, 8)
@@ -1983,6 +1984,7 @@ struct ContentView: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .id(language.selection)
                 .labelsHidden()
                 .onChange(of: hostScope) { _, scope in
                     personalHostDropTargetID = nil
@@ -5267,7 +5269,7 @@ struct ContentView: View {
                     ForEach(model.placements, id: \.id) { placement in
                         let display = model.displays.first(where: { $0.id == placement.id })
                         HStack {
-                            Text(display?.name ?? "Дисплей")
+                            Text(RDPDisplayLabels.name(for: display))
                             if placement.isPrimary {
                                 Label("Основной", systemImage: "star.fill")
                                     .font(.caption)

@@ -1117,6 +1117,7 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
 struct SelectiveRemoteTeamHostsView: View {
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
+    @ObservedObject private var language = AppLanguageStore.shared
     @Binding var selectedHostID: UUID?
     @Binding var requestedAction: SelectiveRemoteTeamHostActionRequest?
     @Binding var searchText: String
@@ -1601,12 +1602,13 @@ struct SelectiveRemoteTeamHostsView: View {
                     if value == "personal" { onShowPersonal() }
                 }
             )) {
-                Text(UpdateLocalization.text(ru: "Личные", en: "Personal"))
+                Text(HostScopeLabels.personal)
                     .tag("personal")
-                Text(UpdateLocalization.text(ru: "Командные", en: "Team"))
+                Text(HostScopeLabels.team)
                     .tag("team")
             }
             .pickerStyle(.segmented)
+            .id(language.selection)
             .labelsHidden()
 
             HStack(spacing: 8) {

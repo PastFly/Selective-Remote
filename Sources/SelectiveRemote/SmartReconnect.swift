@@ -4,7 +4,24 @@ struct SmartReconnectProgress: Equatable, Sendable {
     let attempt: Int
     let maximumAttempts: Int
     let nextAttemptAt: Date?
-    let reason: String
+    private let originalReason: String
+    let displayReason: RDPDisplayStatus?
+
+    var reason: String { displayReason?.text ?? originalReason }
+
+    init(
+        attempt: Int,
+        maximumAttempts: Int,
+        nextAttemptAt: Date?,
+        reason: String,
+        displayReason: RDPDisplayStatus? = nil
+    ) {
+        self.attempt = attempt
+        self.maximumAttempts = maximumAttempts
+        self.nextAttemptAt = nextAttemptAt
+        originalReason = reason
+        self.displayReason = displayReason
+    }
 
     var attemptLabel: String {
         UpdateLocalization.text(ru: "Попытка \(attempt)/\(maximumAttempts)", en: "Attempt \(attempt)/\(maximumAttempts)")
