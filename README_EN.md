@@ -16,9 +16,9 @@ A native Mac app that keeps connections, files, and commands together. Work acro
 
 ## Connect. Organize. Work.
 
-| Connect | Organize | Work |
-| --- | --- | --- |
-| SSH and RDP, including multiple displays; Telnet and Serial when needed. | Profiles, groups, favorites, and tags keep infrastructure easy to find. | Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app. |
+- **Connect:** SSH and RDP, including multiple displays; Telnet and Serial when needed.
+- **Organize:** profiles, groups, favorites, and tags keep infrastructure easy to find.
+- **Work:** Terminal, dual-pane SFTP, SSH tunnels, and Snippets stay in one app.
 
 Available now in **v0.31.0**: SSH Workspace, local Terminal, SFTP, Forwarding Manager, Connection Center, diagnostics, macOS Keychain, and encrypted local backups. [Explore the features and quick start](docs/FEATURES-EN.md).
 
