@@ -106,10 +106,18 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
 
     private let fileManager: FileManager
     private let defaults: UserDefaults
+    private let migrateCredentials: () throws -> Void
 
-    init(fileManager: FileManager = .default, defaults: UserDefaults = .standard) {
+    init(
+        fileManager: FileManager = .default,
+        defaults: UserDefaults = .standard,
+        migrateCredentials: @escaping () throws -> Void = {
+            try KeychainService.migrateCredentialsToUnifiedVault()
+        }
+    ) {
         self.fileManager = fileManager
         self.defaults = defaults
+        self.migrateCredentials = migrateCredentials
     }
 
     func exportArchive(
@@ -119,7 +127,7 @@ final class SelectiveRemoteBackupService: @unchecked Sendable {
     ) throws -> SelectiveRemoteBackupSummary {
         try validatePassword(password)
         if options.includeCredentials {
-            _ = try? KeychainService.migrateCredentialsToUnifiedVault()
+            try migrateCredentials()
         }
 
         let defaultsPlist = try captureDefaults()

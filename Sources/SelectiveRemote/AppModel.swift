@@ -14,6 +14,7 @@ private enum SelectiveRemoteAppError: LocalizedError {
     case overlappingDisplays
     case profileAlreadyRunning
     case activeProfileDeletion
+    case profileKeychainDeletionFailed
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +32,8 @@ private enum SelectiveRemoteAppError: LocalizedError {
             UpdateLocalization.text(ru: "Этот профиль уже подключён. Можно одновременно запускать другие профили.", en: "This profile is already connected. You can run other profiles at the same time.")
         case .activeProfileDeletion:
             UpdateLocalization.text(ru: "Сначала отключите активную RDP/SSH-сессию и остановите SSH-туннели этого профиля.", en: "Disconnect the active RDP/SSH session and stop this profile’s SSH tunnels first.")
+        case .profileKeychainDeletionFailed:
+            UpdateLocalization.text(ru: "Не удалось удалить пароли из Keychain. Профиль сохранён; повторите попытку.", en: "Could not delete passwords from Keychain. The profile was kept; please try again.")
         }
     }
 }
@@ -416,6 +419,9 @@ final class AppModel: NSObject, ObservableObject {
     private let displayManager = DisplayManager()
     private let overlay = DisplayNumberOverlay()
     private let freeRDP = FreeRDPService()
+    var deleteProfilePasswords: (UUID) throws -> Void = {
+        try KeychainService.deleteAllPasswords(profileID: $0)
+    }
     private let profilesKey = "SelectiveRemote.connectionProfiles.v2"
     private let selectedProfileKey = "SelectiveRemote.selectedProfileID.v2"
     private let legacyProfileKey = "SelectiveRemote.connectionProfile.v1"
@@ -2193,7 +2199,12 @@ final class AppModel: NSObject, ObservableObject {
             errorMessage = SelectiveRemoteAppError.activeProfileDeletion.localizedDescription
             return
         }
-        try? KeychainService.deleteAllPasswords(profileID: id)
+        do {
+            try deleteProfilePasswords(id)
+        } catch {
+            errorMessage = SelectiveRemoteAppError.profileKeychainDeletionFailed.localizedDescription
+            return
+        }
         setPasswordStored(false, profileID: id, kind: .rdp)
         setPasswordStored(false, profileID: id, kind: .gateway)
         setPasswordStored(false, profileID: id, kind: .ssh)
