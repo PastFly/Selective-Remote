@@ -29,6 +29,7 @@ class SiteTests(unittest.TestCase):
                 ids=[a.get('id') for t,a in tags if a.get('id')]
                 self.assertEqual([i for i in ids if i in SECTIONS],SECTIONS)
                 self.assertTrue(any(t=='a' and a.get('href')==other and a.get('hreflang') for t,a in tags))
+                self.assertTrue(any(t=='a' and 'brand' in a.get('class','').split() and a.get('href')==('/Selective-Remote/ru/' if lang=='ru' else '/Selective-Remote/') for t,a in tags))
                 self.assertTrue(any(t=='a' and a.get('href')=='#main' for t,a in tags))
                 self.assertFalse(any(t=='a' and 'README' in a.get('href','') for t,a in tags))
 
