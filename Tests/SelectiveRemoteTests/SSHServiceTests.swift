@@ -185,6 +185,30 @@ func hostBoundJumpAuthenticationIdentity() throws {
     #expect(settings.jumpCredentialIdentity?.hasPrefix("jump|\(jump.id.uuidString)|") == true)
 }
 
+@Test("Recovery probe isolates destination trust and pins managed Jump trust")
+func routeBoundHostKeyProbeArguments() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "internal.example.test"
+    destination.sshPort = 2222
+    var jump = ConnectionProfile(connectionType: .ssh)
+    jump.host = "bastion.example.test"
+    jump.sshHostKeyPolicy = .acceptNew
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil, jumpHost: jump)
+    let arguments = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    #expect(arguments.contains("-F"))
+    #expect(arguments.contains("/dev/null"))
+    #expect(arguments.contains("UserKnownHostsFile=/private/tmp/probe/known_hosts"))
+    #expect(arguments.contains("StrictHostKeyChecking=accept-new"))
+    #expect(arguments.last == "internal.example.test")
+    let proxy = try #require(arguments.first(where: { $0.hasPrefix("ProxyCommand=") }))
+    #expect(proxy.contains("'yes'"))
+    #expect(proxy.contains(SSHKnownHostsService.defaultURL.path))
+    #expect(!proxy.contains("'accept-new'"))
+}
+
 @Test("Saved SSH password resolves by profile after a fresh Terminal connection is reconstructed")
 func savedSSHPasswordReferenceIsStableAcrossReconnect() throws {
     var profile = ConnectionProfile(connectionType: .ssh)

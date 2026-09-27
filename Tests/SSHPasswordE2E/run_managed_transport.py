@@ -120,7 +120,32 @@ try:
         f"session={'session=transport-ok' in managed.stdout}, "
         f"helper_signal={-managed.returncode if managed.returncode < 0 else 'none'}"
     )
-    print("direct, main-style -J, OpenSSH -W, managed jump, destination PTY session: PASS")
+    probe_hosts = ROOT / "probe_known_hosts"
+    probe_hosts.write_text("")
+    probe = ["/usr/bin/ssh", "-F", "/dev/null", "-S", "none",
+             "-o", "ControlMaster=no", "-o", f"UserKnownHostsFile={probe_hosts}",
+             "-o", "GlobalKnownHostsFile=/dev/null", "-o", "StrictHostKeyChecking=accept-new",
+             "-o", "HashKnownHosts=no", "-o", "CheckHostIP=no", "-o", "UpdateHostKeys=no",
+             "-o", "BatchMode=yes", "-o", "PreferredAuthentications=none",
+             "-o", "PubkeyAuthentication=no", "-o", "PasswordAuthentication=no",
+             "-o", "KbdInteractiveAuthentication=no", "-o", "NumberOfPasswordPrompts=0",
+             "-o", "ConnectTimeout=8", "-p", str(ports[1]),
+             "-o", "ProxyCommand=" + proxy_command, "-N", "127.0.0.1"]
+    run(probe, timeout=15, env=env)
+    observed = probe_hosts.read_text()
+    assert observed.startswith(f"[127.0.0.1]:{ports[1]} "), observed
+    assert host_keys[1].with_suffix(".pub").read_text().split()[1] in observed, observed
+
+    original_known_hosts = known_hosts.read_text()
+    incorrect_jump = client_key.with_suffix(".pub").read_text().split()[1]
+    known_hosts.write_text(original_known_hosts.replace(
+        host_keys[0].with_suffix(".pub").read_text().split()[1], incorrect_jump
+    ))
+    probe_hosts.write_text("")
+    run(probe, timeout=15, env=env)
+    assert probe_hosts.read_text() == "", "probe reached destination despite changed Jump Host"
+    known_hosts.write_text(original_known_hosts)
+    print("direct, managed jump, destination PTY, isolated host-key probe, changed-jump rejection: PASS")
 finally:
     agent.terminate()
     agent.wait(timeout=3)

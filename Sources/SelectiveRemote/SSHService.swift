@@ -468,7 +468,10 @@ enum SSHService {
         }
     }
 
-    static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
+    static func proxyArguments(
+        settings: SSHConnectionSettings,
+        probeKnownHostsPath: String? = nil
+    ) -> [String] {
         let helper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers", isDirectory: true)
             .appendingPathComponent("SelectiveRemoteSSHProxy")
@@ -483,8 +486,8 @@ enum SSHService {
                 "%h", "%p", shellEscaped(jumpHostUsername),
                 "\"${SELECTIVEREMOTE_JUMP_SECRET_FILE:-}\"",
                 shellEscaped(jumpIdentity),
-                shellEscaped(jumpHostKeyPolicy.openSSHValue),
-                "''"
+                shellEscaped(probeKnownHostsPath == nil ? jumpHostKeyPolicy.openSSHValue : SSHHostKeyPolicy.strict.openSSHValue),
+                shellEscaped(probeKnownHostsPath ?? "")
             ]
             return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
         }
@@ -501,6 +504,87 @@ enum SSHService {
             "\"\(secret)\""
         ]
         return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
+    }
+
+    /// Reads the destination host key over the configured transport into an
+    /// isolated file. The temporary accept-new policy never touches the user's
+    /// known_hosts; a managed Jump Host remains strict against that real file.
+    static func observedDestinationKey(
+        settings: SSHConnectionSettings,
+        environment: [String: String]
+    ) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SelectiveRemoteHostProbe-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            guard chmod(directory.path, 0o700) == 0 else {
+                throw SSHKnownHostsService.RecoveryError.unsafeSource
+            }
+            let file = directory.appendingPathComponent("known_hosts")
+            let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { throw SSHKnownHostsService.RecoveryError.unsafeSource }
+            close(fd)
+
+            let arguments = hostKeyProbeArguments(
+                settings: settings,
+                temporaryKnownHostsPath: file.path
+            )
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = arguments
+            process.environment = environment
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let deadline = Date().addingTimeInterval(15)
+            while process.isRunning && Date() < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            guard !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw SSHKnownHostsService.RecoveryError.scanChanged
+            }
+            return contents
+        }.value
+    }
+
+    static func hostKeyProbeArguments(
+        settings: SSHConnectionSettings,
+        temporaryKnownHostsPath: String
+    ) -> [String] {
+        var arguments = [
+                "-F", "/dev/null", "-S", "none",
+                "-o", "ControlMaster=no",
+                "-o", "UserKnownHostsFile=\(temporaryKnownHostsPath)",
+                "-o", "GlobalKnownHostsFile=/dev/null",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "HashKnownHosts=no",
+                "-o", "CheckHostIP=no",
+                "-o", "UpdateHostKeys=no",
+                "-o", "BatchMode=yes",
+                "-o", "PreferredAuthentications=none",
+                "-o", "PubkeyAuthentication=no",
+                "-o", "PasswordAuthentication=no",
+                "-o", "KbdInteractiveAuthentication=no",
+                "-o", "NumberOfPasswordPrompts=0",
+                "-o", "ConnectTimeout=8",
+                "-o", "ConnectionAttempts=1",
+                "-p", String(settings.port)
+            ]
+        arguments += proxyArguments(
+            settings: settings,
+            probeKnownHostsPath: settings.jumpHostName == nil ? nil : defaultKnownHostsPath
+        )
+        arguments += ["-N", settings.host]
+        return arguments
+    }
+
+    private static var defaultKnownHostsPath: String {
+        SSHKnownHostsService.defaultURL.path
     }
 
     private static func shellEscaped(_ value: String) -> String {
