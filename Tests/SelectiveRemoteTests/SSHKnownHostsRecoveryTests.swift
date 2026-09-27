@@ -43,6 +43,7 @@ func ambiguousRecoveryCandidates() throws {
         "server.example.test ssh-ed25519 \(oldKey)\nserver.example.test ssh-ed25519 \(oldKey)\n",
         "@revoked server.example.test ssh-ed25519 \(oldKey)\n",
         "server.example.test ssh-rsa \(oldKey)\n",
+        "*.example.test ssh-ed25519 \(oldKey)\n",
     ] {
         let fixture = try recoveryFixture(source)
         defer { try? FileManager.default.removeItem(at: fixture.directory) }

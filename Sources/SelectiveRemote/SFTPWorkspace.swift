@@ -763,7 +763,8 @@ struct SFTPWorkspaceView: View {
             }
             if success, let path {
                 navigateRemote(pane, to: path)
-            } else if !success, connection.kind == .savedProfile {
+            } else if !success, connection.kind == .savedProfile,
+                      pane.session.remote.failedForHostKeyMismatch {
                 Task { @MainActor in
                     await appModel.offerKnownHostRecovery(
                         settings: settings,

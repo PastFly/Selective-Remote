@@ -116,7 +116,10 @@ enum SSHKnownHostsService {
         let observed = parse(contents: scannedContents, path: "ssh-keyscan")
         let matched = matches.compactMap { line in stored.first(where: { $0.lineNumber == line }) }
         guard !matched.isEmpty, matched.count == matches.count,
-              matched.allSatisfy({ $0.marker == nil && !$0.hosts.contains(",") }),
+              matched.allSatisfy({
+                  $0.marker == nil && !$0.hosts.contains(",")
+                      && ($0.hosts == lookupHost || $0.hosts.hasPrefix("|1|"))
+              }),
               Set(matched.map(\.algorithm)).count == matched.count,
               !observed.isEmpty,
               observed.allSatisfy({ $0.hosts == lookupHost && $0.marker == nil }),

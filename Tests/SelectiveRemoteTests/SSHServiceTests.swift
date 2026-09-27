@@ -578,6 +578,19 @@ func buildsSFTPFileManagementCommands() throws {
     )
 }
 
+@Test("SFTP master distinguishes host-key mismatch from authentication and path failures")
+func classifiesSFTPMasterHostKeyFailureOnlyFromSSHOutput() {
+    if case .hostKeyChanged = SFTPServiceError.masterFailure(
+        status: 255, stderr: "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed."
+    ) {} else { Issue.record("Expected changed host key") }
+    if case .authenticationRequired = SFTPServiceError.masterFailure(
+        status: 255, stderr: "Permission denied (publickey)."
+    ) {} else { Issue.record("Expected authentication failure") }
+    if case .hostKeyChanged = SFTPServiceError.masterFailure(
+        status: 1, stderr: "missing remote directory"
+    ) { Issue.record("Directory errors cannot trigger host-key recovery") }
+}
+
 @Test("SFTP отклоняет опасные имена и некорректные права")
 func validatesSFTPFileManagementInput() {
     #expect(throws: SFTPServiceError.self) {
