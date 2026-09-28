@@ -125,6 +125,7 @@ struct ContentView: View {
     @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject private var syncPresentation = SyncPresentationStore.shared
+    @ObservedObject private var notificationCenter = MacNotificationCenter.shared
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
     @StateObject private var teamHosts = SelectiveRemoteTeamHostStore.shared
@@ -142,6 +143,9 @@ struct ContentView: View {
     @State private var showsSSHDiagnostics = false
     @State private var showsAppearanceSettings = false
     @State private var showsUpdatePopover = false
+    @State private var showsNotifications = false
+    @State private var notificationAccountEndpoint: String?
+    @State private var notificationAccountID: UUID?
     @State private var profileToShare: ConnectionProfile?
     @State private var personalHostPendingDeletion: ConnectionProfile?
     @State private var showsPersonalFolderCreator = false
@@ -245,7 +249,9 @@ struct ContentView: View {
         )
     }
 
-    var body: some View {
+    var body: some View { notificationLifecycle(mainContent) }
+
+    private var mainContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
                 .navigationSplitViewColumnWidth(
@@ -480,12 +486,7 @@ struct ContentView: View {
                 },
                 onReviewDevices: {
                     showsSyncCenter = false
-                    let raw = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
-                        ?? SelectiveRemoteCloudEndpoint.production
-                    guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(raw),
-                          let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
-                    else { return }
-                    NSWorkspace.shared.open(url)
+                    openCloudDevices()
                 },
                 onOpenDiagnostics: {
                     showsSyncCenter = false
@@ -493,6 +494,62 @@ struct ContentView: View {
                     setMainArea(.diagnostics)
                 }
             )
+        }
+    }
+
+    private func notificationLifecycle<V: View>(_ view: V) -> some View {
+        view
+            .task(id: cloudSessionAvailable) { await refreshNotificationSources() }
+            .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+                notificationAccountID = nil
+                notificationCenter.setAccount(nil)
+                refreshCloudSessionAvailability()
+                Task { await refreshNotificationSources() }
+            }
+            .onChange(of: showsNotifications) { _, visible in
+                if visible { Task { await refreshNotificationSources() } }
+            }
+            .onChange(of: cloudEndpoint) { _, _ in
+                notificationAccountEndpoint = nil
+                notificationAccountID = nil
+                notificationCenter.setAccount(nil)
+                refreshCloudSessionAvailability()
+                Task { await refreshNotificationSources() }
+            }
+            .onChange(of: syncPresentation.personal) { _, snapshot in
+                if notificationAccountID != nil &&
+                    notificationAccountID == notificationCenter.currentAccountID {
+                    notificationCenter.applySyncSnapshot(snapshot)
+                }
+            }
+            .onChange(of: syncPresentation.team) { _, snapshot in
+                if notificationAccountID != nil &&
+                    notificationAccountID == notificationCenter.currentAccountID {
+                    notificationCenter.applySyncSnapshot(snapshot)
+                }
+            }
+    }
+
+    private var notificationBell: some View {
+        Button { showsNotifications.toggle() } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "bell")
+                if notificationCenter.attentionCount > 0 {
+                    Text(notificationCenter.attentionCount > 9 ? "9+" :
+                         "\(notificationCenter.attentionCount)")
+                        .font(.caption2.bold())
+                        .foregroundStyle(Color.accentColor)
+                }
+            }
+        }
+        .buttonStyle(.borderless)
+        .help(UpdateLocalization.text(ru: "Уведомления", en: "Notifications"))
+        .accessibilityLabel(UpdateLocalization.text(
+            ru: "Уведомления: требуют внимания \(notificationCenter.attentionCount)",
+            en: "Notifications: \(notificationCenter.attentionCount) need attention"
+        ))
+        .popover(isPresented: $showsNotifications, arrowEdge: .top) {
+            NotificationCenterView(center: notificationCenter, onOpen: openNotification)
         }
     }
 
@@ -535,6 +592,7 @@ struct ContentView: View {
                     }
                     .layoutPriority(1)
                     Spacer(minLength: 6)
+                    notificationBell
                     Button {
                         showsAppearanceSettings.toggle()
                     } label: {
@@ -2321,6 +2379,88 @@ struct ContentView: View {
         }
         if !cloudSessionAvailable, teamHosts.hosts.isEmpty {
             hostScope = .personal
+        }
+        if !cloudSessionAvailable {
+            notificationAccountID = nil
+            notificationCenter.setAccount(nil)
+        }
+    }
+
+    @MainActor
+    private func refreshNotificationSources() async {
+        guard cloudSessionAvailable,
+              let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+        else {
+            notificationAccountID = nil
+            notificationCenter.setAccount(nil)
+            return
+        }
+        let sourceEndpoint = cloudEndpoint
+        if notificationAccountEndpoint != endpoint.absoluteString {
+            notificationCenter.setAccount(nil)
+            notificationAccountID = nil
+            notificationAccountEndpoint = endpoint.absoluteString
+        }
+        guard let user = try? await cloudClient.currentUser(endpoint: endpoint),
+              cloudEndpoint == sourceEndpoint, cloudSessionAvailable
+        else { return }
+        let sameAccount = notificationAccountID == user.id
+        notificationCenter.setAccount(user.id)
+        notificationAccountID = user.id
+        if sameAccount {
+            notificationCenter.applySyncSnapshot(syncPresentation.personal)
+            notificationCenter.applySyncSnapshot(syncPresentation.team)
+        }
+        if let invitations = try? await cloudClient.pendingTeamInvitations(endpoint: endpoint),
+           cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
+           notificationAccountID == user.id,
+           notificationCenter.currentAccountID == user.id {
+            notificationCenter.reconcileInvitations(invitations.map {
+                (id: $0.id, teamID: $0.teamID)
+            })
+        }
+        if let devices = try? await cloudClient.pendingDeviceIDs(endpoint: endpoint),
+           cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
+           notificationAccountID == user.id,
+           notificationCenter.currentAccountID == user.id {
+            notificationCenter.reconcileDevices(devices)
+        }
+    }
+
+    private func openCloudDevices() {
+        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint),
+              let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
+        else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func openNotification(_ item: NotificationItem) {
+        showsNotifications = false
+        switch item.kind {
+        case .deviceApproval:
+            openCloudDevices()
+        case .invitation:
+            refreshCloudSessionAvailability()
+            if cloudSessionAvailable { showsCloudManagement = true }
+            else { showsCloudOnboarding = true }
+        case .syncError, .conflict:
+            showsSyncCenter = true
+        case .failClosed, .wrapperIssue:
+            refreshCloudSessionAvailability()
+            if cloudSessionAvailable { showsCloudManagement = true }
+            else { showsSyncCenter = true }
+        case .hostIdentity:
+            guard let id = UUID(uuidString: item.sourceID) else { return }
+            if model.profiles.contains(where: { $0.id == id }) {
+                model.selectProfile(id)
+                openPersonalHosts()
+                selectedTab = .security
+                model.connect()
+            } else if let host = teamHosts.hosts.first(where: { $0.id == id }) {
+                openTeamHostCard(host)
+                openTeamTerminal(host, username: host.profile.username,
+                                 temporaryPassword: host.credentials.password)
+            }
         }
     }
 

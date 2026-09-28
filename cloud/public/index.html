@@ -348,6 +348,19 @@
         <header class="workspace-header">
           <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
           <div class="workspace-global-actions">
+            <details class="workspace-notification-details" id="workspace-notification-details">
+              <summary id="workspace-notification-summary" aria-label="Уведомления"><svg aria-hidden="true" viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></svg><b id="workspace-notification-badge" hidden></b></summary>
+              <div class="workspace-notification-panel" role="region" aria-labelledby="workspace-notification-title">
+                <div class="notification-heading"><h3 id="workspace-notification-title">Уведомления</h3><span id="workspace-notification-unread"></span></div>
+                <div class="notification-filters" role="group" aria-label="Фильтр уведомлений">
+                  <button type="button" data-notification-filter="all" aria-pressed="true">Все</button>
+                  <button type="button" data-notification-filter="needsAction" aria-pressed="false">Требуют действия</button>
+                  <button type="button" data-notification-filter="sync" aria-pressed="false">Sync</button>
+                  <button type="button" data-notification-filter="security" aria-pressed="false">Безопасность</button>
+                </div>
+                <div id="workspace-notification-list" class="notification-list"></div>
+              </div>
+            </details>
             <details class="workspace-sync-details" id="workspace-sync-details">
               <summary class="workspace-sync-state" id="workspace-sync-state" data-state="unknown" data-tooltip="Состояние локальной и Cloud-синхронизации"><i aria-hidden="true"></i><span role="status" aria-live="polite">Статус неизвестен</span></summary>
               <div class="workspace-sync-panel">

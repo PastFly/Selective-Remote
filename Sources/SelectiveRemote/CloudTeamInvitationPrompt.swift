@@ -81,13 +81,28 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
 
     @MainActor
     private func refreshInvitation() async {
-        guard invitation == nil,
-              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
+        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
               await client.hasStoredSession(endpoint: url)
-        else { return }
+        else {
+            invitation = nil
+            MacNotificationCenter.shared.setAccount(nil)
+            return
+        }
         do {
-            invitation = try await client.pendingTeamInvitations(endpoint: url)
-                .first { !dismissedInvitationIDs.contains($0.id) }
+            let user = try await client.currentUser(endpoint: url)
+            let pending = try await client.pendingTeamInvitations(endpoint: url)
+            guard let confirmed = try? await client.currentUser(endpoint: url),
+                  confirmed.id == user.id else { return }
+            MacNotificationCenter.shared.setAccount(user.id)
+            MacNotificationCenter.shared.reconcileInvitations(pending.map {
+                (id: $0.id, teamID: $0.teamID)
+            })
+            if let current = invitation, !pending.contains(where: { $0.id == current.id }) {
+                invitation = nil
+            }
+            if invitation == nil {
+                invitation = pending.first { !dismissedInvitationIDs.contains($0.id) }
+            }
         } catch {
             // A missing or expired Cloud session must not interrupt local-only work.
         }
@@ -101,6 +116,7 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
             do {
                 _ = try await client.acceptTeamInvitation(endpoint: url, invitationID: value.id)
                 invitation = nil
+                await refreshInvitation()
                 NotificationCenter.default.post(
                     name: .selectiveRemoteCloudTeamMembershipChanged,
                     object: nil

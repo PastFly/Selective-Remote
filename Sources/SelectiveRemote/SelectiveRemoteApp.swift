@@ -11,6 +11,9 @@ extension Notification.Name {
     static let selectiveRemoteCloudTeamMembershipChanged = Notification.Name(
         "SelectiveRemote.cloudTeamMembershipChanged"
     )
+    static let selectiveRemoteCloudSessionChanged = Notification.Name(
+        "SelectiveRemote.cloudSessionChanged"
+    )
     static let selectiveRemoteOpenTeamHosts = Notification.Name(
         "SelectiveRemote.openTeamHosts"
     )

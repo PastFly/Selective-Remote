@@ -27,8 +27,14 @@ import {
   rotateTeamVault,
   synchronizeTeamVault,
 } from "./team-vault-sync.js";
+import {
+  deviceNotificationObservations, invitationNotificationObservations,
+  syncNotificationDecision,
+} from "./notification-projection.js";
+import { createNotificationCenter } from "./notification-center.js";
 
 const syncObservationEvent = "selective-remote:sync-observation";
+const notificationSourceEvent = "selective-remote:notification-source";
 const syncIssueCodes = new Set([
   "authentication_required", "local_vault_locked", "team_vault_locked", "recovery_passphrase_required",
   "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
@@ -45,6 +51,10 @@ export function publishSyncObservation(documentValue, observation) {
   if (scope !== "personal" && scope !== "team") return;
   if (!["start", "locked", "selection", "result", "error"].includes(type)) return;
   const detail = { scope, type };
+  if (typeof observation.vaultID === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(observation.vaultID)) {
+    detail.vaultID = observation.vaultID;
+  }
   if (type === "result") {
     const result = observation.result ?? {};
     const status = String(result.status ?? "");
@@ -2282,7 +2292,14 @@ export function initializeTeamWorkspace({
   }
 
   async function loadDevices() {
+    const sessionID = client.session()?.id;
     const values = await client.listDevices();
+    if (!sessionID || client.session()?.id !== sessionID || !identity) return;
+    const EventType = documentValue.defaultView?.CustomEvent;
+    if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
+      detail: { recipient: sessionID, group: "devices", complete: true, at: new Date().toISOString(),
+        observations: deviceNotificationObservations(values, sessionID) },
+    }));
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     devices.replaceChildren();
     if (deviceOrbit) {
@@ -2658,7 +2675,15 @@ export function initializeTeamWorkspace({
   }
 
   async function loadPendingInvitations() {
-    accountInvitations = await client.listPendingTeamInvitations();
+    const sessionID = client.session()?.id;
+    const values = await client.listPendingTeamInvitations();
+    if (!sessionID || client.session()?.id !== sessionID || !identity) return;
+    accountInvitations = values;
+    const EventType = documentValue.defaultView?.CustomEvent;
+    if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
+      detail: { recipient: sessionID, group: "invitations", complete: true, at: new Date().toISOString(),
+        observations: invitationNotificationObservations(values) },
+    }));
     renderPendingInvitations();
     renderOverviewSummary();
   }
@@ -2677,6 +2702,12 @@ export function initializeTeamWorkspace({
       if (identity !== activeIdentity) return;
       if (pendingForAccount) {
         accountInvitations = pendingForAccount;
+        const EventType = documentValue.defaultView?.CustomEvent;
+        const sessionID = client.session()?.id;
+        if (EventType && sessionID) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
+          detail: { recipient: sessionID, group: "invitations", complete: true, at: new Date().toISOString(),
+            observations: invitationNotificationObservations(pendingForAccount) },
+        }));
         renderPendingInvitations();
         renderOverviewSummary();
       }
@@ -2819,7 +2850,7 @@ export function initializeTeamWorkspace({
     activeVault = selectedVault,
   ) {
     if (!activeController || !activeTeam || !activeVault) return null;
-    publishSyncObservation(documentValue, { scope: "team", type: "start" });
+    publishSyncObservation(documentValue, { scope: "team", type: "start", vaultID: activeVault.id });
     return exclusiveVaultOperation(async () => {
       const result = await synchronizeTeamVault({
         client,
@@ -2860,9 +2891,9 @@ export function initializeTeamWorkspace({
   function applySynchronizationOutcome(outcome, { background = false } = {}) {
     if (!outcome) return;
     const { result, wrapperProvisioning, wrapperProvisioningFailed } = outcome;
-    publishSyncObservation(documentValue, { scope: "team", type: "result", result });
+    publishSyncObservation(documentValue, { scope: "team", type: "result", result, vaultID: selectedVault?.id });
     if (wrapperProvisioningFailed) {
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed" });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed", vaultID: selectedVault?.id });
     }
     if (result.status === "conflict") {
       renderConflicts(result);
@@ -2906,7 +2937,7 @@ export function initializeTeamWorkspace({
         applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
       } catch (error) {
         const code = String(error?.message ?? "");
-        publishSyncObservation(documentValue, { scope: "team", type: "error", code });
+        publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id });
         if (code === "team_vault_rotation_required") {
           selectedVault = { ...selectedVault, rotationRequired: true };
           vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
@@ -2932,7 +2963,7 @@ export function initializeTeamWorkspace({
     stopBackgroundSync();
     resetRecordEditor();
     resetSnippetBrowser({ lock: true });
-    publishSyncObservation(documentValue, { scope: "team", type: "locked" });
+    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id });
     controller?.lock();
     controller = null;
     selectedVault = null;
@@ -3011,7 +3042,7 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
-    publishSyncObservation(documentValue, { scope: "team", type: "selection" });
+    publishSyncObservation(documentValue, { scope: "team", type: "selection", vaultID: selectedVault?.id });
     workspace.hidden = activeView !== "hosts";
     recordCreate.hidden = activeView !== "hosts";
     recordCreate.disabled = !canEdit();
@@ -3025,7 +3056,7 @@ export function initializeTeamWorkspace({
       applySynchronizationOutcome(outcome);
     } catch (error) {
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id });
       setWorkspaceControls(true);
       rotateButton.hidden = true;
       rotateButton.disabled = true;
@@ -3652,7 +3683,7 @@ export function initializeTeamWorkspace({
       applySynchronizationOutcome(await synchronizeAndProvision());
     } catch (error) {
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id });
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Синхронизация временно приостановлена: ключ обновляется автоматически."
@@ -3667,7 +3698,7 @@ export function initializeTeamWorkspace({
   lockButton.addEventListener("click", () => {
     stopBackgroundSync();
     controller?.lock();
-    publishSyncObservation(documentValue, { scope: "team", type: "locked" });
+    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id });
     records.replaceChildren();
     clearConflicts();
     setWorkspaceControls(true);
@@ -3752,6 +3783,17 @@ export function initializeTeamWorkspace({
   });
   return {
     setView,
+    async refreshNotificationSources() {
+      if (!identity) return;
+      await Promise.allSettled([loadDevices(), loadPendingInvitations()]);
+    },
+    selectVaultForNotification(vaultID) {
+      const vault = vaults.find((value) => value.id === vaultID);
+      if (!vault || !identity) return false;
+      vaultSelect.value = vault.id;
+      if (controller && selectedVault?.id !== vault.id) void openSelectedVault();
+      return true;
+    },
     renderLocaleSensitive() {
       const locale = activeInterfaceLocale(documentValue.documentElement?.lang);
       for (const option of teamSelect.options) {
@@ -4910,6 +4952,25 @@ export function initializePortalNavigation({
   const syncState = documentValue.querySelector("#workspace-sync-state");
   const syncDetails = documentValue.querySelector("#workspace-sync-details");
   let syncPresentation = createSyncPresentationState();
+  let notificationRecipient = null;
+  const notificationCenter = createNotificationCenter({ documentValue, onRoute: (item) => {
+    if (item.kind === "deviceApproval") {
+      selectWorkspacePanel("workspace-devices");
+      requestedWorkspaceRoute = "/app/devices";
+    } else if (item.kind === "invitation") {
+      selectWorkspacePanel("team-vault", null, "teams");
+      requestedWorkspaceRoute = "/app/teams";
+      documentValue.querySelector("#team-pending-invitations")?.scrollIntoView?.({ block: "center" });
+    } else if (item.group === "sync:personal") {
+      selectWorkspacePanel("local-vault", "all");
+      requestedWorkspaceRoute = "/app/personal-vault";
+    } else if (item.group?.startsWith("sync:team:")) {
+      const exactVaultAvailable = teamUI?.selectVaultForNotification?.(item.sourceID) === true;
+      selectWorkspacePanel("team-vault", null, exactVaultAvailable ? "hosts" : "teams");
+      requestedWorkspaceRoute = exactVaultAvailable ? "/app/team-vault" : "/app/teams";
+    }
+    setPath(requestedWorkspaceRoute);
+  } });
   const interfaceLocale = () => activeInterfaceLocale(documentValue.documentElement?.lang);
   function renderCommands() {
     if (!commandResults) return;
@@ -4992,7 +5053,16 @@ export function initializePortalNavigation({
   documentValue.addEventListener(syncObservationEvent, (event) => {
     syncPresentation = reduceSyncPresentationState(syncPresentation, event.detail);
     updateSyncState();
+    if (notificationRecipient) {
+      const decision = syncNotificationDecision(syncPresentation[event.detail.scope], {
+        scope: event.detail.scope, recipient: notificationRecipient,
+        teamVaultID: event.detail.vaultID ?? null,
+      });
+      if (decision) notificationCenter.observe({ ...decision,
+        recipient: notificationRecipient, at: new Date().toISOString() });
+    }
   });
+  documentValue.addEventListener(notificationSourceEvent, (event) => notificationCenter.observe(event.detail));
   syncDetails?.addEventListener("toggle", updateSyncState);
   syncDetails?.addEventListener("keydown", (event) => {
     if (event.key === "Escape") { syncDetails.open = false; syncState?.focus(); }
@@ -5020,6 +5090,7 @@ export function initializePortalNavigation({
   documentValue.defaultView?.addEventListener("offline", updateSyncState);
   documentValue.addEventListener("selective-remote:locale-changed", () => {
     updateSyncState();
+    notificationCenter.render();
     vaultUI?.render?.();
     teamUI?.renderLocaleSensitive?.();
     refreshVaultSynchronizationLocale();
@@ -5031,11 +5102,15 @@ export function initializePortalNavigation({
     sessionChanged(user) {
       if (user) {
         sessionActive = true;
+        notificationRecipient = user.id;
+        notificationCenter.sessionChanged(user);
         syncPresentation = createSyncPresentationState();
         updateSyncState();
         showWorkspace();
       } else if (sessionActive) {
         sessionActive = false;
+        notificationRecipient = null;
+        notificationCenter.sessionChanged(null);
         syncPresentation = reduceSyncPresentationState(syncPresentation, { type: "signedOut" });
         updateSyncState();
         showAuthentication("login", { replace: true });
@@ -5182,6 +5257,9 @@ export async function initializePortal({
     showAuthMode: account?.showAuth,
   });
   navigation?.sessionChanged(account?.client.session());
+  if (account?.client.session()) {
+    await account.teamWorkspace?.refreshNotificationSources?.();
+  }
   if (teamInvitation.present) {
     navigation?.showAuthentication("login", { replace: true });
     const accountMessage = documentValue.querySelector("#cloud-account-message");
