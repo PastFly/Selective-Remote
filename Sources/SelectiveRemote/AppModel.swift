@@ -4116,11 +4116,23 @@ final class AppModel: NSObject, ObservableObject {
                 profileID: settings.profileID, scannedContents: observed
             )
         }
-        guard let resolved, contextValid() else { return }
+        guard let resolved else { return }
+        presentKnownHostRecoveryCandidate(
+            resolved, settings: settings, contextValid: contextValid, retry: retry
+        )
+    }
+
+    func presentKnownHostRecoveryCandidate(
+        _ candidate: SSHKnownHostRecoveryCandidate,
+        settings: SSHConnectionSettings,
+        contextValid: @escaping () -> Bool,
+        retry: @escaping () -> Void
+    ) {
+        guard knownHostRecoveryCandidate == nil, contextValid() else { return }
         knownHostRecoverySettings = settings
         knownHostRecoveryContextValid = contextValid
         knownHostRecoveryRetry = retry
-        knownHostRecoveryCandidate = resolved
+        knownHostRecoveryCandidate = candidate
     }
 
     private func observedDestinationKey(settings: SSHConnectionSettings) async throws -> String {
@@ -4145,8 +4157,9 @@ final class AppModel: NSObject, ObservableObject {
         knownHostRecoverySettings = nil
     }
 
-    func confirmKnownHostRecovery() {
+    func confirmKnownHostRecovery(candidateID: UUID) {
         guard let candidate = knownHostRecoveryCandidate,
+              candidate.id == candidateID,
               let settings = knownHostRecoverySettings,
               knownHostRecoveryContextValid?() == true,
               !knownHostRecoveryWorking else { return }

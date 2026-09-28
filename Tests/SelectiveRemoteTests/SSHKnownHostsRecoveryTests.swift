@@ -34,6 +34,40 @@ func changedDestinationCandidate() throws {
     #expect(try String(contentsOf: fixture.file, encoding: .utf8) == original)
 }
 
+@MainActor
+@Test("An existing recovery prompt cannot be replaced or confirmed by another candidate")
+func recoveryPromptIsBoundToDisplayedCandidate() throws {
+    let oldKey = Data("old-host-key".utf8).base64EncodedString()
+    let newKey = Data("new-host-key".utf8).base64EncodedString()
+    let fixture = try recoveryFixture("first.example.test ssh-ed25519 \(oldKey)\nsecond.example.test ssh-ed25519 \(oldKey)\n")
+    defer { try? FileManager.default.removeItem(at: fixture.directory) }
+    var firstProfile = ConnectionProfile(connectionType: .ssh)
+    firstProfile.host = "first.example.test"
+    var secondProfile = ConnectionProfile(connectionType: .ssh)
+    secondProfile.host = "second.example.test"
+    let firstSettings = try SSHConnectionSettings(profile: firstProfile, identity: nil)
+    let secondSettings = try SSHConnectionSettings(profile: secondProfile, identity: nil)
+    let first = try #require(SSHKnownHostsService.recoveryCandidate(
+        host: firstProfile.host, port: 22, role: .destination,
+        profileID: firstProfile.id,
+        scannedContents: "first.example.test ssh-ed25519 \(newKey)\n",
+        from: fixture.file
+    ))
+    let second = try #require(SSHKnownHostsService.recoveryCandidate(
+        host: secondProfile.host, port: 22, role: .destination,
+        profileID: secondProfile.id,
+        scannedContents: "second.example.test ssh-ed25519 \(newKey)\n",
+        from: fixture.file
+    ))
+    let model = AppModel()
+    model.presentKnownHostRecoveryCandidate(first, settings: firstSettings, contextValid: { true }, retry: {})
+    model.presentKnownHostRecoveryCandidate(second, settings: secondSettings, contextValid: { true }, retry: {})
+    #expect(model.knownHostRecoveryCandidate?.id == first.id)
+    model.confirmKnownHostRecovery(candidateID: second.id)
+    #expect(model.knownHostRecoveryCandidate?.id == first.id)
+    #expect(!model.knownHostRecoveryWorking)
+}
+
 @Test("Duplicate, marker, and changed source algorithms fail closed")
 func ambiguousRecoveryCandidates() throws {
     let oldKey = Data("old-host-key".utf8).base64EncodedString()

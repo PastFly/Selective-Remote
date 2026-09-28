@@ -365,7 +365,7 @@ struct ContentView: View {
                 candidate: candidate,
                 isWorking: model.knownHostRecoveryWorking,
                 onCancel: { model.cancelKnownHostRecovery() },
-                onConfirm: { model.confirmKnownHostRecovery() }
+                onConfirm: { model.confirmKnownHostRecovery(candidateID: candidate.id) }
             )
         }
         .sheet(isPresented: $showsCaptureDiagnostics) {

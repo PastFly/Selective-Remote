@@ -262,6 +262,53 @@ func jumpRecoveryProbePreservesHostAliasRoute() throws {
     #expect(arguments.suffix(3) == ["-l", "alice", "sr-jump-alias"])
 }
 
+@Test("Recovery probe follows the saved username through Match user routing")
+func recoveryProbeMatchesConfiguredUserRoute() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "sr-match-user-alias"
+    destination.username = "actualuser"
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil)
+    let probe = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SelectiveRemoteMatchUserTest-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let config = directory.appendingPathComponent("config")
+    try """
+    Host sr-match-user-alias
+      User defaultuser
+    Match host sr-match-user-alias user actualuser
+      HostName actual.example.test
+    Match host sr-match-user-alias user defaultuser
+      HostName probe.example.test
+
+    """.write(to: config, atomically: true, encoding: .utf8)
+
+    func effectiveHost(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-G", "-F", config.path] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("hostname ") })
+            .map(String.init) ?? ""
+    }
+
+    let normal = try effectiveHost(SSHService.interactiveSSHArguments(settings: settings))
+    #expect(normal == "hostname actual.example.test")
+    #expect(try effectiveHost(probe) == normal)
+}
+
 @Test("Guided recovery rejects a different configured host-key name or trust file")
 func recoveryRejectsDifferentTrustBinding() {
     let baseline = """

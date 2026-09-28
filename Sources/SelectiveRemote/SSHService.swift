@@ -618,6 +618,9 @@ enum SSHService {
             settings: settings,
             probeKnownHostsPath: settings.jumpHostName == nil ? nil : defaultKnownHostsPath
         )
+        if !settings.username.isEmpty {
+            arguments += ["-o", "User=\(settings.username)"]
+        }
         arguments += ["-N", settings.host]
         return arguments
     }
