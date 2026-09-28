@@ -263,11 +263,6 @@ actor SelectiveRemotePersonalVaultAutoSync {
     private let client: SelectiveRemoteCloudAPIClient
     private let keyStore: any SelectiveRemotePersonalVaultKeyStore
     private var pending: Task<Void, Never>?
-    private var presentationFailureObserver: (@Sendable () async -> Void)?
-
-    func observePresentationFailure(_ observer: @escaping @Sendable () async -> Void) {
-        presentationFailureObserver = observer
-    }
 
     struct Download: Sendable {
         let document: SelectiveRemoteVaultDocument
@@ -307,7 +302,6 @@ actor SelectiveRemotePersonalVaultAutoSync {
                 )
             } catch {
                 SelectiveRemotePersonalVaultSyncStatus.recordError(error)
-                await presentationFailureObserver?()
             }
         }
     }

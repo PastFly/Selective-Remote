@@ -29,9 +29,9 @@ typealias SelectiveRemoteTeamVaultMaterializedSnapshotConsumer =
 
 actor SelectiveRemoteTeamVaultAutoSync {
     enum PresentationEvent: Sendable {
-        case started
-        case completed(SelectiveRemoteTeamVaultAutoSyncReport)
-        case failed
+        case started(token: UUID, endpoint: URL, deviceID: UUID)
+        case completed(SelectiveRemoteTeamVaultAutoSyncReport, token: UUID, endpoint: URL, deviceID: UUID)
+        case failed(token: UUID, endpoint: URL, deviceID: UUID)
     }
     static let shared = SelectiveRemoteTeamVaultAutoSync()
 
@@ -94,7 +94,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
             return try await activeSynchronization.task.value
         }
         let token = UUID()
-        await presentationObserver?(.started)
+        await presentationObserver?(.started(token: token, endpoint: endpoint, deviceID: deviceID))
         let task = Task { [self] in
             try await performSynchronization(endpoint: endpoint, deviceID: deviceID)
         }
@@ -104,11 +104,11 @@ actor SelectiveRemoteTeamVaultAutoSync {
             if activeSynchronization?.token == token { activeSynchronization = nil }
             var safeReport = report
             safeReport.lastFailure = nil
-            await presentationObserver?(.completed(safeReport))
+            await presentationObserver?(.completed(safeReport, token: token, endpoint: endpoint, deviceID: deviceID))
             return report
         } catch {
             if activeSynchronization?.token == token { activeSynchronization = nil }
-            await presentationObserver?(.failed)
+            await presentationObserver?(.failed(token: token, endpoint: endpoint, deviceID: deviceID))
             throw error
         }
     }

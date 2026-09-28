@@ -107,7 +107,9 @@ final class SyncPresentationStore: ObservableObject {
 
     @Published private(set) var personal = SyncScopeSnapshot.unknown(.personal)
     @Published private(set) var team = SyncScopeSnapshot.unknown(.team)
+    private(set) var generation = UUID()
     private var accountKey: String?
+    private var activeTeamCycle: (token: UUID, generation: UUID)?
 
     var aggregate: SyncLifecycle {
         let visible = [personal.lifecycle, team.lifecycle].filter {
@@ -120,18 +122,36 @@ final class SyncPresentationStore: ObservableObject {
     }
 
     func setAccount(endpoint: String?, deviceID: String?) {
-        let next = endpoint.flatMap { url in deviceID.map { "\(url)|\($0)" } }
+        let next = Self.accountKey(endpoint: endpoint, deviceID: deviceID)
         guard next != accountKey else { return }
         accountKey = next
+        invalidateSession()
+    }
+
+    func invalidateSession() {
+        generation = UUID()
+        activeTeamCycle = nil
         personal = .unknown(.personal)
         team = .unknown(.team)
+    }
+
+    func matchesAccount(endpoint: String, deviceID: String) -> Bool {
+        accountKey != nil && accountKey == Self.accountKey(endpoint: endpoint, deviceID: deviceID)
+    }
+
+    private static func accountKey(endpoint: String?, deviceID: String?) -> String? {
+        guard let endpoint, let deviceID else { return nil }
+        let normalized = (try? SelectiveRemoteCloudEndpoint.normalized(endpoint))?.absoluteString
+            ?? endpoint
+        return "\(normalized)|\(deviceID.lowercased())"
     }
 
     func begin(_ scope: SyncScope) {
         update(scope, lifecycle: .syncing, issue: nil, pending: nil)
     }
 
-    func recordPersonalSuccess(revision: Int) {
+    func recordPersonalSuccess(revision: Int, generation expectedGeneration: UUID? = nil) {
+        guard expectedGeneration == nil || expectedGeneration == generation else { return }
         let now = Date()
         personal = .init(scope: .personal, lifecycle: .synced, issue: nil,
                          lastConfirmedAt: now, appliedRevision: revision,
@@ -150,6 +170,26 @@ final class SyncPresentationStore: ObservableObject {
     func recordPersonalUnknown() {
         update(.personal, lifecycle: .unknown, issue: nil,
                pending: personal.pendingLocalChanges)
+    }
+
+    func beginTeamCycle(token: UUID) {
+        activeTeamCycle = (token, generation)
+        begin(.team)
+    }
+
+    func completeTeamCycle(_ report: SelectiveRemoteTeamVaultAutoSyncReport,
+                           token: UUID) {
+        guard activeTeamCycle?.token == token,
+              activeTeamCycle?.generation == generation else { return }
+        activeTeamCycle = nil
+        recordTeamReport(report)
+    }
+
+    func failTeamCycle(token: UUID) {
+        guard activeTeamCycle?.token == token,
+              activeTeamCycle?.generation == generation else { return }
+        activeTeamCycle = nil
+        recordTeamFailure()
     }
 
     func recordTeamReport(_ report: SelectiveRemoteTeamVaultAutoSyncReport) {

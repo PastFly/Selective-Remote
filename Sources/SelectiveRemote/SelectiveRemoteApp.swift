@@ -484,15 +484,19 @@ struct SelectiveRemoteApp: App {
             await teamVaultAutoSync.observePresentation { event in
                 await MainActor.run {
                     switch event {
-                    case .started: syncPresentation.begin(.team)
-                    case let .completed(report): syncPresentation.recordTeamReport(report)
-                    case .failed: syncPresentation.recordTeamFailure()
+                    case let .started(token, endpoint, deviceID):
+                        if syncPresentation.matchesAccount(
+                            endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+                        ) { syncPresentation.beginTeamCycle(token: token) }
+                    case let .completed(report, token, endpoint, deviceID):
+                        if syncPresentation.matchesAccount(
+                            endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+                        ) { syncPresentation.completeTeamCycle(report, token: token) }
+                    case let .failed(token, endpoint, deviceID):
+                        if syncPresentation.matchesAccount(
+                            endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+                        ) { syncPresentation.failTeamCycle(token: token) }
                     }
-                }
-            }
-            await personalVaultAutoSync.observePresentationFailure {
-                await MainActor.run {
-                    syncPresentation.recordPersonalFailure(.unknownFailure)
                 }
             }
             updateTeamVaultAutoSync()
@@ -566,6 +570,7 @@ struct SelectiveRemoteApp: App {
             true,
             forKey: SelectiveRemotePersonalVaultSyncStatus.isSyncingKey
         )
+        let syncGeneration = syncPresentation.generation
         syncPresentation.begin(.personal)
         defer {
             UserDefaults.standard.set(
@@ -578,9 +583,16 @@ struct SelectiveRemoteApp: App {
                 endpoint: endpoint,
                 deviceID: deviceID
             ) else {
-                syncPresentation.recordPersonalUnknown()
+                if syncPresentation.matchesAccount(
+                    endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+                ), syncPresentation.generation == syncGeneration {
+                    syncPresentation.recordPersonalUnknown()
+                }
                 return
             }
+            guard syncPresentation.matchesAccount(
+                endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+            ), syncPresentation.generation == syncGeneration else { return }
             let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
             let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
             try KeychainService.savePasswords(snapshot.credentials)
@@ -589,18 +601,29 @@ struct SelectiveRemoteApp: App {
                 endpoint: endpoint,
                 deviceID: deviceID
             )
+            guard syncPresentation.matchesAccount(
+                endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+            ), syncPresentation.generation == syncGeneration else { return }
             if model.profiles != snapshot.profiles { model.profiles = snapshot.profiles }
             if model.independentPortForwards != snapshot.forwarding {
                 model.independentPortForwards = snapshot.forwarding
             }
             if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
             TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
-            syncPresentation.recordPersonalSuccess(revision: download.revision)
+            if syncPresentation.matchesAccount(
+                endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+            ) {
+                syncPresentation.recordPersonalSuccess(
+                    revision: download.revision, generation: syncGeneration
+                )
+            }
         } catch {
             SelectiveRemotePersonalVaultSyncStatus.recordError(error)
-            syncPresentation.recordPersonalFailure(
-                SyncIssue.classifyPersonal(error)
-            )
+            if syncPresentation.matchesAccount(
+                endpoint: endpoint.absoluteString, deviceID: deviceID.uuidString
+            ), syncPresentation.generation == syncGeneration {
+                syncPresentation.recordPersonalFailure(SyncIssue.classifyPersonal(error))
+            }
         }
     }
 }

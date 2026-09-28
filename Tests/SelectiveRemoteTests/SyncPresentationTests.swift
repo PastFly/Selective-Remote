@@ -36,6 +36,23 @@ struct SyncPresentationTests {
         #expect(store.personal.lifecycle == .unknown)
         #expect(store.personal.appliedRevision == nil)
         #expect(store.personal.lastConfirmedAt == nil)
+        #expect(!store.matchesAccount(endpoint: "https://one.example", deviceID: "one"))
+        #expect(store.matchesAccount(endpoint: "https://two.example", deviceID: "two"))
+    }
+
+    @Test("Session reset rejects an in-flight confirmation on the same device")
+    func sessionResetInvalidatesGeneration() {
+        let store = SyncPresentationStore()
+        store.setAccount(endpoint: "https://one.example", deviceID: "same-device")
+        let oldGeneration = store.generation
+        let oldCycle = UUID()
+        store.beginTeamCycle(token: oldCycle)
+        store.invalidateSession()
+        store.recordPersonalSuccess(revision: 7, generation: oldGeneration)
+        store.completeTeamCycle(.init(scannedVaults: 1, synchronizedVaults: 1), token: oldCycle)
+        #expect(store.generation != oldGeneration)
+        #expect(store.personal.lifecycle == .unknown)
+        #expect(store.team.lifecycle == .unknown)
     }
 
     @Test("Retry routes to the exact existing scope notification once")
