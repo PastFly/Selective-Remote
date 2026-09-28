@@ -213,12 +213,14 @@ test("macOS Cloud settings expose device-bound sign-in and native Team managemen
 });
 
 test("macOS exposes direct Cloud management and persists Personal and Team outline disclosure state", async () => {
-  const [content, hosts, rows] = await Promise.all([
+  const [content, service, hosts, rows] = await Promise.all([
     readFile(new URL("ContentView.swift", sourceRoot), "utf8"),
+    readFile(new URL("SyncStatusUtilityView.swift", sourceRoot), "utf8"),
     readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8"),
     readFile(new URL("PersistentOutlineRows.swift", sourceRoot), "utf8"),
   ]);
-  assert.match(content, /ru: "Управление Cloud"/u);
+  assert.match(content, /CloudSyncServiceBlockView\(/u);
+  assert.match(service, /english \? "Cloud Management" : "Управление Cloud"/u);
   assert.match(content, /showsCloudManagement = true/u);
   assert.match(content, /SelectiveRemote\.personal-host\.expanded-folders\.v1/u);
   assert.match(hosts, /SelectiveRemote\.team-host\.expanded-teams\.v1/u);
