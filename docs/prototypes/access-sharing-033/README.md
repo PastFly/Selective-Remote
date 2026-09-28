@@ -18,6 +18,12 @@ Cloud has Members, Groups and Resources, both Access Manager perspectives,
 Effective Access and bulk grant/revoke preview. Resize the browser to inspect
 narrow and mobile layouts.
 
+The Cloud demo scale control shows 6, 100, or 500 synthetic resources, with
+5 members at the base size and 100 at the larger sizes. Search and 25-row pagination keep
+the manager usable. Effective Access lists direct, group, and inherited demo
+paths; preview shows the affected group members and descendants before a
+demo grant or revoke. Only the chosen recipient's matching grants are removed.
+
 The prototype intentionally disables `Credential.Use without Reveal` and
 explains that the current whole-Team-Vault client decryption cannot enforce
 that security property. See the source-backed current architecture audit and
