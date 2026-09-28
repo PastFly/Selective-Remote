@@ -4094,7 +4094,9 @@ final class AppModel: NSObject, ObservableObject {
         if let jumpHost = settings.jumpHostName,
            let jumpPort = settings.jumpHostPort,
            let jumpID = settings.jumpHostProfileID {
-            let jumpScan = try? await SSHKnownHostsService.runKeyscan(host: jumpHost, port: jumpPort)
+            let jumpScan = try? await SSHService.observedJumpHostKey(
+                host: jumpHost, port: jumpPort, username: settings.jumpHostUsername ?? ""
+            )
             candidate = jumpScan.flatMap {
                 SSHKnownHostsService.recoveryCandidate(
                     host: jumpHost, port: jumpPort, role: .jumpHost,
@@ -4154,8 +4156,9 @@ final class AppModel: NSObject, ObservableObject {
             do {
                 let _ = try await SSHKnownHostsService.replaceConfirmed(candidate) {
                     if candidate.role == .jumpHost {
-                        return try await SSHKnownHostsService.runKeyscan(
-                            host: candidate.host, port: candidate.port
+                        return try await SSHService.observedJumpHostKey(
+                            host: candidate.host, port: candidate.port,
+                            username: settings.jumpHostUsername ?? ""
                         )
                     }
                     return try await self.observedDestinationKey(settings: settings)

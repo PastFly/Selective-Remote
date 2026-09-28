@@ -193,7 +193,6 @@ struct SSHProxyCommandMain {
         ]
         if !args[10].isEmpty {
             childArguments += [
-                "-F", "/dev/null",
                 "-S", "none",
                 "-o", "ControlMaster=no",
                 "-o", "GlobalKnownHostsFile=/dev/null",

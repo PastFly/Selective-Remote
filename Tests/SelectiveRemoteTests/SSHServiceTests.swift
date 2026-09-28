@@ -198,8 +198,7 @@ func routeBoundHostKeyProbeArguments() throws {
         settings: settings,
         temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
     )
-    #expect(arguments.contains("-F"))
-    #expect(arguments.contains("/dev/null"))
+    #expect(!arguments.contains("-F"))
     #expect(arguments.contains("UserKnownHostsFile=/private/tmp/probe/known_hosts"))
     #expect(arguments.contains("StrictHostKeyChecking=accept-new"))
     #expect(arguments.last == "internal.example.test")
@@ -207,6 +206,86 @@ func routeBoundHostKeyProbeArguments() throws {
     #expect(proxy.contains("'yes'"))
     #expect(proxy.contains(SSHKnownHostsService.defaultURL.path))
     #expect(!proxy.contains("'accept-new'"))
+}
+
+@Test("Recovery probe honors the same OpenSSH Host alias as the normal connection")
+func recoveryProbePreservesHostAliasRoute() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "sr-recovery-alias"
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil)
+    let probe = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    #expect(!probe.contains("-F"))
+
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SelectiveRemoteSSHConfigTest-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let config = directory.appendingPathComponent("config")
+    try "Host sr-recovery-alias\n  HostName 192.0.2.10\n  HostKeyAlias sr-recovery-alias\n"
+        .write(to: config, atomically: true, encoding: .utf8)
+
+    func effectiveHost(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-G", "-F", config.path] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("hostname ") })
+            .map(String.init) ?? ""
+    }
+
+    #expect(try effectiveHost(SSHService.interactiveSSHArguments(settings: settings)) == "hostname 192.0.2.10")
+    #expect(try effectiveHost(probe) == "hostname 192.0.2.10")
+}
+
+@Test("Jump recovery probe retains OpenSSH alias routing while disabling nested proxies")
+func jumpRecoveryProbePreservesHostAliasRoute() throws {
+    let arguments = SSHService.jumpHostKeyProbeArguments(
+        host: "sr-jump-alias",
+        port: 2222,
+        username: "alice",
+        temporaryKnownHostsPath: "/private/tmp/probe/jump_known_hosts"
+    )
+    #expect(!arguments.contains("-F"))
+    #expect(arguments.contains("ProxyJump=none"))
+    #expect(arguments.contains("ProxyCommand=none"))
+    #expect(arguments.contains("UserKnownHostsFile=/private/tmp/probe/jump_known_hosts"))
+    #expect(arguments.suffix(3) == ["-l", "alice", "sr-jump-alias"])
+}
+
+@Test("Guided recovery rejects a different configured host-key name or trust file")
+func recoveryRejectsDifferentTrustBinding() {
+    let baseline = """
+    hostname sr-recovery-alias
+    userknownhostsfile /Users/test/.ssh/known_hosts /Users/test/.ssh/known_hosts2
+    globalknownhostsfile /etc/ssh/ssh_known_hosts
+    """
+    let routed = """
+    hostname 192.0.2.10
+    userknownhostsfile /Users/test/.ssh/known_hosts /Users/test/.ssh/known_hosts2
+    globalknownhostsfile /etc/ssh/ssh_known_hosts
+    hostkeyalias sr-recovery-alias
+    """
+    #expect(SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed, baseline: baseline, host: "sr-recovery-alias"
+    ))
+    #expect(!SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed.replacingOccurrences(of: "hostkeyalias sr-recovery-alias", with: "hostkeyalias other-host"),
+        baseline: baseline, host: "sr-recovery-alias"
+    ))
+    #expect(!SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed.replacingOccurrences(of: "/Users/test/.ssh/known_hosts2", with: "/private/tmp/custom_hosts"),
+        baseline: baseline, host: "sr-recovery-alias"
+    ))
 }
 
 @Test("Saved SSH password resolves by profile after a fresh Terminal connection is reconstructed")
