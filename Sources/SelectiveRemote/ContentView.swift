@@ -612,6 +612,13 @@ struct ContentView: View {
                     }
                 }
 
+                SyncStatusUtilityView(
+                    lifecycle: syncPresentation.aggregate,
+                    english: language.selection.usesEnglish,
+                    onOpen: { showsSyncCenter = true }
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 if model.availableUpdateManifest != nil ||
                     model.runningSessionCount > 0 ||
                     model.runningSSHTunnelCount > 0 {
@@ -763,25 +770,6 @@ struct ContentView: View {
                     ru: "Аккаунт, команды и Team Vaults",
                     en: "Account, Teams, and Team Vaults"
                 ))
-
-                Button {
-                    showsSyncCenter = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "arrow.triangle.2.circlepath")
-                            .frame(width: 22)
-                        Text(UpdateLocalization.text(ru: "Синхронизация", en: "Sync"))
-                        Spacer()
-                        Text(syncPresentation.aggregate.title(english: language.selection.usesEnglish))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 30)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: false))
 
                 ForEach(primaryMainAreas) { area in
                     Button {
