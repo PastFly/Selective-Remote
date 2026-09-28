@@ -531,13 +531,6 @@ test("RU and EN synchronization metadata use the active locale", () => {
   assert.equal(formatVaultSynchronizationSummary(-1, at, { locale: "en" }), "Last synchronized: —");
 });
 
-test("workspace synchronization state recognizes RU and EN status messages", async () => {
-  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(application, /конфликт\|conflict/u);
-  assert.match(application, /ошиб\|не удалось\|поврежд\|error\|failed\|corrupt/u);
-  assert.match(application, /синхрониз\|загружа\|обновля\|synchroniz\|upload\|refresh/u);
-});
-
 test("a rendered synchronization timestamp switches locale without a new sync", () => {
   let summary = null;
   const documentValue = { documentElement: { lang: "ru" }, createElement: () => ({ dataset: {}, textContent: "" }) };
@@ -883,8 +876,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(html, /<html lang="ru" class="app-booting">/u);
   assert.match(html, /id="app-boot-screen"[^>]*role="status"/u);
   assert.match(html, /Открываем защищённое пространство/u);
-  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=194">/u);
-  assert.match(html, /\/app\.js\?v=194/u);
+  assert.match(html, /<script src="\/appearance-bootstrap\.js\?v=162"><\/script>\s*<link rel="stylesheet" href="\/styles\.css\?v=196">/u);
+  assert.match(html, /\/app\.js\?v=196/u);
   assert.match(appearanceBootstrap, /sr_theme=\(graphite\|emerald\|light\)/u);
   assert.match(appearanceBootstrap, /document\.documentElement\.dataset\.theme/u);
   assert.match(styles, /\.app-booting \.shell \{ visibility:hidden; \}/u);
@@ -1056,8 +1049,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.doesNotMatch(html, /ещё не выполняет этот импорт автоматически/u);
   assert.match(styles, /\[hidden\]\s*\{\s*display:\s*none\s*!important;\s*\}/u);
   assert.match(styles, /\.workspace-layout/u);
-  assert.match(html, /styles\.css\?v=194/u);
-  assert.match(html, /app\.js\?v=194/u);
+  assert.match(html, /styles\.css\?v=196/u);
+  assert.match(html, /app\.js\?v=196/u);
   assert.match(html, /data-nav-icon="⌁" data-workspace-target="local-vault" data-record-filter="all">Vault/u);
   assert.match(html, /data-stat-kind="credential"/u);
   assert.match(styles, /Cloud workspace v171/u);
@@ -1248,8 +1241,8 @@ test("portal exposes separate public, authentication and workspace states", asyn
   assert.match(application, /Данные команды обновлены/u);
   assert.match(application, /Синхронизация продолжится автоматически/u);
   assert.doesNotMatch(application, /Синхронизация не выполнена; локальная/u);
-  assert.match(html, /app\.js\?v=194/u);
-  assert.match(html, /styles\.css\?v=194/u);
+  assert.match(html, /app\.js\?v=196/u);
+  assert.match(html, /styles\.css\?v=196/u);
   assert.doesNotMatch(application, /documentValue\.visibilityState === "hidden"/u);
   assert.match(application, /runBackgroundTeamVaultSync/u);
   assert.match(application, /void runBackgroundTeamVaultSync\(\)/u);

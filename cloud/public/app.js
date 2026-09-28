@@ -28,6 +28,119 @@ import {
   synchronizeTeamVault,
 } from "./team-vault-sync.js";
 
+const syncObservationEvent = "selective-remote:sync-observation";
+const syncIssueCodes = new Set([
+  "authentication_required", "local_vault_locked", "team_vault_locked", "recovery_passphrase_required",
+  "team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required",
+  "network_unavailable", "remote_revision_regressed", "team_vault_generation_changed",
+  "invalid_remote_revision", "invalid_local_team_vault", "team_vault_storage_failed",
+  "wrapper_provisioning_failed",
+]);
+
+export function publishSyncObservation(documentValue, observation) {
+  const EventType = documentValue.defaultView?.CustomEvent;
+  if (!EventType) return;
+  const scope = observation.scope;
+  const type = observation.type;
+  if (scope !== "personal" && scope !== "team") return;
+  if (!["start", "locked", "selection", "result", "error"].includes(type)) return;
+  const detail = { scope, type };
+  if (type === "result") {
+    const result = observation.result ?? {};
+    const status = String(result.status ?? "");
+    detail.result = {
+      status: ["empty", "uploaded", "uploaded_with_new_local_changes", "downloaded", "up_to_date",
+        "initialized", "remote_changed", "conflict"].includes(status) ? status : "unknown",
+      ...(Number.isSafeInteger(result.revision) && result.revision >= 0 ? { revision: result.revision } : {}),
+      ...(Number.isSafeInteger(result.remoteRevision) && result.remoteRevision >= 0
+        ? { remoteRevision: result.remoteRevision } : {}),
+    };
+  }
+  if (type === "error") {
+    const code = String(observation.code ?? "");
+    detail.code = syncIssueCodes.has(code) ? code : "unknown_failure";
+  }
+  documentValue.dispatchEvent(new EventType(syncObservationEvent, { detail }));
+}
+
+export function createSyncPresentationState() {
+  return { personal: { status: "unknown" }, team: { status: "unknown" } };
+}
+
+export function reduceSyncPresentationState(state, observation) {
+  if (observation.type === "signedOut") {
+    return { personal: { status: "signedOut" }, team: { status: "signedOut" } };
+  }
+  const scope = observation.scope;
+  if (scope !== "personal" && scope !== "team") return state;
+  let next;
+  if (observation.type === "start") next = { status: "syncing" };
+  else if (observation.type === "locked") next = { status: "locked" };
+  else if (observation.type === "selection") next = { status: "unknown" };
+  else if (observation.type === "error") {
+    const rawCode = String(observation.code ?? "");
+    const code = syncIssueCodes.has(rawCode) ? rawCode : "unknown_failure";
+    const status = code === "authentication_required" ? "signedOut"
+      : ["local_vault_locked", "team_vault_locked", "recovery_passphrase_required"].includes(code) ? "locked"
+        : ["team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required"].includes(code)
+          ? "attention" : "error";
+    next = { status, issue: code };
+  } else if (observation.type === "result") {
+    const result = observation.result ?? {};
+    const status = result.status === "conflict" ? "conflict"
+      : ["remote_changed", "uploaded_with_new_local_changes"].includes(result.status) ? "attention"
+        : ["uploaded", "downloaded", "up_to_date", "initialized"].includes(result.status) ? "current"
+          : "unknown";
+    next = { status, ...(Number.isSafeInteger(result.revision) ? { revision: result.revision } : {}),
+      ...(Number.isSafeInteger(result.remoteRevision) ? { remoteRevision: result.remoteRevision } : {}),
+      ...(status === "current" ? { confirmedAt: observation.at ?? new Date().toISOString() } : {}) };
+  } else return state;
+  return { ...state, [scope]: next };
+}
+
+export function summarizeSyncPresentationState(state, { online = true } = {}) {
+  const statuses = [state.personal.status, state.team.status];
+  const securityIssues = new Set(["team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required"]);
+  const needsSecurityAttention = [state.personal, state.team].some((scope) => securityIssues.has(scope.issue));
+  const status = needsSecurityAttention ? "attention"
+    : statuses.includes("error") ? "error"
+      : statuses.includes("conflict") ? "conflict"
+        : !online ? "offline"
+          : statuses.includes("syncing") ? "syncing"
+            : statuses.includes("attention") ? "attention"
+              : statuses.every((value) => value === "current") ? "current"
+              : statuses.every((value) => value === "signedOut") ? "signedOut"
+                : statuses.every((value) => value === "locked") ? "locked" : "unknown";
+  return { status, personal: state.personal, team: state.team };
+}
+
+export function syncPresentationLabels(summary, locale = "ru") {
+  const english = locale === "en";
+  const labels = english ? {
+    unknown: "Status unknown", current: "Confirmed here", syncing: "Checking…",
+    conflict: "Conflict", attention: "Needs attention", error: "Sync failed",
+    offline: "Offline", signedOut: "Sign in to Cloud", locked: "Vault locked",
+  } : {
+    unknown: "Статус неизвестен", current: "Синхронизировано здесь", syncing: "Проверяем…",
+    conflict: "Конфликт", attention: "Требуется внимание", error: "Ошибка синхронизации",
+    offline: "Офлайн", signedOut: "Войдите в Cloud", locked: "Vault заблокирован",
+  };
+  const aggregateCurrent = english ? "Observed Vaults confirmed" : "Наблюдаемые Vaults подтверждены";
+  const note = summary.status === "offline"
+    ? (english ? "Connection appears offline. Changes may be waiting to sync."
+      : "Похоже, нет сети. Изменения могут ожидать синхронизации.")
+    : (english ? "Other Team Vaults: not checked in this tab."
+      : "Другие Team Vaults: не проверены в этой вкладке.");
+  const detail = (scope) => {
+    const item = summary[scope];
+    if (item.status !== "current" || !Number.isSafeInteger(item.revision)) return labels[item.status];
+    const at = item.confirmedAt ? ` · ${formatVaultTimestamp(item.confirmedAt, { locale })}` : "";
+    return `${labels.current} · r${item.revision}${at}`;
+  };
+  return { summary: summary.status === "current" ? aggregateCurrent : labels[summary.status],
+    personal: detail("personal"), team: detail("team"), note };
+}
+
 const verificationPrefix = "#verify-email?";
 const passwordResetPrefix = "#reset-password?";
 const teamInvitationPrefix = "#accept-team-invitation?";
@@ -1238,6 +1351,7 @@ export async function initializeLocalVault({
       return;
     }
     controller.lock();
+    publishSyncObservation(documentValue, { scope: "personal", type: "locked" });
     resetEditor();
     clearConflictUI();
     mode("waiting");
@@ -2705,6 +2819,7 @@ export function initializeTeamWorkspace({
     activeVault = selectedVault,
   ) {
     if (!activeController || !activeTeam || !activeVault) return null;
+    publishSyncObservation(documentValue, { scope: "team", type: "start" });
     return exclusiveVaultOperation(async () => {
       const result = await synchronizeTeamVault({
         client,
@@ -2745,6 +2860,10 @@ export function initializeTeamWorkspace({
   function applySynchronizationOutcome(outcome, { background = false } = {}) {
     if (!outcome) return;
     const { result, wrapperProvisioning, wrapperProvisioningFailed } = outcome;
+    publishSyncObservation(documentValue, { scope: "team", type: "result", result });
+    if (wrapperProvisioningFailed) {
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed" });
+    }
     if (result.status === "conflict") {
       renderConflicts(result);
     } else if (result.status === "remote_changed") {
@@ -2787,6 +2906,7 @@ export function initializeTeamWorkspace({
         applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
       } catch (error) {
         const code = String(error?.message ?? "");
+        publishSyncObservation(documentValue, { scope: "team", type: "error", code });
         if (code === "team_vault_rotation_required") {
           selectedVault = { ...selectedVault, rotationRequired: true };
           vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
@@ -2812,6 +2932,7 @@ export function initializeTeamWorkspace({
     stopBackgroundSync();
     resetRecordEditor();
     resetSnippetBrowser({ lock: true });
+    publishSyncObservation(documentValue, { scope: "team", type: "locked" });
     controller?.lock();
     controller = null;
     selectedVault = null;
@@ -2890,6 +3011,7 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
+    publishSyncObservation(documentValue, { scope: "team", type: "selection" });
     workspace.hidden = activeView !== "hosts";
     recordCreate.hidden = activeView !== "hosts";
     recordCreate.disabled = !canEdit();
@@ -2903,6 +3025,7 @@ export function initializeTeamWorkspace({
       applySynchronizationOutcome(outcome);
     } catch (error) {
       const code = String(error?.message ?? "");
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code });
       setWorkspaceControls(true);
       rotateButton.hidden = true;
       rotateButton.disabled = true;
@@ -3529,6 +3652,7 @@ export function initializeTeamWorkspace({
       applySynchronizationOutcome(await synchronizeAndProvision());
     } catch (error) {
       const code = String(error?.message ?? "");
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code });
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Синхронизация временно приостановлена: ключ обновляется автоматически."
@@ -3543,6 +3667,7 @@ export function initializeTeamWorkspace({
   lockButton.addEventListener("click", () => {
     stopBackgroundSync();
     controller?.lock();
+    publishSyncObservation(documentValue, { scope: "team", type: "locked" });
     records.replaceChildren();
     clearConflicts();
     setWorkspaceControls(true);
@@ -3896,15 +4021,18 @@ export async function initializeCloudAccount({
   async function backgroundPersonalVaultSync() {
     if (backgroundSyncing || !client.session() || await vault.status() !== "unlocked") return;
     backgroundSyncing = true;
+    publishSyncObservation(documentValue, { scope: "personal", type: "start" });
     try {
       let result = await synchronizePersonalVault();
       if (result.status === "remote_changed") result = await synchronizePersonalVault();
+      publishSyncObservation(documentValue, { scope: "personal", type: "result", result });
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
       if (Number.isSafeInteger(result.revision)) {
         setVaultSynchronizationMessage(vaultMessage, { documentValue, revision: result.revision });
       }
-    } catch {
+    } catch (error) {
+      publishSyncObservation(documentValue, { scope: "personal", type: "error", code: String(error?.message ?? "") });
       setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
     } finally {
       backgroundSyncing = false;
@@ -4371,8 +4499,10 @@ export async function initializeCloudAccount({
 
   syncButton.addEventListener("click", async () => {
     syncButton.disabled = true;
+    publishSyncObservation(documentValue, { scope: "personal", type: "start" });
     try {
       const result = await synchronizePersonalVault();
+      publishSyncObservation(documentValue, { scope: "personal", type: "result", result });
       const messages = {
         empty: "Сначала создайте локальный Vault.",
         uploaded: `Зашифрованная ревизия ${result.revision} загружена.`,
@@ -4393,6 +4523,7 @@ export async function initializeCloudAccount({
       }
     } catch (error) {
       const code = String(error?.message ?? "");
+      publishSyncObservation(documentValue, { scope: "personal", type: "error", code });
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
       else if (code === "authentication_required") {
         showSession(null);
@@ -4777,6 +4908,8 @@ export function initializePortalNavigation({
   const workspaceCreate = documentValue.querySelector("#workspace-create");
   const mobileAccount = documentValue.querySelector("#workspace-mobile-account");
   const syncState = documentValue.querySelector("#workspace-sync-state");
+  const syncDetails = documentValue.querySelector("#workspace-sync-details");
+  let syncPresentation = createSyncPresentationState();
   const interfaceLocale = () => activeInterfaceLocale(documentValue.documentElement?.lang);
   function renderCommands() {
     if (!commandResults) return;
@@ -4841,19 +4974,47 @@ export function initializePortalNavigation({
   });
   function updateSyncState() {
     if (!syncState) return;
-    const combined = `${documentValue.querySelector("#local-vault-message")?.textContent ?? ""} ${documentValue.querySelector("#team-vault-workspace-status")?.textContent ?? ""}`.toLocaleLowerCase();
-    const state = !documentValue.defaultView?.navigator?.onLine ? "offline"
-      : /конфликт|conflict/u.test(combined) ? "conflict"
-        : /ошиб|не удалось|поврежд|error|failed|corrupt/u.test(combined) ? "error"
-          : /синхрониз|загружа|обновля|synchroniz|upload|refresh/u.test(combined) ? "syncing" : "synced";
-    syncState.dataset.state = state;
-    const labels = interfaceLocale() === "en"
-      ? { offline: "Offline", conflict: "Conflict", error: "Error", syncing: "Synchronizing…", synced: "Synchronized" }
-      : { offline: "Офлайн", conflict: "Конфликт", error: "Ошибка", syncing: "Синхронизация…", synced: "Синхронизировано" };
-    setText(syncState.querySelector("span"), labels[state]);
+    const summary = summarizeSyncPresentationState(syncPresentation, {
+      online: documentValue.defaultView?.navigator?.onLine !== false,
+    });
+    const labels = syncPresentationLabels(summary, interfaceLocale());
+    syncState.dataset.state = summary.status;
+    setText(syncState.querySelector("span"), labels.summary);
+    setText(documentValue.querySelector("#workspace-sync-personal"), labels.personal);
+    setText(documentValue.querySelector("#workspace-sync-team"), labels.team);
+    setText(documentValue.querySelector("#workspace-sync-note"), labels.note);
+    for (const scope of ["personal", "team"]) {
+      const retry = documentValue.querySelector(`[data-sync-retry="${scope}"]`);
+      const source = documentValue.querySelector(scope === "personal" ? "#cloud-vault-sync" : "#team-vault-sync");
+      if (retry) retry.disabled = summary[scope].status === "syncing" || !source || source.disabled || source.hidden;
+    }
   }
-  for (const target of [documentValue.querySelector("#local-vault-message"), documentValue.querySelector("#team-vault-workspace-status")].filter(Boolean)) {
-    new MutationObserver(updateSyncState).observe(target, { childList: true, characterData: true, subtree: true });
+  documentValue.addEventListener(syncObservationEvent, (event) => {
+    syncPresentation = reduceSyncPresentationState(syncPresentation, event.detail);
+    updateSyncState();
+  });
+  syncDetails?.addEventListener("toggle", updateSyncState);
+  syncDetails?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") { syncDetails.open = false; syncState?.focus(); }
+  });
+  documentValue.addEventListener("click", (event) => {
+    if (syncDetails?.open && !syncDetails.contains(event.target)) syncDetails.open = false;
+  });
+  for (const button of syncDetails?.querySelectorAll("[data-sync-route]") ?? []) {
+    button.addEventListener("click", () => {
+      const personal = button.dataset.syncRoute === "personal";
+      selectWorkspacePanel(personal ? "local-vault" : "team-vault", personal ? "all" : null, personal ? null : "hosts");
+      requestedWorkspaceRoute = personal ? "/app/personal-vault" : "/app/team-vault";
+      setPath(requestedWorkspaceRoute);
+      syncDetails.open = false;
+    });
+  }
+  for (const button of syncDetails?.querySelectorAll("[data-sync-retry]") ?? []) {
+    button.addEventListener("click", () => {
+      const source = documentValue.querySelector(button.dataset.syncRetry === "personal" ? "#cloud-vault-sync" : "#team-vault-sync");
+      if (source && !source.disabled && !source.hidden) source.click();
+      syncDetails.open = false;
+    });
   }
   documentValue.defaultView?.addEventListener("online", updateSyncState);
   documentValue.defaultView?.addEventListener("offline", updateSyncState);
@@ -4870,9 +5031,13 @@ export function initializePortalNavigation({
     sessionChanged(user) {
       if (user) {
         sessionActive = true;
+        syncPresentation = createSyncPresentationState();
+        updateSyncState();
         showWorkspace();
       } else if (sessionActive) {
         sessionActive = false;
+        syncPresentation = reduceSyncPresentationState(syncPresentation, { type: "signedOut" });
+        updateSyncState();
         showAuthentication("login", { replace: true });
       }
     },

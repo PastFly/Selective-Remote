@@ -93,6 +93,7 @@ enum DiagnosticsReportBuilder {
         runtimeItems: [ConnectionCenterItem],
         currentError: String?,
         forwardingErrors: [UUID: String],
+        syncSnapshots: [SyncScopeSnapshot] = [],
         generatedAt: Date = Date()
     ) -> DiagnosticsReport {
         var lines: [String] = [
@@ -108,6 +109,13 @@ enum DiagnosticsReportBuilder {
             "Runtime connections: \(runtimeItems.count)",
             "Runtime problems: \(runtimeItems.filter { $0.state.isProblem }.count)"
         ]
+
+        if !syncSnapshots.isEmpty {
+            lines += ["", "[Cloud & Sync]"]
+            for snapshot in syncSnapshots {
+                lines.append(contentsOf: safeSyncLines(snapshot))
+            }
+        }
 
         if profiles.isEmpty {
             lines += ["", "[Profiles]", "No saved profiles"]
@@ -157,6 +165,48 @@ enum DiagnosticsReportBuilder {
             problemCount: runtimeItems.filter { $0.state.isProblem }.count,
             text: finalText
         )
+    }
+
+    private static func safeSyncLines(_ snapshot: SyncScopeSnapshot) -> [String] {
+        let scope = snapshot.scope == .personal ? "Personal" : "Team Vaults"
+        let lifecycle: String
+        switch snapshot.lifecycle {
+        case .security: lifecycle = "security"
+        case .error: lifecycle = "error"
+        case .conflict: lifecycle = "conflict"
+        case .offline: lifecycle = "offline"
+        case .syncing: lifecycle = "syncing"
+        case .pending: lifecycle = "pending"
+        case .synced: lifecycle = "synced"
+        case .unknown: lifecycle = "unknown"
+        case .signedOut: lifecycle = "signed_out"
+        case .locked: lifecycle = "locked"
+        case .disabled: lifecycle = "disabled"
+        }
+        var lines = ["\(scope): \(lifecycle)"]
+        if let issue = snapshot.issue {
+            let category: String
+            switch issue {
+            case .vaultLocked: category = "vault_locked"
+            case .sessionExpired: category = "session_expired"
+            case .keyOrWrapperMissing: category = "key_or_wrapper_missing"
+            case .rotationRequired: category = "rotation_required"
+            case .conflict: category = "conflict"
+            case .transientFailure: category = "transient_failure"
+            case .unknownFailure: category = "unknown_failure"
+            }
+            lines.append("Issue: \(category)")
+        }
+        if let lastConfirmedAt = snapshot.lastConfirmedAt {
+            lines.append("Last confirmed on this Mac: \(timestamp(lastConfirmedAt))")
+        }
+        if let revision = snapshot.appliedRevision, revision > 0 {
+            lines.append("Revision: \(revision)")
+        }
+        if snapshot.materialization == .hiddenFailClosed {
+            lines.append("Materialization: hidden_fail_closed")
+        }
+        return lines
     }
 
     private static func profileLines(
@@ -445,11 +495,16 @@ private extension String {
 struct DiagnosticsCenterView: View {
     @ObservedObject var model: AppModel
     @ObservedObject private var language = AppLanguageStore.shared
+    @ObservedObject private var syncPresentation = SyncPresentationStore.shared
+    var onOpenCloudManagement: (() -> Void)? = nil
+    var onOpenSyncCenter: (() -> Void)? = nil
+    var cloudSyncRequestID: UUID? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private enum Pane: String, CaseIterable, Identifiable {
         case overview
         case systemCheck
+        case cloudSync
         case connections
         case rdp
         case ssh
@@ -464,6 +519,7 @@ struct DiagnosticsCenterView: View {
             switch self {
             case .overview: "Общее"
             case .systemCheck: "Проверка системы"
+            case .cloudSync: "Cloud & Sync"
             case .connections: "Подключения"
             case .rdp: "RDP"
             case .ssh: "SSH / Terminal"
@@ -494,6 +550,7 @@ struct DiagnosticsCenterView: View {
             runtimeItems: snapshot.items,
             currentError: model.errorMessage,
             forwardingErrors: model.sshTunnelLastErrors,
+            syncSnapshots: [syncPresentation.personal, syncPresentation.team],
             generatedAt: generatedAt
         )
     }
@@ -519,6 +576,12 @@ struct DiagnosticsCenterView: View {
         .frame(maxWidth: 1180, alignment: .topLeading)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            if cloudSyncRequestID != nil { selectedPane = .cloudSync }
+        }
+        .onChange(of: cloudSyncRequestID) { _, requestID in
+            if requestID != nil { selectedPane = .cloudSync }
+        }
         .alert("Не удалось экспортировать диагностику", isPresented: Binding(
             get: { exportError != nil },
             set: { if !$0 { exportError = nil } }
@@ -668,6 +731,8 @@ struct DiagnosticsCenterView: View {
             }
         case .systemCheck:
             DiagnosticsSystemCheckView(model: model)
+        case .cloudSync:
+            cloudSyncPane
         case .connections, .rdp, .ssh, .sftp, .forwarding:
             runtimeList
         case .errors:
@@ -677,6 +742,110 @@ struct DiagnosticsCenterView: View {
         case .raw:
             EmptyView()
         }
+    }
+
+    private var cloudSyncPane: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(UpdateLocalization.text(
+                ru: "Cloud и синхронизация",
+                en: "Cloud & Sync"
+            ))
+            .font(.title2.bold())
+            Text(UpdateLocalization.text(
+                ru: "Показаны только подтверждённые локальные сведения. Состояние других устройств может быть неизвестно.",
+                en: "Only confirmed local facts are shown. The state of other devices may be unknown."
+            ))
+            .foregroundStyle(.secondary)
+
+            HStack {
+                Label(UpdateLocalization.text(ru: "Аккаунт", en: "Account"), systemImage: "person.crop.circle")
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Открыть Cloud", en: "Open Cloud")) {
+                    onOpenCloudManagement?()
+                }
+                .disabled(onOpenCloudManagement == nil)
+            }
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+            syncCard(syncPresentation.personal)
+            syncCard(syncPresentation.team)
+
+            HStack {
+                Label(UpdateLocalization.text(ru: "Устройства", en: "Devices"), systemImage: "laptopcomputer.and.iphone")
+                Spacer()
+                Button(UpdateLocalization.text(ru: "Проверить устройства", en: "Review Devices")) {
+                    openCloudDevices()
+                }
+            }
+            .padding(14)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+
+            Button(UpdateLocalization.text(ru: "Открыть центр синхронизации", en: "Open Sync Center")) {
+                onOpenSyncCenter?()
+            }
+            .disabled(onOpenSyncCenter == nil)
+        }
+    }
+
+    private func syncCard(_ snapshot: SyncScopeSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(
+                    snapshot.scope == .personal
+                        ? UpdateLocalization.text(ru: "Личный Vault", en: "Personal Vault")
+                        : UpdateLocalization.text(ru: "Team Vaults", en: "Team Vaults"),
+                    systemImage: snapshot.scope == .personal ? "person.crop.square" : "person.3"
+                )
+                .font(.headline)
+                Spacer()
+                Text(snapshot.lifecycle.title(english: language.selection.usesEnglish))
+                    .foregroundStyle(snapshot.lifecycle == .security || snapshot.lifecycle == .error
+                        ? Color.orange : Color.secondary)
+            }
+            if snapshot.materialization == .hiddenFailClosed {
+                Text(UpdateLocalization.text(
+                    ru: "Хосты этого Vault остаются безопасно скрыты",
+                    en: "Hosts from this Vault remain safely hidden"
+                ))
+                .font(.subheadline)
+            }
+            if let date = snapshot.lastConfirmedAt {
+                HStack(spacing: 4) {
+                    Text(UpdateLocalization.text(ru: "Последнее подтверждение на этом Mac:", en: "Last confirmed on this Mac:"))
+                    Text(date, style: .relative)
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            if let revision = snapshot.appliedRevision {
+                Text(UpdateLocalization.text(ru: "Ревизия: \(revision)", en: "Revision: \(revision)"))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            HStack {
+                Button(UpdateLocalization.text(ru: "Повторить", en: "Retry")) {
+                    syncPresentation.retry(snapshot.scope)
+                }
+                .disabled([.syncing, .signedOut, .locked, .disabled].contains(snapshot.lifecycle))
+                Button(UpdateLocalization.text(ru: "Подробнее", en: "Details")) {
+                    onOpenCloudManagement?()
+                }
+                .disabled(onOpenCloudManagement == nil)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func openCloudDevices() {
+        let raw = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
+            ?? SelectiveRemoteCloudEndpoint.production
+        guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(raw),
+              let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
+        else { return }
+        NSWorkspace.shared.open(url)
     }
 
     private var safetyBanner: some View {
@@ -935,7 +1104,7 @@ struct DiagnosticsCenterView: View {
         case .sftp: item.kind == .sftp
         case .forwarding: item.kind == .forwarding
         case .errors: item.state.isProblem
-        case .environment, .raw: false
+        case .cloudSync, .environment, .raw: false
         }
     }
 

@@ -151,7 +151,7 @@ func secondarySelectorValueCatalogIsComplete() throws {
         "keychain.filter.touchID", "keychain.filter.passwords", "keychain.filter.authorities",
         "keychain.filter.knownHosts", "keychain.sort.name", "keychain.sort.type",
         "keychain.sort.usage", "keychain.sort.fingerprint",
-        "diagnostics.pane.overview", "diagnostics.pane.systemCheck",
+        "diagnostics.pane.overview", "diagnostics.pane.systemCheck", "diagnostics.pane.cloudSync",
         "diagnostics.pane.connections", "diagnostics.pane.rdp", "diagnostics.pane.ssh",
         "diagnostics.pane.sftp", "diagnostics.pane.forwarding", "diagnostics.pane.errors",
         "diagnostics.pane.environment", "diagnostics.pane.raw",

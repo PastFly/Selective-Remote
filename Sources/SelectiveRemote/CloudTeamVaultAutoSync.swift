@@ -28,6 +28,11 @@ typealias SelectiveRemoteTeamVaultMaterializedSnapshotConsumer =
     @Sendable ([SelectiveRemoteTeamVaultMaterializedSnapshot]) async -> Void
 
 actor SelectiveRemoteTeamVaultAutoSync {
+    enum PresentationEvent: Sendable {
+        case started(token: UUID, endpoint: URL, deviceID: UUID)
+        case completed(SelectiveRemoteTeamVaultAutoSyncReport, token: UUID, endpoint: URL, deviceID: UUID)
+        case failed(token: UUID, endpoint: URL, deviceID: UUID)
+    }
     static let shared = SelectiveRemoteTeamVaultAutoSync()
 
     private let remote: any SelectiveRemoteTeamVaultAutoSyncRemote
@@ -40,6 +45,11 @@ actor SelectiveRemoteTeamVaultAutoSync {
         token: UUID,
         task: Task<SelectiveRemoteTeamVaultAutoSyncReport, Error>
     )?
+    private var presentationObserver: (@Sendable (PresentationEvent) async -> Void)?
+
+    func observePresentation(_ observer: @escaping @Sendable (PresentationEvent) async -> Void) {
+        presentationObserver = observer
+    }
 
     init(
         remote: any SelectiveRemoteTeamVaultAutoSyncRemote = SelectiveRemoteCloudAPIClient(),
@@ -84,6 +94,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
             return try await activeSynchronization.task.value
         }
         let token = UUID()
+        await presentationObserver?(.started(token: token, endpoint: endpoint, deviceID: deviceID))
         let task = Task { [self] in
             try await performSynchronization(endpoint: endpoint, deviceID: deviceID)
         }
@@ -91,9 +102,13 @@ actor SelectiveRemoteTeamVaultAutoSync {
         do {
             let report = try await task.value
             if activeSynchronization?.token == token { activeSynchronization = nil }
+            var safeReport = report
+            safeReport.lastFailure = nil
+            await presentationObserver?(.completed(safeReport, token: token, endpoint: endpoint, deviceID: deviceID))
             return report
         } catch {
             if activeSynchronization?.token == token { activeSynchronization = nil }
+            await presentationObserver?(.failed(token: token, endpoint: endpoint, deviceID: deviceID))
             throw error
         }
     }

@@ -318,6 +318,15 @@ enum SelectiveRemoteCloudEndpoint {
 enum SelectiveRemoteCloudPortalURL {
     static let login = URL(string: "https://cloud.pastfly.ru/?auth=login")!
 
+    static func devices(endpoint: URL) -> URL? {
+        guard var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.path = "/app/devices"
+        components.query = nil
+        components.fragment = nil
+        return components.url
+    }
+
     static func registration(endpoint: URL) -> URL {
         var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)!
         components.path = "/"

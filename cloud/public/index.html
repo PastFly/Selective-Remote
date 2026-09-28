@@ -10,8 +10,8 @@
   <link rel="alternate" hreflang="x-default" href="/">
   <title>Selective Remote Cloud</title>
   <script src="/appearance-bootstrap.js?v=162"></script>
-  <link rel="stylesheet" href="/styles.css?v=194">
-  <script src="/i18n.js?v=194"></script>
+  <link rel="stylesheet" href="/styles.css?v=196">
+  <script src="/i18n.js?v=196"></script>
 </head>
 <body>
   <div class="app-boot-screen" id="app-boot-screen" role="status" aria-live="polite" aria-label="Загрузка Selective Remote Cloud">
@@ -348,7 +348,14 @@
         <header class="workspace-header">
           <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2 id="workspace-title">Обзор</h2></div>
           <div class="workspace-global-actions">
-            <span class="workspace-sync-state" id="workspace-sync-state" data-state="synced" role="status" data-tooltip="Состояние локальной и Cloud-синхронизации"><i aria-hidden="true"></i><span>Синхронизировано</span></span>
+            <details class="workspace-sync-details" id="workspace-sync-details">
+              <summary class="workspace-sync-state" id="workspace-sync-state" data-state="unknown" data-tooltip="Состояние локальной и Cloud-синхронизации"><i aria-hidden="true"></i><span role="status" aria-live="polite">Статус неизвестен</span></summary>
+              <div class="workspace-sync-panel">
+                <div class="workspace-sync-row"><strong>Personal Vault</strong><span id="workspace-sync-personal">Статус неизвестен</span><button type="button" class="secondary" data-sync-route="personal">Открыть</button><button type="button" class="secondary" data-sync-retry="personal">Повторить</button></div>
+                <div class="workspace-sync-row"><strong>Выбранный Team Vault</strong><span id="workspace-sync-team">Статус неизвестен</span><button type="button" class="secondary" data-sync-route="team">Открыть</button><button type="button" class="secondary" data-sync-retry="team">Повторить</button></div>
+                <p id="workspace-sync-note">Другие Team Vaults: не проверены в этой вкладке.</p>
+              </div>
+            </details>
             <button type="button" class="secondary" id="workspace-command-open" aria-keyshortcuts="Meta+K Control+K" data-tooltip="Быстрый переход к разделу или записи">⌘K Поиск</button>
             <button type="button" id="workspace-create" data-tooltip="Создать запись в открытом пространстве">＋ Создать</button>
           </div>
@@ -1023,6 +1030,6 @@
       </div>
     </form>
   </dialog>
-  <script type="module" src="/app.js?v=194"></script>
+  <script type="module" src="/app.js?v=196"></script>
 </body>
 </html>
