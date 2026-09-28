@@ -65,7 +65,9 @@ stored items. The cap prevents local storage abuse without expiring an existing
 active security item.
 
 Mac keeps host identity issues in installation-local UserDefaults and account
-issues in per-account UserDefaults envelopes. Cloud keeps the account projection
+issues in per-endpoint, per-account UserDefaults envelopes. The normalized Cloud
+endpoint is hashed into the storage key, preventing UUID reuse across endpoints
+from loading another endpoint's history. Cloud keeps the account projection
 in per-account `localStorage`. Switching account hides the old account's issues;
 read state remains local to this device/browser, with no claim of cross-device
 sync. Cloud has no Host Key event because it does not initiate SSH connections.
@@ -113,6 +115,10 @@ size limit event spam. Polling reuses existing invitation/device refreshes;
 rendering performs no network request, decryption or persistence write.
 Persistence is immediate for a new item, read transition or resolution and
 throttled for timestamp-only observations in the browser.
+The Mac invitation poll discards late results after endpoint/session changes.
+Cloud sync events carry their originating recipient, and complete device and
+invitation responses carry request-order sequence numbers so older responses
+cannot clear newer attention cues.
 
 ## Owner manual acceptance before 0.33 release
 

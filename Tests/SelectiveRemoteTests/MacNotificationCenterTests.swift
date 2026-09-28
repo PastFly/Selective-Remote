@@ -27,6 +27,24 @@ struct MacNotificationCenterTests {
         #expect(center.attentionCount == 2)
     }
 
+    @Test("The same user UUID on another Cloud endpoint cannot load prior account cues")
+    func endpointIsolation() {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        defaults.set("https://one.example", forKey: "SelectiveRemote.cloud.endpoint.v1")
+        let center = MacNotificationCenter(defaults: defaults, installationID: local)
+        center.setAccount(accountA)
+        center.reconcileDevices([profile], at: at)
+        #expect(center.attentionCount == 1)
+
+        defaults.set("https://two.example", forKey: "SelectiveRemote.cloud.endpoint.v1")
+        center.setAccount(accountA)
+        #expect(center.attentionCount == 0)
+
+        defaults.set("https://one.example", forKey: "SelectiveRemote.cloud.endpoint.v1")
+        center.setAccount(accountA)
+        #expect(center.attentionCount == 1)
+    }
+
     @Test("Invitation stays active when read and resolves only on fresh pending list")
     func invitationRead() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!

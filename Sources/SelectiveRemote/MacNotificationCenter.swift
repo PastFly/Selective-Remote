@@ -1,4 +1,5 @@
 import Combine
+import CryptoKit
 import Foundation
 
 @MainActor
@@ -10,6 +11,8 @@ final class MacNotificationCenter: ObservableObject {
     private let local: NotificationProjectionStore
     private var account: NotificationProjectionStore?
     private var accountID: UUID?
+    private var accountEndpoint: String?
+    private(set) var sessionRevision: UInt64 = 0
 
     var currentAccountID: UUID? { accountID }
 
@@ -34,10 +37,21 @@ final class MacNotificationCenter: ObservableObject {
     }
 
     func setAccount(_ id: UUID?) {
-        guard id != accountID else { return }
-        accountID = id
-        account = id.map { NotificationProjectionStore(recipient: $0,
-            persisted: defaults.data(forKey: Self.accountStorageKey($0))) }
+        let configured = defaults.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
+            ?? SelectiveRemoteCloudEndpoint.production
+        let endpoint = id.flatMap { _ in
+            try? SelectiveRemoteCloudEndpoint.normalized(configured).absoluteString
+        }
+        guard id != accountID || endpoint != accountEndpoint else { return }
+        sessionRevision &+= 1
+        accountID = endpoint == nil ? nil : id
+        accountEndpoint = endpoint
+        account = accountID.flatMap { id in
+            endpoint.map { endpoint in
+                NotificationProjectionStore(recipient: id,
+                    persisted: defaults.data(forKey: Self.accountStorageKey(id, endpoint: endpoint)))
+            }
+        }
         refreshItems()
     }
 
@@ -103,11 +117,14 @@ final class MacNotificationCenter: ObservableObject {
     }
 
     private func persistAccount() {
-        guard let accountID, let data = try? account?.serializedData() else { return }
-        defaults.set(data, forKey: Self.accountStorageKey(accountID))
+        guard let accountID, let accountEndpoint,
+              let data = try? account?.serializedData() else { return }
+        defaults.set(data, forKey: Self.accountStorageKey(accountID, endpoint: accountEndpoint))
     }
 
-    private static func accountStorageKey(_ id: UUID) -> String {
-        "SelectiveRemote.notifications.account.v1.\(id.uuidString)"
+    private static func accountStorageKey(_ id: UUID, endpoint: String) -> String {
+        let digest = SHA256.hash(data: Data(endpoint.utf8))
+            .map { String(format: "%02x", $0) }.joined()
+        return "SelectiveRemote.notifications.account.v1.\(digest).\(id.uuidString)"
     }
 }

@@ -27,6 +27,15 @@ test("device stays active after read and resolves only after a complete fresh de
   assert.equal(notificationItems(state)[0].resolvedAt, later);
 });
 
+test("an older complete device response cannot clear a newer pending security cue", () => {
+  let state = createNotificationState(recipient);
+  state = reconcileNotifications(state, { group: "devices", complete: true, at: later, sequence: 2,
+    observations: [{ kind: "deviceApproval", scopeID: recipient, sourceID: device }] });
+  state = reconcileNotifications(state, { group: "devices", complete: true, at, sequence: 1,
+    observations: [] });
+  assert.equal(notificationCounts(state).attentionCount, 1);
+});
+
 test("pending invitation is one item across refreshes and reappearing issue becomes unread", () => {
   let state = createNotificationState(recipient);
   const observation = { kind: "invitation", scopeID: team, sourceID: invitation };

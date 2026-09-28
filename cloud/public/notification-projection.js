@@ -51,11 +51,15 @@ export function createNotificationState(recipient, serialized = null) {
     parsed.items.length <= maxPersistedItems
     ? parsed.items.map((item) => safeItem(item, recipient)).filter(Boolean)
     : [];
-  return { recipient, items };
+  return { recipient, items, sequenceByGroup: {} };
 }
 
-export function reconcileNotifications(state, { group, observations = [], complete = false, at }) {
+export function reconcileNotifications(state, { group, observations = [], complete = false, at, sequence }) {
   if (!validGroup(group) || !validTime(at) || !Array.isArray(observations)) return state;
+  const sequenced = Number.isSafeInteger(sequence) && sequence > 0;
+  if (sequenced && sequence <= (state.sequenceByGroup?.[group] ?? 0)) return state;
+  const sequenceByGroup = { ...state.sequenceByGroup };
+  if (sequenced) sequenceByGroup[group] = sequence;
   const next = state.items.map((item) => ({ ...item }));
   const seen = new Set();
   const indexed = new Map(next.filter((item) => item.group === group)
@@ -88,12 +92,13 @@ export function reconcileNotifications(state, { group, observations = [], comple
   const active = next.filter((item) => item.resolvedAt === null);
   const resolved = next.filter((item) => item.resolvedAt !== null && Date.parse(item.resolvedAt) >= cutoff)
     .sort((a, b) => Date.parse(b.resolvedAt) - Date.parse(a.resolvedAt)).slice(0, maxResolvedItems);
-  return { recipient: state.recipient, items: [...active, ...resolved] };
+  return { recipient: state.recipient, items: [...active, ...resolved], sequenceByGroup };
 }
 
 export function markNotificationRead(state, id, at) {
   if (!uuid.test(id) || !validTime(at)) return state;
-  return { recipient: state.recipient, items: state.items.map((item) => item.id === id &&
+  return { recipient: state.recipient, sequenceByGroup: state.sequenceByGroup,
+    items: state.items.map((item) => item.id === id &&
     item.resolvedAt === null && item.readAt === null ? { ...item, readAt: at } : item) };
 }
 

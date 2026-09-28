@@ -51,6 +51,10 @@ export function publishSyncObservation(documentValue, observation) {
   if (scope !== "personal" && scope !== "team") return;
   if (!["start", "locked", "selection", "result", "error"].includes(type)) return;
   const detail = { scope, type };
+  if (typeof observation.recipient === "string" &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(observation.recipient)) {
+    detail.recipient = observation.recipient;
+  }
   if (typeof observation.vaultID === "string" &&
       /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(observation.vaultID)) {
     detail.vaultID = observation.vaultID;
@@ -1709,6 +1713,7 @@ export function initializeTeamWorkspace({
   let memberRequestGeneration = 0;
   let teamInvitations = [];
   let accountInvitations = [];
+  let notificationSourceSequence = 0;
   let deviceAdmissionPolicy = null;
   let selectedTeam = null;
   let selectedVault = null;
@@ -2292,12 +2297,14 @@ export function initializeTeamWorkspace({
   }
 
   async function loadDevices() {
+    const sequence = ++notificationSourceSequence;
     const sessionID = client.session()?.id;
     const values = await client.listDevices();
     if (!sessionID || client.session()?.id !== sessionID || !identity) return;
     const EventType = documentValue.defaultView?.CustomEvent;
     if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
-      detail: { recipient: sessionID, group: "devices", complete: true, at: new Date().toISOString(),
+      detail: { recipient: sessionID, group: "devices", complete: true, sequence,
+        at: new Date().toISOString(),
         observations: deviceNotificationObservations(values, sessionID) },
     }));
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
@@ -2675,13 +2682,15 @@ export function initializeTeamWorkspace({
   }
 
   async function loadPendingInvitations() {
+    const sequence = ++notificationSourceSequence;
     const sessionID = client.session()?.id;
     const values = await client.listPendingTeamInvitations();
     if (!sessionID || client.session()?.id !== sessionID || !identity) return;
     accountInvitations = values;
     const EventType = documentValue.defaultView?.CustomEvent;
     if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
-      detail: { recipient: sessionID, group: "invitations", complete: true, at: new Date().toISOString(),
+      detail: { recipient: sessionID, group: "invitations", complete: true, sequence,
+        at: new Date().toISOString(),
         observations: invitationNotificationObservations(values) },
     }));
     renderPendingInvitations();
@@ -2698,6 +2707,7 @@ export function initializeTeamWorkspace({
         await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams(activeTeam?.id)]);
         return;
       }
+      const sequence = ++notificationSourceSequence;
       const pendingForAccount = await client.listPendingTeamInvitations().catch(() => null);
       if (identity !== activeIdentity) return;
       if (pendingForAccount) {
@@ -2705,7 +2715,8 @@ export function initializeTeamWorkspace({
         const EventType = documentValue.defaultView?.CustomEvent;
         const sessionID = client.session()?.id;
         if (EventType && sessionID) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
-          detail: { recipient: sessionID, group: "invitations", complete: true, at: new Date().toISOString(),
+          detail: { recipient: sessionID, group: "invitations", complete: true, sequence,
+            at: new Date().toISOString(),
             observations: invitationNotificationObservations(pendingForAccount) },
         }));
         renderPendingInvitations();
@@ -2850,7 +2861,8 @@ export function initializeTeamWorkspace({
     activeVault = selectedVault,
   ) {
     if (!activeController || !activeTeam || !activeVault) return null;
-    publishSyncObservation(documentValue, { scope: "team", type: "start", vaultID: activeVault.id });
+    const recipient = client.session()?.id;
+    publishSyncObservation(documentValue, { scope: "team", type: "start", vaultID: activeVault.id, recipient });
     return exclusiveVaultOperation(async () => {
       const result = await synchronizeTeamVault({
         client,
@@ -2884,16 +2896,16 @@ export function initializeTeamWorkspace({
         populateVaults();
         vaultSelect.value = selectedVault.id;
       }
-      return { result, wrapperProvisioning, wrapperProvisioningFailed };
+      return { result, wrapperProvisioning, wrapperProvisioningFailed, recipient };
     });
   }
 
   function applySynchronizationOutcome(outcome, { background = false } = {}) {
     if (!outcome) return;
-    const { result, wrapperProvisioning, wrapperProvisioningFailed } = outcome;
-    publishSyncObservation(documentValue, { scope: "team", type: "result", result, vaultID: selectedVault?.id });
+    const { result, wrapperProvisioning, wrapperProvisioningFailed, recipient } = outcome;
+    publishSyncObservation(documentValue, { scope: "team", type: "result", result, vaultID: selectedVault?.id, recipient });
     if (wrapperProvisioningFailed) {
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed", vaultID: selectedVault?.id });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed", vaultID: selectedVault?.id, recipient });
     }
     if (result.status === "conflict") {
       renderConflicts(result);
@@ -2932,12 +2944,13 @@ export function initializeTeamWorkspace({
 
   async function runBackgroundTeamVaultSync() {
     if (activeConflicts || vaultOperation || !identity || !selectedTeam) return;
+    const recipient = client.session()?.id;
     if (controller && selectedVault && !selectedVault.rotationRequired) {
       try {
         applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
       } catch (error) {
         const code = String(error?.message ?? "");
-        publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id });
+        publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id, recipient });
         if (code === "team_vault_rotation_required") {
           selectedVault = { ...selectedVault, rotationRequired: true };
           vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
@@ -2963,7 +2976,8 @@ export function initializeTeamWorkspace({
     stopBackgroundSync();
     resetRecordEditor();
     resetSnippetBrowser({ lock: true });
-    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id });
+    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id,
+      recipient: client.session()?.id });
     controller?.lock();
     controller = null;
     selectedVault = null;
@@ -3034,6 +3048,7 @@ export function initializeTeamWorkspace({
   async function openSelectedVault() {
     const vault = vaults.find((value) => value.id === vaultSelect.value);
     if (!vault || !identity) return;
+    const recipient = client.session()?.id;
     lockCurrentVault();
     selectedVault = vault;
     const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
@@ -3042,7 +3057,8 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
-    publishSyncObservation(documentValue, { scope: "team", type: "selection", vaultID: selectedVault?.id });
+    publishSyncObservation(documentValue, { scope: "team", type: "selection", vaultID: selectedVault?.id,
+      recipient: client.session()?.id });
     workspace.hidden = activeView !== "hosts";
     recordCreate.hidden = activeView !== "hosts";
     recordCreate.disabled = !canEdit();
@@ -3056,7 +3072,7 @@ export function initializeTeamWorkspace({
       applySynchronizationOutcome(outcome);
     } catch (error) {
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id, recipient });
       setWorkspaceControls(true);
       rotateButton.hidden = true;
       rotateButton.disabled = true;
@@ -3679,11 +3695,12 @@ export function initializeTeamWorkspace({
 
   syncButton.addEventListener("click", async () => {
     setRecoveryControls("none");
+    const recipient = client.session()?.id;
     try {
       applySynchronizationOutcome(await synchronizeAndProvision());
     } catch (error) {
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id, recipient });
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Синхронизация временно приостановлена: ключ обновляется автоматически."
@@ -3698,7 +3715,8 @@ export function initializeTeamWorkspace({
   lockButton.addEventListener("click", () => {
     stopBackgroundSync();
     controller?.lock();
-    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id });
+    publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id,
+      recipient: client.session()?.id });
     records.replaceChildren();
     clearConflicts();
     setWorkspaceControls(true);
@@ -4061,20 +4079,21 @@ export async function initializeCloudAccount({
   }
 
   async function backgroundPersonalVaultSync() {
-    if (backgroundSyncing || !client.session() || await vault.status() !== "unlocked") return;
+    const recipient = client.session()?.id;
+    if (backgroundSyncing || !recipient || await vault.status() !== "unlocked") return;
     backgroundSyncing = true;
-    publishSyncObservation(documentValue, { scope: "personal", type: "start" });
+    publishSyncObservation(documentValue, { scope: "personal", type: "start", recipient });
     try {
       let result = await synchronizePersonalVault();
       if (result.status === "remote_changed") result = await synchronizePersonalVault();
-      publishSyncObservation(documentValue, { scope: "personal", type: "result", result });
+      publishSyncObservation(documentValue, { scope: "personal", type: "result", result, recipient });
       if (result.status !== "remote_changed") hideConflicts();
       vaultUI.render();
       if (Number.isSafeInteger(result.revision)) {
         setVaultSynchronizationMessage(vaultMessage, { documentValue, revision: result.revision });
       }
     } catch (error) {
-      publishSyncObservation(documentValue, { scope: "personal", type: "error", code: String(error?.message ?? "") });
+      publishSyncObservation(documentValue, { scope: "personal", type: "error", code: String(error?.message ?? ""), recipient });
       setText(vaultMessage, "Автосинхронизация временно недоступна; локальные данные сохранены, повторим автоматически.");
     } finally {
       backgroundSyncing = false;
@@ -4541,10 +4560,11 @@ export async function initializeCloudAccount({
 
   syncButton.addEventListener("click", async () => {
     syncButton.disabled = true;
-    publishSyncObservation(documentValue, { scope: "personal", type: "start" });
+    const recipient = client.session()?.id;
+    publishSyncObservation(documentValue, { scope: "personal", type: "start", recipient });
     try {
       const result = await synchronizePersonalVault();
-      publishSyncObservation(documentValue, { scope: "personal", type: "result", result });
+      publishSyncObservation(documentValue, { scope: "personal", type: "result", result, recipient });
       const messages = {
         empty: "Сначала создайте локальный Vault.",
         uploaded: `Зашифрованная ревизия ${result.revision} загружена.`,
@@ -4565,7 +4585,7 @@ export async function initializeCloudAccount({
       }
     } catch (error) {
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "personal", type: "error", code });
+      publishSyncObservation(documentValue, { scope: "personal", type: "error", code, recipient });
       if (code === "local_vault_locked") setText(vaultMessage, "Сначала разблокируйте локальный Vault.");
       else if (code === "authentication_required") {
         showSession(null);
@@ -5051,6 +5071,8 @@ export function initializePortalNavigation({
     }
   }
   documentValue.addEventListener(syncObservationEvent, (event) => {
+    if (event.detail?.recipient && event.detail.recipient !== notificationRecipient) return;
+    if (!event.detail?.recipient && event.detail?.type !== "locked") return;
     syncPresentation = reduceSyncPresentationState(syncPresentation, event.detail);
     updateSyncState();
     if (notificationRecipient) {

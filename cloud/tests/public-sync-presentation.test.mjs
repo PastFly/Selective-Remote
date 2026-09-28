@@ -97,3 +97,12 @@ test("observation event strips conflict records and arbitrary error text", () =>
   assert.equal(events[1].detail.code, "unknown_failure");
   assert.doesNotMatch(JSON.stringify(events), /Secret host|example\.internal/u);
 });
+
+test("sync observation preserves only a typed recipient to bind delayed results", () => {
+  const events = [];
+  class FakeEvent { constructor(type, options) { this.type = type; this.detail = options.detail; } }
+  const documentValue = { defaultView: { CustomEvent: FakeEvent }, dispatchEvent: (event) => events.push(event) };
+  publishSyncObservation(documentValue, { scope: "personal", type: "result",
+    recipient: "11111111-1111-4111-8111-111111111111", result: { status: "up_to_date" } });
+  assert.equal(events[0].detail.recipient, "11111111-1111-4111-8111-111111111111");
+});
