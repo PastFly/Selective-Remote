@@ -360,6 +360,14 @@ struct ContentView: View {
             )
             .environmentObject(model)
         }
+        .sheet(item: $model.knownHostRecoveryCandidate) { candidate in
+            KnownHostRecoverySheet(
+                candidate: candidate,
+                isWorking: model.knownHostRecoveryWorking,
+                onCancel: { model.cancelKnownHostRecovery() },
+                onConfirm: { model.confirmKnownHostRecovery(candidateID: candidate.id) }
+            )
+        }
         .sheet(isPresented: $showsCaptureDiagnostics) {
             CaptureDiagnosticsView(
                 cameraSelectionMode: profile.cameraSelectionMode,

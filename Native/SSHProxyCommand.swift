@@ -192,8 +192,14 @@ struct SSHProxyCommandMain {
             "-W", "\(args[4]):\(targetPort)"
         ]
         if !args[10].isEmpty {
-            childArguments.append("-o")
-            childArguments.append("UserKnownHostsFile=\(args[10])")
+            childArguments += [
+                "-S", "none",
+                "-o", "ControlMaster=no",
+                "-o", "GlobalKnownHostsFile=/dev/null",
+                "-o", "CheckHostIP=no",
+                "-o", "UpdateHostKeys=no",
+                "-o", "UserKnownHostsFile=\(args[10])"
+            ]
         }
         if !args[6].isEmpty {
             childArguments.append("-l")

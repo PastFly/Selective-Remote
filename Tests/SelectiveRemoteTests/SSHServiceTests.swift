@@ -185,6 +185,156 @@ func hostBoundJumpAuthenticationIdentity() throws {
     #expect(settings.jumpCredentialIdentity?.hasPrefix("jump|\(jump.id.uuidString)|") == true)
 }
 
+@Test("Recovery probe isolates destination trust and pins managed Jump trust")
+func routeBoundHostKeyProbeArguments() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "internal.example.test"
+    destination.sshPort = 2222
+    var jump = ConnectionProfile(connectionType: .ssh)
+    jump.host = "bastion.example.test"
+    jump.sshHostKeyPolicy = .acceptNew
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil, jumpHost: jump)
+    let arguments = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    #expect(!arguments.contains("-F"))
+    #expect(arguments.contains("UserKnownHostsFile=/private/tmp/probe/known_hosts"))
+    #expect(arguments.contains("StrictHostKeyChecking=accept-new"))
+    #expect(arguments.last == "internal.example.test")
+    let proxy = try #require(arguments.first(where: { $0.hasPrefix("ProxyCommand=") }))
+    #expect(proxy.contains("'yes'"))
+    #expect(proxy.contains(SSHKnownHostsService.defaultURL.path))
+    #expect(!proxy.contains("'accept-new'"))
+}
+
+@Test("Recovery probe honors the same OpenSSH Host alias as the normal connection")
+func recoveryProbePreservesHostAliasRoute() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "sr-recovery-alias"
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil)
+    let probe = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    #expect(!probe.contains("-F"))
+
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SelectiveRemoteSSHConfigTest-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let config = directory.appendingPathComponent("config")
+    try "Host sr-recovery-alias\n  HostName 192.0.2.10\n  HostKeyAlias sr-recovery-alias\n"
+        .write(to: config, atomically: true, encoding: .utf8)
+
+    func effectiveHost(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-G", "-F", config.path] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("hostname ") })
+            .map(String.init) ?? ""
+    }
+
+    #expect(try effectiveHost(SSHService.interactiveSSHArguments(settings: settings)) == "hostname 192.0.2.10")
+    #expect(try effectiveHost(probe) == "hostname 192.0.2.10")
+}
+
+@Test("Jump recovery probe retains OpenSSH alias routing while disabling nested proxies")
+func jumpRecoveryProbePreservesHostAliasRoute() throws {
+    let arguments = SSHService.jumpHostKeyProbeArguments(
+        host: "sr-jump-alias",
+        port: 2222,
+        username: "alice",
+        temporaryKnownHostsPath: "/private/tmp/probe/jump_known_hosts"
+    )
+    #expect(!arguments.contains("-F"))
+    #expect(arguments.contains("ProxyJump=none"))
+    #expect(arguments.contains("ProxyCommand=none"))
+    #expect(arguments.contains("UserKnownHostsFile=/private/tmp/probe/jump_known_hosts"))
+    #expect(arguments.suffix(3) == ["-l", "alice", "sr-jump-alias"])
+}
+
+@Test("Recovery probe follows the saved username through Match user routing")
+func recoveryProbeMatchesConfiguredUserRoute() throws {
+    var destination = ConnectionProfile(connectionType: .ssh)
+    destination.host = "sr-match-user-alias"
+    destination.username = "actualuser"
+    let settings = try SSHConnectionSettings(profile: destination, identity: nil)
+    let probe = SSHService.hostKeyProbeArguments(
+        settings: settings,
+        temporaryKnownHostsPath: "/private/tmp/probe/known_hosts"
+    )
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("SelectiveRemoteMatchUserTest-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let config = directory.appendingPathComponent("config")
+    try """
+    Host sr-match-user-alias
+      User defaultuser
+    Match host sr-match-user-alias user actualuser
+      HostName actual.example.test
+    Match host sr-match-user-alias user defaultuser
+      HostName probe.example.test
+
+    """.write(to: config, atomically: true, encoding: .utf8)
+
+    func effectiveHost(_ arguments: [String]) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = ["-G", "-F", config.path] + arguments
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+        try process.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        #expect(process.terminationStatus == 0)
+        return String(decoding: data, as: UTF8.self)
+            .split(separator: "\n")
+            .first(where: { $0.hasPrefix("hostname ") })
+            .map(String.init) ?? ""
+    }
+
+    let normal = try effectiveHost(SSHService.interactiveSSHArguments(settings: settings))
+    #expect(normal == "hostname actual.example.test")
+    #expect(try effectiveHost(probe) == normal)
+}
+
+@Test("Guided recovery rejects a different configured host-key name or trust file")
+func recoveryRejectsDifferentTrustBinding() {
+    let baseline = """
+    hostname sr-recovery-alias
+    userknownhostsfile /Users/test/.ssh/known_hosts /Users/test/.ssh/known_hosts2
+    globalknownhostsfile /etc/ssh/ssh_known_hosts
+    """
+    let routed = """
+    hostname 192.0.2.10
+    userknownhostsfile /Users/test/.ssh/known_hosts /Users/test/.ssh/known_hosts2
+    globalknownhostsfile /etc/ssh/ssh_known_hosts
+    hostkeyalias sr-recovery-alias
+    """
+    #expect(SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed, baseline: baseline, host: "sr-recovery-alias"
+    ))
+    #expect(!SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed.replacingOccurrences(of: "hostkeyalias sr-recovery-alias", with: "hostkeyalias other-host"),
+        baseline: baseline, host: "sr-recovery-alias"
+    ))
+    #expect(!SSHService.isRecoveryTrustConfigurationSupported(
+        effective: routed.replacingOccurrences(of: "/Users/test/.ssh/known_hosts2", with: "/private/tmp/custom_hosts"),
+        baseline: baseline, host: "sr-recovery-alias"
+    ))
+}
+
 @Test("Saved SSH password resolves by profile after a fresh Terminal connection is reconstructed")
 func savedSSHPasswordReferenceIsStableAcrossReconnect() throws {
     var profile = ConnectionProfile(connectionType: .ssh)
@@ -552,6 +702,19 @@ func buildsSFTPFileManagementCommands() throws {
             #"chgrp 42 "/srv/report.txt""#
         ]
     )
+}
+
+@Test("SFTP master distinguishes host-key mismatch from authentication and path failures")
+func classifiesSFTPMasterHostKeyFailureOnlyFromSSHOutput() {
+    if case .hostKeyChanged = SFTPServiceError.masterFailure(
+        status: 255, stderr: "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!\nHost key verification failed."
+    ) {} else { Issue.record("Expected changed host key") }
+    if case .authenticationRequired = SFTPServiceError.masterFailure(
+        status: 255, stderr: "Permission denied (publickey)."
+    ) {} else { Issue.record("Expected authentication failure") }
+    if case .hostKeyChanged = SFTPServiceError.masterFailure(
+        status: 1, stderr: "missing remote directory"
+    ) { Issue.record("Directory errors cannot trigger host-key recovery") }
 }
 
 @Test("SFTP отклоняет опасные имена и некорректные права")

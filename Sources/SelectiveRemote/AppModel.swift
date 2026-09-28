@@ -484,6 +484,7 @@ final class AppModel: NSObject, ObservableObject {
     private var managedSessions: [UUID: ManagedRDPSession] = [:]
     private var lastSessionLogURLs: [UUID: URL] = [:]
     private var managedSSHTunnels: [UUID: RunningSSHTunnel] = [:]
+    private var sshTunnelRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
     private var lastSSHTunnelLogURLs: [UUID: URL] = [:]
     private var stoppingSSHTunnelIDs: Set<UUID> = []
     private var sshTerminalSessions: [UUID: TerminalSessionModel] = [:]
@@ -491,6 +492,11 @@ final class AppModel: NSObject, ObservableObject {
     private var terminalWorkspaces: [UUID: TerminalWorkspaceModel] = [:]
     private var terminalWorkspaceObservers: [UUID: AnyCancellable] = [:]
     private var terminalRuntimeSettings: [UUID: SSHConnectionSettings] = [:]
+    @Published var knownHostRecoveryCandidate: SSHKnownHostRecoveryCandidate?
+    @Published private(set) var knownHostRecoveryWorking = false
+    private var knownHostRecoveryRetry: (() -> Void)?
+    private var knownHostRecoveryContextValid: (() -> Bool)?
+    private var knownHostRecoverySettings: SSHConnectionSettings?
     private var terminalStartedAt: [UUID: Date] = [:]
     private var terminalLogObserverIDs: [UUID: UUID] = [:]
     private var terminalLogRecordIDs: [UUID: UUID] = [:]
@@ -3252,6 +3258,7 @@ final class AppModel: NSObject, ObservableObject {
                 passwordCredential: effectiveCredential
             )
             managedSSHTunnels[id] = running
+            sshTunnelRuntimeSettings[id] = settings
             sshTunnels[id] = SSHTunnelSummary(
                 id: id,
                 profileID: Self.globalForwardingProfileID,
@@ -3374,6 +3381,7 @@ final class AppModel: NSObject, ObservableObject {
                 passwordCredential: credential
             )
             managedSSHTunnels[ruleID] = running
+            sshTunnelRuntimeSettings[ruleID] = settings
             sshTunnels[ruleID] = SSHTunnelSummary(
                 id: ruleID,
                 profileID: profileID,
@@ -3961,6 +3969,18 @@ final class AppModel: NSObject, ObservableObject {
                         ? UpdateLocalization.text(ru: "\(terminalProtocolTitle)-сессия завершена", en: "\(terminalProtocolTitle) session ended")
                         : (moshFailure ?? UpdateLocalization.text(ru: "\(terminalProtocolTitle)-сессия завершилась с кодом \(exitCode)", en: "\(terminalProtocolTitle) session exited with code \(exitCode)"))
                 }
+                if !terminationRequested, exitCode != 0,
+                   settings.terminalProtocol == .ssh,
+                   SSHKnownHostsService.isHostKeyMismatch(recentOutput) {
+                    Task { [weak self, weak session] in
+                        await self?.offerKnownHostRecovery(
+                            settings: settings,
+                            connection: connection,
+                            tabID: tabID,
+                            session: session
+                        )
+                    }
+                }
                 objectWillChange.send()
             }
             beginTerminalSessionLog(
@@ -4039,6 +4059,137 @@ final class AppModel: NSObject, ObservableObject {
             )
             errorMessage = error.localizedDescription
             statusMessage = UpdateLocalization.text(ru: "\(settings.terminalProtocol.title) не запущен", en: "\(settings.terminalProtocol.title) did not start")
+        }
+    }
+
+    private func offerKnownHostRecovery(
+        settings: SSHConnectionSettings,
+        connection: TerminalTabConnection,
+        tabID: UUID,
+        session: TerminalSessionModel?
+    ) async {
+        guard let session else { return }
+        await offerKnownHostRecovery(
+            settings: settings,
+            contextValid: { [weak self, weak session] in
+                guard let self, session != nil else { return false }
+                return self.sshConnectionSettings(connection: connection, tabID: tabID) == settings
+            },
+            retry: { [weak self, weak session] in
+                guard let self, let session,
+                      self.sshConnectionSettings(connection: connection, tabID: tabID) == settings
+                else { return }
+                self.connectSSHTerminal(connection: connection, tabID: tabID, session: session)
+            }
+        )
+    }
+
+    func offerKnownHostRecovery(
+        settings: SSHConnectionSettings,
+        contextValid: @escaping () -> Bool,
+        retry: @escaping () -> Void
+    ) async {
+        guard knownHostRecoveryCandidate == nil, contextValid() else { return }
+        let candidate: SSHKnownHostRecoveryCandidate?
+        if let jumpHost = settings.jumpHostName,
+           let jumpPort = settings.jumpHostPort,
+           let jumpID = settings.jumpHostProfileID {
+            let jumpScan = try? await SSHService.observedJumpHostKey(
+                host: jumpHost, port: jumpPort, username: settings.jumpHostUsername ?? ""
+            )
+            candidate = jumpScan.flatMap {
+                SSHKnownHostsService.recoveryCandidate(
+                    host: jumpHost, port: jumpPort, role: .jumpHost,
+                    profileID: jumpID, scannedContents: $0
+                )
+            }
+        } else {
+            candidate = nil
+        }
+        let resolved: SSHKnownHostRecoveryCandidate?
+        if let candidate {
+            resolved = candidate
+        } else {
+            guard let observed = try? await observedDestinationKey(settings: settings) else { return }
+            resolved = SSHKnownHostsService.recoveryCandidate(
+                host: settings.host, port: settings.port, role: .destination,
+                profileID: settings.profileID, scannedContents: observed
+            )
+        }
+        guard let resolved else { return }
+        presentKnownHostRecoveryCandidate(
+            resolved, settings: settings, contextValid: contextValid, retry: retry
+        )
+    }
+
+    func presentKnownHostRecoveryCandidate(
+        _ candidate: SSHKnownHostRecoveryCandidate,
+        settings: SSHConnectionSettings,
+        contextValid: @escaping () -> Bool,
+        retry: @escaping () -> Void
+    ) {
+        guard knownHostRecoveryCandidate == nil, contextValid() else { return }
+        knownHostRecoverySettings = settings
+        knownHostRecoveryContextValid = contextValid
+        knownHostRecoveryRetry = retry
+        knownHostRecoveryCandidate = candidate
+    }
+
+    private func observedDestinationKey(settings: SSHConnectionSettings) async throws -> String {
+        let environment = try SSHKeyService.backgroundAuthenticationEnvironment(
+            settings: settings,
+            proxyPasswordCredential: settings.proxyMode == .none ? nil : KeychainService.credentialReference(
+                profileID: settings.profileID, kind: .proxy
+            ),
+            jumpHostPasswordCredential: settings.jumpHostProfileID.map {
+                KeychainService.credentialReference(profileID: $0, kind: .ssh)
+            }
+        )
+        defer { SSHKeyService.cleanupAuthenticationEnvironment(environment) }
+        return try await SSHService.observedDestinationKey(settings: settings, environment: environment)
+    }
+
+    func cancelKnownHostRecovery() {
+        guard !knownHostRecoveryWorking else { return }
+        knownHostRecoveryCandidate = nil
+        knownHostRecoveryRetry = nil
+        knownHostRecoveryContextValid = nil
+        knownHostRecoverySettings = nil
+    }
+
+    func confirmKnownHostRecovery(candidateID: UUID) {
+        guard let candidate = knownHostRecoveryCandidate,
+              candidate.id == candidateID,
+              let settings = knownHostRecoverySettings,
+              knownHostRecoveryContextValid?() == true,
+              !knownHostRecoveryWorking else { return }
+        knownHostRecoveryWorking = true
+        Task {
+            defer { knownHostRecoveryWorking = false }
+            do {
+                let _ = try await SSHKnownHostsService.replaceConfirmed(candidate) {
+                    if candidate.role == .jumpHost {
+                        return try await SSHService.observedJumpHostKey(
+                            host: candidate.host, port: candidate.port,
+                            username: settings.jumpHostUsername ?? ""
+                        )
+                    }
+                    return try await self.observedDestinationKey(settings: settings)
+                }
+                let contextStillValid = knownHostRecoveryContextValid?() == true
+                knownHostRecoveryCandidate = nil
+                let retry = knownHostRecoveryRetry
+                knownHostRecoveryRetry = nil
+                knownHostRecoveryContextValid = nil
+                knownHostRecoverySettings = nil
+                statusMessage = UpdateLocalization.text(
+                    ru: "Ключ хоста заменён после проверки. Повторяем соединение.",
+                    en: "Host key replaced after verification. Retrying the connection."
+                )
+                if contextStillValid { retry?() }
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -5568,6 +5719,7 @@ final class AppModel: NSObject, ObservableObject {
 
     private func finishSSHTunnel(_ ruleID: UUID, status: Int32) {
         guard let running = managedSSHTunnels.removeValue(forKey: ruleID) else { return }
+        let settings = sshTunnelRuntimeSettings.removeValue(forKey: ruleID)
         let summary = sshTunnels.removeValue(forKey: ruleID)
         let reconnectAttempt = sshTunnelReconnectAttempts[ruleID]
         let requested = stoppingSSHTunnelIDs.remove(ruleID) != nil
@@ -5594,6 +5746,39 @@ final class AppModel: NSObject, ObservableObject {
             ? UpdateLocalization.text(ru: "процесс завершился: \(localizedTermination)", en: "process exited: \(localizedTermination)")
             : String(details.suffix(3_000))
         sshTunnelLastErrors[ruleID] = message
+
+        if status != 0, SSHKnownHostsService.isHostKeyMismatch(log),
+           let settings, let summary {
+            Task { [weak self] in
+                guard let self else { return }
+                await self.offerKnownHostRecovery(
+                    settings: settings,
+                    contextValid: { [weak self] in
+                        guard let self else { return false }
+                        if summary.profileID == Self.globalForwardingProfileID {
+                            guard let item = self.independentPortForwards.first(where: { $0.id == ruleID }),
+                                  item.connection.kind == .savedProfile else { return false }
+                            return self.sshConnectionSettings(
+                                connection: item.connection,
+                                tabID: Self.globalForwardingProfileID
+                            ) == settings
+                        }
+                        return self.sshConnectionSettings(profileID: summary.profileID) == settings
+                            && self.profiles.contains(where: {
+                                $0.id == summary.profileID && $0.portForwards.contains(where: { $0.id == ruleID })
+                            })
+                    },
+                    retry: { [weak self] in
+                        guard let self else { return }
+                        if summary.profileID == Self.globalForwardingProfileID {
+                            self.startIndependentPortForward(ruleID)
+                        } else {
+                            self.startProfileSSHTunnel(ruleID: ruleID, profileID: summary.profileID)
+                        }
+                    }
+                )
+            }
+        }
 
         if let summary,
            canAutomaticallyReconnectSSHTunnel(summary),

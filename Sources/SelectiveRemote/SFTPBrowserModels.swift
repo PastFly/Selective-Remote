@@ -677,6 +677,7 @@ final class SFTPBrowserModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published private(set) var statusMessage = UpdateLocalization.text(ru: "SFTP ещё не подключён", en: "SFTP is not connected yet")
     @Published var errorMessage: String?
+    private(set) var failedForHostKeyMismatch = false
     @Published var selectedEntryIDs: Set<String> = []
     @Published var editorDocument: SFTPRemoteTextDocument?
     @Published var sortField: SFTPFileSortField = .name {
@@ -726,6 +727,7 @@ final class SFTPBrowserModel: ObservableObject {
         isBusy = false
         statusMessage = UpdateLocalization.text(ru: "SFTP ещё не подключён", en: "SFTP is not connected yet")
         errorMessage = nil
+        failedForHostKeyMismatch = false
         selectedEntryIDs.removeAll()
         editorDocument = nil
         filterText = ""
@@ -761,6 +763,7 @@ final class SFTPBrowserModel: ObservableObject {
         operationID = token
         isBusy = true
         errorMessage = nil
+        failedForHostKeyMismatch = false
         statusMessage = UpdateLocalization.text(ru: "Читаем \(target)…", en: "Reading \(target)…")
 
         Task {
@@ -788,6 +791,9 @@ final class SFTPBrowserModel: ObservableObject {
                 )
             } catch {
                 guard operationID == token else { return }
+                if case .hostKeyChanged = error as? SFTPServiceError {
+                    failedForHostKeyMismatch = true
+                }
                 isBusy = false
                 statusMessage = UpdateLocalization.text(ru: "SFTP недоступен", en: "SFTP is unavailable")
                 errorMessage = error.localizedDescription

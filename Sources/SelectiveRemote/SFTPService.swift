@@ -7,7 +7,17 @@ enum SFTPServiceError: LocalizedError, Sendable {
     case invalidPermissions
     case invalidNumericID
     case authenticationRequired
+    case hostKeyChanged
     case commandFailed(String)
+
+    static func masterFailure(status: Int32, stderr: String) -> SFTPServiceError {
+        if SSHKnownHostsService.isHostKeyMismatch(stderr) { return .hostKeyChanged }
+        if status == 255 { return .authenticationRequired }
+        return .commandFailed(UpdateLocalization.text(
+            ru: "не удалось создать управляющее SSH-соединение (код \(status))",
+            en: "could not establish the SSH control connection (code \(status))"
+        ))
+    }
 
     var errorDescription: String? {
         switch self {
@@ -25,6 +35,11 @@ enum SFTPServiceError: LocalizedError, Sendable {
             UpdateLocalization.text(
                 ru: "SSH-сервер отклонил аутентификацию SFTP. Проверьте логин, пароль или SSH-ключ и повторите подключение.",
                 en: "The SSH server rejected SFTP authentication. Check the username, password, or SSH key and reconnect."
+            )
+        case .hostKeyChanged:
+            UpdateLocalization.text(
+                ru: "Ключ SSH-сервера изменился. Проверьте его перед повторным подключением.",
+                en: "The SSH server key changed. Verify it before reconnecting."
             )
         case let .commandFailed(message):
             UpdateLocalization.text(ru: "Ошибка SFTP: \(message)", en: "SFTP error: \(message)")
@@ -218,6 +233,21 @@ enum SFTPRemoteEntrySorter {
     }
 }
 
+private final class SFTPMasterErrorCapture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes = Data()
+
+    func append(_ chunk: Data) {
+        lock.withLock {
+            if bytes.count < 16_384 {
+                bytes.append(chunk.prefix(16_384 - bytes.count))
+            }
+        }
+    }
+
+    var text: String { lock.withLock { String(decoding: bytes, as: UTF8.self) } }
+}
+
 private final class SFTPMasterConnectionManager: @unchecked Sendable {
     private let stateLock = NSLock()
     private let controlPathGate = SFTPControlPathGate()
@@ -297,12 +327,22 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
             )
             process.standardInput = FileHandle.nullDevice
             process.standardOutput = FileHandle.nullDevice
-            process.standardError = FileHandle.nullDevice
+            let errorPipe = Pipe()
+            let errorCapture = SFTPMasterErrorCapture()
+            let errorReadDone = DispatchSemaphore(value: 0)
+            process.standardError = errorPipe
 
             do {
                 try process.run()
             } catch {
                 throw SSHServiceError.launchFailed(error.localizedDescription)
+            }
+            let errorReader = errorPipe.fileHandleForReading
+            DispatchQueue.global(qos: .utility).async {
+                while let chunk = try? errorReader.read(upToCount: 4_096), !chunk.isEmpty {
+                    errorCapture.append(chunk)
+                }
+                errorReadDone.signal()
             }
             stateLock.withLock {
                 ownedProcesses[controlPath] = process
@@ -343,14 +383,11 @@ private final class SFTPMasterConnectionManager: @unchecked Sendable {
                 }
             }
 
-            if process.terminationStatus == 255 {
-                throw SFTPServiceError.authenticationRequired
-            }
-            throw SFTPServiceError.commandFailed(
-                UpdateLocalization.text(
-                    ru: "не удалось создать управляющее SSH-соединение (код \(process.terminationStatus))",
-                    en: "could not establish the SSH control connection (code \(process.terminationStatus))"
-                )
+            try? errorPipe.fileHandleForWriting.close()
+            _ = errorReadDone.wait(timeout: .now() + 1)
+            throw SFTPServiceError.masterFailure(
+                status: process.terminationStatus,
+                stderr: errorCapture.text
             )
         }
     }

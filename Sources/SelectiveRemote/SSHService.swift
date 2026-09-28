@@ -468,7 +468,10 @@ enum SSHService {
         }
     }
 
-    static func proxyArguments(settings: SSHConnectionSettings) -> [String] {
+    static func proxyArguments(
+        settings: SSHConnectionSettings,
+        probeKnownHostsPath: String? = nil
+    ) -> [String] {
         let helper = Bundle.main.bundleURL
             .appendingPathComponent("Contents/Helpers", isDirectory: true)
             .appendingPathComponent("SelectiveRemoteSSHProxy")
@@ -483,8 +486,8 @@ enum SSHService {
                 "%h", "%p", shellEscaped(jumpHostUsername),
                 "\"${SELECTIVEREMOTE_JUMP_SECRET_FILE:-}\"",
                 shellEscaped(jumpIdentity),
-                shellEscaped(jumpHostKeyPolicy.openSSHValue),
-                "''"
+                shellEscaped(probeKnownHostsPath == nil ? jumpHostKeyPolicy.openSSHValue : SSHHostKeyPolicy.strict.openSSHValue),
+                shellEscaped(probeKnownHostsPath ?? "")
             ]
             return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
         }
@@ -501,6 +504,212 @@ enum SSHService {
             "\"\(secret)\""
         ]
         return ["-o", "ProxyCommand=\(parts.joined(separator: " "))"]
+    }
+
+    /// Reads the destination host key over the configured transport into an
+    /// isolated file. The temporary accept-new policy never touches the user's
+    /// known_hosts; a managed Jump Host remains strict against that real file.
+    static func observedDestinationKey(
+        settings: SSHConnectionSettings,
+        environment: [String: String]
+    ) async throws -> String {
+        var configurationChecks = [(
+            host: settings.host,
+            arguments: commonSSHArguments(settings: settings, batchMode: true, multiplexing: false)
+                + [settings.host]
+        )]
+        if let jumpHost = settings.jumpHostName, let jumpPort = settings.jumpHostPort {
+            configurationChecks.append((
+                host: jumpHost,
+                arguments: jumpHostConfigurationArguments(
+                    host: jumpHost, port: jumpPort, username: settings.jumpHostUsername ?? ""
+                )
+            ))
+        }
+        return try await observedHostKey(environment: environment, configurationChecks: configurationChecks) { file in
+            hostKeyProbeArguments(settings: settings, temporaryKnownHostsPath: file)
+        }
+    }
+
+    static func observedJumpHostKey(host: String, port: Int, username: String) async throws -> String {
+        let configurationChecks = [(
+            host: host,
+            arguments: jumpHostConfigurationArguments(host: host, port: port, username: username)
+        )]
+        return try await observedHostKey(
+            environment: ProcessInfo.processInfo.environment,
+            configurationChecks: configurationChecks
+        ) { file in
+            jumpHostKeyProbeArguments(
+                host: host, port: port, username: username, temporaryKnownHostsPath: file
+            )
+        }
+    }
+
+    private static func observedHostKey(
+        environment: [String: String],
+        configurationChecks: [(host: String, arguments: [String])],
+        argumentsForFile: @escaping @Sendable (String) -> [String]
+    ) async throws -> String {
+        try await Task.detached(priority: .userInitiated) {
+            for check in configurationChecks {
+                try ensureRecoveryTrustConfiguration(
+                    host: check.host, arguments: check.arguments, environment: environment
+                )
+            }
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SelectiveRemoteHostProbe-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+            defer { try? FileManager.default.removeItem(at: directory) }
+            guard chmod(directory.path, 0o700) == 0 else {
+                throw SSHKnownHostsService.RecoveryError.unsafeSource
+            }
+            let file = directory.appendingPathComponent("known_hosts")
+            let fd = open(file.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600)
+            guard fd >= 0 else { throw SSHKnownHostsService.RecoveryError.unsafeSource }
+            close(fd)
+
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = argumentsForFile(file.path)
+            process.environment = environment
+            process.standardInput = FileHandle.nullDevice
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let deadline = Date().addingTimeInterval(15)
+            while process.isRunning && Date() < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            if process.isRunning { process.terminate() }
+            process.waitUntilExit()
+            let contents = try String(contentsOf: file, encoding: .utf8)
+            guard !contents.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw SSHKnownHostsService.RecoveryError.scanChanged
+            }
+            return contents
+        }.value
+    }
+
+    static func hostKeyProbeArguments(
+        settings: SSHConnectionSettings,
+        temporaryKnownHostsPath: String
+    ) -> [String] {
+        var arguments = [
+                "-S", "none",
+                "-o", "ControlMaster=no",
+                "-o", "UserKnownHostsFile=\(temporaryKnownHostsPath)",
+                "-o", "GlobalKnownHostsFile=/dev/null",
+                "-o", "StrictHostKeyChecking=accept-new",
+                "-o", "HashKnownHosts=no",
+                "-o", "CheckHostIP=no",
+                "-o", "UpdateHostKeys=no",
+                "-o", "BatchMode=yes",
+                "-o", "PreferredAuthentications=none",
+                "-o", "PubkeyAuthentication=no",
+                "-o", "PasswordAuthentication=no",
+                "-o", "KbdInteractiveAuthentication=no",
+                "-o", "NumberOfPasswordPrompts=0",
+                "-o", "ConnectTimeout=8",
+                "-o", "ConnectionAttempts=1",
+                "-p", String(settings.port)
+            ]
+        arguments += proxyArguments(
+            settings: settings,
+            probeKnownHostsPath: settings.jumpHostName == nil ? nil : defaultKnownHostsPath
+        )
+        if !settings.username.isEmpty {
+            arguments += ["-o", "User=\(settings.username)"]
+        }
+        arguments += ["-N", settings.host]
+        return arguments
+    }
+
+    static func jumpHostKeyProbeArguments(
+        host: String,
+        port: Int,
+        username: String,
+        temporaryKnownHostsPath: String
+    ) -> [String] {
+        var arguments = [
+            "-S", "none", "-o", "ControlMaster=no",
+            "-o", "UserKnownHostsFile=\(temporaryKnownHostsPath)",
+            "-o", "GlobalKnownHostsFile=/dev/null",
+            "-o", "StrictHostKeyChecking=accept-new",
+            "-o", "HashKnownHosts=no", "-o", "CheckHostIP=no",
+            "-o", "UpdateHostKeys=no", "-o", "BatchMode=yes",
+            "-o", "PreferredAuthentications=none",
+            "-o", "PubkeyAuthentication=no",
+            "-o", "PasswordAuthentication=no",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "NumberOfPasswordPrompts=0",
+            "-o", "ConnectTimeout=8", "-o", "ConnectionAttempts=1",
+            "-o", "ProxyJump=none", "-o", "ProxyCommand=none",
+            "-o", "ClearAllForwardings=yes",
+            "-p", String(port), "-N"
+        ]
+        if !username.isEmpty { arguments += ["-l", username] }
+        arguments.append(host)
+        return arguments
+    }
+
+    private static func jumpHostConfigurationArguments(
+        host: String, port: Int, username: String
+    ) -> [String] {
+        var arguments = [
+            "-p", String(port), "-o", "ProxyJump=none",
+            "-o", "ProxyCommand=none", "-o", "ClearAllForwardings=yes"
+        ]
+        if !username.isEmpty { arguments += ["-l", username] }
+        arguments.append(host)
+        return arguments
+    }
+
+    static func isRecoveryTrustConfigurationSupported(
+        effective: String, baseline: String, host: String
+    ) -> Bool {
+        func value(_ key: String, in output: String) -> String? {
+            output.split(separator: "\n")
+                .first(where: { $0.hasPrefix("\(key) ") })
+                .map { String($0.dropFirst(key.count + 1)) }
+        }
+        for key in ["userknownhostsfile", "globalknownhostsfile", "knownhostscommand"] {
+            guard value(key, in: effective) == value(key, in: baseline) else { return false }
+        }
+        guard value("userknownhostsfile", in: effective) != nil else { return false }
+        return value("hostkeyalias", in: effective).map { $0 == host } ?? true
+    }
+
+    private static func ensureRecoveryTrustConfiguration(
+        host: String, arguments: [String], environment: [String: String]
+    ) throws {
+        func effectiveConfiguration(_ config: [String]) throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+            process.arguments = ["-G"] + config + arguments
+            process.environment = environment
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardError = FileHandle.nullDevice
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                throw SSHKnownHostsService.RecoveryError.unsafeSource
+            }
+            return String(decoding: data, as: UTF8.self)
+        }
+        let effective = try effectiveConfiguration([])
+        let baseline = try effectiveConfiguration(["-F", "/dev/null"])
+        guard isRecoveryTrustConfigurationSupported(
+            effective: effective, baseline: baseline, host: host
+        ) else {
+            throw SSHKnownHostsService.RecoveryError.unsafeSource
+        }
+    }
+
+    private static var defaultKnownHostsPath: String {
+        SSHKnownHostsService.defaultURL.path
     }
 
     private static func shellEscaped(_ value: String) -> String {
