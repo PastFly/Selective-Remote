@@ -612,13 +612,6 @@ struct ContentView: View {
                     }
                 }
 
-                SyncStatusUtilityView(
-                    lifecycle: syncPresentation.aggregate,
-                    english: language.selection.usesEnglish,
-                    onOpen: { showsSyncCenter = true }
-                )
-                .frame(maxWidth: .infinity, alignment: .leading)
-
                 if model.availableUpdateManifest != nil ||
                     model.runningSessionCount > 0 ||
                     model.runningSSHTunnelCount > 0 {
@@ -770,6 +763,15 @@ struct ContentView: View {
                     ru: "Аккаунт, команды и Team Vaults",
                     en: "Account, Teams, and Team Vaults"
                 ))
+
+                SyncStatusUtilityView(
+                    lifecycle: syncPresentation.aggregate,
+                    english: language.selection.usesEnglish,
+                    onOpen: { showsSyncCenter = true }
+                )
+                .padding(.leading, 43)
+                .padding(.bottom, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
                 ForEach(primaryMainAreas) { area in
                     Button {

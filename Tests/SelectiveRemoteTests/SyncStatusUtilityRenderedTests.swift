@@ -18,21 +18,30 @@ struct SyncStatusUtilityRenderedTests {
             for english in [false, true] {
                 for scheme in [ColorScheme.light, .dark] {
                     for width in [220, 280, 360] {
-                        let view = VStack(alignment: .leading, spacing: 10) {
+                        let view = VStack(alignment: .leading, spacing: 11) {
                             HStack {
                                 Text("Selective Remote").font(.headline)
                                 Spacer()
                                 Image(systemName: "bell")
                                 Image(systemName: "paintpalette")
                             }
+                            HStack(spacing: 8) {
+                                Image(systemName: "cloud").frame(width: 22)
+                                Text(english ? "Cloud Management" : "Управление Cloud")
+                                    .lineLimit(1)
+                                Spacer(minLength: 2)
+                                Circle().fill(Color.green).frame(width: 7, height: 7)
+                            }
+                            .font(.subheadline)
                             SyncStatusUtilityView(lifecycle: lifecycle, english: english, onOpen: {})
-                            Spacer()
+                                .padding(.leading, 30)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                         .padding(12)
-                        .frame(width: CGFloat(width), height: 102)
+                        .frame(width: CGFloat(width), height: 115)
                         .preferredColorScheme(scheme)
                         let hosting = NSHostingView(rootView: view)
-                        hosting.frame = CGRect(x: 0, y: 0, width: width, height: 102)
+                        hosting.frame = CGRect(x: 0, y: 0, width: width, height: 115)
                         let window = NSWindow(contentRect: hosting.frame, styleMask: [.borderless],
                                               backing: .buffered, defer: false)
                         window.appearance = NSAppearance(named: scheme == .dark ? .darkAqua : .aqua)
@@ -47,7 +56,7 @@ struct SyncStatusUtilityRenderedTests {
                         ))
                         let bitmap = NSBitmapImageRep(cgImage: image)
                         window.orderOut(nil)
-                        #expect(bitmap.colorAt(x: width / 2, y: 44) != nil)
+                        #expect(bitmap.colorAt(x: width / 2, y: 76) != nil)
                         if let output {
                             let filename = "\(name)-\(english ? "en" : "ru")-\(scheme == .dark ? "graphite" : "light")-\(width).png"
                             let url = URL(fileURLWithPath: output).appending(path: filename)

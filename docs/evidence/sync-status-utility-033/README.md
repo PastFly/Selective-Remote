@@ -11,9 +11,9 @@ SR_CAPTURE_SYNC_STATUS_MATRIX=/private/tmp/sync-status-rendered-matrix \
   swift test --filter SyncStatusUtilityRenderedTests
 ```
 
-The fixture uses the real `SyncStatusUtilityView` in a small synthetic header
-with the existing bell kept at the upper edge. It checks the status control's
-language, color, icon and narrow layout. It is not an installed-app or Owner
-manual acceptance result. The production `ContentView` keeps its existing
-Notification bell and existing Sync Center sheet; the status button is now in
-the service area under the sidebar header, outside primary navigation.
+The fixture uses the real `SyncStatusUtilityView` directly below a synthetic
+Cloud Management row, with the existing bell kept at the upper edge. It checks
+the status control's language, color, icon and narrow layout. It is not an
+installed-app or Owner manual acceptance result. The production `ContentView`
+keeps its existing Notification bell and Sync Center sheet; the status is a
+small secondary action attached to Cloud Management, outside primary navigation.
