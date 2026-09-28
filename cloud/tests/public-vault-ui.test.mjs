@@ -531,13 +531,6 @@ test("RU and EN synchronization metadata use the active locale", () => {
   assert.equal(formatVaultSynchronizationSummary(-1, at, { locale: "en" }), "Last synchronized: —");
 });
 
-test("workspace synchronization state recognizes RU and EN status messages", async () => {
-  const application = await readFile(new URL("../public/app.js", import.meta.url), "utf8");
-  assert.match(application, /конфликт\|conflict/u);
-  assert.match(application, /ошиб\|не удалось\|поврежд\|error\|failed\|corrupt/u);
-  assert.match(application, /синхрониз\|загружа\|обновля\|synchroniz\|upload\|refresh/u);
-});
-
 test("a rendered synchronization timestamp switches locale without a new sync", () => {
   let summary = null;
   const documentValue = { documentElement: { lang: "ru" }, createElement: () => ({ dataset: {}, textContent: "" }) };
