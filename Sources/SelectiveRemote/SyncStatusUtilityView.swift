@@ -93,3 +93,48 @@ struct SyncStatusUtilityView: View {
         .help(english ? "Open Sync Center" : "Открыть Центр синхронизации")
     }
 }
+
+/// One sidebar service block with independent Cloud and Sync actions.
+struct CloudSyncServiceBlockView: View {
+    let lifecycle: SyncLifecycle
+    let english: Bool
+    let cloudSessionAvailable: Bool
+    let onCloud: () -> Void
+    let onSync: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Button(action: onCloud) {
+                HStack(spacing: 10) {
+                    Image(systemName: "cloud")
+                        .frame(width: 22)
+                        .accessibilityHidden(true)
+                    Text(english ? "Cloud Management" : "Управление Cloud")
+                        .lineLimit(1)
+                    Spacer(minLength: 2)
+                    Circle()
+                        .fill(cloudSessionAvailable ? Color.green : Color.secondary.opacity(0.45))
+                        .frame(width: 7, height: 7)
+                        .accessibilityHidden(true)
+                }
+                .padding(.horizontal, 11)
+                .frame(height: 34)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: false))
+            .accessibilityLabel(english ? "Cloud Management" : "Управление Cloud")
+            .accessibilityValue(cloudSessionAvailable
+                ? (english ? "Cloud session available" : "Сеанс Cloud доступен")
+                : (english ? "Cloud sign-in required" : "Требуется вход в Cloud"))
+            .help(english ? "Account, Teams, and Team Vaults" : "Аккаунт, команды и Team Vaults")
+
+            SyncStatusUtilityView(lifecycle: lifecycle, english: english, onOpen: onSync)
+                .padding(.leading, 43)
+                .padding(.trailing, 11)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(height: 22)
+        }
+        .frame(height: 56)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+    }
+}

@@ -25,17 +25,14 @@ struct SyncStatusUtilityRenderedTests {
                                 Image(systemName: "bell")
                                 Image(systemName: "paintpalette")
                             }
-                            HStack(spacing: 8) {
-                                Image(systemName: "cloud").frame(width: 22)
-                                Text(english ? "Cloud Management" : "Управление Cloud")
-                                    .lineLimit(1)
-                                Spacer(minLength: 2)
-                                Circle().fill(Color.green).frame(width: 7, height: 7)
-                            }
-                            .font(.subheadline)
-                            SyncStatusUtilityView(lifecycle: lifecycle, english: english, onOpen: {})
-                                .padding(.leading, 30)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            CloudSyncServiceBlockView(
+                                lifecycle: lifecycle,
+                                english: english,
+                                cloudSessionAvailable: true,
+                                onCloud: {},
+                                onSync: {}
+                            )
+                            .frame(width: CGFloat(width - 24))
                         }
                         .padding(12)
                         .frame(width: CGFloat(width), height: 115)
@@ -66,5 +63,20 @@ struct SyncStatusUtilityRenderedTests {
                 }
             }
         }
+    }
+
+    @Test("Service block height is stable across sync states")
+    func stableHeight() {
+        let states: [SyncLifecycle] = [.synced, .syncing, .unknown, .error, .conflict, .security]
+        let heights = states.map { lifecycle in
+            NSHostingView(rootView: CloudSyncServiceBlockView(
+                lifecycle: lifecycle,
+                english: false,
+                cloudSessionAvailable: true,
+                onCloud: {},
+                onSync: {}
+            ).frame(width: 220)).fittingSize.height
+        }
+        #expect(heights.allSatisfy { abs($0 - heights[0]) < 0.5 })
     }
 }
