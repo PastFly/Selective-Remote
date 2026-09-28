@@ -111,7 +111,7 @@ function principalEffective(item, principalId) {
     const group = state.groups.find((entry) => entry.id === path.origin);
     const viaGroup = group && principalId !== group.id ? `${T("groupMember")}: ${group.name} → ` : "";
     const route = path.inheritedFrom ? `${T("fromFolder")}: ${origin.title} → ` : `${T("direct")}: `;
-    return `<div class="path"><strong>${esc(principalName(path.origin))}</strong><span class="step">${esc(viaGroup + route + item.title)}</span><span class="step">${esc(path.actions.map(actionLabel).join(" · "))}</span><button class="button small danger" type="button" data-action="remove-grant" data-value="${esc(path.grantId)}">${esc(T("removeDemo"))}</button></div>`;
+    return `<div class="path"><strong>${esc(principalName(path.origin))}</strong><span class="step">${esc(viaGroup + item.vault + " " + T("vault") + " → " + route + item.title)}</span><span class="step">${esc(path.actions.map(actionLabel).join(" · "))}</span><button class="button small danger" type="button" data-action="remove-grant" data-value="${esc(path.grantId)}">${esc(T("removeDemo"))}</button></div>`;
   }).join("");
   return `${permissionGrid}<div class="section-title">${esc(T("accessPaths"))}</div>${paths || `<p class="muted">${esc(T("noAccess"))}</p>`}`;
 }
