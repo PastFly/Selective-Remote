@@ -37,9 +37,30 @@ const syncIssueCodes = new Set([
   "wrapper_provisioning_failed",
 ]);
 
-function publishSyncObservation(documentValue, observation) {
+export function publishSyncObservation(documentValue, observation) {
   const EventType = documentValue.defaultView?.CustomEvent;
-  if (EventType) documentValue.dispatchEvent(new EventType(syncObservationEvent, { detail: observation }));
+  if (!EventType) return;
+  const scope = observation.scope;
+  const type = observation.type;
+  if (scope !== "personal" && scope !== "team") return;
+  if (!["start", "locked", "selection", "result", "error"].includes(type)) return;
+  const detail = { scope, type };
+  if (type === "result") {
+    const result = observation.result ?? {};
+    const status = String(result.status ?? "");
+    detail.result = {
+      status: ["empty", "uploaded", "uploaded_with_new_local_changes", "downloaded", "up_to_date",
+        "initialized", "remote_changed", "conflict"].includes(status) ? status : "unknown",
+      ...(Number.isSafeInteger(result.revision) && result.revision >= 0 ? { revision: result.revision } : {}),
+      ...(Number.isSafeInteger(result.remoteRevision) && result.remoteRevision >= 0
+        ? { remoteRevision: result.remoteRevision } : {}),
+    };
+  }
+  if (type === "error") {
+    const code = String(observation.code ?? "");
+    detail.code = syncIssueCodes.has(code) ? code : "unknown_failure";
+  }
+  documentValue.dispatchEvent(new EventType(syncObservationEvent, { detail }));
 }
 
 export function createSyncPresentationState() {

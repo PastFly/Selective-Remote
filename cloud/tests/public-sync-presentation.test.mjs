@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createSyncPresentationState,
+  publishSyncObservation,
   reduceSyncPresentationState,
   summarizeSyncPresentationState,
   syncPresentationLabels,
@@ -63,4 +64,17 @@ test("unknown engine errors do not enter presentation state verbatim", () => {
   });
   assert.equal(state.team.status, "error");
   assert.equal(state.team.issue, "unknown_failure");
+});
+
+test("observation event strips conflict records and arbitrary error text", () => {
+  const events = [];
+  class FakeEvent { constructor(type, options) { this.type = type; this.detail = options.detail; } }
+  const documentValue = { defaultView: { CustomEvent: FakeEvent }, dispatchEvent: (event) => events.push(event) };
+  publishSyncObservation(documentValue, {
+    scope: "team", type: "result", result: { status: "conflict", revision: 6, conflicts: [{ title: "Secret host" }] },
+  });
+  publishSyncObservation(documentValue, { scope: "team", type: "error", code: "private host example.internal" });
+  assert.deepEqual(events[0].detail.result, { status: "conflict", revision: 6 });
+  assert.equal(events[1].detail.code, "unknown_failure");
+  assert.doesNotMatch(JSON.stringify(events), /Secret host|example\.internal/u);
 });
