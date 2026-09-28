@@ -158,6 +158,7 @@ struct SelectiveRemoteApp: App {
     @StateObject private var appLock = AppLockStore()
     private let personalVaultAutoSync = SelectiveRemotePersonalVaultAutoSync()
     private let teamVaultAutoSync = SelectiveRemoteTeamVaultAutoSync.shared
+    private let syncPresentation = SyncPresentationStore.shared
 
     private var menuBarSystemImage: String {
         if appLock.isLocked { return "lock.fill" }
@@ -184,8 +185,8 @@ struct SelectiveRemoteApp: App {
                     .frame(minWidth: 1050, minHeight: 700)
                     .onAppear {
                         model.presentWhatsNewAfterUpgradeIfNeeded()
+                        configureSyncPresentation()
                         schedulePersonalVaultAutoSync()
-                        updateTeamVaultAutoSync()
                     }
                     .task {
                         await runPersonalVaultInboundSyncLoop()
@@ -208,11 +209,26 @@ struct SelectiveRemoteApp: App {
                     .onReceive(NotificationCenter.default.publisher(
                         for: .selectiveRemoteTeamVaultSyncNow
                     )) { _ in
-                        Task { _ = try? await teamVaultAutoSync.synchronizeConfiguredAccountNow() }
+                        Task {
+                            do { _ = try await teamVaultAutoSync.synchronizeConfiguredAccountNow() }
+                            catch {
+                                if error as? SelectiveRemoteCloudError == .invalidRequest {
+                                    syncPresentation.setPrerequisite(.team, lifecycle: .signedOut)
+                                } else {
+                                    syncPresentation.recordTeamFailure()
+                                }
+                            }
+                        }
                     }
             }
             .onChange(of: appLock.isLocked) { _, _ in
                 updateTeamVaultAutoSync()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+                syncPresentation.setAccount(
+                    endpoint: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
+                    deviceID: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1")
+                )
             }
         }
         .windowResizability(.contentMinSize)
@@ -445,6 +461,10 @@ struct SelectiveRemoteApp: App {
 
     private func updateTeamVaultAutoSync() {
         let shouldRun = !appLock.isLocked
+        if !shouldRun {
+            syncPresentation.setPrerequisite(.team, lifecycle: .locked)
+            syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
+        }
         Task {
             if shouldRun {
                 await teamVaultAutoSync.start()
@@ -455,16 +475,49 @@ struct SelectiveRemoteApp: App {
         }
     }
 
+    private func configureSyncPresentation() {
+        syncPresentation.setAccount(
+            endpoint: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
+            deviceID: UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1")
+        )
+        Task {
+            await teamVaultAutoSync.observePresentation { event in
+                await MainActor.run {
+                    switch event {
+                    case .started: syncPresentation.begin(.team)
+                    case let .completed(report): syncPresentation.recordTeamReport(report)
+                    case .failed: syncPresentation.recordTeamFailure()
+                    }
+                }
+            }
+            await personalVaultAutoSync.observePresentationFailure {
+                await MainActor.run {
+                    syncPresentation.recordPersonalFailure(.unknownFailure)
+                }
+            }
+            updateTeamVaultAutoSync()
+        }
+    }
+
     private func schedulePersonalVaultAutoSync() {
-        guard !appLock.isLocked else { return }
+        guard !appLock.isLocked else {
+            syncPresentation.setPrerequisite(.personal, lifecycle: .locked)
+            return
+        }
         guard UserDefaults.standard.object(
             forKey: "SelectiveRemote.cloud.personal-vault-sync-enabled.v1"
-        ) as? Bool ?? true else { return }
+        ) as? Bool ?? true else {
+            syncPresentation.setPrerequisite(.personal, lifecycle: .disabled)
+            return
+        }
         guard let endpointText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1"),
               let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(endpointText),
               let deviceText = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.device-id.v1"),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
-        else { return }
+        else {
+            syncPresentation.setPrerequisite(.personal, lifecycle: .signedOut)
+            return
+        }
         let profiles = model.profiles
         let snippets = TerminalCommandHistoryStore.shared.templates()
         let forwarding = model.independentPortForwards
@@ -505,11 +558,15 @@ struct SelectiveRemoteApp: App {
                   forKey: "SelectiveRemote.cloud.device-id.v1"
               ),
               let deviceID = UUID(uuidString: deviceText), deviceID.isSelectiveRemoteCloudUUID
-        else { return }
+        else {
+            syncPresentation.recordPersonalUnknown()
+            return
+        }
         UserDefaults.standard.set(
             true,
             forKey: SelectiveRemotePersonalVaultSyncStatus.isSyncingKey
         )
+        syncPresentation.begin(.personal)
         defer {
             UserDefaults.standard.set(
                 false,
@@ -520,7 +577,10 @@ struct SelectiveRemoteApp: App {
             guard let download = try await personalVaultAutoSync.downloadIfNewer(
                 endpoint: endpoint,
                 deviceID: deviceID
-            ) else { return }
+            ) else {
+                syncPresentation.recordPersonalUnknown()
+                return
+            }
             let snapshot = try SelectiveRemotePersonalVaultImporter.decode(download.document)
             let restoredKeys = try SelectiveRemotePersonalVaultSSHKeyStore.install(snapshot.sshKeys)
             try KeychainService.savePasswords(snapshot.credentials)
@@ -535,8 +595,12 @@ struct SelectiveRemoteApp: App {
             }
             if model.sshKeys != restoredKeys { model.sshKeys = restoredKeys }
             TerminalCommandHistoryStore.shared.replaceSyncedTemplates(snapshot.snippets)
+            syncPresentation.recordPersonalSuccess(revision: download.revision)
         } catch {
             SelectiveRemotePersonalVaultSyncStatus.recordError(error)
+            syncPresentation.recordPersonalFailure(
+                SyncIssue.classifyPersonal(error)
+            )
         }
     }
 }

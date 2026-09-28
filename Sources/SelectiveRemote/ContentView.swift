@@ -121,7 +121,9 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @ObservedObject private var language = AppLanguageStore.shared
     @EnvironmentObject private var appAppearance: AppAppearanceStore
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ObservedObject private var syncPresentation = SyncPresentationStore.shared
     @StateObject private var terminalAppearance = TerminalAppearanceStore()
     @StateObject private var snippets = TerminalCommandHistoryStore.shared
     @StateObject private var teamHosts = SelectiveRemoteTeamHostStore.shared
@@ -146,6 +148,8 @@ struct ContentView: View {
     @State private var newPersonalFolderParent = ""
     @State private var showsCloudManagement = false
     @State private var showsCloudOnboarding = false
+    @State private var showsSyncCenter = false
+    @State private var diagnosticsCloudSyncRequestID: UUID?
     @State private var cloudSessionAvailable = false
     @State private var teamHostSearchText = ""
     @State private var selectedTeamHostID = UserDefaults.standard
@@ -452,6 +456,26 @@ struct ContentView: View {
         }) {
             SelectiveRemoteCloudOnboardingSheet(model: model)
         }
+        .sheet(isPresented: $showsSyncCenter) {
+            SyncCenterView(
+                onOpenCloudSettings: {
+                    showsSyncCenter = false
+                    UserDefaults.standard.set("cloud", forKey: "SelectiveRemote.settings.selected-tab.v1")
+                    openSettings()
+                },
+                onOpenCloudManagement: {
+                    showsSyncCenter = false
+                    refreshCloudSessionAvailability()
+                    if cloudSessionAvailable { showsCloudManagement = true }
+                    else { showsCloudOnboarding = true }
+                },
+                onOpenDiagnostics: {
+                    showsSyncCenter = false
+                    diagnosticsCloudSyncRequestID = UUID()
+                    setMainArea(.diagnostics)
+                }
+            )
+        }
     }
 
     private var sidebar: some View {
@@ -663,6 +687,25 @@ struct ContentView: View {
                     ru: "Аккаунт, команды и Team Vaults",
                     en: "Account, Teams, and Team Vaults"
                 ))
+
+                Button {
+                    showsSyncCenter = true
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.triangle.2.circlepath")
+                            .frame(width: 22)
+                        Text(UpdateLocalization.text(ru: "Синхронизация", en: "Sync"))
+                        Spacer()
+                        Text(syncPresentation.aggregate.title(english: language.selection.usesEnglish))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 11)
+                    .frame(height: 30)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: false))
 
                 ForEach(primaryMainAreas) { area in
                     Button {
@@ -2557,7 +2600,16 @@ struct ContentView: View {
             case .sftp:
                 globalSFTPDetail
             case .diagnostics:
-                DiagnosticsCenterView(model: model)
+                DiagnosticsCenterView(
+                    model: model,
+                    onOpenCloudManagement: {
+                        refreshCloudSessionAvailability()
+                        if cloudSessionAvailable { showsCloudManagement = true }
+                        else { showsCloudOnboarding = true }
+                    },
+                    onOpenSyncCenter: { showsSyncCenter = true },
+                    cloudSyncRequestID: diagnosticsCloudSyncRequestID
+                )
             case .keychain:
                 credentialVaultDetail
             case .forwarding:
