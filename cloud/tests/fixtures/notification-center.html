@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ru" data-theme="graphite">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notification Center synthetic preview</title>
+<link rel="stylesheet" href="../../public/styles.css">
+<body data-portal-view="workspace">
+  <main class="shell" id="cloud-workspace">
+    <section class="workspace-main">
+      <header class="workspace-header">
+        <div><p class="eyebrow">SELECTIVE REMOTE CLOUD</p><h2>Обзор</h2></div>
+        <div class="workspace-global-actions">
+          <details class="workspace-notification-details" id="workspace-notification-details">
+            <summary id="workspace-notification-summary" aria-label="Уведомления">🔔<b id="workspace-notification-badge" hidden></b></summary>
+            <div class="workspace-notification-panel" role="region" aria-labelledby="workspace-notification-title">
+              <div class="notification-heading"><h3 id="workspace-notification-title">Уведомления</h3><span id="workspace-notification-unread"></span></div>
+              <div class="notification-filters" role="group" aria-label="Фильтр уведомлений">
+                <button type="button" data-notification-filter="all" aria-pressed="true">Все</button>
+                <button type="button" data-notification-filter="needsAction" aria-pressed="false">Требуют действия</button>
+                <button type="button" data-notification-filter="sync" aria-pressed="false">Sync</button>
+                <button type="button" data-notification-filter="security" aria-pressed="false">Безопасность</button>
+              </div>
+              <div id="workspace-notification-list" class="notification-list"></div>
+            </div>
+          </details>
+          <button type="button" class="secondary">Sync</button>
+          <button type="button" id="workspace-command-open">⌘K</button>
+          <button type="button" id="workspace-create">Создать</button>
+        </div>
+      </header>
+    </section>
+  </main>
+  <script type="module">
+    import { createNotificationCenter } from "../../public/notification-center.js";
+    const params = new URLSearchParams(location.search);
+    const locale = params.get("locale") === "en" ? "en" : "ru";
+    const theme = params.get("theme") === "light" ? "light" : "graphite";
+    const state = params.get("state") ?? "empty";
+    document.documentElement.lang = locale;
+    document.documentElement.dataset.theme = theme;
+    const recipient = "11111111-1111-4111-8111-111111111111";
+    const device = "22222222-2222-4222-8222-222222222222";
+    const team = "33333333-3333-4333-8333-333333333333";
+    const invitation = "44444444-4444-4444-8444-444444444444";
+    const at = "2026-09-28T19:00:00.000Z";
+    localStorage.removeItem(`selective-remote.notifications.v1:${recipient}`);
+    const center = createNotificationCenter({ documentValue: document,
+      onRoute: (item) => { document.body.dataset.routedKind = item.kind; } });
+    center.sessionChanged({ id: recipient });
+    function observe(group, observations, complete = true) {
+      center.observe({ recipient, group, observations, complete, at });
+    }
+    if (["device", "mixed", "read", "resolved"].includes(state)) observe("devices", [
+      { kind: "deviceApproval", scopeID: recipient, sourceID: device },
+    ]);
+    if (["invitation", "mixed"].includes(state)) observe("invitations", [
+      { kind: "invitation", scopeID: team, sourceID: invitation },
+    ]);
+    if (["sync", "mixed"].includes(state)) observe("sync:personal", [
+      { kind: "syncError", scopeID: recipient, sourceID: "personal" },
+    ]);
+    if (state === "conflict") observe("sync:personal", [
+      { kind: "conflict", scopeID: recipient, sourceID: "personal" },
+    ]);
+    if (state === "failClosed") observe(`sync:team:${team}`, [
+      { kind: "failClosed", scopeID: team, sourceID: team },
+    ]);
+    if (state === "resolved") observe("devices", []);
+    document.querySelector("#workspace-notification-details").open = true;
+    if (state === "read") document.querySelector(".notification-card button.secondary")?.click();
+  </script>
+</body>
+</html>

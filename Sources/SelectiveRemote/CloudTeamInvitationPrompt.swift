@@ -13,7 +13,16 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task { await pollForInvitations() }
+            .task(id: endpoint) { await pollForInvitations() }
+            .onChange(of: endpoint) { _, _ in
+                invitation = nil
+                dismissedInvitationIDs.removeAll()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+                invitation = nil
+                dismissedInvitationIDs.removeAll()
+                Task { await refreshInvitation() }
+            }
             .sheet(item: $invitation) { value in
                 invitationSheet(value)
             }
@@ -81,13 +90,37 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
 
     @MainActor
     private func refreshInvitation() async {
-        guard invitation == nil,
-              let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
+        let configuredEndpoint = endpoint
+        let revision = MacNotificationCenter.shared.sessionRevision
+        guard let url = try? SelectiveRemoteCloudEndpoint.normalized(configuredEndpoint),
               await client.hasStoredSession(endpoint: url)
-        else { return }
+        else {
+            if endpoint == configuredEndpoint &&
+                MacNotificationCenter.shared.sessionRevision == revision {
+                invitation = nil
+                MacNotificationCenter.shared.setAccount(nil)
+            }
+            return
+        }
         do {
-            invitation = try await client.pendingTeamInvitations(endpoint: url)
-                .first { !dismissedInvitationIDs.contains($0.id) }
+            let user = try await client.currentUser(endpoint: url)
+            let pending = try await client.pendingTeamInvitations(endpoint: url)
+            guard let confirmed = try? await client.currentUser(endpoint: url),
+                  confirmed.id == user.id,
+                  await client.hasStoredSession(endpoint: url),
+                  !Task.isCancelled,
+                  endpoint == configuredEndpoint,
+                  MacNotificationCenter.shared.sessionRevision == revision else { return }
+            MacNotificationCenter.shared.setAccount(user.id)
+            MacNotificationCenter.shared.reconcileInvitations(pending.map {
+                (id: $0.id, teamID: $0.teamID)
+            })
+            if let current = invitation, !pending.contains(where: { $0.id == current.id }) {
+                invitation = nil
+            }
+            if invitation == nil {
+                invitation = pending.first { !dismissedInvitationIDs.contains($0.id) }
+            }
         } catch {
             // A missing or expired Cloud session must not interrupt local-only work.
         }
@@ -100,11 +133,14 @@ struct SelectiveRemoteCloudTeamInvitationPrompt: ViewModifier {
         Task { @MainActor in
             do {
                 _ = try await client.acceptTeamInvitation(endpoint: url, invitationID: value.id)
-                invitation = nil
-                NotificationCenter.default.post(
-                    name: .selectiveRemoteCloudTeamMembershipChanged,
-                    object: nil
-                )
+                if (try? SelectiveRemoteCloudEndpoint.normalized(endpoint)) == url {
+                    invitation = nil
+                    await refreshInvitation()
+                    NotificationCenter.default.post(
+                        name: .selectiveRemoteCloudTeamMembershipChanged,
+                        object: nil
+                    )
+                }
             } catch {
                 errorMessage = error.localizedDescription
             }

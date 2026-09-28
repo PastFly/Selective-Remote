@@ -4089,7 +4089,9 @@ final class AppModel: NSObject, ObservableObject {
         contextValid: @escaping () -> Bool,
         retry: @escaping () -> Void
     ) async {
-        guard knownHostRecoveryCandidate == nil, contextValid() else { return }
+        guard contextValid() else { return }
+        MacNotificationCenter.shared.observeHostIdentity(profileID: settings.profileID)
+        guard knownHostRecoveryCandidate == nil else { return }
         let candidate: SSHKnownHostRecoveryCandidate?
         if let jumpHost = settings.jumpHostName,
            let jumpPort = settings.jumpHostPort,
@@ -4176,6 +4178,7 @@ final class AppModel: NSObject, ObservableObject {
                     }
                     return try await self.observedDestinationKey(settings: settings)
                 }
+                MacNotificationCenter.shared.resolveHostIdentity(profileID: settings.profileID)
                 let contextStillValid = knownHostRecoveryContextValid?() == true
                 knownHostRecoveryCandidate = nil
                 let retry = knownHostRecoveryRetry

@@ -380,6 +380,9 @@ struct CloudSettingsView: View {
         .task {
             await loadCloudStateIfNeeded()
         }
+        .onChange(of: accountUser?.id) { _, _ in
+            NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)
+        }
         .sheet(isPresented: $showsAccountSheet) {
             accountSheet
         }

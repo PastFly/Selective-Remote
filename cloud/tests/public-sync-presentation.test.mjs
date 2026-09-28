@@ -97,3 +97,25 @@ test("observation event strips conflict records and arbitrary error text", () =>
   assert.equal(events[1].detail.code, "unknown_failure");
   assert.doesNotMatch(JSON.stringify(events), /Secret host|example\.internal/u);
 });
+
+test("sync observation preserves only a typed recipient to bind delayed results", () => {
+  const events = [];
+  class FakeEvent { constructor(type, options) { this.type = type; this.detail = options.detail; } }
+  const documentValue = { defaultView: { CustomEvent: FakeEvent }, dispatchEvent: (event) => events.push(event) };
+  publishSyncObservation(documentValue, { scope: "personal", type: "result",
+    recipient: "11111111-1111-4111-8111-111111111111", result: { status: "up_to_date" } });
+  assert.equal(events[0].detail.recipient, "11111111-1111-4111-8111-111111111111");
+});
+
+test("a Team sync target becomes stale when the selected Vault changes during an await", async () => {
+  const { teamSyncTargetMatches } = await import("../public/app.js");
+  assert.equal(typeof teamSyncTargetMatches, "function");
+  const controller = {};
+  const captured = { controller, teamID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    vaultID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
+  const current = { ...captured, vaultID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
+  assert.equal(teamSyncTargetMatches(captured, current), false);
+  assert.equal(teamSyncTargetMatches(captured, { ...captured, controller: {} }), false);
+  assert.equal(teamSyncTargetMatches(captured, { ...captured, teamID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }), false);
+  assert.equal(teamSyncTargetMatches(captured, captured), true);
+});

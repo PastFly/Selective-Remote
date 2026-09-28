@@ -525,6 +525,39 @@ actor SelectiveRemoteCloudAPIClient {
         return user
     }
 
+    func pendingDeviceIDs(endpoint: URL) async throws -> [UUID] {
+        let data = try await authorizedData(endpoint: endpoint, path: "v1/devices")
+        return try Self.pendingDeviceIDs(from: data)
+    }
+
+    static func pendingDeviceIDs(from data: Data) throws -> [UUID] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              exactKeys(root, expected: ["devices"]),
+              let devices = root["devices"] as? [[String: Any]],
+              devices.count <= 1_000
+        else { throw SelectiveRemoteCloudError.invalidResponse }
+        var seen: Set<UUID> = []
+        var pending: [UUID] = []
+        let expected: Set<String> = [
+            "app_version", "created_at", "id", "key_approved_at", "key_registered",
+            "last_seen_at", "name", "platform", "public_key", "public_key_algorithm",
+            "revoked_at"
+        ]
+        for device in devices {
+            guard exactKeys(device, expected: expected),
+                  let rawID = device["id"] as? String,
+                  let id = UUID(uuidString: rawID), id.isSelectiveRemoteCloudUUID,
+                  seen.insert(id).inserted,
+                  let registered = device["key_registered"] as? Bool,
+                  device["key_approved_at"] is NSNull || device["key_approved_at"] is String,
+                  device["revoked_at"] is NSNull || device["revoked_at"] is String
+            else { throw SelectiveRemoteCloudError.invalidResponse }
+            if registered && device["key_approved_at"] is NSNull &&
+                device["revoked_at"] is NSNull { pending.append(id) }
+        }
+        return pending
+    }
+
     func teams(endpoint: URL) async throws -> [SelectiveRemoteCloudTeam] {
         let data = try await authorizedData(endpoint: endpoint, path: "v1/teams")
         guard Self.validTeamsJSON(data),
