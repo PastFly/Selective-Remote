@@ -734,44 +734,20 @@ struct ContentView: View {
             }
 
             VStack(spacing: 5) {
-                Button {
-                    refreshCloudSessionAvailability()
-                    if cloudSessionAvailable {
-                        showsCloudManagement = true
-                    } else {
-                        showsCloudOnboarding = true
-                    }
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "cloud")
-                            .frame(width: 22)
-                        Text(UpdateLocalization.text(
-                            ru: "Управление Cloud",
-                            en: "Cloud Management"
-                        ))
-                        Spacer()
-                        Circle()
-                            .fill(cloudSessionAvailable ? Color.green : Color.secondary.opacity(0.45))
-                            .frame(width: 7, height: 7)
-                    }
-                    .padding(.horizontal, 11)
-                    .frame(height: 34)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(SelectiveRemoteNavigationButtonStyle(selected: false))
-                .help(UpdateLocalization.text(
-                    ru: "Аккаунт, команды и Team Vaults",
-                    en: "Account, Teams, and Team Vaults"
-                ))
-
-                SyncStatusUtilityView(
+                CloudSyncServiceBlockView(
                     lifecycle: syncPresentation.aggregate,
                     english: language.selection.usesEnglish,
-                    onOpen: { showsSyncCenter = true }
+                    cloudSessionAvailable: cloudSessionAvailable,
+                    onCloud: {
+                        refreshCloudSessionAvailability()
+                        if cloudSessionAvailable {
+                            showsCloudManagement = true
+                        } else {
+                            showsCloudOnboarding = true
+                        }
+                    },
+                    onSync: { showsSyncCenter = true }
                 )
-                .padding(.leading, 43)
-                .padding(.bottom, 4)
-                .frame(maxWidth: .infinity, alignment: .leading)
 
                 ForEach(primaryMainAreas) { area in
                     Button {
