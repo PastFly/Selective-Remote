@@ -115,5 +115,7 @@ test("a Team sync target becomes stale when the selected Vault changes during an
     vaultID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" };
   const current = { ...captured, vaultID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" };
   assert.equal(teamSyncTargetMatches(captured, current), false);
+  assert.equal(teamSyncTargetMatches(captured, { ...captured, controller: {} }), false);
+  assert.equal(teamSyncTargetMatches(captured, { ...captured, teamID: "dddddddd-dddd-4ddd-8ddd-dddddddddddd" }), false);
   assert.equal(teamSyncTargetMatches(captured, captured), true);
 });

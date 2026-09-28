@@ -2953,11 +2953,14 @@ export function initializeTeamWorkspace({
     if (activeConflicts || vaultOperation || !identity || !selectedTeam) return;
     const recipient = client.session()?.id;
     if (controller && selectedVault && !selectedVault.rotationRequired) {
+      const target = { controller, teamID: selectedTeam.id, vaultID: selectedVault.id };
       try {
         applySynchronizationOutcome(await synchronizeAndProvision(), { background: true });
       } catch (error) {
+        if (!teamSyncTargetMatches(target,
+          { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
         const code = String(error?.message ?? "");
-        publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id, recipient });
+        publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: target.vaultID, recipient });
         if (code === "team_vault_rotation_required") {
           selectedVault = { ...selectedVault, rotationRequired: true };
           vaults = vaults.map((value) => value.id === selectedVault.id ? selectedVault : value);
@@ -3064,6 +3067,7 @@ export function initializeTeamWorkspace({
       identity,
       scope,
     });
+    const target = { controller, teamID: selectedTeam.id, vaultID: vault.id };
     publishSyncObservation(documentValue, { scope: "team", type: "selection", vaultID: selectedVault?.id,
       recipient: client.session()?.id });
     workspace.hidden = activeView !== "hosts";
@@ -3078,6 +3082,8 @@ export function initializeTeamWorkspace({
       const outcome = await synchronizeAndProvision();
       applySynchronizationOutcome(outcome);
     } catch (error) {
+      if (!teamSyncTargetMatches(target,
+        { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       const code = String(error?.message ?? "");
       publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: vault.id, recipient });
       setWorkspaceControls(true);
@@ -3703,11 +3709,14 @@ export function initializeTeamWorkspace({
   syncButton.addEventListener("click", async () => {
     setRecoveryControls("none");
     const recipient = client.session()?.id;
+    const target = { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id };
     try {
       applySynchronizationOutcome(await synchronizeAndProvision());
     } catch (error) {
+      if (!teamSyncTargetMatches(target,
+        { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
       const code = String(error?.message ?? "");
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: selectedVault?.id, recipient });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code, vaultID: target.vaultID, recipient });
       setRecoveryControls(teamVaultRecoveryMode({ errorCode: code }));
       setText(workspaceStatus, code === "team_vault_rotation_required"
         ? "Синхронизация временно приостановлена: ключ обновляется автоматически."
