@@ -2401,12 +2401,15 @@ struct ContentView: View {
             notificationAccountID = nil
             notificationAccountEndpoint = endpoint.absoluteString
         }
+        let sourceRevision = notificationCenter.sessionRevision
         guard let user = try? await cloudClient.currentUser(endpoint: endpoint),
-              cloudEndpoint == sourceEndpoint, cloudSessionAvailable
+              cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
+              notificationCenter.sessionRevision == sourceRevision
         else { return }
         let sameAccount = notificationAccountID == user.id
         notificationCenter.setAccount(user.id)
         notificationAccountID = user.id
+        let accountRevision = notificationCenter.sessionRevision
         if sameAccount {
             notificationCenter.applySyncSnapshot(syncPresentation.personal)
             notificationCenter.applySyncSnapshot(syncPresentation.team)
@@ -2414,7 +2417,8 @@ struct ContentView: View {
         if let invitations = try? await cloudClient.pendingTeamInvitations(endpoint: endpoint),
            cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
            notificationAccountID == user.id,
-           notificationCenter.currentAccountID == user.id {
+           notificationCenter.currentAccountID == user.id,
+           notificationCenter.sessionRevision == accountRevision {
             notificationCenter.reconcileInvitations(invitations.map {
                 (id: $0.id, teamID: $0.teamID)
             })
@@ -2422,7 +2426,8 @@ struct ContentView: View {
         if let devices = try? await cloudClient.pendingDeviceIDs(endpoint: endpoint),
            cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
            notificationAccountID == user.id,
-           notificationCenter.currentAccountID == user.id {
+           notificationCenter.currentAccountID == user.id,
+           notificationCenter.sessionRevision == accountRevision {
             notificationCenter.reconcileDevices(devices)
         }
     }

@@ -45,6 +45,15 @@ struct MacNotificationCenterTests {
         #expect(center.attentionCount == 1)
     }
 
+    @Test("An explicit session reset invalidates pending work even before an account is selected")
+    func nilSessionResetAdvancesRevision() {
+        let defaults = UserDefaults(suiteName: UUID().uuidString)!
+        let center = MacNotificationCenter(defaults: defaults, installationID: local)
+        let before = center.sessionRevision
+        center.setAccount(nil)
+        #expect(center.sessionRevision != before)
+    }
+
     @Test("Invitation stays active when read and resolves only on fresh pending list")
     func invitationRead() {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!

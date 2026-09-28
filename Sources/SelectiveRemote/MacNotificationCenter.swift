@@ -42,7 +42,7 @@ final class MacNotificationCenter: ObservableObject {
         let endpoint = id.flatMap { _ in
             try? SelectiveRemoteCloudEndpoint.normalized(configured).absoluteString
         }
-        guard id != accountID || endpoint != accountEndpoint else { return }
+        guard id == nil || id != accountID || endpoint != accountEndpoint else { return }
         sessionRevision &+= 1
         accountID = endpoint == nil ? nil : id
         accountEndpoint = endpoint

@@ -77,6 +77,11 @@ export function publishSyncObservation(documentValue, observation) {
   documentValue.dispatchEvent(new EventType(syncObservationEvent, { detail }));
 }
 
+export function teamSyncTargetMatches(captured, current) {
+  return !!captured?.controller && captured.controller === current?.controller
+    && captured.teamID === current.teamID && captured.vaultID === current.vaultID;
+}
+
 export function createSyncPresentationState() {
   return { personal: { status: "unknown" }, team: { status: "unknown" } };
 }
@@ -2862,6 +2867,8 @@ export function initializeTeamWorkspace({
   ) {
     if (!activeController || !activeTeam || !activeVault) return null;
     const recipient = client.session()?.id;
+    const target = { controller: activeController, teamID: activeTeam.id, vaultID: activeVault.id };
+    const currentTarget = () => ({ controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id });
     publishSyncObservation(documentValue, { scope: "team", type: "start", vaultID: activeVault.id, recipient });
     return exclusiveVaultOperation(async () => {
       const result = await synchronizeTeamVault({
@@ -2869,10 +2876,7 @@ export function initializeTeamWorkspace({
         controller: activeController,
         role: activeTeam.role,
       });
-      if (controller !== activeController || selectedTeam?.id !== activeTeam.id
-        || selectedVault?.id !== activeVault.id) {
-        return null;
-      }
+      if (!teamSyncTargetMatches(target, currentTarget())) return null;
       let wrapperProvisioning = null;
       let wrapperProvisioningFailed = false;
       if (!["conflict", "remote_changed"].includes(result.status) && !activeVault.rotationRequired) {
@@ -2885,8 +2889,10 @@ export function initializeTeamWorkspace({
           wrapperProvisioningFailed = true;
         }
       }
+      if (!teamSyncTargetMatches(target, currentTarget())) return null;
       if (!["conflict", "remote_changed"].includes(result.status)) {
         const state = await activeController.syncState();
+        if (!teamSyncTargetMatches(target, currentTarget())) return null;
         selectedVault = {
           ...selectedVault,
           revision: result.revision ?? selectedVault.revision,
@@ -2896,16 +2902,17 @@ export function initializeTeamWorkspace({
         populateVaults();
         vaultSelect.value = selectedVault.id;
       }
-      return { result, wrapperProvisioning, wrapperProvisioningFailed, recipient };
+      return { result, wrapperProvisioning, wrapperProvisioningFailed, recipient, target };
     });
   }
 
   function applySynchronizationOutcome(outcome, { background = false } = {}) {
-    if (!outcome) return;
-    const { result, wrapperProvisioning, wrapperProvisioningFailed, recipient } = outcome;
-    publishSyncObservation(documentValue, { scope: "team", type: "result", result, vaultID: selectedVault?.id, recipient });
+    if (!outcome || !teamSyncTargetMatches(outcome.target,
+      { controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id })) return;
+    const { result, wrapperProvisioning, wrapperProvisioningFailed, recipient, target } = outcome;
+    publishSyncObservation(documentValue, { scope: "team", type: "result", result, vaultID: target.vaultID, recipient });
     if (wrapperProvisioningFailed) {
-      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed", vaultID: selectedVault?.id, recipient });
+      publishSyncObservation(documentValue, { scope: "team", type: "error", code: "wrapper_provisioning_failed", vaultID: target.vaultID, recipient });
     }
     if (result.status === "conflict") {
       renderConflicts(result);

@@ -115,10 +115,15 @@ size limit event spam. Polling reuses existing invitation/device refreshes;
 rendering performs no network request, decryption or persistence write.
 Persistence is immediate for a new item, read transition or resolution and
 throttled for timestamp-only observations in the browser.
-The Mac invitation poll discards late results after endpoint/session changes.
+The Mac invitation poll and source refresh discard late results after
+endpoint/session changes. Every explicit session reset advances the generation,
+even before an account has been selected.
 Cloud sync events carry their originating recipient, and complete device and
 invitation responses carry request-order sequence numbers so older responses
 cannot clear newer attention cues.
+Team sync results retain their captured controller, Team and Vault identity;
+selection changes during asynchronous wrapper work cannot resolve another
+Vault's attention cue.
 
 ## Owner manual acceptance before 0.33 release
 
