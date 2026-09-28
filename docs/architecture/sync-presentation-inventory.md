@@ -26,7 +26,7 @@ Status lifecycle, aggregate priority and recovery action availability are **DERI
 - Team `hiddenFailClosed` is shown only for the existing missing-wrapper or rotation signals. Generic failures are errors without a claim that Vault data is corrupt.
 - Browser DOM observation events contain allowlisted scope, status, revision and error category. Conflict records, names, IDs and raw errors never enter the event detail.
 - Diagnostics Copy/Export adds only lifecycle, issue category, local confirmation time, applied revision and fail-closed category, then runs the existing `DiagnosticRedactor`. Team names, hostnames, account IDs and raw sync errors remain excluded.
-- Retry dispatches to the existing Personal or Team action for its own scope. Device and Team actions open existing management routes; no approval or role check is performed in presentation code.
+- Retry dispatches to the existing Personal or Team action for its own scope. Device and Team actions open existing management routes; the shared Devices URL helper strips inherited query and fragment. No approval or role check is performed in presentation code.
 - Notification Center may later consume `scope`, `category`, `severity`, `action route`, `deduplication key` and safe metadata. This branch stores no notification event or inbox and emits no Activity entry for routine sync attempts.
 
 ## Scoped security and performance review

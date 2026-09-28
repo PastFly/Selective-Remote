@@ -5,6 +5,7 @@ struct SyncCenterView: View {
     @ObservedObject private var language = AppLanguageStore.shared
     let onOpenCloudSettings: () -> Void
     let onOpenCloudManagement: () -> Void
+    let onReviewDevices: () -> Void
     let onOpenDiagnostics: () -> Void
 
     private var english: Bool { language.selection.usesEnglish }
@@ -30,15 +31,26 @@ struct SyncCenterView: View {
             scopeCard(sync.personal, title: english ? "Personal Vault" : "Личный Vault")
             scopeCard(sync.team, title: english ? "Team Vaults" : "Командные Vaults")
 
-            HStack {
-                Button(english ? "Cloud Settings" : "Настройки Cloud", action: onOpenCloudSettings)
-                Button(english ? "Diagnostics" : "Диагностика", action: onOpenDiagnostics)
-                Spacer()
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    footerActions
+                    Spacer()
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    footerActions
+                }
             }
         }
         .padding(24)
         }
         .frame(minWidth: 320, idealWidth: 540, minHeight: 360)
+    }
+
+    @ViewBuilder
+    private var footerActions: some View {
+        Button(english ? "Cloud Settings" : "Настройки Cloud", action: onOpenCloudSettings)
+        Button(english ? "Review Devices" : "Проверить устройства", action: onReviewDevices)
+        Button(english ? "Diagnostics" : "Диагностика", action: onOpenDiagnostics)
     }
 
     private func scopeCard(_ snapshot: SyncScopeSnapshot, title: String) -> some View {

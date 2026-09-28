@@ -843,12 +843,9 @@ struct DiagnosticsCenterView: View {
         let raw = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
             ?? SelectiveRemoteCloudEndpoint.production
         guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(raw),
-              var parts = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
+              let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
         else { return }
-        parts.path = "/app/devices"
-        parts.query = nil
-        parts.fragment = nil
-        if let url = parts.url { NSWorkspace.shared.open(url) }
+        NSWorkspace.shared.open(url)
     }
 
     private var safetyBanner: some View {

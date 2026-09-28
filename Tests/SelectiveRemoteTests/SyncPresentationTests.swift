@@ -43,6 +43,13 @@ struct SyncPresentationTests {
         #expect(SyncIssue.classifyPersonal(SelectiveRemotePersonalVaultError.uploadConflict(2)) == .conflict)
     }
 
+    @Test("Devices recovery route drops inherited query and fragment")
+    func devicesRoute() {
+        let endpoint = URL(string: "https://cloud.example.test/base?token=secret#fragment")!
+        let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
+        #expect(url?.absoluteString == "https://cloud.example.test/app/devices")
+    }
+
     @Test("A report with no session cannot claim synchronization")
     func zeroReportUnknown() {
         let store = SyncPresentationStore()

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 private enum ProfileTab: String, CaseIterable, Identifiable {
@@ -468,6 +469,15 @@ struct ContentView: View {
                     refreshCloudSessionAvailability()
                     if cloudSessionAvailable { showsCloudManagement = true }
                     else { showsCloudOnboarding = true }
+                },
+                onReviewDevices: {
+                    showsSyncCenter = false
+                    let raw = UserDefaults.standard.string(forKey: "SelectiveRemote.cloud.endpoint.v1")
+                        ?? SelectiveRemoteCloudEndpoint.production
+                    guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(raw),
+                          let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
+                    else { return }
+                    NSWorkspace.shared.open(url)
                 },
                 onOpenDiagnostics: {
                     showsSyncCenter = false
