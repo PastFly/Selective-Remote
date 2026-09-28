@@ -2,6 +2,35 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+@Test("Cloud sync diagnostics export contains allowlisted state only")
+func diagnosticsSyncStateIsSafeForCopyAndExport() {
+    let confirmed = Date(timeIntervalSince1970: 2_000)
+    let personal = SyncScopeSnapshot(
+        scope: .personal, lifecycle: .synced, issue: nil,
+        lastConfirmedAt: confirmed, appliedRevision: 42,
+        observedRemoteRevision: 43, observedAt: confirmed,
+        pendingLocalChanges: nil, materialization: .confirmed
+    )
+    let team = SyncScopeSnapshot(
+        scope: .team, lifecycle: .security, issue: .keyOrWrapperMissing,
+        lastConfirmedAt: nil, appliedRevision: nil,
+        observedRemoteRevision: nil, observedAt: confirmed,
+        pendingLocalChanges: nil, materialization: .hiddenFailClosed
+    )
+    let report = DiagnosticsReportBuilder.build(
+        appVersion: "0.32.0", macOSVersion: "macOS", architecture: "arm64",
+        profiles: [], sshKeys: [], runtimeItems: [], currentError: nil,
+        forwardingErrors: [:], syncSnapshots: [personal, team]
+    )
+    #expect(report.text.contains("[Cloud & Sync]"))
+    #expect(report.text.contains("Personal: synced"))
+    #expect(report.text.contains("Team Vaults: security"))
+    #expect(report.text.contains("Revision: 42"))
+    #expect(report.text.contains("Materialization: hidden_fail_closed"))
+    #expect(!report.text.contains("Revision: 43"))
+    #expect(!report.text.contains("example"))
+}
+
 @Test("Diagnostics Center 2.0 удаляет секреты из ошибок перед Copy/Export")
 func diagnosticsCenterRedactsSecrets() {
     let report = DiagnosticsReportBuilder.build(
@@ -133,7 +162,7 @@ func diagnosticsCenterIntegrationContract() throws {
     )
 
     #expect(content.contains("case diagnostics = \"Диагностика\""))
-    #expect(content.contains("DiagnosticsCenterView(model: model)"))
+    #expect(content.contains("DiagnosticsCenterView("))
     #expect(diagnostics.contains("Копировать диагностику"))
     #expect(diagnostics.contains("Экспортировать диагностику"))
     #expect(!diagnostics.contains("KeychainService."))

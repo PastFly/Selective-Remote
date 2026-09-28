@@ -526,6 +526,9 @@ struct SelectiveRemoteApp: App {
         let snippets = TerminalCommandHistoryStore.shared.templates()
         let forwarding = model.independentPortForwards
         let sshKeys = model.sshKeys
+        let syncGeneration = syncPresentation.generation
+        let syncEndpoint = endpoint.absoluteString
+        let syncDeviceID = deviceID.uuidString
         Task {
             await personalVaultAutoSync.schedule(
                 endpoint: endpoint,
@@ -533,7 +536,16 @@ struct SelectiveRemoteApp: App {
                 profiles: profiles,
                 snippets: snippets,
                 forwarding: forwarding,
-                sshKeys: sshKeys
+                sshKeys: sshKeys,
+                onFailure: { issue in
+                    await MainActor.run {
+                        guard syncPresentation.generation == syncGeneration,
+                              syncPresentation.matchesAccount(
+                                endpoint: syncEndpoint, deviceID: syncDeviceID
+                              ) else { return }
+                        syncPresentation.recordPersonalFailure(issue)
+                    }
+                }
             )
         }
     }

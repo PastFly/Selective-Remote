@@ -17,6 +17,32 @@ struct SyncPresentationTests {
         #expect(store.aggregate == .security)
     }
 
+    @Test("A confirmed Team cannot hide a locked or signed-out Personal Vault")
+    func aggregatePrerequisite() {
+        let store = SyncPresentationStore()
+        store.recordTeamReport(.init(scannedVaults: 1, synchronizedVaults: 1))
+        store.setPrerequisite(.personal, lifecycle: .locked)
+        #expect(store.aggregate == .locked)
+        store.setPrerequisite(.personal, lifecycle: .signedOut)
+        #expect(store.aggregate == .signedOut)
+    }
+
+    @Test("Personal conflict stays scoped and outranks a confirmed Team")
+    func personalConflict() {
+        let store = SyncPresentationStore()
+        store.recordTeamReport(.init(scannedVaults: 1, synchronizedVaults: 1))
+        store.recordPersonalFailure(.conflict)
+        #expect(store.personal.lifecycle == .conflict)
+        #expect(store.team.lifecycle == .synced)
+        #expect(store.aggregate == .conflict)
+    }
+
+    @Test("Crypto failure is not mislabeled as a missing wrapper")
+    func cryptoFailureCategory() {
+        #expect(SyncIssue.classifyPersonal(SelectiveRemotePersonalVaultError.cryptoFailure) == .unknownFailure)
+        #expect(SyncIssue.classifyPersonal(SelectiveRemotePersonalVaultError.uploadConflict(2)) == .conflict)
+    }
+
     @Test("A report with no session cannot claim synchronization")
     func zeroReportUnknown() {
         let store = SyncPresentationStore()

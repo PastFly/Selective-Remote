@@ -967,7 +967,7 @@ button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-vis
   #cloud-workspace.workspace-layout { padding-bottom:72px; }
   #cloud-workspace .workspace-sidebar { display:none; }
   #cloud-workspace .workspace-header { display:flex; align-items:flex-start; margin-bottom:14px; padding-bottom:14px; }
-  .workspace-global-actions { width:100%; justify-content:flex-start; }.workspace-global-actions #workspace-command-open { margin-left:auto; }.workspace-sync-state span { display:none; }
+  .workspace-global-actions { width:100%; justify-content:flex-start; }.workspace-global-actions #workspace-command-open { margin-left:auto; }.workspace-sync-details .workspace-sync-state span { display:inline; }
   .workspace-mobile-nav { position:absolute; z-index:20; left:0; right:0; bottom:0; display:grid; grid-template-columns:repeat(4,1fr); padding:7px 8px max(7px,env(safe-area-inset-bottom)); border-top:1px solid var(--line); background:#08110df2; backdrop-filter:blur(18px); }.workspace-mobile-nav button { display:grid; place-items:center; gap:3px; min-height:52px; border:0; border-radius:9px; background:transparent; color:var(--text-interactive-inactive); font:inherit; font-size:10px; font-weight:750; }.workspace-mobile-nav button span { font-size:18px; }.workspace-mobile-nav button.active { color:var(--accent); background:#75e0b40d; }
   .field-with-help { grid-column:1; }
 }

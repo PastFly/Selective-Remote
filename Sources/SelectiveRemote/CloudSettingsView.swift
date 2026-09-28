@@ -565,6 +565,7 @@ struct CloudSettingsView: View {
         accountPhase = .restoring
         do {
             accountUser = try await client.currentUser(endpoint: url)
+            SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
             NotificationCenter.default.post(
@@ -591,6 +592,7 @@ struct CloudSettingsView: View {
                     password: password,
                     device: .thisMac(id: deviceID, publicKey: identity.publicKey)
                 )
+                SyncPresentationStore.shared.invalidateSession()
                 accountEndpoint = url.absoluteString
                 var enrollmentError: String?
                 let enrollment = SelectiveRemotePersonalVaultAccountEnrollment(
@@ -685,7 +687,11 @@ struct CloudSettingsView: View {
         else { return }
         Task { @MainActor in
             do {
-                self.accountUser = try await client.currentUser(endpoint: url)
+                let refreshedUser = try await client.currentUser(endpoint: url)
+                if refreshedUser.id != accountUser.id {
+                    SyncPresentationStore.shared.invalidateSession()
+                }
+                self.accountUser = refreshedUser
                 await loadInventory(endpoint: url)
             } catch {
                 if error as? SelectiveRemoteCloudError == .authenticationRequired {
@@ -804,6 +810,7 @@ struct CloudSettingsView: View {
 
     @MainActor
     private func resetAccountPresentation(endpoint url: URL) {
+        SyncPresentationStore.shared.invalidateSession()
         accountEndpoint = url.absoluteString
         accountPhase = .signedOut
         accountUser = nil

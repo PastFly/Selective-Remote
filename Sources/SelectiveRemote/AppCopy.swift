@@ -140,6 +140,7 @@ enum AppCopy {
         "keychain.sort.fingerprint": ("По fingerprint", "By Fingerprint"),
         "diagnostics.pane.overview": ("Общее", "Overview"),
         "diagnostics.pane.systemCheck": ("Проверка системы", "System Check"),
+        "diagnostics.pane.cloudSync": ("Cloud и Sync", "Cloud & Sync"),
         "diagnostics.pane.connections": ("Подключения", "Connections"),
         "diagnostics.pane.rdp": ("RDP", "RDP"),
         "diagnostics.pane.ssh": ("SSH / Terminal", "SSH / Terminal"),

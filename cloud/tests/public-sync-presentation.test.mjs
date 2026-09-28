@@ -29,21 +29,31 @@ test("typed Personal and Team outcomes preserve conflict, attention and confirme
   assert.equal(summarizeSyncPresentationState(state).status, "current");
 });
 
-test("one failed scope masks a successful scope and offline is only a connectivity hint", () => {
+test("one failed scope masks a successful scope even with an offline hint", () => {
   let state = createSyncPresentationState();
   state = reduceSyncPresentationState(state, { scope: "personal", type: "result", result: { status: "up_to_date", revision: 2 } });
   state = reduceSyncPresentationState(state, { scope: "team", type: "error", code: "network_unavailable" });
   assert.equal(summarizeSyncPresentationState(state).status, "error");
-  assert.equal(summarizeSyncPresentationState(state, { online: false }).status, "offline");
+  assert.equal(summarizeSyncPresentationState(state, { online: false }).status, "error");
   assert.equal(state.personal.status, "current");
+});
+
+test("offline hint does not imply a pending count or confirmed synchronization", () => {
+  const state = createSyncPresentationState();
+  const summary = summarizeSyncPresentationState(state, { online: false });
+  assert.equal(summary.status, "offline");
+  assert.equal(summary.personal.status, "unknown");
+  assert.equal(summary.team.status, "unknown");
+  assert.match(syncPresentationLabels(summary, "en").note, /may be waiting/u);
+  assert.match(syncPresentationLabels(summary, "ru").note, /могут ожидать/u);
 });
 
 test("session and lock events clear stale success; RU/EN labels read state, not message text", () => {
   let state = createSyncPresentationState();
   state = reduceSyncPresentationState(state, { scope: "personal", type: "result", result: { status: "downloaded", revision: 9 } });
   state = reduceSyncPresentationState(state, { scope: "team", type: "result", result: { status: "up_to_date", revision: 3 } });
-  assert.equal(syncPresentationLabels(summarizeSyncPresentationState(state), "ru").summary, "Синхронизировано здесь");
-  assert.equal(syncPresentationLabels(summarizeSyncPresentationState(state), "en").summary, "Confirmed here");
+  assert.equal(syncPresentationLabels(summarizeSyncPresentationState(state), "ru").summary, "Наблюдаемые Vaults подтверждены");
+  assert.equal(syncPresentationLabels(summarizeSyncPresentationState(state), "en").summary, "Observed Vaults confirmed");
   state = reduceSyncPresentationState(state, { scope: "personal", type: "locked" });
   assert.equal(state.personal.status, "locked");
   state = reduceSyncPresentationState(state, { type: "signedOut" });
@@ -64,6 +74,15 @@ test("unknown engine errors do not enter presentation state verbatim", () => {
   });
   assert.equal(state.team.status, "error");
   assert.equal(state.team.issue, "unknown_failure");
+});
+
+test("aggregate keeps security and errors visible over other scopes and offline hint", () => {
+  let state = createSyncPresentationState();
+  state = reduceSyncPresentationState(state, { scope: "personal", type: "result", result: { status: "conflict" } });
+  state = reduceSyncPresentationState(state, { scope: "team", type: "error", code: "unknown_failure" });
+  assert.equal(summarizeSyncPresentationState(state, { online: false }).status, "error");
+  state = reduceSyncPresentationState(state, { scope: "team", type: "error", code: "team_vault_key_unavailable" });
+  assert.equal(summarizeSyncPresentationState(state, { online: false }).status, "attention");
 });
 
 test("observation event strips conflict records and arbitrary error text", () => {

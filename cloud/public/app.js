@@ -100,12 +100,15 @@ export function reduceSyncPresentationState(state, observation) {
 
 export function summarizeSyncPresentationState(state, { online = true } = {}) {
   const statuses = [state.personal.status, state.team.status];
-  const status = statuses.includes("conflict") ? "conflict"
-    : statuses.includes("error") && online ? "error"
-      : statuses.includes("attention") ? "attention"
-        : statuses.includes("syncing") ? "syncing"
-          : !online ? "offline"
-            : statuses.every((value) => value === "current") ? "current"
+  const securityIssues = new Set(["team_vault_key_unavailable", "team_vault_rotation_required", "device_approval_required"]);
+  const needsSecurityAttention = [state.personal, state.team].some((scope) => securityIssues.has(scope.issue));
+  const status = needsSecurityAttention ? "attention"
+    : statuses.includes("error") ? "error"
+      : statuses.includes("conflict") ? "conflict"
+        : !online ? "offline"
+          : statuses.includes("syncing") ? "syncing"
+            : statuses.includes("attention") ? "attention"
+              : statuses.every((value) => value === "current") ? "current"
               : statuses.every((value) => value === "signedOut") ? "signedOut"
                 : statuses.every((value) => value === "locked") ? "locked" : "unknown";
   return { status, personal: state.personal, team: state.team };
@@ -122,13 +125,20 @@ export function syncPresentationLabels(summary, locale = "ru") {
     conflict: "Конфликт", attention: "Требуется внимание", error: "Ошибка синхронизации",
     offline: "Офлайн", signedOut: "Войдите в Cloud", locked: "Vault заблокирован",
   };
+  const aggregateCurrent = english ? "Observed Vaults confirmed" : "Наблюдаемые Vaults подтверждены";
+  const note = summary.status === "offline"
+    ? (english ? "Connection appears offline. Changes may be waiting to sync."
+      : "Похоже, нет сети. Изменения могут ожидать синхронизации.")
+    : (english ? "Other Team Vaults: not checked in this tab."
+      : "Другие Team Vaults: не проверены в этой вкладке.");
   const detail = (scope) => {
     const item = summary[scope];
     if (item.status !== "current" || !Number.isSafeInteger(item.revision)) return labels[item.status];
     const at = item.confirmedAt ? ` · ${formatVaultTimestamp(item.confirmedAt, { locale })}` : "";
     return `${labels.current} · r${item.revision}${at}`;
   };
-  return { summary: labels[summary.status], personal: detail("personal"), team: detail("team") };
+  return { summary: summary.status === "current" ? aggregateCurrent : labels[summary.status],
+    personal: detail("personal"), team: detail("team"), note };
 }
 
 const verificationPrefix = "#verify-email?";
@@ -4972,6 +4982,7 @@ export function initializePortalNavigation({
     setText(syncState.querySelector("span"), labels.summary);
     setText(documentValue.querySelector("#workspace-sync-personal"), labels.personal);
     setText(documentValue.querySelector("#workspace-sync-team"), labels.team);
+    setText(documentValue.querySelector("#workspace-sync-note"), labels.note);
     for (const scope of ["personal", "team"]) {
       const retry = documentValue.querySelector(`[data-sync-retry="${scope}"]`);
       const source = documentValue.querySelector(scope === "personal" ? "#cloud-vault-sync" : "#team-vault-sync");

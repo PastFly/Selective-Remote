@@ -48,8 +48,7 @@ enum SyncIssue: Equatable, Sendable {
         if let error = error as? SelectiveRemotePersonalVaultError {
             switch error {
             case .uploadConflict, .remoteVaultNotEmpty: return .conflict
-            case .invalidEnvelope, .cryptoFailure: return .keyOrWrapperMissing
-            case .invalidRecoveryPhrase, .emptyLocalVault,
+            case .invalidEnvelope, .cryptoFailure, .invalidRecoveryPhrase, .emptyLocalVault,
                  .legacyMigrationRequiresLocalData: return .unknownFailure
             }
         }
@@ -112,12 +111,14 @@ final class SyncPresentationStore: ObservableObject {
     private var activeTeamCycle: (token: UUID, generation: UUID)?
 
     var aggregate: SyncLifecycle {
-        let visible = [personal.lifecycle, team.lifecycle].filter {
-            ![.signedOut, .locked, .disabled].contains($0)
+        let scopes = [personal.lifecycle, team.lifecycle]
+        if let urgent = scopes.filter({ [.security, .error, .conflict].contains($0) })
+            .max(by: { $0.priority < $1.priority }) { return urgent }
+        for prerequisite in [SyncLifecycle.locked, .signedOut, .disabled] {
+            if scopes.contains(prerequisite) { return prerequisite }
         }
-        guard !visible.isEmpty else { return personal.lifecycle }
-        let highest = visible.max { $0.priority < $1.priority } ?? .unknown
-        return highest == .synced && !visible.allSatisfy({ $0 == .synced })
+        let highest = scopes.max { $0.priority < $1.priority } ?? .unknown
+        return highest == .synced && !scopes.allSatisfy({ $0 == .synced })
             ? .unknown : highest
     }
 

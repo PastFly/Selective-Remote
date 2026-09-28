@@ -285,7 +285,8 @@ actor SelectiveRemotePersonalVaultAutoSync {
         profiles: [ConnectionProfile],
         snippets: [TerminalCommandTemplate],
         forwarding: [IndependentPortForward],
-        sshKeys: [SSHKeyRecord]
+        sshKeys: [SSHKeyRecord],
+        onFailure: (@Sendable (SyncIssue) async -> Void)? = nil
     ) {
         pending?.cancel()
         pending = Task {
@@ -300,8 +301,11 @@ actor SelectiveRemotePersonalVaultAutoSync {
                     forwarding: forwarding,
                     sshKeys: sshKeys
                 )
+            } catch is CancellationError {
+                return
             } catch {
                 SelectiveRemotePersonalVaultSyncStatus.recordError(error)
+                await onFailure?(SyncIssue.classifyPersonal(error))
             }
         }
     }

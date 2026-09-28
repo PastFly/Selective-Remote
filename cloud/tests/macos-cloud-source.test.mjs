@@ -605,7 +605,7 @@ test("macOS Personal Vault auto-sync preserves encrypted credentials without ext
   assert.match(sync, /recordError\(_ error:/u);
   assert.match(sync, /catch \{[\s\S]*SelectiveRemotePersonalVaultSyncStatus\.recordError\(error\)/u);
   assert.doesNotMatch(credentials, /authenticateDeviceOwner/u);
-  assert.match(app, /guard !appLock\.isLocked else \{ return \}/u);
+  assert.match(app, /guard !appLock\.isLocked else \{\s*syncPresentation\.setPrerequisite\(\.personal, lifecycle: \.locked\)\s*return\s*\}/u);
   assert.match(crypto, /"folder": \.string\(profile\.group\)/u);
   assert.match(crypto, /"tags": \.array\(profile\.tags\.map/u);
   assert.match(crypto, /"description": \.string\(profile\.profileDescription\)/u);
