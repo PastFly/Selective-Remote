@@ -6,6 +6,10 @@ import {
 } from "./team-policy.mjs";
 import { teamVaultWrapperContextHash } from "./security.mjs";
 import { vaultFoundationCapabilities } from "./vault-format.mjs";
+import {
+  validateResourceCipherEnvelope,
+  validateResourceKeyWrapper,
+} from "../public/resource-crypto-v2.js";
 
 const { Pool } = pg;
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -180,6 +184,132 @@ export class PostgresStore {
       if (!result.rows[0]) throw new Error("resource_version_conflict");
       await client.query("COMMIT");
       return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  // Dormant internal primitive: no HTTP route calls this method. Publication is one transaction.
+  async publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, expectedManifestVersion, ciphertext, wrappers }) {
+    const scope = validateResourceCipherEnvelope(ciphertext);
+    if (!scopedUUID.test(teamID) || !scopedUUID.test(vaultID) || !scopedUUID.test(resourceID)
+      || scope.teamID !== teamID || scope.vaultID !== vaultID || scope.resourceID !== resourceID
+      || !Number.isSafeInteger(expectedManifestVersion) || expectedManifestVersion < 0
+      || scope.manifestVersion !== expectedManifestVersion + 1
+      || !Array.isArray(wrappers) || wrappers.length === 0 || wrappers.length > 1000) {
+      throw new Error("invalid_resource_v2_publish");
+    }
+    const seen = new Set();
+    for (const wrapper of wrappers) {
+      const target = validateResourceKeyWrapper(wrapper);
+      if (target.teamID !== teamID || target.vaultID !== vaultID
+        || target.resourceID !== resourceID || target.part !== scope.part
+        || target.keyVersion !== scope.keyVersion) throw new Error("resource_v2_wrapper_scope_mismatch");
+      const identity = `${target.membershipID}:${target.membershipEpoch}:${target.deviceID}`;
+      if (seen.has(identity)) throw new Error("duplicate_resource_v2_wrapper");
+      seen.add(identity);
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const resource = await client.query(
+        `SELECT resource.resource_version AS crypto_resource_version
+         FROM vault_resource_registry AS resource
+         JOIN team_memberships AS membership
+           ON membership.team_id = resource.team_id AND membership.user_id = $4
+          AND membership.revoked_at IS NULL
+         JOIN team_membership_device_admissions AS admission
+           ON admission.membership_id = membership.id
+          AND admission.membership_epoch = membership.epoch AND admission.device_id = $5
+         WHERE resource.team_id = $1 AND resource.vault_id = $2 AND resource.id = $3
+           AND resource.deleted_at IS NULL
+         FOR UPDATE OF resource`,
+        [teamID, vaultID, resourceID, actorUserID, actorDeviceID],
+      );
+      if (!resource.rows[0]) throw new Error("resource_v2_current_epoch_admission_required");
+      if (Number(resource.rows[0].crypto_resource_version) !== scope.registryVersion) {
+        throw new Error("resource_registry_version_conflict");
+      }
+      const existing = await client.query(
+        `SELECT manifest_version AS current_manifest_version, key_version AS current_key_version
+         FROM vault_resource_manifest_pointers_v2
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+         FOR UPDATE`,
+        [teamID, vaultID, resourceID, scope.part],
+      );
+      const currentManifest = Number(existing.rows[0]?.current_manifest_version ?? 0);
+      const currentKey = Number(existing.rows[0]?.current_key_version ?? 0);
+      if (currentManifest !== expectedManifestVersion || scope.keyVersion !== currentKey + 1) {
+        throw new Error("resource_manifest_conflict");
+      }
+      await client.query(
+        `INSERT INTO vault_resource_ciphertext_versions
+          (team_id, vault_id, resource_id, part, key_version, policy_version,
+           registry_version, resource_version, manifest_version, nonce, ciphertext, auth_tag)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [teamID, vaultID, resourceID, scope.part, scope.keyVersion, scope.policyVersion,
+          scope.registryVersion, scope.resourceVersion, scope.manifestVersion,
+          ciphertext.nonce, ciphertext.ciphertext, ciphertext.authTag],
+      );
+      for (const wrapper of wrappers) {
+        const target = wrapper.context;
+        await client.query(
+          `INSERT INTO vault_resource_key_wrappers_v2
+            (team_id, vault_id, resource_id, part, key_version, membership_id,
+             membership_epoch, device_id, ephemeral_public_key, nonce, ciphertext, auth_tag)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+          [teamID, vaultID, resourceID, scope.part, scope.keyVersion,
+            target.membershipID, target.membershipEpoch, target.deviceID,
+            JSON.stringify(wrapper.ephemeralPublicKey), wrapper.nonce, wrapper.ciphertext,
+            wrapper.authTag],
+        );
+      }
+      let pointer;
+      if (existing.rows[0]) {
+        pointer = await client.query(
+          `UPDATE vault_resource_manifest_pointers_v2
+           SET key_version = $5, manifest_version = $6, published_at = now()
+           WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+             AND manifest_version = $7
+           RETURNING manifest_version`,
+          [teamID, vaultID, resourceID, scope.part, scope.keyVersion,
+            scope.manifestVersion, expectedManifestVersion],
+        );
+      } else {
+        pointer = await client.query(
+          `INSERT INTO vault_resource_manifest_pointers_v2
+            (team_id, vault_id, resource_id, part, key_version, manifest_version)
+           VALUES ($1, $2, $3, $4, $5, $6) RETURNING manifest_version`,
+          [teamID, vaultID, resourceID, scope.part, scope.keyVersion, scope.manifestVersion],
+        );
+      }
+      if (!pointer.rows[0]) throw new Error("resource_manifest_conflict");
+      await client.query(
+        `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+           AND key_version = $5`,
+        [teamID, vaultID, resourceID, scope.part, scope.keyVersion],
+      );
+      if (currentKey > 0) {
+        await client.query(
+          `UPDATE vault_resource_ciphertext_versions
+           SET lifecycle = 'OBSOLETE', obsolete_at = now()
+           WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+             AND key_version = $5`,
+          [teamID, vaultID, resourceID, scope.part, currentKey],
+        );
+        await client.query(
+          `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
+           WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+             AND key_version = $5`,
+          [teamID, vaultID, resourceID, scope.part, currentKey],
+        );
+      }
+      await client.query("COMMIT");
+      return pointer.rows[0];
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

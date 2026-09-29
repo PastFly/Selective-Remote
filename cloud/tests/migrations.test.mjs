@@ -21,8 +21,24 @@ test("numbered migrations have stable checksums", async () => {
     { version: 11, name: "011_team_device_admission_policy.sql" },
     { version: 12, name: "012_team_invitation_wrapper_preprovision.sql" },
     { version: 13, name: "013_resource_registry_foundation.sql" },
+    { version: 14, name: "014_resource_crypto_v2.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("resource crypto v2 storage is additive, scoped and rejects v1 Vaults", async () => {
+  const migration = (await loadMigrations(migrationsDirectory)).find(({ version }) => version === 14);
+  assert.ok(migration);
+  assert.match(migration.sql, /CREATE TABLE vault_resource_ciphertext_versions/u);
+  assert.match(migration.sql, /CREATE TABLE vault_resource_key_wrappers_v2/u);
+  assert.match(migration.sql, /CREATE TABLE vault_resource_manifest_pointers_v2/u);
+  assert.match(migration.sql, /FOREIGN KEY \(team_id, vault_id, resource_id\)/u);
+  assert.match(migration.sql, /format_state = 'V2_PREPARING'/u);
+  assert.match(migration.sql, /membership_epoch/u);
+  assert.match(migration.sql, /FOR SHARE OF membership, device, admission/u);
+  assert.match(migration.sql, /immutable_resource_v2_ciphertext/u);
+  assert.match(migration.sql, /invalid_resource_v2_manifest_advance/u);
+  assert.doesNotMatch(migration.sql, /DROP TABLE|TRUNCATE|UPDATE shared_vaults SET format_state/iu);
 });
 
 test("resource registry migration is additive, tenant-bound and dormant for v1 Vaults", async () => {
