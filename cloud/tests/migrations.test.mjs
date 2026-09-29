@@ -20,8 +20,27 @@ test("numbered migrations have stable checksums", async () => {
     { version: 10, name: "010_team_membership_device_admissions.sql" },
     { version: 11, name: "011_team_device_admission_policy.sql" },
     { version: 12, name: "012_team_invitation_wrapper_preprovision.sql" },
+    { version: 13, name: "013_resource_registry_foundation.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("resource registry migration is additive, tenant-bound and dormant for v1 Vaults", async () => {
+  const migrations = await loadMigrations(migrationsDirectory);
+  const foundation = migrations.find(({ version }) => version === 13);
+  assert.ok(foundation);
+  assert.match(foundation.sql, /ADD COLUMN format_state text NOT NULL DEFAULT 'V1_ACTIVE'/u);
+  assert.match(foundation.sql, /CREATE TABLE vault_resource_registry/u);
+  assert.match(foundation.sql, /FOREIGN KEY \(vault_id, team_id\)/u);
+  assert.match(foundation.sql, /UNIQUE \(team_id, vault_id, id\)/u);
+  assert.match(foundation.sql, /parent_folder_id uuid/u);
+  assert.match(foundation.sql, /deleted_at timestamptz/u);
+  assert.match(foundation.sql, /shared_vault_format_schema_match/u);
+  assert.match(foundation.sql, /active_resource_children/u);
+  assert.match(foundation.sql, /CREATE TRIGGER shared_vault_wrappers_v1_only/u);
+  assert.match(foundation.sql, /CREATE TRIGGER invitation_vault_wrappers_v1_only/u);
+  assert.match(foundation.sql, /CREATE TRIGGER shared_vault_revisions_v1_only/u);
+  assert.doesNotMatch(foundation.sql, /hostname|username|folder_name|snippet_title|plaintext|DROP TABLE|TRUNCATE/iu);
 });
 
 test("username invitations can carry client-created wrappers for one reserved membership epoch", async () => {

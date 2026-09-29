@@ -27,6 +27,92 @@ const teamID = "84f6c860-0d26-4ef5-8652-27cb8b991b70";
 const membershipID = "7026d8a4-116a-4f61-9d8e-ff04e3a73360";
 const deviceID = "33cc880e-084a-4d9a-b1ea-f99d2ff86032";
 const vaultID = "bc01823b-1401-4058-9488-f4f6d1839b3b";
+const resourceID = "af810efa-fc88-43c4-8557-4105a5ff8140";
+
+test("dormant registry registration binds a random identity to an admitted custodian and v2 Vault", async () => {
+  const f = fixture((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("INSERT INTO vault_resource_registry")) return { rows: [{
+      id: resourceID, team_id: teamID, vault_id: vaultID, policy_class: "folder",
+      parent_folder_id: null, resource_version: 1, deleted_at: null,
+    }] };
+    return { rows: [] };
+  });
+  const row = await f.store.registerResourceIdentity({
+    actorUserID, actorDeviceID: deviceID, teamID, vaultID, resourceID,
+    policyClass: "folder", parentFolderID: null,
+  });
+  assert.equal(row.id, resourceID);
+  assert.match(f.queries.find(({ sql }) => sql.includes("AS registry_actor_role")).sql,
+    /format_state = 'V2_PREPARING'[\s\S]*format_schema_version = 2/u);
+  assert.deepEqual(f.queries.find(({ sql }) => sql.includes("INSERT INTO vault_resource_registry")).parameters,
+    [resourceID, teamID, vaultID, "folder", null]);
+  assert.ok(!f.queries.some(({ sql }) => /hostname|folder_name|plaintext|username/u.test(sql)));
+});
+
+test("registry rejects invalid UUID and class before querying", async () => {
+  const f = fixture(() => { throw new Error("unexpected query"); });
+  await assert.rejects(f.store.registerResourceIdentity({
+    actorUserID, actorDeviceID: deviceID, teamID, vaultID, resourceID: "not-an-id",
+    policyClass: "folder", parentFolderID: null,
+  }), /invalid_resource_id/u);
+  await assert.rejects(f.store.registerResourceIdentity({
+    actorUserID, actorDeviceID: deviceID, teamID, vaultID, resourceID,
+    policyClass: "host", parentFolderID: null,
+  }), /invalid_resource_class/u);
+  assert.equal(f.queries.length, 0);
+});
+
+test("registry read, move and tombstone keep immutable identity and exact scope", async () => {
+  const row = { id: resourceID, team_id: teamID, vault_id: vaultID,
+    policy_class: "folder", parent_folder_id: null, resource_version: 1, deleted_at: null };
+  const f = fixture((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("FROM vault_resource_registry") || sql.includes("UPDATE vault_resource_registry")) {
+      return { rows: [row] };
+    }
+    return { rows: [] };
+  });
+  const scope = { actorUserID, actorDeviceID: deviceID, teamID, vaultID, resourceID };
+  assert.equal((await f.store.getResourceIdentity(scope)).id, resourceID);
+  assert.equal((await f.store.moveResourceIdentity({ ...scope, parentFolderID: null,
+    expectedVersion: 1 })).id, resourceID);
+  assert.equal((await f.store.tombstoneResourceIdentity({ ...scope, expectedVersion: 1 })).id, resourceID);
+  for (const { sql, parameters } of f.queries.filter(({ sql }) =>
+    sql.includes("FROM vault_resource_registry") || sql.includes("UPDATE vault_resource_registry"))) {
+    assert.match(sql, /team_id = \$[0-9]+[\s\S]*vault_id = \$[0-9]+[\s\S]*id = \$[0-9]+/u);
+    assert.ok(parameters.includes(teamID) && parameters.includes(vaultID)
+      && parameters.includes(resourceID));
+  }
+});
+
+test("legacy Vault read excludes hypothetical V2_ACTIVE rows", async () => {
+  const f = fixture((sql) => {
+    if (sql.includes("SELECT vault.id, vault.team_id, vault.name, vault.revision")) {
+      return { rows: sql.includes("vault.format_state = 'V1_ACTIVE'") ? [] : [{
+        id: vaultID, team_id: teamID, device_key_authorized: true,
+      }] };
+    }
+    return { rows: [] };
+  });
+  await assert.rejects(f.store.getSharedVault(teamID, vaultID, actorUserID, deviceID),
+    /team_not_found/u);
+});
+
+test("foundation capability result is bound to admitted session and server Vault state", async () => {
+  const f = fixture((sql) => sql.includes("AS foundation_format_state") ? { rows: [{
+    foundation_format_state: "V1_ACTIVE", format_schema_version: 1, role: "owner",
+  }] } : { rows: [] });
+  const caps = await f.store.getVaultFoundationCapabilities({
+    session: { user_id: actorUserID, device_id: deviceID, app_version: "999" }, teamID, vaultID,
+  });
+  assert.equal(caps.legacyWholeVault, true);
+  assert.equal(caps.resource_acl_v2, false);
+  const query = f.queries.find(({ sql }) => sql.includes("AS foundation_format_state"));
+  assert.deepEqual(query.parameters, [teamID, vaultID, actorUserID, deviceID]);
+  assert.match(query.sql, /membership\.revoked_at IS NULL/u);
+  assert.match(query.sql, /device\.revoked_at IS NULL/u);
+});
 
 function teamEnvelope({ baseRevision = 0, keyGeneration = 1, wrappers = [] } = {}) {
   return {
