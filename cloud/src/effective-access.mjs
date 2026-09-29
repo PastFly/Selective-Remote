@@ -57,3 +57,29 @@ export function compileEffectiveAccess({ target, ancestors, membership, groupIDs
   }
   return evaluateAccessPaths({ kind: target.kind, paths, cryptoStatus, requiresCrypto });
 }
+
+export function applyGrantChanges(grants, changes, { strict = true } = {}) {
+  if (!Array.isArray(grants) || !Array.isArray(changes)) {
+    throw new Error("invalid_access_request");
+  }
+  const result = grants.map((grant) => ({ ...grant }));
+  for (const change of changes) {
+    if (change.type === "GRANT_CREATE") {
+      if (!change.grant?.id || result.some((grant) => grant.id === change.grant.id)) {
+        throw new Error("access_policy_conflict");
+      }
+      result.push({ ...change.grant });
+      continue;
+    }
+    const found = result.find((grant) => grant.id === change.grantID
+      && grant.revokedAt == null);
+    if (!found) {
+      if (strict) throw new Error("access_policy_conflict");
+      continue;
+    }
+    if (change.type === "GRANT_CHANGE") found.mask = change.permissionMask;
+    else if (change.type === "GRANT_REVOKE") found.revokedAt = "PREVIEW_REVOKED";
+    else throw new Error("invalid_access_request");
+  }
+  return result;
+}

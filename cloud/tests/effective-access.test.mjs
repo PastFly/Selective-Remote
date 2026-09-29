@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compileEffectiveAccess } from "../src/effective-access.mjs";
+import { compileEffectiveAccess, applyGrantChanges } from "../src/effective-access.mjs";
 
 const membership = { id: "member-1", userID: "user-1", epoch: 3 };
 const target = { id: "host-1", kind: "HOST", teamID: "team-1", vaultID: "vault-1",
@@ -70,4 +70,23 @@ test("Credential inherited View maps only to ViewMetadata and no Reveal", () => 
   assert.equal(result.policyMask, 1);
   assert.equal(result.paths[0].permission, "ViewMetadata");
   assert.equal(result.effectiveUsable, "UNKNOWN");
+});
+
+
+test("preview applies grant changes to a copy and preserves remaining paths", () => {
+  const current = [{ id: "direct", mask: 1, revokedAt: null }];
+  const after = applyGrantChanges(current, [
+    { type: "GRANT_REVOKE", grantID: "direct" },
+    { type: "GRANT_CREATE", grant: { id: "preview-group", mask: 1,
+      revokedAt: null } },
+  ]);
+  assert.equal(current[0].revokedAt, null);
+  assert.equal(after[0].revokedAt, "PREVIEW_REVOKED");
+  assert.equal(after[1].id, "preview-group");
+  assert.throws(() => applyGrantChanges(current, [
+    { type: "GRANT_CHANGE", grantID: "missing", permissionMask: 1 },
+  ]), /access_policy_conflict/);
+  assert.deepEqual(applyGrantChanges(current, [
+    { type: "GRANT_REVOKE", grantID: "unrelated" },
+  ], { strict: false }), current);
 });

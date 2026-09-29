@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   validateGrant, inheritedViewBit, evaluateAccessPaths, permissionBits,
+  requiredCryptoParts,
 } from "../src/access-policy.mjs";
 import { requireAccessMutation } from "../src/team-policy.mjs";
 
@@ -75,4 +76,14 @@ test("a direct grant reports each permission path without labeling Edit as View"
   ], cryptoStatus: "NO", requiresCrypto: false });
   assert.deepEqual(result.paths[0].permissions, ["View", "Edit"]);
   assert.equal(result.paths[0].permission, undefined);
+});
+
+
+test("crypto work is derived per permission rather than from policy presence", () => {
+  assert.deepEqual(requiredCryptoParts("HOST", permissionBits.ManageAccess), []);
+  assert.deepEqual(requiredCryptoParts("HOST", permissionBits.View | permissionBits.Edit), ["GENERAL"]);
+  assert.deepEqual(requiredCryptoParts("CREDENTIAL", permissionBits.View), ["METADATA"]);
+  assert.deepEqual(requiredCryptoParts("CREDENTIAL", permissionBits.Reveal), ["SECRET"]);
+  assert.deepEqual(requiredCryptoParts("CREDENTIAL", permissionBits.View | permissionBits.Reveal),
+    ["METADATA", "SECRET"]);
 });

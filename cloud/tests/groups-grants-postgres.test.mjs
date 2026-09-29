@@ -112,6 +112,11 @@ test("group names are validated before SQL", async () => {
     /invalid_access_version/);
   await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
+  await assert.rejects(access.previewAccessChange({ request: { changes: [] } }),
+    /invalid_access_request/);
+  await assert.rejects(access.commitAccessChange({ token: "unsigned",
+    sessionSecret: "test", request: { changes: [] } }),
+    /access_preview_conflict/);
 });
 
 test("Team group creation is gated by admitted Owner and exact idempotent request", {
@@ -198,6 +203,28 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       subjectUserID: viewer });
     assert.equal(effectiveAfter.policyMask, 1);
     assert.equal(effectiveAfter.paths.length, 1);
+    const snippet = randomUUID();
+    await pool.query(`INSERT INTO vault_resource_registry
+      (id, team_id, vault_id, policy_class, policy_kind)
+      VALUES ($1, $2, $3, 'general', 'SNIPPET')`, [snippet, team, vault]);
+    const request = { changes: [{ type: "GRANT_CREATE", principalKind: "USER",
+      principalID: viewer, targetKind: "RESOURCE", targetID: snippet,
+      permissionMask: 1 }] };
+    const previewInput = { actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, request, sessionSecret: "test-session-secret" };
+    const preview = await access.previewAccessChange(previewInput);
+    assert.equal(preview.details.length, 1);
+    assert.equal(preview.details[0].before.policyMask, 0);
+    assert.equal(preview.details[0].after.policyMask, 1);
+    await assert.rejects(access.commitAccessChange({ ...previewInput,
+      token: preview.token + "x", idempotencyKey: `access:bad-token:${suffix}` }),
+    /access_preview_conflict/);
+    const applied = await access.commitAccessChange({ ...previewInput,
+      token: preview.token, idempotencyKey: `access:commit:${suffix}` });
+    assert.equal(applied.applied, 1);
+    assert.equal((await access.getEffectiveAccess({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, resourceID: snippet,
+      subjectUserID: viewer })).policyMask, 1);
     await assert.rejects(access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
       teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
       name: "Stale", idempotencyKey: `access:stale:${suffix}` }), /access_policy_conflict/);

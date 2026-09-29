@@ -71,3 +71,18 @@ export function evaluateAccessPaths({ kind, paths, cryptoStatus = "NO",
     blockedReasons: !policyAllowed ? ["POLICY_DENIED"]
       : effectiveUsable === "NO" && requiresCrypto ? ["KEY_UNAVAILABLE"] : [] };
 }
+
+export function requiredCryptoParts(kind, mask) {
+  validateGrant(kind, mask);
+  if (kind === "CREDENTIAL") {
+    const parts = [];
+    if ((mask & permissionBits.View) !== 0) parts.push("METADATA");
+    if ((mask & (permissionBits.Reveal | permissionBits.Edit)) !== 0) parts.push("SECRET");
+    return parts;
+  }
+  if (["HOST", "SNIPPET", "FORWARDING"].includes(kind)
+    && (mask & (permissionBits.View | permissionBits.Edit)) !== 0) {
+    return ["GENERAL"];
+  }
+  return [];
+}

@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { requireAccessMutation, validateIdempotencyKey } from "./team-policy.mjs";
-import { compileEffectiveAccess } from "./effective-access.mjs";
-import { permissionBits } from "./access-policy.mjs";
+import { applyGrantChanges, compileEffectiveAccess } from "./effective-access.mjs";
+import { permissionBits, requiredCryptoParts, validateGrant } from "./access-policy.mjs";
+import { createPreviewToken, hashAccessRequest, validateAccessChangeRequest,
+  verifyPreviewToken } from "./access-preview.mjs";
 
 function accessGroupName(value) {
   const name = String(value ?? "").trim();
@@ -377,138 +379,13 @@ export class AccessStore {
   }
 
   async getEffectiveAccess(input) {
-    const { actorUserID, teamID, vaultID, resourceID, subjectUserID } = input;
-    if (!uuidPattern.test(resourceID ?? "")) throw new Error("invalid_access_resource");
+    if (!uuidPattern.test(input?.resourceID ?? "")) throw new Error("invalid_access_resource");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
-      await readAccessActor(client, input);
-      const vault = await client.query(
-        `SELECT id FROM shared_vaults WHERE id = $1 AND team_id = $2
-           AND archived_at IS NULL AND format_state = 'V2_PREPARING'
-           AND format_schema_version = 2`,
-        [vaultID, teamID],
-      );
-      if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
-      const subject = await client.query(
-        `SELECT id, user_id, epoch FROM team_memberships
-         WHERE team_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
-        [teamID, subjectUserID],
-      );
-      if (!subject.rows[0]) throw new Error("team_not_found");
-      const membership = { id: subject.rows[0].id,
-        userID: subject.rows[0].user_id, epoch: Number(subject.rows[0].epoch) };
-      const row = await client.query(
-        `SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
-         FROM vault_resource_registry WHERE id = $1 AND team_id = $2 AND vault_id = $3
-           AND deleted_at IS NULL`,
-        [resourceID, teamID, vaultID],
-      );
-      if (!row.rows[0]?.policy_kind) throw new Error("access_resource_not_found");
-      const target = { id: row.rows[0].id, teamID: row.rows[0].team_id,
-        vaultID: row.rows[0].vault_id, kind: row.rows[0].policy_kind,
-        parentFolderID: row.rows[0].parent_folder_id,
-        deletedAt: row.rows[0].deleted_at };
-      const ancestorRows = await client.query(
-        `WITH RECURSIVE path AS (
-           SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at,
-             1 AS depth, ARRAY[id] AS seen
-           FROM vault_resource_registry
-           WHERE team_id = $1 AND vault_id = $2 AND id = $3
-           UNION ALL
-           SELECT parent.id, parent.team_id, parent.vault_id, parent.policy_kind,
-             parent.parent_folder_id, parent.deleted_at, path.depth + 1,
-             path.seen || parent.id
-           FROM vault_resource_registry AS parent
-           JOIN path ON parent.id = path.parent_folder_id
-           WHERE parent.team_id = $1 AND parent.vault_id = $2
-             AND path.depth < 64 AND NOT parent.id = ANY(path.seen)
-         ) SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
-           FROM path ORDER BY depth`,
-        [teamID, vaultID, target.parentFolderID],
-      );
-      const ancestors = ancestorRows.rows.map((item) => ({ id: item.id,
-        teamID: item.team_id, vaultID: item.vault_id, kind: item.policy_kind,
-        parentFolderID: item.parent_folder_id, deletedAt: item.deleted_at }));
-      const groupRows = await client.query(
-        `SELECT edge.group_id FROM team_access_group_members AS edge
-         JOIN team_access_groups AS grp ON grp.id = edge.group_id
-           AND grp.team_id = edge.team_id AND grp.deleted_at IS NULL
-         WHERE edge.team_id = $1 AND edge.user_id = $2
-           AND edge.membership_id = $3 AND edge.membership_epoch = $4
-           AND edge.removed_at IS NULL`,
-        [teamID, membership.userID, membership.id, membership.epoch],
-      );
-      const groupIDs = groupRows.rows.map((item) => item.group_id);
-      const grantRows = await client.query(
-        `SELECT id, team_id, vault_id, principal_kind, principal_id,
-           membership_id, membership_epoch, target_kind, target_id,
-           permission_mask, revoked_at
-         FROM vault_access_grants WHERE team_id = $1 AND vault_id = $2
-           AND revoked_at IS NULL
-           AND ((principal_kind = 'USER' AND principal_id = $3
-               AND membership_id = $4 AND membership_epoch = $5)
-             OR (principal_kind = 'GROUP' AND principal_id = ANY($6::uuid[])))
-           AND ((target_kind = 'VAULT' AND target_id = $2)
-             OR (target_kind = 'FOLDER' AND target_id = ANY($7::uuid[]))
-             OR (target_kind = $8 AND target_id = $9))
-         ORDER BY id LIMIT 1001`,
-        [teamID, vaultID, membership.userID, membership.id, membership.epoch,
-          groupIDs, ancestors.map((item) => item.id),
-          target.kind === "FOLDER" ? "FOLDER" : "RESOURCE", resourceID],
-      );
-      if (grantRows.rows.length > 1000) throw new Error("access_result_too_large");
-      const grants = grantRows.rows.map((item) => ({ id: item.id,
-        teamID: item.team_id, vaultID: item.vault_id,
-        principalKind: item.principal_kind, principalID: item.principal_id,
-        membershipID: item.membership_id, membershipEpoch: item.membership_epoch,
-        targetKind: item.target_kind, targetID: item.target_id,
-        mask: item.permission_mask, revokedAt: item.revoked_at }));
-      const wrapperRows = await client.query(
-        `SELECT DISTINCT pointer.part FROM vault_resource_manifest_pointers_v2 AS pointer
-         JOIN vault_resource_ciphertext_versions AS cipher
-           ON cipher.team_id = pointer.team_id AND cipher.vault_id = pointer.vault_id
-          AND cipher.resource_id = pointer.resource_id AND cipher.part = pointer.part
-          AND cipher.key_version = pointer.key_version AND cipher.lifecycle = 'PUBLISHED'
-         JOIN vault_resource_key_wrappers_v2 AS wrapper
-           ON wrapper.team_id = pointer.team_id AND wrapper.vault_id = pointer.vault_id
-          AND wrapper.resource_id = pointer.resource_id AND wrapper.part = pointer.part
-          AND wrapper.key_version = pointer.key_version AND wrapper.obsolete_at IS NULL
-         JOIN team_membership_device_admissions AS admission
-           ON admission.membership_id = wrapper.membership_id
-          AND admission.membership_epoch = wrapper.membership_epoch
-          AND admission.device_id = wrapper.device_id
-         JOIN devices AS device ON device.id = wrapper.device_id
-           AND device.revoked_at IS NULL AND device.user_id = $4
-         WHERE pointer.team_id = $1 AND pointer.vault_id = $2
-           AND pointer.resource_id = $3 AND wrapper.membership_id = $5
-           AND wrapper.membership_epoch = $6`,
-        [teamID, vaultID, resourceID, membership.userID,
-          membership.id, membership.epoch],
-      );
-      const availableParts = new Set(wrapperRows.rows.map((item) => item.part));
-      // A management bit is policy-only; content bits need current eligible wraps.
-      const requiredPart = target.kind === "FOLDER" ? null
-        : target.kind === "CREDENTIAL" ? "METADATA" : "GENERAL";
-      const cryptoStatus = requiredPart && availableParts.has(requiredPart)
-        ? "WRAP_PRESENT_UNVERIFIED" : "NO";
-      const result = compileEffectiveAccess({ target, ancestors, membership,
-        groupIDs, grants, cryptoStatus, requiresCrypto: requiredPart !== null });
-      const cryptoAvailableByPermission = {};
-      for (const [name, bit] of Object.entries(permissionBits)) {
-        if ((result.policyMask & bit) === 0) continue;
-        const part = target.kind === "CREDENTIAL"
-          ? (name === "Reveal" || name === "Edit" ? "SECRET"
-            : name === "View" ? "METADATA" : null)
-          : target.kind === "FOLDER" || ["ManageAccess", "Manage", "Create"].includes(name)
-            ? null : "GENERAL";
-        const label = name === "View" && target.kind === "CREDENTIAL"
-          ? "ViewMetadata" : name;
-        cryptoAvailableByPermission[label] = part === null ? "NOT_REQUIRED"
-          : availableParts.has(part) ? "WRAP_PRESENT_UNVERIFIED" : "NO";
-      }
+      const result = await this.readEffectiveAccessInSnapshot(client, input);
       await client.query("COMMIT");
-      return { ...result, cryptoAvailableByPermission };
+      return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw error;
@@ -516,4 +393,478 @@ export class AccessStore {
       client.release();
     }
   }
+
+  async readEffectiveAccessInSnapshot(client, input, changes = []) {
+    const { teamID, vaultID, resourceID, subjectUserID } = input;
+    await readAccessActor(client, input);
+    const vault = await client.query(
+      `SELECT id FROM shared_vaults WHERE id = $1 AND team_id = $2
+         AND archived_at IS NULL AND format_state = 'V2_PREPARING'
+         AND format_schema_version = 2`,
+      [vaultID, teamID],
+    );
+    if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+    const subject = await client.query(
+      `SELECT id, user_id, epoch FROM team_memberships
+       WHERE team_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+      [teamID, subjectUserID],
+    );
+    if (!subject.rows[0]) throw new Error("team_not_found");
+    const membership = { id: subject.rows[0].id,
+      userID: subject.rows[0].user_id, epoch: Number(subject.rows[0].epoch) };
+    const row = await client.query(
+      `SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
+       FROM vault_resource_registry WHERE id = $1 AND team_id = $2 AND vault_id = $3
+         AND deleted_at IS NULL`,
+      [resourceID, teamID, vaultID],
+    );
+    if (!row.rows[0]?.policy_kind) throw new Error("access_resource_not_found");
+    const target = { id: row.rows[0].id, teamID: row.rows[0].team_id,
+      vaultID: row.rows[0].vault_id, kind: row.rows[0].policy_kind,
+      parentFolderID: row.rows[0].parent_folder_id,
+      deletedAt: row.rows[0].deleted_at };
+    const ancestorRows = await client.query(
+      `WITH RECURSIVE path AS (
+         SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at,
+           1 AS depth, ARRAY[id] AS seen
+         FROM vault_resource_registry
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3
+         UNION ALL
+         SELECT parent.id, parent.team_id, parent.vault_id, parent.policy_kind,
+           parent.parent_folder_id, parent.deleted_at, path.depth + 1,
+           path.seen || parent.id
+         FROM vault_resource_registry AS parent
+         JOIN path ON parent.id = path.parent_folder_id
+         WHERE parent.team_id = $1 AND parent.vault_id = $2
+           AND path.depth < 64 AND NOT parent.id = ANY(path.seen)
+       ) SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
+         FROM path ORDER BY depth`,
+      [teamID, vaultID, target.parentFolderID],
+    );
+    const ancestors = ancestorRows.rows.map((item) => ({ id: item.id,
+      teamID: item.team_id, vaultID: item.vault_id, kind: item.policy_kind,
+      parentFolderID: item.parent_folder_id, deletedAt: item.deleted_at }));
+    const groupRows = await client.query(
+      `SELECT edge.group_id FROM team_access_group_members AS edge
+       JOIN team_access_groups AS grp ON grp.id = edge.group_id
+         AND grp.team_id = edge.team_id AND grp.deleted_at IS NULL
+       WHERE edge.team_id = $1 AND edge.user_id = $2
+         AND edge.membership_id = $3 AND edge.membership_epoch = $4
+         AND edge.removed_at IS NULL`,
+      [teamID, membership.userID, membership.id, membership.epoch],
+    );
+    const groupIDs = groupRows.rows.map((item) => item.group_id);
+    const grantRows = await client.query(
+      `SELECT id, team_id, vault_id, principal_kind, principal_id,
+         membership_id, membership_epoch, target_kind, target_id,
+         permission_mask, revoked_at
+       FROM vault_access_grants WHERE team_id = $1 AND vault_id = $2
+         AND revoked_at IS NULL
+         AND ((principal_kind = 'USER' AND principal_id = $3
+             AND membership_id = $4 AND membership_epoch = $5)
+           OR (principal_kind = 'GROUP' AND principal_id = ANY($6::uuid[])))
+         AND ((target_kind = 'VAULT' AND target_id = $2)
+           OR (target_kind = 'FOLDER' AND target_id = ANY($7::uuid[]))
+           OR (target_kind = $8 AND target_id = $9))
+       ORDER BY id LIMIT 1001`,
+      [teamID, vaultID, membership.userID, membership.id, membership.epoch,
+        groupIDs, ancestors.map((item) => item.id),
+        target.kind === "FOLDER" ? "FOLDER" : "RESOURCE", resourceID],
+    );
+    if (grantRows.rows.length > 1000) throw new Error("access_result_too_large");
+    const storedGrants = grantRows.rows.map((item) => ({ id: item.id,
+      teamID: item.team_id, vaultID: item.vault_id,
+      principalKind: item.principal_kind, principalID: item.principal_id,
+      membershipID: item.membership_id, membershipEpoch: item.membership_epoch,
+      targetKind: item.target_kind, targetID: item.target_id,
+      mask: item.permission_mask, revokedAt: item.revoked_at }));
+    const grants = applyGrantChanges(storedGrants, changes, { strict: false });
+    const wrapperRows = await client.query(
+      `SELECT DISTINCT pointer.part FROM vault_resource_manifest_pointers_v2 AS pointer
+       JOIN vault_resource_ciphertext_versions AS cipher
+         ON cipher.team_id = pointer.team_id AND cipher.vault_id = pointer.vault_id
+        AND cipher.resource_id = pointer.resource_id AND cipher.part = pointer.part
+        AND cipher.key_version = pointer.key_version AND cipher.lifecycle = 'PUBLISHED'
+       JOIN vault_resource_key_wrappers_v2 AS wrapper
+         ON wrapper.team_id = pointer.team_id AND wrapper.vault_id = pointer.vault_id
+        AND wrapper.resource_id = pointer.resource_id AND wrapper.part = pointer.part
+        AND wrapper.key_version = pointer.key_version AND wrapper.obsolete_at IS NULL
+       JOIN team_membership_device_admissions AS admission
+         ON admission.membership_id = wrapper.membership_id
+        AND admission.membership_epoch = wrapper.membership_epoch
+        AND admission.device_id = wrapper.device_id
+       JOIN devices AS device ON device.id = wrapper.device_id
+         AND device.revoked_at IS NULL AND device.user_id = $4
+       WHERE pointer.team_id = $1 AND pointer.vault_id = $2
+         AND pointer.resource_id = $3 AND wrapper.membership_id = $5
+         AND wrapper.membership_epoch = $6`,
+      [teamID, vaultID, resourceID, membership.userID,
+        membership.id, membership.epoch],
+    );
+    const availableParts = new Set(wrapperRows.rows.map((item) => item.part));
+    // Derive crypto work from effective bits; ManageAccess alone needs no CEK.
+    const policy = compileEffectiveAccess({ target, ancestors, membership,
+      groupIDs, grants, cryptoStatus: "NO", requiresCrypto: false });
+    const requiredParts = policy.policyMask
+      ? requiredCryptoParts(target.kind, policy.policyMask) : [];
+    const cryptoStatus = requiredParts.length > 0
+      && requiredParts.every((part) => availableParts.has(part))
+      ? "WRAP_PRESENT_UNVERIFIED" : "NO";
+    const result = compileEffectiveAccess({ target, ancestors, membership,
+      groupIDs, grants, cryptoStatus, requiresCrypto: requiredParts.length > 0 });
+    const cryptoAvailableByPermission = {};
+    for (const [name, bit] of Object.entries(permissionBits)) {
+      if ((result.policyMask & bit) === 0) continue;
+      const part = target.kind === "CREDENTIAL"
+        ? (name === "Reveal" || name === "Edit" ? "SECRET"
+          : name === "View" ? "METADATA" : null)
+        : target.kind === "FOLDER" || ["ManageAccess", "Manage", "Create"].includes(name)
+          ? null : "GENERAL";
+      const label = name === "View" && target.kind === "CREDENTIAL"
+        ? "ViewMetadata" : name;
+      cryptoAvailableByPermission[label] = part === null ? "NOT_REQUIRED"
+        : availableParts.has(part) ? "WRAP_PRESENT_UNVERIFIED" : "NO";
+    }
+    return { ...result, cryptoAvailableByPermission };
+  }
+
+  async previewAccessChange(input) {
+    validateAccessChangeRequest(input?.request);
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const preview = await this.buildAccessPreview(client, input);
+      const token = createPreviewToken(preview.binding, input.sessionSecret);
+      await client.query("COMMIT");
+      return { token, details: preview.details, counts: preview.counts,
+        nextCursor: preview.nextCursor };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async buildAccessPreview(client, input) {
+    const { actorUserID, actorDeviceID, teamID, vaultID, request } = input;
+    const changes = validateAccessChangeRequest(request);
+    const actor = await readAccessActor(client, input);
+    const vault = await client.query(
+      `SELECT access_policy_version FROM shared_vaults
+       WHERE id = $1 AND team_id = $2 AND archived_at IS NULL
+         AND format_state = 'V2_PREPARING' AND format_schema_version = 2`,
+      [vaultID, teamID],
+    );
+    if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+    const teamRevision = await client.query(
+      `SELECT revision FROM team_policy_revisions WHERE team_id = $1`, [teamID],
+    );
+    const resolved = [];
+    const pairs = new Map();
+    const allSubjects = new Map();
+    const allResources = new Map();
+    const explicitPrincipals = new Set();
+    for (const [index, change] of changes.entries()) {
+      let grant = null;
+      if (change.type !== "GRANT_CREATE") {
+        const existing = await client.query(
+          `SELECT id, principal_kind, principal_id, membership_id,
+             membership_epoch, target_kind, target_id, permission_mask, version
+           FROM vault_access_grants WHERE id = $1 AND team_id = $2
+             AND vault_id = $3 AND revoked_at IS NULL`,
+          [change.grantID, teamID, vaultID],
+        );
+        if (!existing.rows[0] || Number(existing.rows[0].version)
+          !== change.expectedVersion) throw new Error("access_policy_conflict");
+        grant = existing.rows[0];
+      }
+      const principalKind = grant?.principal_kind ?? change.principalKind;
+      const principalID = grant?.principal_id ?? change.principalID;
+      const targetKind = grant?.target_kind ?? change.targetKind;
+      const targetID = grant?.target_id ?? change.targetID;
+      const mask = change.type === "GRANT_REVOKE"
+        ? grant.permission_mask : change.permissionMask;
+      explicitPrincipals.add(`${principalKind}:${principalID}`);
+      if (explicitPrincipals.size > 20) throw new Error("access_batch_too_large");
+      let targetPolicyKind = "VAULT";
+      if (targetKind !== "VAULT") {
+        const registry = await client.query(
+          `SELECT policy_kind FROM vault_resource_registry
+           WHERE id = $1 AND team_id = $2 AND vault_id = $3
+             AND deleted_at IS NULL`,
+          [targetID, teamID, vaultID],
+        );
+        targetPolicyKind = registry.rows[0]?.policy_kind;
+        if (!targetPolicyKind || (targetKind === "FOLDER" && targetPolicyKind !== "FOLDER")
+          || (targetKind === "RESOURCE" && targetPolicyKind === "FOLDER")) {
+          throw new Error("access_resource_not_found");
+        }
+      } else if (targetID !== vaultID) {
+        throw new Error("access_resource_not_found");
+      }
+      if (change.type !== "GRANT_REVOKE") validateGrant(targetPolicyKind, mask);
+      if (change.type === "GRANT_CREATE") {
+        const duplicate = await client.query(
+          `SELECT 1 FROM vault_access_grants WHERE team_id = $1 AND vault_id = $2
+             AND principal_kind = $3 AND principal_id = $4
+             AND target_kind = $5 AND target_id = $6 AND revoked_at IS NULL`,
+          [teamID, vaultID, principalKind, principalID, targetKind, targetID],
+        );
+        if (duplicate.rows[0]) throw new Error("access_policy_conflict");
+      }
+      let subjects;
+      if (principalKind === "USER") {
+        const rows = await client.query(
+          `SELECT id, user_id, epoch, role FROM team_memberships
+           WHERE team_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+          [teamID, principalID],
+        );
+        subjects = rows.rows;
+        if (change.type !== "GRANT_REVOKE" && !subjects[0]) {
+          throw new Error("team_not_found");
+        }
+        if (grant && change.type !== "GRANT_REVOKE" && subjects[0]
+          && (grant.membership_id !== subjects[0].id
+            || Number(grant.membership_epoch) !== Number(subjects[0].epoch))) {
+          throw new Error("access_policy_conflict");
+        }
+      } else {
+        const group = await client.query(
+          `SELECT deleted_at FROM team_access_groups WHERE id = $1 AND team_id = $2`,
+          [principalID, teamID],
+        );
+        if ((!group.rows[0] || group.rows[0].deleted_at !== null)
+          && change.type !== "GRANT_REVOKE") throw new Error("access_group_not_found");
+        const rows = await client.query(
+          `SELECT DISTINCT member.id, member.user_id, member.epoch, member.role
+           FROM team_access_group_members AS edge
+           JOIN team_memberships AS member ON member.id = edge.membership_id
+             AND member.team_id = edge.team_id AND member.user_id = edge.user_id
+             AND member.epoch = edge.membership_epoch AND member.revoked_at IS NULL
+           WHERE edge.team_id = $1 AND edge.group_id = $2
+             AND edge.removed_at IS NULL ORDER BY member.id LIMIT 1001`,
+          [teamID, principalID],
+        );
+        if (rows.rows.length > 1000) throw new Error("access_batch_too_large");
+        subjects = rows.rows;
+      }
+      for (const subject of subjects) {
+        requireAccessMutation(actor.role, subject.role);
+        allSubjects.set(subject.user_id, { userID: subject.user_id,
+          membershipID: subject.id, epoch: Number(subject.epoch) });
+      }
+      let resourceRows;
+      if (targetKind === "RESOURCE") {
+        resourceRows = await client.query(
+          `SELECT id, resource_version, policy_kind FROM vault_resource_registry
+           WHERE id = $1 AND team_id = $2 AND vault_id = $3
+             AND deleted_at IS NULL`,
+          [targetID, teamID, vaultID],
+        );
+      } else if (targetKind === "FOLDER") {
+        resourceRows = await client.query(
+          `WITH RECURSIVE subtree AS (
+             SELECT id, parent_folder_id, resource_version, policy_kind
+             FROM vault_resource_registry WHERE id = $1 AND team_id = $2
+               AND vault_id = $3 AND deleted_at IS NULL
+             UNION
+             SELECT child.id, child.parent_folder_id, child.resource_version,
+               child.policy_kind FROM vault_resource_registry AS child
+             JOIN subtree ON child.parent_folder_id = subtree.id
+             WHERE child.team_id = $2 AND child.vault_id = $3
+               AND child.deleted_at IS NULL
+           ) SELECT id, resource_version, policy_kind FROM subtree ORDER BY id LIMIT 51`,
+          [targetID, teamID, vaultID],
+        );
+      } else {
+        resourceRows = await client.query(
+          `SELECT id, resource_version, policy_kind FROM vault_resource_registry
+           WHERE team_id = $1 AND vault_id = $2 AND deleted_at IS NULL
+           ORDER BY id LIMIT 51`,
+          [teamID, vaultID],
+        );
+      }
+      if (resourceRows.rows.length > 50) throw new Error("access_batch_too_large");
+      if (resourceRows.rows.some((row) => !row.policy_kind)) {
+        throw new Error("access_unclassified_resource");
+      }
+      for (const resource of resourceRows.rows) {
+        allResources.set(resource.id, resource);
+        for (const subject of subjects) {
+          pairs.set(`${subject.user_id}:${resource.id}`,
+            { subjectUserID: subject.user_id, resourceID: resource.id });
+        }
+      }
+      resolved.push({ index, type: change.type, grantID: grant?.id ?? null,
+        expectedVersion: change.expectedVersion ?? null, principalKind, principalID,
+        membershipID: principalKind === "USER"
+          ? subjects[0]?.id ?? grant?.membership_id ?? null : null,
+        membershipEpoch: principalKind === "USER"
+          ? subjects[0]?.epoch ?? grant?.membership_epoch ?? null : null,
+        targetKind, targetID, permissionMask: mask,
+        oldMask: grant?.permission_mask ?? 0 });
+    }
+    if (allResources.size > 50 || pairs.size > 1000) {
+      throw new Error("access_batch_too_large");
+    }
+    const hypothetical = resolved.map((item) => item.type === "GRANT_CREATE"
+      ? { type: item.type, grant: { id: `preview:${item.index}`,
+        teamID, vaultID, principalKind: item.principalKind,
+        principalID: item.principalID, membershipID: item.membershipID,
+        membershipEpoch: item.membershipEpoch, targetKind: item.targetKind,
+        targetID: item.targetID, mask: item.permissionMask, revokedAt: null } }
+      : { type: item.type, grantID: item.grantID,
+        permissionMask: item.permissionMask });
+    const details = [];
+    let widened = 0;
+    let lost = 0;
+    for (const pair of pairs.values()) {
+      const accessInput = { actorUserID, actorDeviceID, teamID, vaultID,
+        resourceID: pair.resourceID, subjectUserID: pair.subjectUserID };
+      const before = await this.readEffectiveAccessInSnapshot(client, accessInput);
+      const after = await this.readEffectiveAccessInSnapshot(client, accessInput, hypothetical);
+      const gainedMask = after.policyMask & ~before.policyMask;
+      const lostMask = before.policyMask & ~after.policyMask;
+      if (gainedMask) widened++;
+      if (lostMask) lost++;
+      details.push({ ...pair, before, after, gainedMask, lostMask });
+    }
+    const resourceIDs = [...allResources.keys()].sort();
+    const registry = await client.query(
+      `WITH RECURSIVE chain AS (
+         SELECT id, parent_folder_id, resource_version
+         FROM vault_resource_registry WHERE team_id = $1 AND vault_id = $2
+           AND id = ANY($3::uuid[]) AND deleted_at IS NULL
+         UNION
+         SELECT parent.id, parent.parent_folder_id, parent.resource_version
+         FROM vault_resource_registry AS parent
+         JOIN chain ON parent.id = chain.parent_folder_id
+         WHERE parent.team_id = $1 AND parent.vault_id = $2
+           AND parent.deleted_at IS NULL
+       ) SELECT DISTINCT id, resource_version FROM chain ORDER BY id`,
+      [teamID, vaultID, resourceIDs],
+    );
+    const binding = { actorMembershipID: actor.id, actorEpoch: Number(actor.epoch),
+      actorDeviceID, teamID, vaultID, requestHash: hashAccessRequest(request),
+      teamPolicyRevision: Number(teamRevision.rows[0]?.revision ?? 0),
+      vaultPolicyVersion: Number(vault.rows[0].access_policy_version),
+      registryVersionsHash: hashAccessRequest(registry.rows.map((row) =>
+        [row.id, Number(row.resource_version)])),
+      selectedDescendantsHash: hashAccessRequest(resourceIDs),
+      subjectsHash: hashAccessRequest([...allSubjects.values()]
+        .sort((left, right) => left.userID.localeCompare(right.userID))) };
+    return { binding, resolved, details,
+      subjectBindings: [...allSubjects.values()],
+      counts: { pairs: pairs.size, widened, lost },
+      nextCursor: details.length > 50 ? "50" : null };
+  }
+
+  async commitAccessChange(input) {
+    const signed = verifyPreviewToken(input?.token, input?.sessionSecret);
+    validateAccessChangeRequest(input?.request);
+    const { actorUserID, actorDeviceID, teamID, vaultID, idempotencyKey } = input;
+    if (signed.actorDeviceID !== actorDeviceID || signed.teamID !== teamID
+      || signed.vaultID !== vaultID
+      || signed.requestHash !== hashAccessRequest(input.request)) {
+      throw new Error("access_preview_conflict");
+    }
+    const receiptRequest = { actorUserID, actorDeviceID, teamID, vaultID,
+      tokenHash: hashAccessRequest(input.token),
+      requestHash: signed.requestHash };
+    return this.withMutation({ actorUserID, idempotencyKey,
+      operation: "access.grant.commit", request: receiptRequest }, async (client) => {
+      const actor = await requirePreparingActor(client, input);
+      await client.query(
+        `INSERT INTO team_policy_revisions (team_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+        [teamID],
+      );
+      await client.query(
+        `SELECT revision FROM team_policy_revisions WHERE team_id = $1 FOR UPDATE`,
+        [teamID],
+      );
+      let preview = await this.buildAccessPreview(client, input);
+      if (preview.subjectBindings.length) {
+        await client.query(
+          `SELECT id FROM team_memberships WHERE team_id = $1
+             AND id = ANY($2::uuid[]) ORDER BY id FOR SHARE`,
+          [teamID, preview.subjectBindings.map((item) => item.membershipID)],
+        );
+        preview = await this.buildAccessPreview(client, input);
+      }
+      const { expiresAt, ...signedBinding } = signed;
+      if (signed.actorMembershipID !== actor.id
+        || Number(signed.actorEpoch) !== Number(actor.epoch)
+        || hashAccessRequest(signedBinding) !== hashAccessRequest(preview.binding)) {
+        throw new Error("access_preview_conflict");
+      }
+      const committed = [];
+      for (const change of preview.resolved) {
+        let grantID = change.grantID;
+        if (change.type === "GRANT_CREATE") {
+          const row = await client.query(
+            `INSERT INTO vault_access_grants
+               (team_id, vault_id, principal_kind, principal_id,
+                membership_id, membership_epoch, target_kind, target_id,
+                permission_mask, created_by_user_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+             RETURNING id`,
+            [teamID, vaultID, change.principalKind, change.principalID,
+              change.membershipID, change.membershipEpoch,
+              change.targetKind, change.targetID, change.permissionMask, actorUserID],
+          );
+          grantID = row.rows[0].id;
+        } else if (change.type === "GRANT_CHANGE") {
+          const row = await client.query(
+            `UPDATE vault_access_grants SET permission_mask = $4,
+               version = version + 1, updated_at = now()
+             WHERE id = $1 AND team_id = $2 AND vault_id = $3
+               AND version = $5 AND revoked_at IS NULL RETURNING id`,
+            [grantID, teamID, vaultID, change.permissionMask, change.expectedVersion],
+          );
+          if (!row.rows[0]) throw new Error("access_policy_conflict");
+        } else {
+          const row = await client.query(
+            `UPDATE vault_access_grants SET revoked_at = now(),
+               version = version + 1, updated_at = now()
+             WHERE id = $1 AND team_id = $2 AND vault_id = $3
+               AND version = $4 AND revoked_at IS NULL RETURNING id`,
+            [grantID, teamID, vaultID, change.expectedVersion],
+          );
+          if (!row.rows[0]) throw new Error("access_policy_conflict");
+        }
+        const action = change.type === "GRANT_CREATE" ? "grant.created"
+          : change.type === "GRANT_CHANGE" ? "grant.changed" : "grant.revoked";
+        await client.query(
+          `INSERT INTO team_audit_events
+             (team_id, actor_user_id, action, target_vault_id, metadata)
+           VALUES ($1, $2, $3, $4, $5::jsonb)`,
+          [teamID, actorUserID, action, vaultID, JSON.stringify({ grantID,
+            principalKind: change.principalKind, principalID: change.principalID,
+            targetKind: change.targetKind, targetID: change.targetID,
+            oldMask: change.oldMask, newMask:
+              change.type === "GRANT_REVOKE" ? 0 : change.permissionMask })],
+        );
+        committed.push({ type: change.type, grantID });
+      }
+      if (committed.length > 1) {
+        await client.query(
+          `INSERT INTO team_audit_events
+             (team_id, actor_user_id, action, target_vault_id, metadata)
+           VALUES ($1, $2, 'bulk_grant.applied', $3, $4::jsonb)`,
+          [teamID, actorUserID, vaultID,
+            JSON.stringify({ count: committed.length })],
+        );
+      }
+      // Candidates are returned only from a successful committed transaction.
+      const notificationCandidates = preview.details
+        .filter((item) => item.gainedMask !== 0 || item.lostMask !== 0)
+        .map((item) => ({ userID: item.subjectUserID,
+          resourceID: item.resourceID, gainedMask: item.gainedMask,
+          lostMask: item.lostMask }));
+      return { applied: committed.length, grants: committed,
+        notificationCandidates, counts: preview.counts };
+    });
+  }
+
 }
