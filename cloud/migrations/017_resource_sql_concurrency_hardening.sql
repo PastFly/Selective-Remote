@@ -156,7 +156,10 @@ BEGIN
         END IF;
     ELSE
         IF (NEW.id, NEW.team_id, NEW.user_id, NEW.epoch)
-           IS DISTINCT FROM (OLD.id, OLD.team_id, OLD.user_id, OLD.epoch) THEN
+           IS DISTINCT FROM (OLD.id, OLD.team_id, OLD.user_id, OLD.epoch)
+           AND NOT (NEW.id = OLD.id AND NEW.team_id = OLD.team_id
+                    AND NEW.epoch = OLD.epoch AND OLD.revoked_at IS NOT NULL
+                    AND NEW.revoked_at IS NOT NULL AND NEW.user_id IS NULL) THEN
             RAISE EXCEPTION 'membership_identity_immutable';
         END IF;
     END IF;
