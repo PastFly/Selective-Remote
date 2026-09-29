@@ -16,8 +16,9 @@ test("signed device trust records are additive, unique and bounded in PostgreSQL
     await applyMigrations(pool, migrationsDirectory, { info() {} });
     const v2Before = Number((await pool.query(`SELECT count(*) AS count FROM shared_vaults
       WHERE format_state = 'V2_ACTIVE'`)).rows[0].count);
-    const account = (await pool.query(`INSERT INTO users (email) VALUES ($1) RETURNING id`,
-      [`trust-${randomUUID()}@example.test`])).rows[0].id;
+    const suffix = randomUUID().replaceAll("-", "").slice(0, 12);
+    const account = (await pool.query(`INSERT INTO users (email, username) VALUES ($1, $2) RETURNING id`,
+      [`trust-${suffix}@example.test`, `trust_${suffix}`])).rows[0].id;
     const device = randomUUID();
     await pool.query(`INSERT INTO devices (id, user_id, name, platform)
       VALUES ($1, $2, 'Test', 'web')`, [device, account]);

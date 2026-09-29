@@ -89,6 +89,9 @@ test("checkpoint rejects rollback, revoked devices and changed scope", async () 
     trust, expectedDeviceID: deviceID, cryptoValue: webcrypto };
   await assert.rejects(verifyDeviceForWrapping({ ...base,
     trust: { ...trust, highWater: 2 } }), /device_trust/u);
+  const { checkpointDigest: _omitted, ...incompletePin } = trust;
+  await assert.rejects(verifyDeviceForWrapping({ ...base,
+    trust: incompletePin }), /device_trust/u);
   await assert.rejects(verifyDeviceForWrapping({ ...base,
     trust: { ...trust, accountID: otherID } }), /device_trust/u);
   await assert.rejects(verifyDeviceForWrapping({ ...base, expectedDeviceID: otherID }), /device_trust/u);

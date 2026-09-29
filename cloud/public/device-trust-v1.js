@@ -292,6 +292,7 @@ export async function verifyDeviceForWrapping({ rootPublicKey, certificate, chec
   if (!trust || trust.rootFingerprint !== await fingerprint(rootPublicKey, crypto)
     || !Number.isSafeInteger(trust.highWater) || trust.highWater < 1
     || normalizedEndpoint(trust.endpoint) !== trust.endpoint) fail();
+  bytes(trust.checkpointDigest, 32);
   const accountID = id(trust.accountID);
   const deviceID = id(expectedDeviceID);
   if (certificate?.payload?.accountID !== accountID
@@ -305,7 +306,7 @@ export async function verifyDeviceForWrapping({ rootPublicKey, certificate, chec
     checkpoint.signature, crypto);
   const checkpointDigest = await deviceDirectoryDigest(checkpoint, crypto);
   if (checkpoint.payload.version === trust.highWater
-    && trust.checkpointDigest !== undefined && trust.checkpointDigest !== checkpointDigest) fail();
+    && trust.checkpointDigest !== checkpointDigest) fail();
   const entry = checkpoint.payload.entries.find((item) => item.deviceID === deviceID);
   if (!entry || entry.keyVersion !== certificate.payload.keyVersion
     || entry.certificateDigest !== await certificateDigest(certificate, crypto)) fail();
