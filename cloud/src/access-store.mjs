@@ -15,7 +15,7 @@ function requestHash(value) {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-async function requirePreparingActor(client, { actorUserID, actorDeviceID, teamID, vaultID }) {
+async function readAccessActor(client, { actorUserID, actorDeviceID, teamID }) {
   // Read actor first so outsiders cannot distinguish an existing V1 Vault from an absent one.
   const actor = await client.query(
     `SELECT membership.id, membership.role, membership.epoch
@@ -34,13 +34,25 @@ async function requirePreparingActor(client, { actorUserID, actorDeviceID, teamI
   );
   if (!actor.rows[0]) throw new Error("team_not_found");
   requireAccessMutation(actor.rows[0].role);
-  const vault = await client.query(
-    `SELECT id FROM shared_vaults WHERE id = $1 AND team_id = $2
-       AND archived_at IS NULL AND format_state = 'V2_PREPARING'
-       AND format_schema_version = 2 FOR UPDATE`,
-    [vaultID, teamID],
-  );
-  if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+  return actor.rows[0];
+}
+
+async function requirePreparingActor(client, input, relatedVaultIDs = []) {
+  const { actorUserID, actorDeviceID, teamID, vaultID } = input;
+  const actor = await readAccessActor(client, input);
+  const vaultIDs = [...new Set([vaultID, ...relatedVaultIDs])].sort();
+  for (const id of vaultIDs) {
+    const vault = await client.query(
+      `SELECT id, format_state, format_schema_version FROM shared_vaults
+       WHERE id = $1 AND team_id = $2 AND archived_at IS NULL FOR UPDATE`,
+      [id, teamID],
+    );
+    if (!vault.rows[0]) throw new Error("access_policy_conflict");
+    if (id === vaultID && (vault.rows[0].format_state !== "V2_PREPARING"
+      || Number(vault.rows[0].format_schema_version) !== 2)) {
+      throw new Error("access_v2_preparing_required");
+    }
+  }
   const current = await client.query(
     `SELECT membership.id, membership.role, membership.epoch
      FROM team_memberships AS membership
@@ -57,8 +69,8 @@ async function requirePreparingActor(client, { actorUserID, actorDeviceID, teamI
      FOR UPDATE OF membership, team, device`,
     [teamID, actorUserID, actorDeviceID],
   );
-  if (!current.rows[0] || current.rows[0].id !== actor.rows[0].id
-    || current.rows[0].epoch !== actor.rows[0].epoch) throw new Error("team_not_found");
+  if (!current.rows[0] || current.rows[0].id !== actor.id
+    || current.rows[0].epoch !== actor.epoch) throw new Error("team_not_found");
   requireAccessMutation(current.rows[0].role);
   return current.rows[0];
 }
@@ -66,10 +78,12 @@ async function requirePreparingActor(client, { actorUserID, actorDeviceID, teamI
 export class AccessStore {
   constructor(pool) { this.pool = pool; }
 
-  async withMutation({ actorUserID, idempotencyKey, operation, request }, action) {
+  async withMutation({ actorUserID, idempotencyKey, operation, request }, action,
+    attempt = 0) {
     validateIdempotencyKey(idempotencyKey);
     const client = await this.pool.connect();
     const hash = requestHash(request);
+    let retry = false;
     try {
       await client.query("BEGIN");
       const reservation = await client.query(
@@ -102,9 +116,14 @@ export class AccessStore {
       return result;
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
-      throw error;
+      if (["40P01", "40001"].includes(error?.code) && attempt < 2) retry = true;
+      else throw error;
     } finally {
       client.release();
+    }
+    if (retry) {
+      return this.withMutation({ actorUserID, idempotencyKey, operation, request },
+        action, attempt + 1);
     }
   }
 
@@ -266,6 +285,92 @@ export class AccessStore {
         [teamID, actorUserID, JSON.stringify({ groupID, edgeID })],
       );
       return { removed: true, edgeID };
+    });
+  }
+
+  async deleteAccessGroup(input) {
+    const { actorUserID, actorDeviceID, teamID, vaultID, groupID,
+      expectedVersion, idempotencyKey } = input;
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw new Error("invalid_access_version");
+    }
+    const request = { actorUserID, actorDeviceID, teamID, vaultID, groupID,
+      expectedVersion };
+    return this.withMutation({ actorUserID, idempotencyKey,
+      operation: "access.group.delete", request }, async (client) => {
+      await readAccessActor(client, input);
+      const context = await client.query(
+        `SELECT 1 FROM shared_vaults WHERE id = $1 AND team_id = $2
+           AND archived_at IS NULL AND format_state = 'V2_PREPARING'
+           AND format_schema_version = 2`,
+        [vaultID, teamID],
+      );
+      if (!context.rows[0]) throw new Error("access_v2_preparing_required");
+      const previewGrants = await client.query(
+        `SELECT id, vault_id FROM vault_access_grants
+         WHERE team_id = $1 AND principal_kind = 'GROUP'
+           AND principal_id = $2 AND revoked_at IS NULL
+         ORDER BY vault_id, id LIMIT 1001`,
+        [teamID, groupID],
+      );
+      if (previewGrants.rows.length > 1000) {
+        return { deleted: false, code: "group_grants_must_be_revoked_first",
+          safeCount: "1001+" };
+      }
+      const relatedVaultIDs = [...new Set(previewGrants.rows.map((row) => row.vault_id))];
+      await requirePreparingActor(client, input, relatedVaultIDs);
+      await client.query(
+        `INSERT INTO team_policy_revisions (team_id) VALUES ($1) ON CONFLICT DO NOTHING`,
+        [teamID],
+      );
+      await client.query(
+        `SELECT revision FROM team_policy_revisions WHERE team_id = $1 FOR UPDATE`,
+        [teamID],
+      );
+      const currentGrants = await client.query(
+        `SELECT id, vault_id FROM vault_access_grants
+         WHERE team_id = $1 AND principal_kind = 'GROUP'
+           AND principal_id = $2 AND revoked_at IS NULL
+         ORDER BY vault_id, id LIMIT 1001`,
+        [teamID, groupID],
+      );
+      if (currentGrants.rows.length > 1000) {
+        return { deleted: false, code: "group_grants_must_be_revoked_first",
+          safeCount: "1001+" };
+      }
+      if (currentGrants.rows.some((row) => !relatedVaultIDs.includes(row.vault_id))) {
+        throw new Error("access_policy_conflict");
+      }
+      const group = await client.query(
+        `SELECT id FROM team_access_groups WHERE id = $1 AND team_id = $2
+           AND deleted_at IS NULL AND version = $3 FOR UPDATE`,
+        [groupID, teamID, expectedVersion],
+      );
+      if (!group.rows[0]) throw new Error("access_policy_conflict");
+      await client.query(
+        `UPDATE vault_access_grants SET revoked_at = now(), version = version + 1
+         WHERE team_id = $1 AND principal_kind = 'GROUP'
+           AND principal_id = $2 AND revoked_at IS NULL`,
+        [teamID, groupID],
+      );
+      await client.query(
+        `UPDATE team_access_group_members SET removed_at = now(), version = version + 1
+         WHERE team_id = $1 AND group_id = $2 AND removed_at IS NULL`,
+        [teamID, groupID],
+      );
+      await client.query(
+        `UPDATE team_access_groups SET deleted_at = now(), updated_at = now(),
+           version = version + 1 WHERE id = $1 AND team_id = $2`,
+        [groupID, teamID],
+      );
+      await client.query(
+        `INSERT INTO team_audit_events (team_id, actor_user_id, action, metadata)
+         VALUES ($1, $2, 'group.deleted', $3::jsonb)`,
+        [teamID, actorUserID, JSON.stringify({ groupID,
+          revokedGrants: currentGrants.rows.length })],
+      );
+      return { deleted: true, groupID,
+        revokedGrants: currentGrants.rows.length };
     });
   }
 }

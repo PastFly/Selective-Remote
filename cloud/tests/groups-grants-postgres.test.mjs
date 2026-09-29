@@ -81,11 +81,18 @@ test("PostgreSQL enforces scoped grants, Credential mask, and Team group lifetim
     const grant = (await client.query(insertGrant, [team, vault, group, resource, 6, user])).rows[0].id;
     await rejectsStatement(insertGrant, [team, vault, group, resource, 6, user], /duplicate key/);
     await rejectsStatement("UPDATE team_access_groups SET deleted_at = now(), version = 2 WHERE id = $1", [group], /access_group_active_grants_or_tombstone/);
+    const direct = (await client.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, membership_id,
+       membership_epoch, target_kind, target_id, permission_mask, created_by_user_id)
+      VALUES ($1, $2, 'USER', $3, $4, $5, 'RESOURCE', $6, 1, $3) RETURNING id`,
+    [team, vault, user, member.id, member.epoch, resource])).rows[0].id;
+    await client.query("UPDATE team_memberships SET revoked_at = now(), revoked_by_user_id = $2 WHERE id = $1", [member.id, user]);
+    await client.query("UPDATE vault_access_grants SET revoked_at = now(), version = 2 WHERE id = $1", [direct]);
     await client.query("UPDATE vault_access_grants SET revoked_at = now(), version = 2 WHERE id = $1", [grant]);
     await client.query("UPDATE team_access_group_members SET removed_at = now(), version = 2 WHERE id = $1", [edge]);
     await client.query("UPDATE team_access_groups SET deleted_at = now(), version = 2 WHERE id = $1", [group]);
     assert.equal((await client.query("SELECT team_id FROM team_access_groups WHERE id = $1", [group])).rows[0].team_id, team);
-    assert.equal((await client.query("SELECT access_policy_version FROM shared_vaults WHERE id = $1", [vault])).rows[0].access_policy_version, "2");
+    assert.equal((await client.query("SELECT access_policy_version FROM shared_vaults WHERE id = $1", [vault])).rows[0].access_policy_version, "4");
     await client.query("ROLLBACK");
   } finally {
     await client.query("ROLLBACK").catch(() => {});
@@ -101,6 +108,8 @@ test("group names are validated before SQL", async () => {
   await assert.rejects(access.renameAccessGroup({ name: "\n" }), /invalid_access_group_name/);
   await assert.rejects(access.addAccessGroupMember({ targetMembershipID: "bad" }),
     /invalid_access_membership/);
+  await assert.rejects(access.deleteAccessGroup({ expectedVersion: 0 }),
+    /invalid_access_version/);
 });
 
 test("Team group creation is gated by admitted Owner and exact idempotent request", {
@@ -165,6 +174,38 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       /access_idempotency_conflict/);
     await assert.rejects(access.createAccessGroup({ ...input, vaultID: v1Vault,
       idempotencyKey: `access:v1:${suffix}` }), /access_v2_preparing_required/);
+    const deleted = await access.deleteAccessGroup({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
+      expectedVersion: 2, idempotencyKey: `access:delete:${suffix}` });
+    assert.equal(deleted.deleted, true);
+    assert.equal((await access.listAccessGroups({ actorUserID: user,
+      actorDeviceID: device, teamID: team })).rows.some((row) => row.id === created.group.id), false);
+    const fanoutGroup = (await access.createAccessGroup({ ...input, name: "Large group",
+      idempotencyKey: `access:large:${suffix}` })).group.id;
+    await pool.query(`WITH new_resources AS (
+      INSERT INTO vault_resource_registry (id, team_id, vault_id, policy_class, policy_kind)
+      SELECT gen_random_uuid(), $1, $2, 'general', 'HOST'
+      FROM generate_series(1, 1001) RETURNING id
+    ) INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, target_kind, target_id,
+       permission_mask, created_by_user_id)
+      SELECT $1, $2, 'GROUP', $3, 'RESOURCE', id, 1, $4 FROM new_resources`,
+    [team, vault, fanoutGroup, user]);
+    const overflow = await access.deleteAccessGroup({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, groupID: fanoutGroup,
+      expectedVersion: 1, idempotencyKey: `access:large-overflow:${suffix}` });
+    assert.deepEqual(overflow, { deleted: false,
+      code: "group_grants_must_be_revoked_first", safeCount: "1001+" });
+    assert.equal((await pool.query("SELECT deleted_at FROM team_access_groups WHERE id = $1",
+      [fanoutGroup])).rows[0].deleted_at, null);
+    await pool.query(`UPDATE vault_access_grants SET revoked_at = now(), version = version + 1
+      WHERE id = (SELECT id FROM vault_access_grants WHERE principal_id = $1
+        AND revoked_at IS NULL ORDER BY id LIMIT 1)`, [fanoutGroup]);
+    const bounded = await access.deleteAccessGroup({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, groupID: fanoutGroup,
+      expectedVersion: 1, idempotencyKey: `access:large-delete:${suffix}` });
+    assert.equal(bounded.deleted, true);
+    assert.equal(bounded.revokedGrants, 1000);
   } finally {
     await pool.end();
   }

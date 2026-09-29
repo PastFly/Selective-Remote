@@ -179,7 +179,7 @@ CREATE TRIGGER z_access_group_member_policy_revision
     FOR EACH ROW EXECUTE FUNCTION advance_team_access_policy();
 
 CREATE FUNCTION guard_vault_access_grant() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE target_policy_kind text; allowed_mask integer;
+DECLARE target_policy_kind text; allowed_mask integer; current_format text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         IF EXISTS (SELECT 1 FROM shared_vaults
@@ -188,10 +188,14 @@ BEGIN
         END IF;
         RETURN OLD; -- Vault teardown removes only its Vault-scoped grants.
     END IF;
-    PERFORM 1 FROM shared_vaults WHERE id = NEW.vault_id AND team_id = NEW.team_id
-        AND archived_at IS NULL AND format_state = 'V2_PREPARING'
-        AND format_schema_version = 2 FOR UPDATE;
+    SELECT format_state INTO current_format FROM shared_vaults
+        WHERE id = NEW.vault_id AND team_id = NEW.team_id
+          AND archived_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION 'access_v2_preparing_required'; END IF;
+    IF (TG_OP = 'INSERT' OR NEW.revoked_at IS NULL)
+       AND current_format <> 'V2_PREPARING' THEN
+        RAISE EXCEPTION 'access_v2_preparing_required';
+    END IF;
     INSERT INTO team_policy_revisions (team_id) VALUES (NEW.team_id) ON CONFLICT DO NOTHING;
     PERFORM 1 FROM team_policy_revisions WHERE team_id = NEW.team_id FOR UPDATE;
     IF TG_OP = 'UPDATE' THEN
@@ -204,6 +208,14 @@ BEGIN
             OLD.created_at, OLD.created_by_user_id)
            OR NEW.version <> OLD.version + 1 OR OLD.revoked_at IS NOT NULL THEN
             RAISE EXCEPTION 'access_grant_identity_or_version_invalid';
+        END IF;
+        IF NEW.revoked_at IS NOT NULL THEN
+            IF NEW.permission_mask <> OLD.permission_mask THEN
+                RAISE EXCEPTION 'access_grant_revoke_mask_changed';
+            END IF;
+            -- Revocation must remain possible after the principal's epoch expires
+            -- or its target is tombstoned. It grants no new rights.
+            RETURN NEW;
         END IF;
     END IF;
     IF NEW.principal_kind = 'USER' THEN
