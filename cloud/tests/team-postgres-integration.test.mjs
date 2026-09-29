@@ -361,6 +361,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        (membership_id, membership_epoch, device_id) VALUES ($1, $2, $3)`,
       [created.membership.id, created.membership.epoch, lateDeviceID],
     ), /resource_v2_admission_requires_rotation/u);
+    await pool.query("DELETE FROM devices WHERE id = $1", [lateDeviceID]);
     // A pointer must never expose an incomplete direct-SQL PREPARED version.
     await pool.query(
       `INSERT INTO vault_resource_ciphertext_versions
@@ -473,12 +474,15 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     /resource_id_exists/u);
     await assert.rejects(store.tombstoneResourceIdentity({ ...resourceActor,
       resourceID: folderResourceID, expectedVersion: 1 }), /active_resource_children/u);
+    await assert.rejects(store.moveResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, parentFolderID: null, expectedVersion: 1 }),
+    /resource_v2_published_identity_in_use/u);
     const moved = await store.moveResourceIdentity({ ...resourceActor,
-      resourceID: childResourceID, parentFolderID: null, expectedVersion: 1 });
-    assert.equal(moved.id, childResourceID);
+      resourceID: duplicateID, parentFolderID: null, expectedVersion: 1 });
+    assert.equal(moved.id, duplicateID);
     assert.equal(moved.parent_folder_id, null);
     await assert.rejects(store.tombstoneResourceIdentity({ ...resourceActor,
-      resourceID: childResourceID, expectedVersion: 2 }),
+      resourceID: childResourceID, expectedVersion: 1 }),
     /resource_v2_published_identity_in_use/u);
     const tombstoneID = "bbd94518-288d-4968-9e17-ab01ca044770";
     await store.registerResourceIdentity({ ...resourceActor,

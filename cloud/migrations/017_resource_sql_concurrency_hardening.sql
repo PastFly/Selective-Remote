@@ -40,7 +40,9 @@ BEGIN
         RAISE EXCEPTION 'resource_v2_preparing_required';
     END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF OLD.deleted_at IS NULL AND NEW.deleted_at IS NOT NULL
+        IF OLD.deleted_at IS NULL
+           AND (NEW.deleted_at IS NOT NULL
+                OR NEW.parent_folder_id IS DISTINCT FROM OLD.parent_folder_id)
            AND EXISTS (SELECT 1 FROM vault_resource_manifest_pointers_v2
                         WHERE team_id = OLD.team_id AND vault_id = OLD.vault_id
                           AND resource_id = OLD.id) THEN
@@ -209,6 +211,10 @@ BEGIN
     ELSIF TG_TABLE_NAME = 'vault_resource_manifest_pointers_v2' THEN
         IF NOT EXISTS (
             SELECT 1 FROM vault_resource_ciphertext_versions AS ciphertext_version
+            JOIN vault_resource_registry AS current_resource
+              ON current_resource.team_id = ciphertext_version.team_id
+             AND current_resource.vault_id = ciphertext_version.vault_id
+             AND current_resource.id = ciphertext_version.resource_id
             JOIN vault_resource_key_wrappers_v2 AS wrapper
               ON wrapper.team_id = ciphertext_version.team_id
              AND wrapper.vault_id = ciphertext_version.vault_id
@@ -223,6 +229,7 @@ BEGIN
               AND ciphertext_version.key_version = NEW.key_version
               AND ciphertext_version.manifest_version = NEW.manifest_version
               AND ciphertext_version.lifecycle = 'PUBLISHED'
+              AND ciphertext_version.registry_version = current_resource.resource_version
         ) THEN
             RAISE EXCEPTION 'resource_v2_published_ciphertext_required';
         END IF;
