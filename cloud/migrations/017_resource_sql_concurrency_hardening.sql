@@ -64,14 +64,15 @@ BEGIN
     PERFORM 1 FROM shared_vaults
      WHERE id = scope_row.vault_id AND team_id = scope_row.team_id FOR UPDATE;
     IF TG_OP = 'DELETE' THEN
-        IF FOUND AND TG_TABLE_NAME = 'vault_resource_key_wrappers_v2'
-           AND OLD.obsolete_at IS NULL AND EXISTS (
-             SELECT 1 FROM vault_resource_manifest_pointers_v2 AS pointer
-              WHERE pointer.team_id = OLD.team_id AND pointer.vault_id = OLD.vault_id
-                AND pointer.resource_id = OLD.resource_id AND pointer.part = OLD.part
-                AND pointer.key_version = OLD.key_version
-           ) THEN
-            RAISE EXCEPTION 'resource_v2_published_wrapper_delete_forbidden';
+        IF FOUND AND TG_TABLE_NAME = 'vault_resource_key_wrappers_v2' THEN
+            IF OLD.obsolete_at IS NULL AND EXISTS (
+                SELECT 1 FROM vault_resource_manifest_pointers_v2 AS pointer
+                 WHERE pointer.team_id = OLD.team_id AND pointer.vault_id = OLD.vault_id
+                   AND pointer.resource_id = OLD.resource_id AND pointer.part = OLD.part
+                   AND pointer.key_version = OLD.key_version
+            ) THEN
+                RAISE EXCEPTION 'resource_v2_published_wrapper_delete_forbidden';
+            END IF;
         END IF;
         IF FOUND AND TG_TABLE_NAME <> 'vault_resource_key_wrappers_v2' THEN
             -- A Vault returned to legacy V1 can discard its dormant pointer.

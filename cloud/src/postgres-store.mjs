@@ -29,6 +29,11 @@ function requireResourceIdentityInput({ resourceID, policyClass, parentFolderID 
 }
 
 async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID }) {
+  await client.query(
+    `SELECT id FROM shared_vaults
+     WHERE team_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+    [teamID, vaultID],
+  );
   const result = await client.query(
     `SELECT membership.role AS registry_actor_role
      FROM team_memberships AS membership
@@ -45,7 +50,7 @@ async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, te
        AND membership.revoked_at IS NULL
        AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)
        AND vault.format_state = 'V2_PREPARING' AND vault.format_schema_version = 2
-     FOR UPDATE OF vault, membership`,
+     FOR UPDATE OF membership`,
     [teamID, vaultID, actorUserID, actorDeviceID],
   );
   const role = result.rows[0]?.registry_actor_role;
@@ -434,6 +439,12 @@ export class PostgresStore {
         await client.query("COMMIT");
         return receipt.replay;
       }
+      const resource = await client.query(
+        `SELECT id FROM vault_resource_registry
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3 AND deleted_at IS NULL
+         FOR UPDATE`, [teamID, vaultID, resourceID],
+      );
+      if (!resource.rows[0]) throw new Error("resource_not_found");
       const pointer = await client.query(
         `SELECT manifest_version, key_version FROM vault_resource_manifest_pointers_v2
          WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
