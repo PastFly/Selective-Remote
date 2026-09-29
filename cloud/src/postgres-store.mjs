@@ -1,4 +1,5 @@
 import pg from "pg";
+import { createHash } from "node:crypto";
 import {
   requireInvitationPermission,
   requireMembershipChange,
@@ -49,6 +50,44 @@ async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, te
   requireTeamPermission(role, "manage_vault_keys");
 }
 
+async function claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+  operation, payload }) {
+  if (idempotencyKey === undefined) return null;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1
+    || idempotencyKey.length > 200) throw new Error("invalid_resource_idempotency_key");
+  const digest = createHash("sha256").update(JSON.stringify({ operation, payload })).digest("hex");
+  const values = [teamID, vaultID, idempotencyKey, operation, digest];
+  const inserted = await client.query(
+    `INSERT INTO vault_resource_mutation_receipts_v2
+       (team_id, vault_id, idempotency_key, operation, request_sha256, result)
+     VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
+     ON CONFLICT DO NOTHING RETURNING idempotency_key`, values,
+  );
+  if (inserted.rows[0]) return { idempotencyKey, pending: true };
+  const previous = await client.query(
+    `SELECT operation, request_sha256, result
+     FROM vault_resource_mutation_receipts_v2
+     WHERE team_id = $1 AND vault_id = $2 AND idempotency_key = $3 FOR UPDATE`,
+    values.slice(0, 3),
+  );
+  const row = previous.rows[0];
+  if (!row || row.operation !== operation || row.request_sha256 !== digest) {
+    throw new Error("resource_idempotency_conflict");
+  }
+  return { idempotencyKey, replay: row.result };
+}
+
+async function finishResourceMutation(client, receipt, { teamID, vaultID }, result) {
+  if (!receipt?.pending) return result;
+  const stable = JSON.parse(JSON.stringify(result));
+  await client.query(
+    `UPDATE vault_resource_mutation_receipts_v2 SET result = $4::jsonb
+     WHERE team_id = $1 AND vault_id = $2 AND idempotency_key = $3`,
+    [teamID, vaultID, receipt.idempotencyKey, JSON.stringify(stable)],
+  );
+  return stable;
+}
+
 export class PostgresStore {
   constructor(databaseURL, pool = null) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
@@ -89,12 +128,19 @@ export class PostgresStore {
 
   // Internal v2-preparation primitive. No route activates this path for v1 Vaults.
   async registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, policyClass, parentFolderID = null }) {
+    resourceID, policyClass, parentFolderID = null, idempotencyKey }) {
     requireResourceIdentityInput({ resourceID, policyClass, parentFolderID });
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "create_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, policyClass, parentFolderID } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `INSERT INTO vault_resource_registry
            (id, team_id, vault_id, policy_class, parent_folder_id)
@@ -103,8 +149,9 @@ export class PostgresStore {
            schema_version, resource_version, created_at, deleted_at`,
         [resourceID, teamID, vaultID, policyClass, parentFolderID],
       );
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
       if (error?.code === "23505") throw new Error("resource_id_exists");
@@ -134,7 +181,7 @@ export class PostgresStore {
   }
 
   async moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID,
-    parentFolderID, expectedVersion }) {
+    parentFolderID, expectedVersion, idempotencyKey }) {
     if (parentFolderID !== null && !scopedUUID.test(parentFolderID)) {
       throw new Error("invalid_resource_parent");
     }
@@ -145,6 +192,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "move_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, parentFolderID, expectedVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `UPDATE vault_resource_registry
          SET parent_folder_id = $4, resource_version = resource_version + 1
@@ -155,8 +209,9 @@ export class PostgresStore {
         [teamID, vaultID, resourceID, parentFolderID, expectedVersion],
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -164,7 +219,7 @@ export class PostgresStore {
   }
 
   async tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedVersion }) {
+    resourceID, expectedVersion, idempotencyKey }) {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw new Error("invalid_resource_version");
     }
@@ -172,6 +227,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "tombstone_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, expectedVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `UPDATE vault_resource_registry
          SET deleted_at = now(), resource_version = resource_version + 1
@@ -182,8 +244,9 @@ export class PostgresStore {
         [teamID, vaultID, resourceID, expectedVersion],
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -192,7 +255,7 @@ export class PostgresStore {
 
   // Dormant internal primitive: no HTTP route calls this method. Publication is one transaction.
   async publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedManifestVersion, ciphertext, wrappers }) {
+    resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey }) {
     const scope = validateResourceCipherEnvelope(ciphertext);
     if (!scopedUUID.test(teamID) || !scopedUUID.test(vaultID) || !scopedUUID.test(resourceID)
       || scope.teamID !== teamID || scope.vaultID !== vaultID || scope.resourceID !== resourceID
@@ -215,6 +278,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "publish_crypto", payload: { actorUserID, actorDeviceID,
+          resourceID, expectedManifestVersion, ciphertext, wrappers } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const resource = await client.query(
         `SELECT resource.resource_version AS crypto_resource_version
          FROM vault_resource_registry AS resource
@@ -309,8 +379,9 @@ export class PostgresStore {
           [teamID, vaultID, resourceID, scope.part, currentKey],
         );
       }
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, pointer.rows[0]);
       await client.query("COMMIT");
-      return pointer.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;

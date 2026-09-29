@@ -178,8 +178,15 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const resourceActor = { actorUserID: byEmail["owner@example.com"],
       actorDeviceID: ownerDeviceID, teamID: created.team.id, vaultID: shared.vault.id };
     const folderIdentity = await store.registerResourceIdentity({ ...resourceActor,
-      resourceID: folderResourceID, policyClass: "folder", parentFolderID: null });
+      resourceID: folderResourceID, policyClass: "folder", parentFolderID: null,
+      idempotencyKey: "integration:resource-folder-create" });
     assert.equal(folderIdentity.id, folderResourceID);
+    assert.equal((await store.registerResourceIdentity({ ...resourceActor,
+      resourceID: folderResourceID, policyClass: "folder", parentFolderID: null,
+      idempotencyKey: "integration:resource-folder-create" })).id, folderResourceID);
+    await assert.rejects(store.registerResourceIdentity({ ...resourceActor,
+      resourceID: folderResourceID, policyClass: "general", parentFolderID: null,
+      idempotencyKey: "integration:resource-folder-create" }), /resource_idempotency_conflict/u);
     const childIdentity = await store.registerResourceIdentity({ ...resourceActor,
       resourceID: childResourceID, policyClass: "general", parentFolderID: folderResourceID });
     assert.equal(childIdentity.parent_folder_id, folderResourceID);
@@ -247,7 +254,8 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       recipientPublicKey: identity.publicKey, cryptoValue: webcrypto });
     const publish = { ...resourceActor, resourceID: childResourceID,
       expectedManifestVersion: 0, ciphertext: firstCiphertext,
-      wrappers: [firstWrapper, secondDeviceWrapper] };
+      wrappers: [firstWrapper, secondDeviceWrapper],
+      idempotencyKey: "integration:resource-publish-1" };
     await assert.rejects(store.publishResourceCryptoVersion({ ...publish, wrappers: [{
       ...firstWrapper, context: { ...firstWrapper.context,
         membershipID: "7f49f2e1-03bc-4218-9c34-d7629b686160" },
@@ -256,6 +264,10 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       `SELECT count(*)::integer AS count FROM vault_resource_ciphertext_versions
        WHERE resource_id = $1`, [childResourceID])).rows[0].count, 0);
     assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
+    assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
+    await assert.rejects(store.publishResourceCryptoVersion({ ...publish,
+      ciphertext: { ...firstCiphertext, authTag: "A".repeat(22) } }),
+    /resource_idempotency_conflict/u);
     const lateDeviceID = "d22532d3-fbb4-4a99-ad03-151586b88412";
     await pool.query(
       `INSERT INTO devices
@@ -366,7 +378,8 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     ), /resource_v2_last_published_wrapper|resource_v2_published_wrapper_coverage/u);
     assert.equal((await pool.query(
       `SELECT count(*)::integer AS count FROM vault_resource_key_wrappers_v2
-       WHERE resource_id = $1 AND key_version = 1 AND obsolete_at IS NULL`,
+       WHERE resource_id = $1 AND part = 'GENERAL' AND key_version = 1
+         AND obsolete_at IS NULL`,
       [childResourceID],
     )).rows[0].count, 0);
     await assert.rejects(store.getResourceIdentity({ ...resourceActor,

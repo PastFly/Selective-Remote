@@ -3,6 +3,19 @@
 -- A direct SQL UPDATE may acquire its target row before the Vault and deadlock with a
 -- store transaction. PostgreSQL aborts one transaction; callers must retry the entire
 -- operation with fresh version preconditions. No production mutation route exists.
+CREATE TABLE vault_resource_mutation_receipts_v2 (
+    team_id uuid NOT NULL,
+    vault_id uuid NOT NULL,
+    idempotency_key text NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 200),
+    operation text NOT NULL CHECK (operation IN
+        ('create_identity', 'move_identity', 'tombstone_identity', 'publish_crypto')),
+    request_sha256 text NOT NULL CHECK (request_sha256 ~ '^[0-9a-f]{64}$'),
+    result jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (team_id, vault_id, idempotency_key),
+    FOREIGN KEY (vault_id, team_id) REFERENCES shared_vaults(id, team_id) ON DELETE CASCADE
+);
+
 CREATE FUNCTION serialize_resource_registry_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE scope_row record;
 BEGIN
