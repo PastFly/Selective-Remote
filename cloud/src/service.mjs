@@ -326,6 +326,91 @@ export class CloudService {
     }) };
   }
 
+  async previewAccessChange(session, teamID, vaultID, input) {
+    return this.store.access.previewAccessChange({
+      actorUserID: session.user_id, actorDeviceID: session.device_id,
+      teamID, vaultID, request: input?.request, cursor: input?.cursor,
+      sessionSecret: this.config.sessionPepper,
+    });
+  }
+
+  async commitAccessChange(session, teamID, vaultID, input, idempotencyKey) {
+    return this.store.access.commitAccessChange({
+      actorUserID: session.user_id, actorDeviceID: session.device_id,
+      teamID, vaultID, request: input?.request, token: input?.token,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+      sessionSecret: this.config.sessionPepper,
+    });
+  }
+
+  async listAccessGroups(session, teamID, { limit = 50, cursor = null } = {}) {
+    return this.store.access.listAccessGroups({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, limit: Number(limit), cursor });
+  }
+
+  async createAccessGroup(session, teamID, input, idempotencyKey) {
+    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
+    return this.store.access.createAccessGroup({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID: input.vaultID,
+      name: input?.name, idempotencyKey: validateIdempotencyKey(idempotencyKey) });
+  }
+
+  async renameAccessGroup(session, teamID, groupID, input, idempotencyKey) {
+    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
+    return this.store.access.renameAccessGroup({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID: input.vaultID,
+      groupID, expectedVersion: input?.expectedVersion, name: input?.name,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey) });
+  }
+
+  async deleteAccessGroup(session, teamID, groupID, input, idempotencyKey) {
+    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
+    const result = await this.store.access.deleteAccessGroup({
+      actorUserID: session.user_id, actorDeviceID: session.device_id,
+      teamID, vaultID: input.vaultID, groupID,
+      expectedVersion: input?.expectedVersion,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+    if (result.code === "group_grants_must_be_revoked_first") {
+      const error = new Error(result.code);
+      error.safeCount = result.safeCount;
+      throw error;
+    }
+    return result;
+  }
+
+  async addAccessGroupMember(session, teamID, groupID, input, idempotencyKey) {
+    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
+    return this.store.access.addAccessGroupMember({
+      actorUserID: session.user_id, actorDeviceID: session.device_id,
+      teamID, vaultID: input.vaultID, groupID,
+      targetMembershipID: input?.targetMembershipID,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async removeAccessGroupMember(session, teamID, groupID, edgeID, input, idempotencyKey) {
+    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
+    return this.store.access.removeAccessGroupMember({
+      actorUserID: session.user_id, actorDeviceID: session.device_id,
+      teamID, vaultID: input.vaultID, groupID, edgeID,
+      expectedVersion: input?.expectedVersion,
+      idempotencyKey: validateIdempotencyKey(idempotencyKey),
+    });
+  }
+
+  async listAccessGrants(session, teamID, vaultID, { limit = 50, cursor = null } = {}) {
+    return this.store.access.listAccessGrants({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID,
+      limit: Number(limit), cursor });
+  }
+
+  async getEffectiveAccess(session, teamID, vaultID, resourceID, subjectUserID) {
+    if (!isUUID(subjectUserID)) throw new Error("invalid_access_request");
+    return this.store.access.getEffectiveAccess({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID, resourceID, subjectUserID });
+  }
+
   async renameTeam(session, teamID, input, idempotencyKey) {
     const result = await this.store.renameTeam({
       actorUserID: session.user_id,

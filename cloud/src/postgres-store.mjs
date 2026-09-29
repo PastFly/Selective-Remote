@@ -1,4 +1,5 @@
 import pg from "pg";
+import { AccessStore } from "./access-store.mjs";
 import { createHash } from "node:crypto";
 import {
   requireInvitationPermission,
@@ -99,6 +100,7 @@ async function finishResourceMutation(client, receipt, { teamID, vaultID }, resu
 export class PostgresStore {
   constructor(databaseURL, pool = null) {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
+    this.access = new AccessStore(this.pool);
   }
 
   async close() { await this.pool.end(); }

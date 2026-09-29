@@ -107,6 +107,7 @@ export class AccessStore {
         if (replay.rows[0]?.request_sha256 !== hash) {
           throw new Error("access_idempotency_conflict");
         }
+        await requirePreparingActor(client, request);
         await client.query("COMMIT");
         return replay.rows[0].response;
       }
@@ -183,6 +184,42 @@ export class AccessStore {
     );
     const rows = page.rows.slice(0, limit);
     return { rows, nextCursor: page.rows.length > limit ? rows.at(-1).id : null };
+  }
+
+  async listAccessGrants({ actorUserID, actorDeviceID, teamID, vaultID,
+    limit = 50, cursor = null }) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50
+      || (cursor !== null && !uuidPattern.test(cursor))) {
+      throw new Error("invalid_access_page");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await readAccessActor(client, { actorUserID, actorDeviceID, teamID });
+      const vault = await client.query(
+        `SELECT 1 FROM shared_vaults WHERE id = $1 AND team_id = $2
+           AND archived_at IS NULL AND format_state = 'V2_PREPARING'
+           AND format_schema_version = 2`,
+        [vaultID, teamID],
+      );
+      if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+      const page = await client.query(
+        `SELECT id, principal_kind, principal_id, target_kind, target_id,
+           permission_mask, version, created_at, updated_at
+         FROM vault_access_grants WHERE team_id = $1 AND vault_id = $2
+           AND revoked_at IS NULL AND ($3::uuid IS NULL OR id > $3::uuid)
+         ORDER BY id LIMIT $4`,
+        [teamID, vaultID, cursor, limit + 1],
+      );
+      const rows = page.rows.slice(0, limit);
+      await client.query("COMMIT");
+      return { rows, nextCursor: page.rows.length > limit ? rows.at(-1).id : null };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async renameAccessGroup(input) {
@@ -530,14 +567,20 @@ export class AccessStore {
 
   async previewAccessChange(input) {
     validateAccessChangeRequest(input?.request);
+    const rawCursor = input?.cursor ?? "0";
+    if (!/^\d{1,4}$/u.test(String(rawCursor))
+      || Number(rawCursor) > 1000) throw new Error("invalid_access_page");
+    const offset = Number(rawCursor);
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
       const preview = await this.buildAccessPreview(client, input);
       const token = createPreviewToken(preview.binding, input.sessionSecret);
       await client.query("COMMIT");
-      return { token, details: preview.details, counts: preview.counts,
-        nextCursor: preview.nextCursor };
+      return { token, details: preview.details.slice(offset, offset + 50),
+        counts: preview.counts,
+        nextCursor: offset + 50 < preview.details.length
+          ? String(offset + 50) : null };
     } catch (error) {
       await client.query("ROLLBACK").catch(() => {});
       throw error;
@@ -756,8 +799,7 @@ export class AccessStore {
         .sort((left, right) => left.userID.localeCompare(right.userID))) };
     return { binding, resolved, details,
       subjectBindings: [...allSubjects.values()],
-      counts: { pairs: pairs.size, widened, lost },
-      nextCursor: details.length > 50 ? "50" : null };
+      counts: { pairs: pairs.size, widened, lost } };
   }
 
   async commitAccessChange(input) {

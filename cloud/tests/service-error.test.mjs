@@ -37,3 +37,14 @@ test("a known browser device collision is a bounded retryable conflict", () => {
     code: "device_conflict",
   });
 });
+
+test("access policy failures expose typed bounded responses", () => {
+  for (const [code, status] of [
+    ["invalid_access_request", 400], ["credential_edit_requires_reveal", 400],
+    ["access_preview_conflict", 409], ["access_policy_conflict", 409],
+    ["group_grants_must_be_revoked_first", 409], ["access_batch_too_large", 413],
+    ["access_v2_preparing_required", 409],
+  ]) {
+    assert.deepEqual(publicOperationError(new Error(code)), { status, code });
+  }
+});

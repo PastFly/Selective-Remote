@@ -112,6 +112,7 @@ test("group names are validated before SQL", async () => {
     /invalid_access_version/);
   await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
+  await assert.rejects(access.listAccessGrants({ limit: 51 }), /invalid_access_page/);
   await assert.rejects(access.previewAccessChange({ request: { changes: [] } }),
     /invalid_access_request/);
   await assert.rejects(access.commitAccessChange({ token: "unsigned",
@@ -222,6 +223,9 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const applied = await access.commitAccessChange({ ...previewInput,
       token: preview.token, idempotencyKey: `access:commit:${suffix}` });
     assert.equal(applied.applied, 1);
+    const listed = await access.listAccessGrants({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, limit: 50 });
+    assert.equal(listed.rows.some((grant) => grant.id === applied.grants[0].grantID), true);
     assert.equal((await access.getEffectiveAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: snippet,
       subjectUserID: viewer })).policyMask, 1);
