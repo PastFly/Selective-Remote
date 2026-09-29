@@ -16,6 +16,12 @@ CREATE TABLE vault_resource_mutation_receipts_v2 (
     FOREIGN KEY (vault_id, team_id) REFERENCES shared_vaults(id, team_id) ON DELETE CASCADE
 );
 
+CREATE INDEX vault_resource_wrappers_v2_active_version
+    ON vault_resource_key_wrappers_v2
+       (team_id, vault_id, resource_id, part, key_version,
+        membership_id, membership_epoch, device_id)
+    WHERE obsolete_at IS NULL;
+
 CREATE FUNCTION serialize_resource_registry_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE scope_row record;
 BEGIN

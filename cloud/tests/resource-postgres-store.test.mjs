@@ -95,3 +95,33 @@ test("stale manifest and v1 custodian cannot publish", async () => {
   const v1 = fake(() => ({ rows: [] }));
   await assert.rejects(v1.store.publishResourceCryptoVersion(await input()), /team_not_found/u);
 });
+
+test("deadlock retries are bounded and repeat the whole publish with fresh CAS", async () => {
+  let resourceReads = 0;
+  const f = fake((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("AS crypto_resource_version")) {
+      resourceReads += 1;
+      if (resourceReads === 1) throw Object.assign(new Error("deadlock"), { code: "40P01" });
+      return { rows: [{ crypto_resource_version: 1 }] };
+    }
+    if (sql.includes("AS current_manifest_version")) return { rows: [] };
+    if (sql.includes("RETURNING manifest_version")) return { rows: [{ manifest_version: 1 }] };
+    return { rows: [] };
+  });
+  assert.equal((await f.store.publishResourceCryptoVersion(await input())).manifest_version, 1);
+  assert.equal(resourceReads, 2);
+  assert.equal(f.queries.filter(({ sql }) => sql === "ROLLBACK").length, 1);
+  assert.equal(f.queries.filter(({ sql }) => sql === "COMMIT").length, 1);
+
+  const exhausted = fake((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("AS crypto_resource_version")) {
+      throw Object.assign(new Error("deadlock"), { code: "40P01" });
+    }
+    return { rows: [] };
+  });
+  await assert.rejects(exhausted.store.publishResourceCryptoVersion(await input()),
+    (error) => error.code === "40P01");
+  assert.equal(exhausted.queries.filter(({ sql }) => sql === "ROLLBACK").length, 3);
+});

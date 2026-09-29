@@ -187,6 +187,33 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     await assert.rejects(store.registerResourceIdentity({ ...resourceActor,
       resourceID: folderResourceID, policyClass: "general", parentFolderID: null,
       idempotencyKey: "integration:resource-folder-create" }), /resource_idempotency_conflict/u);
+    const otherTeam = await pool.query(
+      "INSERT INTO teams (name, created_by_user_id) VALUES ('Scope fixture', $1) RETURNING id",
+      [byEmail["other@example.com"]],
+    );
+    const otherVault = await pool.query(
+      `INSERT INTO shared_vaults
+       (team_id, name, created_by_user_id, format_state, format_schema_version)
+       VALUES ($1, 'Scope fixture', $2, 'V2_PREPARING', 2) RETURNING id`,
+      [otherTeam.rows[0].id, byEmail["other@example.com"]],
+    );
+    const siblingVault = await pool.query(
+      `INSERT INTO shared_vaults
+       (team_id, name, created_by_user_id, format_state, format_schema_version)
+       VALUES ($1, 'Sibling scope fixture', $2, 'V2_PREPARING', 2) RETURNING id`,
+      [created.team.id, byEmail["owner@example.com"]],
+    );
+    for (const [team, vault] of [[created.team.id, siblingVault.rows[0].id],
+      [otherTeam.rows[0].id, otherVault.rows[0].id]]) {
+      await assert.rejects(pool.query(
+        `INSERT INTO vault_resource_registry
+         (id, team_id, vault_id, policy_class) VALUES ($1, $2, $3, 'folder')`,
+        [folderResourceID, team, vault],
+      ), /duplicate key value/u);
+    }
+    await pool.query("DELETE FROM shared_vaults WHERE id IN ($1, $2)",
+      [siblingVault.rows[0].id, otherVault.rows[0].id]);
+    await pool.query("DELETE FROM teams WHERE id = $1", [otherTeam.rows[0].id]);
     const childIdentity = await store.registerResourceIdentity({ ...resourceActor,
       resourceID: childResourceID, policyClass: "general", parentFolderID: folderResourceID });
     assert.equal(childIdentity.parent_folder_id, folderResourceID);
@@ -216,6 +243,59 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       await Promise.allSettled([folderClientA.query("ROLLBACK"), folderClientB.query("ROLLBACK")]);
       folderClientA.release();
       folderClientB.release();
+    }
+    const duplicateID = "945a8776-80f1-4473-8848-57b48c638309";
+    const createA = await pool.connect();
+    const createB = await pool.connect();
+    try {
+      await Promise.all([createA.query("BEGIN"), createB.query("BEGIN")]);
+      const creates = [createA, createB].map((client, index) => client.query(
+        `INSERT INTO vault_resource_registry (id, team_id, vault_id, policy_class)
+         VALUES ($1, $2, $3, 'general')`,
+        [duplicateID, created.team.id, shared.vault.id],
+      ).then(() => ({ index, ok: true }), (error) => ({ index, ok: false, error })));
+      const firstCreate = await Promise.race(creates);
+      await [createA, createB][firstCreate.index].query(firstCreate.ok ? "COMMIT" : "ROLLBACK");
+      const secondCreate = await creates[1 - firstCreate.index];
+      await [createA, createB][secondCreate.index].query(secondCreate.ok ? "COMMIT" : "ROLLBACK");
+      assert.equal([firstCreate, secondCreate].filter((item) => item.ok).length, 1);
+      assert.match(String([firstCreate, secondCreate].find((item) => !item.ok)?.error),
+        /duplicate key value/u);
+    } finally {
+      await Promise.allSettled([createA.query("ROLLBACK"), createB.query("ROLLBACK")]);
+      createA.release();
+      createB.release();
+    }
+    const racingParentID = "fd288283-e163-4516-9b5e-c1ec11045c20";
+    const racingChildID = "4245641f-bdea-4c66-a7a9-8fa60594702c";
+    await store.registerResourceIdentity({ ...resourceActor, resourceID: racingParentID,
+      policyClass: "folder", parentFolderID: null });
+    const parentClient = await pool.connect();
+    const childClient = await pool.connect();
+    try {
+      await Promise.all([parentClient.query("BEGIN"), childClient.query("BEGIN")]);
+      const operations = [
+        parentClient.query(
+          `UPDATE vault_resource_registry SET deleted_at = now(), resource_version = 2
+           WHERE id = $1`, [racingParentID]),
+        childClient.query(
+          `INSERT INTO vault_resource_registry
+           (id, team_id, vault_id, policy_class, parent_folder_id)
+           VALUES ($1, $2, $3, 'general', $4)`,
+          [racingChildID, created.team.id, shared.vault.id, racingParentID]),
+      ].map((promise, index) => promise.then(() => ({ index, ok: true }),
+        (error) => ({ index, ok: false, error })));
+      const firstOperation = await Promise.race(operations);
+      await [parentClient, childClient][firstOperation.index].query(firstOperation.ok ? "COMMIT" : "ROLLBACK");
+      const secondOperation = await operations[1 - firstOperation.index];
+      await [parentClient, childClient][secondOperation.index].query(secondOperation.ok ? "COMMIT" : "ROLLBACK");
+      assert.equal([firstOperation, secondOperation].filter((item) => item.ok).length, 1);
+      assert.match(String([firstOperation, secondOperation].find((item) => !item.ok)?.error),
+        /active_resource_children|inactive_resource_parent/u);
+    } finally {
+      await Promise.allSettled([parentClient.query("ROLLBACK"), childClient.query("ROLLBACK")]);
+      parentClient.release();
+      childClient.release();
     }
     assert.equal((await store.getResourceIdentity({ ...resourceActor, resourceID: childResourceID })).id,
       childResourceID);
@@ -355,7 +435,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
         membershipEpoch: Number(created.membership.epoch), deviceID: ownerDeviceID },
       recipientPublicKey: identity.publicKey, cryptoValue: webcrypto });
     const nextPublish = { ...publish, expectedManifestVersion: 1,
-      ciphertext: nextCiphertext, wrappers: [nextWrapper] };
+      ciphertext: nextCiphertext, wrappers: [nextWrapper], idempotencyKey: undefined };
     const races = await Promise.allSettled([
       store.publishResourceCryptoVersion(nextPublish),
       store.publishResourceCryptoVersion(nextPublish),

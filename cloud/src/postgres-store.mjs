@@ -16,6 +16,8 @@ const { Pool } = pg;
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const resourceClasses = new Set(["folder", "secret", "general"]);
+const resourceRaceSQLStates = new Set(["40P01", "40001"]);
+const maxResourceRaceRetries = 2;
 
 function requireResourceIdentityInput({ resourceID, policyClass, parentFolderID }) {
   if (!newResourceUUID.test(resourceID)) throw new Error("invalid_resource_id");
@@ -128,7 +130,7 @@ export class PostgresStore {
 
   // Internal v2-preparation primitive. No route activates this path for v1 Vaults.
   async registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, policyClass, parentFolderID = null, idempotencyKey }) {
+    resourceID, policyClass, parentFolderID = null, idempotencyKey, _retryAttempt = 0 }) {
     requireResourceIdentityInput({ resourceID, policyClass, parentFolderID });
     const client = await this.pool.connect();
     try {
@@ -154,6 +156,11 @@ export class PostgresStore {
       return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, policyClass, parentFolderID, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       if (error?.code === "23505") throw new Error("resource_id_exists");
       throw error;
     } finally { client.release(); }
@@ -181,7 +188,7 @@ export class PostgresStore {
   }
 
   async moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID,
-    parentFolderID, expectedVersion, idempotencyKey }) {
+    parentFolderID, expectedVersion, idempotencyKey, _retryAttempt = 0 }) {
     if (parentFolderID !== null && !scopedUUID.test(parentFolderID)) {
       throw new Error("invalid_resource_parent");
     }
@@ -214,12 +221,17 @@ export class PostgresStore {
       return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, parentFolderID, expectedVersion, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
 
   async tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedVersion, idempotencyKey }) {
+    resourceID, expectedVersion, idempotencyKey, _retryAttempt = 0 }) {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw new Error("invalid_resource_version");
     }
@@ -249,13 +261,19 @@ export class PostgresStore {
       return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, expectedVersion, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
 
   // Dormant internal primitive: no HTTP route calls this method. Publication is one transaction.
   async publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey }) {
+    resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
+    _retryAttempt = 0 }) {
     const scope = validateResourceCipherEnvelope(ciphertext);
     if (!scopedUUID.test(teamID) || !scopedUUID.test(vaultID) || !scopedUUID.test(resourceID)
       || scope.teamID !== teamID || scope.vaultID !== vaultID || scope.resourceID !== resourceID
@@ -384,6 +402,11 @@ export class PostgresStore {
       return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
