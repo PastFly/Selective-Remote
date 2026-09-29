@@ -56,12 +56,16 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
       const checkbox = documentValue.createElement("input");
       checkbox.type = "checkbox";
       consent.append(checkbox, ` ${label("Я понимаю последствия потери корня доверия", "I understand the root-loss consequence")}`);
+      const password = field(label("Пароль аккаунта", "Account password"), "current-password");
+      password.type = "password";
       const button = action(current.state === "PUBLISH_PENDING"
         ? label("Повторить публикацию", "Retry publication")
-        : label("Создать корень доверия", "Create trust root"), () => flow.bootstrap());
+        : label("Создать корень доверия", "Create trust root"), async () => {
+          try { await flow.bootstrap(password.value); } finally { password.value = ""; }
+        });
       button.disabled = true;
       checkbox.addEventListener("change", () => { button.disabled = !checkbox.checked; });
-      fragment.append(consent, button);
+      fragment.append(consent, password, button);
     } else if (current.state === "PAIRING_REQUIRED") {
       fragment.append(element("p", label(
         "Попросите существующее доверенное устройство передать отпечаток корня и код контрольной точки напрямую. Данные Cloud без этого сравнения не подтверждают личность устройства.",
@@ -106,6 +110,9 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
         }
       }
       if (!own && identityRepository && ["CERTIFIED", "CUSTODIAN"].includes(current.state)) {
+        fragment.append(element("p", label(
+          "Если действующие Team Vaults ещё зашифрованы для старого ключа, замена будет остановлена, чтобы сохранить доступ к данным. Для такого случая нужна отдельная миграция ключей; архивные Vaults не блокируют замену.",
+          "If active Team Vaults still use the old key, replacement stops to preserve data access. This case needs a separate key migration; archived Vaults do not block replacement.")));
         fragment.append(action(label("Запросить замену ключа", "Request key replacement"), async () => {
           if (!globalThis.confirm(label(
             "Старый ключ будет отозван после нового подтверждения. Потребуется ротация затронутых Team Vaults. Продолжить?",

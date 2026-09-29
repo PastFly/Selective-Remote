@@ -14,6 +14,7 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
     @State private var pairingFingerprint = ""
     @State private var pairingCheckpoint = ""
     @State private var rootLossAcknowledged = false
+    @State private var bootstrapPassword = ""
     @State private var revocationTarget: UUID?
     @State private var isBusy = false
     @State private var errorMessage: String?
@@ -57,12 +58,16 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
                         ))
                         Toggle(text("Я понимаю последствия потери корня", "I understand root loss"),
                             isOn: $rootLossAcknowledged)
+                        SecureField(text("Пароль аккаунта", "Account password"),
+                                    text: $bootstrapPassword)
                         Button(inspection.phase == .firstDevice
                             ? text("Создать корень доверия", "Create trust root")
                             : text("Повторить публикацию", "Retry publication")) {
-                            perform { _ = try await coordinator?.bootstrap() }
+                            let password = bootstrapPassword
+                            bootstrapPassword = ""
+                            perform { _ = try await coordinator?.bootstrap(password: password) }
                         }
-                        .disabled(isBusy || !rootLossAcknowledged)
+                        .disabled(isBusy || !rootLossAcknowledged || bootstrapPassword.isEmpty)
                     case .pairingRequired:
                         Text(text(
                             "Получите отпечаток корня и код контрольной точки с уже доверенного устройства напрямую. Скопированные только из Cloud значения не подтверждают его личность.",
@@ -108,6 +113,12 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
                         }
                         if [SelectiveRemoteCloudDeviceTrustCoordinator.Phase.certified,
                             .custodian].contains(inspection.phase), ownRequest == nil {
+                            Text(text(
+                                "Если действующие Team Vaults используют старый ключ, замена остановится до отдельной миграции ключей. Архивные Vaults не блокируют замену.",
+                                "If active Team Vaults use the old key, replacement stops until a separate key migration. Archived Vaults do not block replacement."
+                            ))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                             Button(text("Запросить замену ключа", "Request key replacement")) {
                                 perform { try await coordinator?.requestRekey() }
                             }

@@ -114,7 +114,8 @@ final class SelectiveRemoteCloudDeviceTrustCoordinator {
             identity: activeIdentity, rekeyCommitted: committed)
     }
 
-    func bootstrap() async throws -> Inspection {
+    func bootstrap(password: String) async throws -> Inspection {
+        guard !password.isEmpty else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
         let current = try await inspect()
         guard current.phase == .firstDevice || current.phase == .publishPending
         else { throw SelectiveRemoteDeviceTrustError.untrustedRoot }
@@ -139,7 +140,7 @@ final class SelectiveRemoteCloudDeviceTrustCoordinator {
             highWater: 1,
             checkpointDigest: try SelectiveRemoteDeviceTrustV1.directoryDigest(bundle.checkpoint))
         _ = try local.savePinIfAbsent(pin, endpoint: endpoint)
-        try await client.deviceTrustPublishRoot(endpoint: endpoint,
+        try await client.deviceTrustPublishRoot(endpoint: endpoint, password: password,
             rootPublicKey: bundle.rootPublicKey, certificate: bundle.certificate,
             checkpoint: bundle.checkpoint)
         let checked = try await inspect()

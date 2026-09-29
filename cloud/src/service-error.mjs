@@ -49,6 +49,7 @@ const operationStatuses = Object.freeze({
   device_trust_pairing_required: 409,
   device_trust_conflict: 409,
   device_trust_signed_revoke_required: 409,
+  device_trust_rekey_vaults_active: 409,
   team_not_found: 404,
   team_access_denied: 403,
   team_member_exists: 409,

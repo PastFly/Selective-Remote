@@ -2,10 +2,36 @@ import assert from "node:assert/strict";
 import { webcrypto } from "node:crypto";
 import test from "node:test";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
+import { createTrustRoot, issueDeviceCertificate, signDeviceDirectory } from "../public/device-trust-v1.js";
 import { DeviceTrustService } from "../src/device-trust-service.mjs";
 
 const accountID = "11111111-1111-4111-8111-111111111111";
 const deviceID = "55555555-5555-4555-8555-555555555555";
+
+test("first root publication requires fresh account password before writing registry", async () => {
+  const identity = await generateTeamDeviceIdentity(webcrypto);
+  const root = await createTrustRoot({ endpoint: "https://cloud.example.test",
+    accountID, cryptoValue: webcrypto });
+  const certificate = await issueDeviceCertificate({ root, accountID, deviceID,
+    publicKey: identity.publicKey, keyVersion: 1, issuedAt: 1_800_000_000,
+    serial: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", cryptoValue: webcrypto });
+  const checkpoint = await signDeviceDirectory({ root, accountID, version: 1,
+    certificates: [certificate], cryptoValue: webcrypto });
+  let writes = 0;
+  const service = new DeviceTrustService({ async publishRoot() { writes += 1;
+    return { published: true }; } }, async (session, password) => {
+    assert.equal(session.user_id, accountID);
+    if (password !== "correct-password") throw new Error("invalid_credentials");
+  });
+  const session = { user_id: accountID, device_id: deviceID };
+  const body = { rootPublicKey: root.publicKey, certificate, checkpoint };
+  await assert.rejects(service.publishRoot(session, { ...body, password: "wrong" }, "root-publish-0001"),
+    /invalid_credentials/u);
+  assert.equal(writes, 0);
+  assert.deepEqual(await service.publishRoot(session,
+    { ...body, password: "correct-password" }, "root-publish-0002"), { published: true });
+  assert.equal(writes, 1);
+});
 
 test("request API binds account and device to session, refusing caller-selected identity", async () => {
   const identity = await generateTeamDeviceIdentity(webcrypto);

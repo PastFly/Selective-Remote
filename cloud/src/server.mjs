@@ -17,7 +17,8 @@ const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const service = new CloudService(store, config, mailer);
-const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool));
+const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
+  (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
@@ -147,8 +148,8 @@ async function route(request, response) {
       if (method === "GET") return handleOperation(response, () => deviceTrust.snapshot(session));
       if (method === "POST") return handleOperation(response, async () => {
         await requireDeviceTrustRateLimits(request, session);
-        return deviceTrust.publishRoot(session, await readJSON(request, maxTeamBodyBytes),
-          idempotencyKey(request));
+        const input = await readJSON(request, maxTeamBodyBytes);
+        return deviceTrust.publishRoot(session, input, idempotencyKey(request));
       }, 201);
     }
     if (url.pathname === "/v1/device-trust/requests") {

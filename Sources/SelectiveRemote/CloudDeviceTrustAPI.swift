@@ -59,17 +59,19 @@ extension SelectiveRemoteCloudAPIClient {
         return response.requests
     }
 
-    func deviceTrustPublishRoot(endpoint: URL, rootPublicKey: String,
+    func deviceTrustPublishRoot(endpoint: URL, password: String, rootPublicKey: String,
         certificate: SelectiveRemoteSignedDeviceCertificate,
         checkpoint: SelectiveRemoteSignedDeviceDirectory) async throws {
         struct Body: Encodable {
+            let password: String
             let rootPublicKey: String
             let certificate: SelectiveRemoteSignedDeviceCertificate
             let checkpoint: SelectiveRemoteSignedDeviceDirectory
         }
         struct Response: Decodable { let published: Bool }
         let response: Response = try await trustRequest(endpoint: endpoint, path: "v1/device-trust",
-            method: "POST", body: JSONEncoder().encode(Body(rootPublicKey: rootPublicKey,
+            method: "POST", body: JSONEncoder().encode(Body(password: password,
+                rootPublicKey: rootPublicKey,
                 certificate: certificate, checkpoint: checkpoint)))
         guard response.published else { throw SelectiveRemoteCloudError.invalidResponse }
     }

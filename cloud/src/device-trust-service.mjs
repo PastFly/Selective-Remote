@@ -29,7 +29,10 @@ function sessionIdentity(session) {
 }
 
 export class DeviceTrustService {
-  constructor(store) { this.store = store; }
+  constructor(store, reauthenticate = null) {
+    this.store = store;
+    this.reauthenticate = reauthenticate;
+  }
 
   async snapshot(session) { return this.store.getSnapshot(sessionIdentity(session).accountID); }
 
@@ -42,7 +45,9 @@ export class DeviceTrustService {
 
   async publishRoot(session, input, key) {
     const { accountID, actorDeviceID } = sessionIdentity(session);
-    record(input, ["rootPublicKey", "certificate", "checkpoint"]);
+    record(input, ["rootPublicKey", "certificate", "checkpoint", "password"]);
+    if (!this.reauthenticate) invalid();
+    await this.reauthenticate(session, input.password);
     const certificate = input.certificate;
     if (certificate?.payload?.accountID !== accountID
       || certificate.payload.deviceID !== actorDeviceID) invalid();

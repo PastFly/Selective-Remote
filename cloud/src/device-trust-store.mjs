@@ -109,6 +109,24 @@ export class DeviceTrustStore {
     }
   }
 
+  async requireNoActiveVaultWrappers(client, accountID, deviceID) {
+    // FK key-share on shared_vaults makes a concurrent direct-SQL wrapper insert
+    // wait until this rekey decision commits or rolls back.
+    await client.query(
+      `SELECT vault.id FROM shared_vaults AS vault
+       JOIN team_memberships AS membership ON membership.team_id = vault.team_id
+       WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+         AND vault.archived_at IS NULL AND vault.format_state = 'V1_ACTIVE'
+       ORDER BY vault.id FOR UPDATE OF vault`, [accountID]);
+    const activeWrappers = await client.query(
+      `SELECT 1 FROM shared_vault_key_wrappers AS wrapper
+       JOIN shared_vaults AS vault ON vault.id = wrapper.vault_id
+         AND vault.key_generation = wrapper.key_generation
+       WHERE wrapper.device_id = $1 AND vault.archived_at IS NULL
+         AND vault.format_state = 'V1_ACTIVE' LIMIT 1`, [deviceID]);
+    if (activeWrappers.rows[0]) throw new Error("device_trust_rekey_vaults_active");
+  }
+
   async mutate(accountID, operation, idempotencyKey, action) {
     const client = await this.pool.connect();
     try {
@@ -227,6 +245,9 @@ export class DeviceTrustStore {
         || (priorVersion > 0 && device.rows[0].public_key === publicKeyJSON)) {
         throw new Error("device_trust_invalid");
       }
+      if (priorVersion > 0) {
+        await this.requireNoActiveVaultWrappers(client, accountID, deviceID);
+      }
       await client.query(
         `UPDATE device_trust_requests_v1 SET state = 'expired', decided_at = now()
          WHERE account_id = $1 AND device_id = $2
@@ -344,6 +365,9 @@ export class DeviceTrustStore {
         [accountID, request.device_id]);
       if (!target.rows[0] || target.rows[0].revoked_at) {
         throw new Error("device_trust_conflict");
+      }
+      if (Number(request.key_version) > 1) {
+        await this.requireNoActiveVaultWrappers(client, accountID, request.device_id);
       }
       if (!root.root_public_key.equals(bundle.rootBytes)
         || Number(request.key_version) !== bundle.keyVersion

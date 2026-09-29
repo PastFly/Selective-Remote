@@ -82,6 +82,35 @@ test("pending request binds the session device and exact key before audit", asyn
     idempotencyKey: "request-2" }), /device_trust_invalid/u);
 });
 
+test("rekey cannot discard the sole decrypting key while a live Team Vault wrapper remains", async () => {
+  const queries = [];
+  const client = { async query(sql, values = []) {
+    queries.push({ sql, values });
+    if (sql.includes("FROM users") && sql.includes("FOR UPDATE")) return { rows: [{ id: accountID }] };
+    if (sql.includes("INSERT INTO device_trust_mutation_receipts_v1")) {
+      return { rows: [{ account_id: accountID }] };
+    }
+    if (sql.includes("FROM device_trust_roots_v1")) return { rows: [{ account_id: accountID }] };
+    if (sql.includes("FROM devices") && sql.includes("FOR UPDATE")) {
+      return { rows: [{ public_key: publicKey, revoked_at: null }] };
+    }
+    if (sql.includes("MAX(key_version)")) return { rows: [{ version: "1" }] };
+    if (sql.includes("FROM shared_vault_key_wrappers AS wrapper")) {
+      return { rows: [{ present: 1 }] };
+    }
+    return { rows: [] };
+  }, release() {} };
+  const store = new DeviceTrustStore({ async connect() { return client; } });
+  await assert.rejects(store.createRequest({ accountID, actorDeviceID: deviceID,
+    deviceID, requestID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    publicKeyBytes: Buffer.alloc(65, 5), publicKeyJSON: "new-public-key",
+    keyDigest: Buffer.alloc(32, 6), keyVersion: 2, idempotencyKey: "rekey-1" }),
+  /device_trust_rekey_vaults_active/u);
+  assert.ok(queries.some(({ sql }) => sql.includes("vault.key_generation = wrapper.key_generation")));
+  assert.ok(!queries.some(({ sql }) => sql.includes("INSERT INTO device_trust_requests_v1")));
+  assert.equal(queries.at(-1).sql, "ROLLBACK");
+});
+
 test("challenge answer is one-use and approval cannot win against rejection", async () => {
   let requestState = "pending";
   let challengeState = "offered";

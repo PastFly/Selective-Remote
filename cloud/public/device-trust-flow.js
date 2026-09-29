@@ -81,7 +81,8 @@ export function createBrowserDeviceTrustFlow({ client, repository, endpoint, acc
     return { snapshot, pin: next, root, state, rekeyCommitted };
   }
 
-  async function bootstrap() {
+  async function bootstrap(password) {
+    if (typeof password !== "string" || password.length === 0) fail();
     const current = await signedSnapshot();
     if (current.state !== "FIRST_DEVICE" && current.state !== "PUBLISH_PENDING") {
       fail("device_trust_conflict");
@@ -101,7 +102,8 @@ export function createBrowserDeviceTrustFlow({ client, repository, endpoint, acc
     const pin = { endpoint, accountID, rootFingerprint: root.fingerprint, highWater: 1,
       checkpointDigest: await deviceDirectoryDigest(bundle.checkpoint, cryptoValue) };
     await repository.savePinIfAbsent(pin);
-    await client.deviceTrustMutation("/v1/device-trust", bundle, mutationKey("root"));
+    await client.deviceTrustMutation("/v1/device-trust",
+      { ...bundle, password }, mutationKey("root"));
     const checked = await signedSnapshot();
     if (checked.state !== "CUSTODIAN" || checked.pin.checkpointDigest !== pin.checkpointDigest) {
       fail("device_trust_root_conflict");

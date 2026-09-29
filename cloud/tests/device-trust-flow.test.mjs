@@ -40,6 +40,7 @@ test("first browser pins before publication; a new browser requires out-of-band 
   const firstClient = { deviceID: () => firstID, deviceTrustSnapshot: () => server.snapshot(),
     async deviceTrustMutation(path, body) {
       assert.equal(path, "/v1/device-trust");
+      assert.equal(body.password, "correct-password");
       firstPin = await firstRepo.loadPin(endpoint, accountID);
       assert.ok(firstPin, "pin persisted before publication");
       published = body; calls.push(path);
@@ -48,7 +49,7 @@ test("first browser pins before publication; a new browser requires out-of-band 
   const first = createBrowserDeviceTrustFlow({ client: firstClient,
     repository: firstRepo, endpoint, accountID, identity: firstIdentity, cryptoValue: webcrypto });
   assert.equal((await first.status()).state, "FIRST_DEVICE");
-  assert.equal((await first.bootstrap()).state, "CUSTODIAN");
+  assert.equal((await first.bootstrap("correct-password")).state, "CUSTODIAN");
   assert.deepEqual(calls, ["/v1/device-trust"]);
   assert.equal((await first.status()).state, "CUSTODIAN");
   const secondRepo = memoryRepository();
@@ -146,7 +147,7 @@ test("new device proof, signed approval, and before/after substitution fail clos
   const second = createBrowserDeviceTrustFlow({ client: client(secondID),
     repository: secondRepo, identityRepository,
     endpoint, accountID, identity: secondIdentity, cryptoValue: webcrypto });
-  await first.bootstrap();
+  await first.bootstrap("correct-password");
   const pin = await firstRepo.loadPin(endpoint, accountID);
   await second.pair({ trustedFingerprint: pin.rootFingerprint,
     trustedCheckpointDigest: pin.checkpointDigest });
