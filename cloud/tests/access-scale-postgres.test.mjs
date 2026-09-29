@@ -67,10 +67,13 @@ test("PG16 access query shapes at 100 members and 1000 resources", {
       ["who_has", `SELECT member.user_id FROM team_access_group_members AS edge
         JOIN team_memberships AS member ON member.id = edge.membership_id
           AND member.epoch = edge.membership_epoch AND member.revoked_at IS NULL
-        JOIN vault_access_grants AS grant ON grant.principal_kind = 'GROUP'
-          AND grant.principal_id = edge.group_id AND grant.team_id = edge.team_id
-          AND grant.target_kind = 'RESOURCE' AND grant.target_id = $3
-          AND grant.vault_id = $2 AND grant.revoked_at IS NULL
+        JOIN vault_access_grants AS access_grant
+          ON access_grant.principal_kind = 'GROUP'
+          AND access_grant.principal_id = edge.group_id
+          AND access_grant.team_id = edge.team_id
+          AND access_grant.target_kind = 'RESOURCE'
+          AND access_grant.target_id = $3
+          AND access_grant.vault_id = $2 AND access_grant.revoked_at IS NULL
         WHERE edge.team_id = $1 AND edge.removed_at IS NULL
         ORDER BY member.user_id LIMIT 50`, [team, vault, resource]],
       ["resources_by_principal", `SELECT id, target_id FROM vault_access_grants

@@ -229,12 +229,29 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     assert.equal(preview.details.length, 1);
     assert.equal(preview.details[0].before.policyMask, 0);
     assert.equal(preview.details[0].after.policyMask, 1);
-    await pool.query(`INSERT INTO team_access_groups
-      (team_id, name, created_by_user_id) VALUES ($1, 'Direct SQL revision', $2)`,
-    [team, user]);
+    const directGroup = (await pool.query(`INSERT INTO team_access_groups
+      (team_id, name, created_by_user_id)
+      VALUES ($1, 'Direct SQL revision', $2) RETURNING id`,
+    [team, user])).rows[0].id;
     await assert.rejects(access.commitAccessChange({ ...previewInput,
       token: preview.token, idempotencyKey: `access:stale-preview:${suffix}` }),
     /access_preview_conflict/);
+    preview = await access.previewAccessChange(previewInput);
+    const directWriter = await pool.connect();
+    try {
+      await directWriter.query("BEGIN");
+      await directWriter.query(`UPDATE team_access_groups
+        SET name = 'Concurrent SQL revision', version = version + 1
+        WHERE id = $1`, [directGroup]);
+      const concurrentCommit = access.commitAccessChange({ ...previewInput,
+        token: preview.token, idempotencyKey: `access:sql-race:${suffix}` });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await directWriter.query("COMMIT");
+      await assert.rejects(concurrentCommit, /access_preview_conflict/);
+    } finally {
+      await directWriter.query("ROLLBACK").catch(() => {});
+      directWriter.release();
+    }
     preview = await access.previewAccessChange(previewInput);
     await assert.rejects(access.commitAccessChange({ ...previewInput,
       token: preview.token + "x", idempotencyKey: `access:bad-token:${suffix}` }),
