@@ -8,7 +8,8 @@ CREATE TABLE vault_resource_mutation_receipts_v2 (
     vault_id uuid NOT NULL,
     idempotency_key text NOT NULL CHECK (length(idempotency_key) BETWEEN 1 AND 200),
     operation text NOT NULL CHECK (operation IN
-        ('create_identity', 'move_identity', 'tombstone_identity', 'publish_crypto')),
+        ('create_identity', 'move_identity', 'tombstone_identity', 'publish_crypto',
+         'revoke_wrapper')),
     request_sha256 text NOT NULL CHECK (request_sha256 ~ '^[0-9a-f]{64}$'),
     result jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -73,7 +74,15 @@ BEGIN
             RAISE EXCEPTION 'resource_v2_published_wrapper_delete_forbidden';
         END IF;
         IF FOUND AND TG_TABLE_NAME <> 'vault_resource_key_wrappers_v2' THEN
-            RAISE EXCEPTION 'resource_v2_hard_delete_forbidden';
+            -- A Vault returned to legacy V1 can discard its dormant pointer.
+            -- Registry tombstones and ciphertext history still cannot be erased.
+            IF TG_TABLE_NAME <> 'vault_resource_manifest_pointers_v2'
+               OR NOT EXISTS (SELECT 1 FROM shared_vaults
+                               WHERE id = OLD.vault_id AND team_id = OLD.team_id
+                                 AND format_state = 'V1_ACTIVE'
+                                 AND format_schema_version = 1) THEN
+                RAISE EXCEPTION 'resource_v2_hard_delete_forbidden';
+            END IF;
         END IF;
         RETURN OLD;
     END IF;

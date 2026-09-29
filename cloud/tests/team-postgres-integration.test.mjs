@@ -427,6 +427,16 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       wrapperClientB.release();
     }
     await pool.query("UPDATE devices SET revoked_at = now() WHERE id = $1", [ownerSecondDeviceID]);
+    const wrapperRevoke = { ...resourceActor, resourceID: childResourceID, part: "GENERAL",
+      keyVersion: 1, membershipID: created.membership.id,
+      membershipEpoch: Number(created.membership.epoch), deviceID: ownerSecondDeviceID,
+      expectedManifestVersion: 1, idempotencyKey: "integration:resource-wrapper-revoke-1" };
+    const revokedWrapper = await store.revokeResourceWrapper(wrapperRevoke);
+    assert.equal(revokedWrapper.device_id, ownerSecondDeviceID);
+    assert.deepEqual(await store.revokeResourceWrapper(wrapperRevoke), revokedWrapper);
+    await assert.rejects(store.revokeResourceWrapper({ ...wrapperRevoke,
+      deviceID: ownerDeviceID, idempotencyKey: "integration:resource-wrapper-revoke-2" }),
+    /resource_v2_published_wrapper_coverage/u);
     const nextContext = { ...cryptoContext, keyVersion: 2, manifestVersion: 2 };
     const nextCEK = generateResourceCEK(webcrypto);
     const nextCiphertext = await encryptResourcePart({ plaintext: new TextEncoder().encode("fixture-v2"),
@@ -487,8 +497,10 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const tombstoneID = "bbd94518-288d-4968-9e17-ab01ca044770";
     await store.registerResourceIdentity({ ...resourceActor,
       resourceID: tombstoneID, policyClass: "general", parentFolderID: null });
-    await store.tombstoneResourceIdentity({ ...resourceActor,
-      resourceID: tombstoneID, expectedVersion: 1 });
+    const tombstoneRequest = { ...resourceActor, resourceID: tombstoneID,
+      expectedVersion: 1, idempotencyKey: "integration:resource-tombstone-1" };
+    const tombstoneResult = await store.tombstoneResourceIdentity(tombstoneRequest);
+    assert.deepEqual(await store.tombstoneResourceIdentity(tombstoneRequest), tombstoneResult);
     await assert.rejects(pool.query(
       "DELETE FROM vault_resource_registry WHERE id = $1", [tombstoneID],
     ), /resource_identity_hard_delete_forbidden/u);
@@ -499,6 +511,9 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       "UPDATE shared_vaults SET format_state = 'V1_ACTIVE', format_schema_version = 1 WHERE id = $1",
       [shared.vault.id],
     );
+    // Retire the dormant test pointer before the later legacy account-deletion fixture.
+    await pool.query("DELETE FROM vault_resource_manifest_pointers_v2 WHERE vault_id = $1",
+      [shared.vault.id]);
     await assert.rejects(pool.query(
       `INSERT INTO vault_resource_ciphertext_versions
        (team_id, vault_id, resource_id, part, key_version, policy_version,

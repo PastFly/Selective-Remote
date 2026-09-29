@@ -16,6 +16,7 @@ const { Pool } = pg;
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const resourceClasses = new Set(["folder", "secret", "general"]);
+const resourceParts = new Set(["GENERAL", "METADATA", "SECRET"]);
 const resourceRaceSQLStates = new Set(["40P01", "40001"]);
 const maxResourceRaceRetries = 2;
 
@@ -393,7 +394,7 @@ export class PostgresStore {
         await client.query(
           `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
            WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
-             AND key_version = $5`,
+             AND key_version = $5 AND obsolete_at IS NULL`,
           [teamID, vaultID, resourceID, scope.part, currentKey],
         );
       }
@@ -406,6 +407,62 @@ export class PostgresStore {
         return this.publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
           resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
           _retryAttempt: _retryAttempt + 1 });
+      }
+      throw error;
+    } finally { client.release(); }
+  }
+
+  // Internal cleanup after recipient revocation; current admitted devices retain coverage.
+  async revokeResourceWrapper({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID,
+    expectedManifestVersion, idempotencyKey, _retryAttempt = 0 }) {
+    if (![teamID, vaultID, resourceID, membershipID, deviceID].every((id) => scopedUUID.test(id))
+      || !resourceParts.has(part)
+      || !Number.isSafeInteger(keyVersion) || keyVersion < 1
+      || !Number.isSafeInteger(membershipEpoch) || membershipEpoch < 1
+      || !Number.isSafeInteger(expectedManifestVersion) || expectedManifestVersion < 1) {
+      throw new Error("invalid_resource_v2_wrapper_revoke");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "revoke_wrapper", payload: { actorUserID, actorDeviceID, resourceID,
+          part, keyVersion, membershipID, membershipEpoch, deviceID, expectedManifestVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
+      const pointer = await client.query(
+        `SELECT manifest_version, key_version FROM vault_resource_manifest_pointers_v2
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+         FOR UPDATE`, [teamID, vaultID, resourceID, part],
+      );
+      if (Number(pointer.rows[0]?.manifest_version) !== expectedManifestVersion
+        || Number(pointer.rows[0]?.key_version) !== keyVersion) {
+        throw new Error("resource_manifest_conflict");
+      }
+      const revoked = await client.query(
+        `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+           AND key_version = $5 AND membership_id = $6 AND membership_epoch = $7
+           AND device_id = $8 AND obsolete_at IS NULL
+         RETURNING team_id, vault_id, resource_id, part, key_version,
+           membership_id, membership_epoch, device_id, obsolete_at`,
+        [teamID, vaultID, resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID],
+      );
+      if (!revoked.rows[0]) throw new Error("resource_wrapper_not_found");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID },
+        revoked.rows[0]);
+      await client.query("COMMIT");
+      return stable;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.revokeResourceWrapper({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID,
+          expectedManifestVersion, idempotencyKey, _retryAttempt: _retryAttempt + 1 });
       }
       throw error;
     } finally { client.release(); }
