@@ -5,8 +5,45 @@ import {
   requireTeamPermission,
 } from "./team-policy.mjs";
 import { teamVaultWrapperContextHash } from "./security.mjs";
+import { vaultFoundationCapabilities } from "./vault-format.mjs";
 
 const { Pool } = pg;
+const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+const resourceClasses = new Set(["folder", "secret", "general"]);
+
+function requireResourceIdentityInput({ resourceID, policyClass, parentFolderID }) {
+  if (!newResourceUUID.test(resourceID)) throw new Error("invalid_resource_id");
+  if (!resourceClasses.has(policyClass)) throw new Error("invalid_resource_class");
+  if (parentFolderID !== null && !scopedUUID.test(parentFolderID)) {
+    throw new Error("invalid_resource_parent");
+  }
+}
+
+async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID }) {
+  const result = await client.query(
+    `SELECT membership.role AS registry_actor_role
+     FROM team_memberships AS membership
+     JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+     JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.id = $2
+       AND vault.archived_at IS NULL
+     JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
+       AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+       AND device.public_key_algorithm = 'p256-ecdh-v1'
+     LEFT JOIN team_membership_device_admissions AS admission
+       ON admission.membership_id = membership.id
+      AND admission.membership_epoch = membership.epoch AND admission.device_id = device.id
+     WHERE membership.team_id = $1 AND membership.user_id = $3
+       AND membership.revoked_at IS NULL
+       AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)
+       AND vault.format_state = 'V2_PREPARING' AND vault.format_schema_version = 2
+     FOR UPDATE OF vault, membership`,
+    [teamID, vaultID, actorUserID, actorDeviceID],
+  );
+  const role = result.rows[0]?.registry_actor_role;
+  if (!role) throw new Error("team_not_found");
+  requireTeamPermission(role, "manage_vault_keys");
+}
 
 export class PostgresStore {
   constructor(databaseURL, pool = null) {
@@ -15,6 +52,139 @@ export class PostgresStore {
 
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
+
+  async getVaultFoundationCapabilities({ session, teamID, vaultID }) {
+    if (!session?.user_id || !session?.device_id) throw new Error("authentication_required");
+    const result = await this.pool.query(
+      `SELECT vault.format_state AS foundation_format_state, vault.format_schema_version,
+         membership.role
+       FROM team_memberships AS membership
+       JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
+       JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.id = $2
+         AND vault.archived_at IS NULL
+       JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
+         AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+         AND device.public_key_algorithm = 'p256-ecdh-v1'
+       LEFT JOIN team_membership_device_admissions AS admission
+         ON admission.membership_id = membership.id
+        AND admission.membership_epoch = membership.epoch AND admission.device_id = device.id
+       WHERE membership.team_id = $1 AND membership.user_id = $3
+         AND membership.revoked_at IS NULL
+         AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)`,
+      [teamID, vaultID, session.user_id, session.device_id],
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error("team_not_found");
+    return vaultFoundationCapabilities({
+      session,
+      formatState: row.foundation_format_state,
+      formatSchemaVersion: row.format_schema_version,
+      registryRouteEligible: ["owner", "admin"].includes(row.role),
+    });
+  }
+
+  // Internal v2-preparation primitive. No route activates this path for v1 Vaults.
+  async registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, policyClass, parentFolderID = null }) {
+    requireResourceIdentityInput({ resourceID, policyClass, parentFolderID });
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const result = await client.query(
+        `INSERT INTO vault_resource_registry
+           (id, team_id, vault_id, policy_class, parent_folder_id)
+         VALUES ($1, $2, $3, $4, $5)
+         RETURNING id, team_id, vault_id, policy_class, parent_folder_id,
+           schema_version, resource_version, created_at, deleted_at`,
+        [resourceID, teamID, vaultID, policyClass, parentFolderID],
+      );
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error?.code === "23505") throw new Error("resource_id_exists");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async getResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID }) {
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const result = await client.query(
+        `SELECT id, team_id, vault_id, policy_class, parent_folder_id,
+           schema_version, resource_version, created_at, deleted_at
+         FROM vault_resource_registry
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3 AND deleted_at IS NULL`,
+        [teamID, vaultID, resourceID],
+      );
+      if (!result.rows[0]) throw new Error("resource_not_found");
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID,
+    parentFolderID, expectedVersion }) {
+    if (parentFolderID !== null && !scopedUUID.test(parentFolderID)) {
+      throw new Error("invalid_resource_parent");
+    }
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw new Error("invalid_resource_version");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const result = await client.query(
+        `UPDATE vault_resource_registry
+         SET parent_folder_id = $4, resource_version = resource_version + 1
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3 AND deleted_at IS NULL
+           AND resource_version = $5
+         RETURNING id, team_id, vault_id, policy_class, parent_folder_id,
+           schema_version, resource_version, created_at, deleted_at`,
+        [teamID, vaultID, resourceID, parentFolderID, expectedVersion],
+      );
+      if (!result.rows[0]) throw new Error("resource_version_conflict");
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
+
+  async tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, expectedVersion }) {
+    if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+      throw new Error("invalid_resource_version");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const result = await client.query(
+        `UPDATE vault_resource_registry
+         SET deleted_at = now(), resource_version = resource_version + 1
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3 AND deleted_at IS NULL
+           AND resource_version = $4
+         RETURNING id, team_id, vault_id, policy_class, parent_folder_id,
+           schema_version, resource_version, created_at, deleted_at`,
+        [teamID, vaultID, resourceID, expectedVersion],
+      );
+      if (!result.rows[0]) throw new Error("resource_version_conflict");
+      await client.query("COMMIT");
+      return result.rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally { client.release(); }
+  }
 
   async deleteAccount(userID) {
     const client = await this.pool.connect();
@@ -1278,6 +1448,7 @@ export class PostgresStore {
           `SELECT id AS vault_id, key_generation, rotation_required
            FROM shared_vaults
            WHERE team_id = $1 AND archived_at IS NULL AND revision > 0
+             AND format_state = 'V1_ACTIVE'
            ORDER BY id FOR UPDATE`,
           [teamID],
         );
@@ -1368,7 +1539,7 @@ export class PostgresStore {
              ON invitation_device.invitation_id = invitation_vault.invitation_id
            JOIN shared_vaults AS vault
              ON vault.id = invitation_vault.vault_id AND vault.team_id = $2
-              AND vault.archived_at IS NULL
+              AND vault.archived_at IS NULL AND vault.format_state = 'V1_ACTIVE'
            JOIN team_memberships AS actor_membership
              ON actor_membership.team_id = $2 AND actor_membership.user_id = $3
               AND actor_membership.revoked_at IS NULL
@@ -1554,11 +1725,14 @@ export class PostgresStore {
             (vault_id, key_generation, membership_id, membership_epoch, device_id,
              wrapper_version, ephemeral_public_key, ciphertext, nonce, auth_tag,
              context_hash, created_by_device_id, created_at)
-           SELECT vault_id, key_generation, $2, $3, device_id, wrapper_version,
-             ephemeral_public_key, ciphertext, nonce, auth_tag, context_hash,
-             created_by_device_id, created_at
-           FROM team_invitation_vault_wrappers
-           WHERE invitation_id = $1`,
+           SELECT staged.vault_id, staged.key_generation, $2, $3, staged.device_id,
+             staged.wrapper_version, staged.ephemeral_public_key, staged.ciphertext,
+             staged.nonce, staged.auth_tag, staged.context_hash,
+             staged.created_by_device_id, staged.created_at
+           FROM team_invitation_vault_wrappers AS staged
+           JOIN shared_vaults AS vault ON vault.id = staged.vault_id
+             AND vault.format_state = 'V1_ACTIVE'
+           WHERE staged.invitation_id = $1`,
           [invitation.id, membership.id, nextEpoch],
         );
         await client.query(
@@ -1702,6 +1876,7 @@ export class PostgresStore {
        FROM team_memberships AS actor
        JOIN teams AS team ON team.id = actor.team_id AND team.archived_at IS NULL
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+         AND vault.format_state = 'V1_ACTIVE'
        WHERE actor.team_id = $1 AND actor.user_id = $2 AND actor.revoked_at IS NULL
        ORDER BY lower(vault.name), vault.id`,
       [teamID, actorUserID],
@@ -1755,6 +1930,7 @@ export class PostgresStore {
         const result = await client.query(
           `UPDATE shared_vaults SET name = $3, updated_at = now()
            WHERE id = $1 AND team_id = $2 AND archived_at IS NULL
+             AND format_state = 'V1_ACTIVE'
            RETURNING id, team_id, name, revision, key_generation, rotation_required,
              created_at, updated_at`,
           [vaultID, teamID, name],
@@ -1785,6 +1961,7 @@ export class PostgresStore {
        FROM team_memberships AS membership
        JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+         AND vault.format_state = 'V1_ACTIVE'
        JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
          AND device.revoked_at IS NULL
          AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
@@ -1822,7 +1999,7 @@ export class PostgresStore {
         AND admission.membership_epoch = membership.epoch
         AND admission.device_id = device.id
        JOIN shared_vaults AS vault ON vault.id = $2 AND vault.team_id = membership.team_id
-         AND vault.archived_at IS NULL
+         AND vault.archived_at IS NULL AND vault.format_state = 'V1_ACTIVE'
        LEFT JOIN shared_vault_key_wrappers AS wrapper
          ON wrapper.vault_id = vault.id AND wrapper.key_generation = vault.key_generation
          AND wrapper.membership_id = membership.id AND wrapper.membership_epoch = membership.epoch
@@ -1852,6 +2029,7 @@ export class PostgresStore {
        FROM team_memberships AS membership
        JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
        JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+         AND vault.format_state = 'V1_ACTIVE'
        JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
          AND device.revoked_at IS NULL
          AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'
@@ -2123,6 +2301,7 @@ async function lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorD
      FROM team_memberships AS membership
      JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
      JOIN shared_vaults AS vault ON vault.team_id = team.id AND vault.archived_at IS NULL
+       AND vault.format_state = 'V1_ACTIVE'
      JOIN devices AS device ON device.id = $4 AND device.user_id = membership.user_id
        AND device.revoked_at IS NULL
        AND device.public_key IS NOT NULL AND device.public_key_algorithm = 'p256-ecdh-v1'

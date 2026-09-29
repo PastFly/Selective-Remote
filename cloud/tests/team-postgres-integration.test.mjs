@@ -128,6 +128,83 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       idempotencyKey: "integration:vault-initialize-01",
     });
     assert.equal(initial.revision, 1);
+    await assert.rejects(store.registerResourceIdentity({
+      actorUserID: byEmail["owner@example.com"], actorDeviceID: ownerDeviceID,
+      teamID: created.team.id, vaultID: shared.vault.id,
+      resourceID: "9e01c763-e16d-4a6b-bd6f-6795f09f02da",
+      policyClass: "folder", parentFolderID: null,
+    }), /team_not_found/u);
+
+    // This state is unreachable through product routes in this foundation PR.
+    // Exercise the future cutover boundary directly, then restore the v1 fixture.
+    await pool.query(
+      "UPDATE shared_vaults SET format_state = 'V2_ACTIVE', format_schema_version = 2 WHERE id = $1",
+      [shared.vault.id],
+    );
+    assert.ok(!(await store.listSharedVaults(created.team.id, byEmail["owner@example.com"]))
+      .some((vault) => vault.id === shared.vault.id));
+    await assert.rejects(store.getSharedVault(created.team.id, shared.vault.id,
+      byEmail["owner@example.com"], ownerDeviceID), /team_not_found/u);
+    await assert.rejects(store.listTeamKeyDevices(created.team.id, shared.vault.id,
+      byEmail["owner@example.com"], ownerDeviceID), /team_not_found/u);
+    await assert.rejects(store.putSharedVault({
+      actorUserID: byEmail["owner@example.com"], actorDeviceID: ownerDeviceID,
+      teamID: created.team.id, vaultID: shared.vault.id,
+      envelope: { baseRevision: 1, keyGeneration: 1, envelopeVersion: 1,
+        ciphertext: "AA", nonce: "B".repeat(16), authTag: "C".repeat(22),
+        contentHash: "D".repeat(43), wrappers: null },
+      idempotencyKey: "integration:v2-legacy-write-denied",
+    }), /team_not_found/u);
+    await assert.rejects(store.grantSharedVaultWrapper({
+      actorUserID: byEmail["owner@example.com"], actorDeviceID: ownerDeviceID,
+      teamID: created.team.id, vaultID: shared.vault.id, wrapper: integrationWrapper(
+        created.membership, ownerDeviceID, "E", created.team.id, shared.vault.id, 1),
+      keyGeneration: 1, idempotencyKey: "integration:v2-legacy-wrapper-denied",
+    }), /team_not_found/u);
+    await pool.query(
+      "UPDATE shared_vaults SET format_state = 'V1_ACTIVE', format_schema_version = 1 WHERE id = $1",
+      [shared.vault.id],
+    );
+    await pool.query(
+      "UPDATE shared_vaults SET format_state = 'V2_PREPARING', format_schema_version = 2 WHERE id = $1",
+      [shared.vault.id],
+    );
+    const folderResourceID = "9e01c763-e16d-4a6b-bd6f-6795f09f02da";
+    const childResourceID = "eb48ea7c-c63e-4b11-96fb-829601e46678";
+    const resourceActor = { actorUserID: byEmail["owner@example.com"],
+      actorDeviceID: ownerDeviceID, teamID: created.team.id, vaultID: shared.vault.id };
+    const folderIdentity = await store.registerResourceIdentity({ ...resourceActor,
+      resourceID: folderResourceID, policyClass: "folder", parentFolderID: null });
+    assert.equal(folderIdentity.id, folderResourceID);
+    const childIdentity = await store.registerResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, policyClass: "general", parentFolderID: folderResourceID });
+    assert.equal(childIdentity.parent_folder_id, folderResourceID);
+    assert.equal((await store.getResourceIdentity({ ...resourceActor, resourceID: childResourceID })).id,
+      childResourceID);
+    await assert.rejects(store.getResourceIdentity({ ...resourceActor,
+      teamID: "2da9bfce-9882-4edc-9303-04cebdb31323", resourceID: childResourceID }),
+    /team_not_found/u);
+    await assert.rejects(store.getResourceIdentity({ ...resourceActor,
+      vaultID: "4f90fbb7-7f1b-42e2-b8eb-159401a27468", resourceID: childResourceID }),
+    /team_not_found/u);
+    await assert.rejects(store.registerResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, policyClass: "general", parentFolderID: null }),
+    /resource_id_exists/u);
+    await assert.rejects(store.tombstoneResourceIdentity({ ...resourceActor,
+      resourceID: folderResourceID, expectedVersion: 1 }), /active_resource_children/u);
+    const moved = await store.moveResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, parentFolderID: null, expectedVersion: 1 });
+    assert.equal(moved.id, childResourceID);
+    assert.equal(moved.parent_folder_id, null);
+    await store.tombstoneResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, expectedVersion: 2 });
+    await assert.rejects(store.registerResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, policyClass: "general", parentFolderID: null }),
+    /resource_id_exists/u);
+    await pool.query(
+      "UPDATE shared_vaults SET format_state = 'V1_ACTIVE', format_schema_version = 1 WHERE id = $1",
+      [shared.vault.id],
+    );
 
     const adminInvite = await store.createTeamInvitation({
       actorUserID: byEmail["owner@example.com"],
