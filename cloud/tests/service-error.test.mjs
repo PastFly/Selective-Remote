@@ -44,6 +44,7 @@ test("access policy failures expose typed bounded responses", () => {
     ["access_preview_conflict", 409], ["access_policy_conflict", 409],
     ["group_grants_must_be_revoked_first", 409], ["access_batch_too_large", 413],
     ["access_v2_preparing_required", 409],
+    ["crypto_publication_required", 409], ["invalid_access_parent", 400],
   ]) {
     assert.deepEqual(publicOperationError(new Error(code)), { status, code });
   }

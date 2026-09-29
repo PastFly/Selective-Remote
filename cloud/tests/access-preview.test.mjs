@@ -43,3 +43,14 @@ test("preview rejects empty and oversized grant batches before SQL", () => {
   assert.throws(() => validateAccessChangeRequest({ changes: [{ ...change,
     permissionMask: 0 }] }), /invalid_access_request/);
 });
+
+test("a bounded same-Vault resource move has an explicit preview request shape", () => {
+  const move = { type: "RESOURCE_MOVE",
+    resourceID: "11111111-1111-4111-8111-111111111111",
+    newParentFolderID: "22222222-2222-4222-8222-222222222222",
+    expectedResourceVersion: 1 };
+  assert.deepEqual(validateAccessChangeRequest({ changes: [move] }), [move]);
+  assert.throws(() => validateAccessChangeRequest({ changes: [
+    { ...move, newParentFolderID: "other-vault" },
+  ] }), /invalid_access_request/);
+});

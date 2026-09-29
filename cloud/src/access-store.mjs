@@ -584,7 +584,7 @@ export class AccessStore {
     }
   }
 
-  async readEffectiveAccessInSnapshot(client, input, changes = []) {
+  async readEffectiveAccessInSnapshot(client, input, changes = [], parentOverrides = new Map()) {
     const { teamID, vaultID, resourceID, subjectUserID } = input;
     await readAccessActor(client, input);
     const vault = await client.query(
@@ -611,9 +611,11 @@ export class AccessStore {
     if (!row.rows[0]?.policy_kind) throw new Error("access_resource_not_found");
     const target = { id: row.rows[0].id, teamID: row.rows[0].team_id,
       vaultID: row.rows[0].vault_id, kind: row.rows[0].policy_kind,
-      parentFolderID: row.rows[0].parent_folder_id,
+      parentFolderID: parentOverrides.has(resourceID)
+        ? parentOverrides.get(resourceID) : row.rows[0].parent_folder_id,
       deletedAt: row.rows[0].deleted_at };
-    const ancestorRows = await client.query(
+    let ancestorRows;
+    if (parentOverrides.size === 0) ancestorRows = await client.query(
       `WITH RECURSIVE path AS (
          SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at,
            1 AS depth, ARRAY[id] AS seen
@@ -631,6 +633,28 @@ export class AccessStore {
          FROM path ORDER BY depth`,
       [teamID, vaultID, target.parentFolderID],
     );
+    else {
+      const rows = [];
+      const seen = new Set([resourceID]);
+      let nextID = target.parentFolderID;
+      while (nextID !== null && rows.length < 64) {
+        if (seen.has(nextID)) throw new Error("invalid_access_ancestry");
+        seen.add(nextID);
+        const parent = await client.query(
+          `SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
+           FROM vault_resource_registry WHERE id = $1 AND team_id = $2 AND vault_id = $3`,
+          [nextID, teamID, vaultID],
+        );
+        if (!parent.rows[0]) throw new Error("invalid_access_ancestry");
+        const item = { ...parent.rows[0], parent_folder_id:
+          parentOverrides.has(nextID) ? parentOverrides.get(nextID)
+            : parent.rows[0].parent_folder_id };
+        rows.push(item);
+        nextID = item.parent_folder_id;
+      }
+      if (nextID !== null) throw new Error("invalid_access_ancestry");
+      ancestorRows = { rows };
+    }
     const ancestors = ancestorRows.rows.map((item) => ({ id: item.id,
       teamID: item.team_id, vaultID: item.vault_id, kind: item.policy_kind,
       parentFolderID: item.parent_folder_id, deletedAt: item.deleted_at }));
@@ -761,7 +785,83 @@ export class AccessStore {
     const allSubjects = new Map();
     const allResources = new Map();
     const explicitPrincipals = new Set();
+    const parentOverrides = new Map();
+    const extraRegistryIDs = new Set();
     for (const [index, change] of changes.entries()) {
+      if (change.type === "RESOURCE_MOVE") {
+        const moving = await client.query(
+          `SELECT id, policy_kind, resource_version, parent_folder_id
+           FROM vault_resource_registry WHERE id = $1 AND team_id = $2
+             AND vault_id = $3 AND deleted_at IS NULL`,
+          [change.resourceID, teamID, vaultID],
+        );
+        if (!moving.rows[0]?.policy_kind || Number(moving.rows[0].resource_version)
+          !== change.expectedResourceVersion) throw new Error("access_policy_conflict");
+        if (change.newParentFolderID === change.resourceID) {
+          throw new Error("invalid_access_parent");
+        }
+        if (change.newParentFolderID !== null) {
+          const parent = await client.query(
+            `SELECT 1 FROM vault_resource_registry WHERE id = $1 AND team_id = $2
+               AND vault_id = $3 AND policy_kind = 'FOLDER' AND deleted_at IS NULL`,
+            [change.newParentFolderID, teamID, vaultID],
+          );
+          if (!parent.rows[0]) throw new Error("invalid_access_parent");
+          extraRegistryIDs.add(change.newParentFolderID);
+        }
+        const subtree = await client.query(
+          `WITH RECURSIVE descendants AS (
+             SELECT id, parent_folder_id, resource_version, policy_kind
+             FROM vault_resource_registry WHERE id = $1 AND team_id = $2
+               AND vault_id = $3 AND deleted_at IS NULL
+             UNION
+             SELECT child.id, child.parent_folder_id, child.resource_version,
+               child.policy_kind FROM vault_resource_registry AS child
+             JOIN descendants ON child.parent_folder_id = descendants.id
+             WHERE child.team_id = $2 AND child.vault_id = $3
+               AND child.deleted_at IS NULL
+           ) SELECT id, resource_version, policy_kind FROM descendants
+             ORDER BY id LIMIT 51`,
+          [change.resourceID, teamID, vaultID],
+        );
+        if (subtree.rows.length > 50) throw new Error("access_batch_too_large");
+        if (subtree.rows.some((item) => !item.policy_kind)) {
+          throw new Error("access_unclassified_resource");
+        }
+        if (subtree.rows.some((item) => item.id === change.newParentFolderID)) {
+          throw new Error("invalid_access_parent");
+        }
+        const published = await client.query(
+          `SELECT 1 FROM vault_resource_manifest_pointers_v2
+           WHERE team_id = $1 AND vault_id = $2
+             AND resource_id = ANY($3::uuid[]) LIMIT 1`,
+          [teamID, vaultID, subtree.rows.map((item) => item.id)],
+        );
+        if (published.rows[0]) throw new Error("crypto_publication_required");
+        const users = await client.query(
+          `SELECT id, user_id, epoch, role FROM team_memberships
+           WHERE team_id = $1 AND revoked_at IS NULL ORDER BY id LIMIT 1001`,
+          [teamID],
+        );
+        if (users.rows.length > 1000) throw new Error("access_batch_too_large");
+        for (const user of users.rows) {
+          allSubjects.set(user.user_id, { userID: user.user_id,
+            membershipID: user.id, epoch: Number(user.epoch) });
+        }
+        for (const resource of subtree.rows) {
+          allResources.set(resource.id, resource);
+          for (const user of users.rows) {
+            pairs.set(`${user.user_id}:${resource.id}`,
+              { subjectUserID: user.user_id, resourceID: resource.id });
+          }
+        }
+        parentOverrides.set(change.resourceID, change.newParentFolderID);
+        resolved.push({ index, type: change.type, resourceID: change.resourceID,
+          newParentFolderID: change.newParentFolderID,
+          expectedResourceVersion: change.expectedResourceVersion,
+          oldParentFolderID: moving.rows[0].parent_folder_id });
+        continue;
+      }
       let grant = null;
       if (change.type !== "GRANT_CREATE") {
         const existing = await client.query(
@@ -904,7 +1004,8 @@ export class AccessStore {
     if (allResources.size > 50 || pairs.size > 1000) {
       throw new Error("access_batch_too_large");
     }
-    const hypothetical = resolved.map((item) => item.type === "GRANT_CREATE"
+    const hypothetical = resolved.filter((item) => item.type !== "RESOURCE_MOVE")
+      .map((item) => item.type === "GRANT_CREATE"
       ? { type: item.type, grant: { id: `preview:${item.index}`,
         teamID, vaultID, principalKind: item.principalKind,
         principalID: item.principalID, membershipID: item.membershipID,
@@ -919,7 +1020,8 @@ export class AccessStore {
       const accessInput = { actorUserID, actorDeviceID, teamID, vaultID,
         resourceID: pair.resourceID, subjectUserID: pair.subjectUserID };
       const before = await this.readEffectiveAccessInSnapshot(client, accessInput);
-      const after = await this.readEffectiveAccessInSnapshot(client, accessInput, hypothetical);
+      const after = await this.readEffectiveAccessInSnapshot(client, accessInput,
+        hypothetical, parentOverrides);
       const gainedMask = after.policyMask & ~before.policyMask;
       const lostMask = before.policyMask & ~after.policyMask;
       if (gainedMask) widened++;
@@ -939,7 +1041,7 @@ export class AccessStore {
          WHERE parent.team_id = $1 AND parent.vault_id = $2
            AND parent.deleted_at IS NULL
        ) SELECT DISTINCT id, resource_version FROM chain ORDER BY id`,
-      [teamID, vaultID, resourceIDs],
+      [teamID, vaultID, [...new Set([...resourceIDs, ...extraRegistryIDs])]],
     );
     const binding = { actorMembershipID: actor.id, actorEpoch: Number(actor.epoch),
       actorDeviceID, teamID, vaultID, requestHash: hashAccessRequest(request),
@@ -968,7 +1070,7 @@ export class AccessStore {
       tokenHash: hashAccessRequest(input.token),
       requestHash: signed.requestHash };
     return this.withMutation({ actorUserID, idempotencyKey,
-      operation: "access.grant.commit", request: receiptRequest }, async (client) => {
+      operation: "access.policy.commit", request: receiptRequest }, async (client) => {
       const actor = await requirePreparingActor(client, input);
       await client.query(
         `INSERT INTO team_policy_revisions (team_id) VALUES ($1) ON CONFLICT DO NOTHING`,
@@ -995,6 +1097,28 @@ export class AccessStore {
       }
       const committed = [];
       for (const change of preview.resolved) {
+        if (change.type === "RESOURCE_MOVE") {
+          const row = await client.query(
+            `UPDATE vault_resource_registry SET parent_folder_id = $4,
+               resource_version = resource_version + 1
+             WHERE id = $1 AND team_id = $2 AND vault_id = $3
+               AND resource_version = $5 AND deleted_at IS NULL RETURNING id`,
+            [change.resourceID, teamID, vaultID, change.newParentFolderID,
+              change.expectedResourceVersion],
+          );
+          if (!row.rows[0]) throw new Error("access_policy_conflict");
+          await client.query(
+            `INSERT INTO team_audit_events
+               (team_id, actor_user_id, action, target_vault_id, metadata)
+             VALUES ($1, $2, 'resource.move_access_changed', $3, $4::jsonb)`,
+            [teamID, actorUserID, vaultID,
+              JSON.stringify({ resourceID: change.resourceID,
+                oldParentFolderID: change.oldParentFolderID,
+                newParentFolderID: change.newParentFolderID })],
+          );
+          committed.push({ type: change.type, resourceID: change.resourceID });
+          continue;
+        }
         let grantID = change.grantID;
         if (change.type === "GRANT_CREATE") {
           const row = await client.query(
@@ -1042,13 +1166,14 @@ export class AccessStore {
         );
         committed.push({ type: change.type, grantID });
       }
-      if (committed.length > 1) {
+      const committedGrants = committed.filter((item) => item.type !== "RESOURCE_MOVE");
+      if (committedGrants.length > 1) {
         await client.query(
           `INSERT INTO team_audit_events
              (team_id, actor_user_id, action, target_vault_id, metadata)
            VALUES ($1, $2, 'bulk_grant.applied', $3, $4::jsonb)`,
           [teamID, actorUserID, vaultID,
-            JSON.stringify({ count: committed.length })],
+            JSON.stringify({ count: committedGrants.length })],
         );
       }
       // Candidates are returned only from a successful committed transaction.

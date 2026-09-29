@@ -246,6 +246,39 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       principalID: viewer, limit: 50 });
     assert.equal(viewerResources.rows.some((row) => row.resourceID === host), true);
     assert.equal(viewerResources.rows.some((row) => row.resourceID === snippet), true);
+    const folderA = randomUUID();
+    const folderB = randomUUID();
+    const forwarding = randomUUID();
+    await pool.query(`INSERT INTO vault_resource_registry
+      (id, team_id, vault_id, policy_class, policy_kind)
+      VALUES ($1, $4, $5, 'folder', 'FOLDER'),
+             ($2, $4, $5, 'folder', 'FOLDER')`,
+    [folderA, folderB, forwarding, team, vault]);
+    await pool.query(`INSERT INTO vault_resource_registry
+      (id, team_id, vault_id, policy_class, policy_kind, parent_folder_id)
+      VALUES ($1, $2, $3, 'general', 'FORWARDING', $4)`,
+    [forwarding, team, vault, folderA]);
+    await pool.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, membership_id,
+       membership_epoch, target_kind, target_id, permission_mask, created_by_user_id)
+      VALUES ($1, $2, 'USER', $3, $4, 1, 'FOLDER', $5, 1, $6)`,
+    [team, vault, viewer, viewerMembership, folderA, user]);
+    const moveRequest = { changes: [{ type: "RESOURCE_MOVE", resourceID: forwarding,
+      newParentFolderID: folderB, expectedResourceVersion: 1 }] };
+    const moveInput = { actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, request: moveRequest,
+      sessionSecret: "test-session-secret" };
+    const movePreview = await access.previewAccessChange(moveInput);
+    const viewerDelta = movePreview.details.find((item) => item.subjectUserID === viewer);
+    assert.equal(viewerDelta.before.policyMask, 1);
+    assert.equal(viewerDelta.after.policyMask, 0);
+    const moved = await access.commitAccessChange({ ...moveInput,
+      token: movePreview.token, idempotencyKey: `access:move:${suffix}` });
+    assert.equal(moved.applied, 1);
+    assert.equal((await pool.query(`SELECT parent_folder_id FROM vault_resource_registry
+      WHERE id = $1`, [forwarding])).rows[0].parent_folder_id, folderB);
+    assert.equal(moved.notificationCandidates.some((item) => item.userID === viewer
+      && item.lostMask === 1), true);
     await assert.rejects(access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
       teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
       name: "Stale", idempotencyKey: `access:stale:${suffix}` }), /access_policy_conflict/);

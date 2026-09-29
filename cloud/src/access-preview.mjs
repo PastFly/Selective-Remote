@@ -78,13 +78,28 @@ export function validateAccessChangeRequest(request) {
     const isCreate = change.type === "GRANT_CREATE";
     const isChange = change.type === "GRANT_CHANGE";
     const isRevoke = change.type === "GRANT_REVOKE";
-    if (!isCreate && !isChange && !isRevoke) throw new Error("invalid_access_request");
+    const isMove = change.type === "RESOURCE_MOVE";
+    if (!isCreate && !isChange && !isRevoke && !isMove) {
+      throw new Error("invalid_access_request");
+    }
     const allowed = isCreate
       ? ["type", "principalKind", "principalID", "targetKind", "targetID", "permissionMask"]
       : isChange ? ["type", "grantID", "expectedVersion", "permissionMask"]
-        : ["type", "grantID", "expectedVersion"];
+        : isMove ? ["type", "resourceID", "newParentFolderID", "expectedResourceVersion"]
+          : ["type", "grantID", "expectedVersion"];
     if (Object.keys(change).some((key) => !allowed.includes(key))) {
       throw new Error("invalid_access_request");
+    }
+    if (isMove) {
+      if (!uuid.test(change.resourceID ?? "")
+        || (change.newParentFolderID !== null
+          && !uuid.test(change.newParentFolderID ?? ""))
+        || !Number.isSafeInteger(change.expectedResourceVersion)
+        || change.expectedResourceVersion < 1
+        || identities.has(change.resourceID)) throw new Error("invalid_access_request");
+      identities.add(change.resourceID);
+      targets.add(`RESOURCE:${change.resourceID}`);
+      continue;
     }
     if (isCreate) {
       if (!["USER", "GROUP"].includes(change.principalKind)

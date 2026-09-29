@@ -66,6 +66,7 @@ const operationStatuses = Object.freeze({
   invalid_access_version: 400,
   invalid_access_page: 400,
   invalid_access_resource: 400,
+  invalid_access_parent: 400,
   invalid_grant_permission: 400,
   credential_edit_requires_reveal: 400,
   access_group_not_found: 404,
@@ -76,6 +77,7 @@ const operationStatuses = Object.freeze({
   access_idempotency_conflict: 409,
   group_grants_must_be_revoked_first: 409,
   access_unclassified_resource: 409,
+  crypto_publication_required: 409,
   access_batch_too_large: 413,
   access_result_too_large: 413,
 });
