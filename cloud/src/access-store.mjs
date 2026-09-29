@@ -361,8 +361,7 @@ export class AccessStore {
             targetID: item.target_id, mask: item.permission_mask,
             revokedAt: item.revoked_at })) });
         if (access.policyAllowed) rows.push({ resourceID: resource.id,
-          policyMask: access.policyMask, paths: access.paths,
-          effectiveUsable: "UNKNOWN" });
+          policyMask: access.policyMask, paths: access.paths });
       }
       await client.query("COMMIT");
       return { rows, nextCursor: page.rows.length > limit
@@ -512,7 +511,7 @@ export class AccessStore {
           safeCount: "1001+" };
       }
       const relatedVaultIDs = [...new Set(previewGrants.rows.map((row) => row.vault_id))];
-      await requirePreparingActor(client, input, relatedVaultIDs);
+      const actor = await requirePreparingActor(client, input, relatedVaultIDs);
       await client.query(
         `INSERT INTO team_policy_revisions (team_id) VALUES ($1) ON CONFLICT DO NOTHING`,
         [teamID],
@@ -534,6 +533,18 @@ export class AccessStore {
       }
       if (currentGrants.rows.some((row) => !relatedVaultIDs.includes(row.vault_id))) {
         throw new Error("access_policy_conflict");
+      }
+      const affectedMembers = await client.query(
+        `SELECT member.role FROM team_access_group_members AS edge
+         JOIN team_memberships AS member ON member.id = edge.membership_id
+           AND member.team_id = edge.team_id AND member.user_id = edge.user_id
+           AND member.epoch = edge.membership_epoch AND member.revoked_at IS NULL
+         WHERE edge.team_id = $1 AND edge.group_id = $2
+           AND edge.removed_at IS NULL FOR SHARE OF member`,
+        [teamID, groupID],
+      );
+      for (const member of affectedMembers.rows) {
+        requireAccessMutation(actor.role, member.role);
       }
       const group = await client.query(
         `SELECT id FROM team_access_groups WHERE id = $1 AND team_id = $2

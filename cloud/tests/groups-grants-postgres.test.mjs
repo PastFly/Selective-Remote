@@ -206,6 +206,8 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       actorDeviceID: device, teamID: team, vaultID: vault, principalKind: "GROUP",
       principalID: created.group.id, limit: 50 });
     assert.equal(groupResources.rows.some((row) => row.resourceID === host), true);
+    assert.equal(Object.hasOwn(groupResources.rows.find((row) => row.resourceID === host),
+      "effectiveUsable"), false);
     const removed = await access.removeAccessGroupMember({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       edgeID: edge.member.id, expectedVersion: 1,
@@ -310,6 +312,30 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       /access_idempotency_conflict/);
     await assert.rejects(access.createAccessGroup({ ...input, vaultID: v1Vault,
       idempotencyKey: `access:v1:${suffix}` }), /access_v2_preparing_required/);
+    const ownerMembership = (await pool.query(`SELECT id FROM team_memberships
+      WHERE team_id = $1 AND user_id = $2 AND revoked_at IS NULL`,
+    [team, user])).rows[0].id;
+    await access.addAccessGroupMember({ actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, groupID: created.group.id,
+      targetMembershipID: ownerMembership,
+      idempotencyKey: `access:owner-member:${suffix}` });
+    const admin = (await pool.query(`INSERT INTO users
+      (email, username, display_name, email_verified_at)
+      VALUES ($1, $2, 'Access admin', now()) RETURNING id`,
+    [`access-admin-${suffix}@example.com`, `access_admin_${suffix}`])).rows[0].id;
+    const adminDevice = randomUUID();
+    await pool.query(`INSERT INTO devices (id, user_id, name, platform, public_key,
+      public_key_algorithm, key_registered_at, key_approved_at)
+      VALUES ($1, $2, 'Admin browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+    [adminDevice, admin, JSON.stringify({ kty: "EC", crv: "P-256",
+      x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
+    await pool.query(`INSERT INTO team_memberships (team_id, user_id, role)
+      VALUES ($1, $2, 'admin')`, [team, admin]);
+    await assert.rejects(access.deleteAccessGroup({ actorUserID: admin,
+      actorDeviceID: adminDevice, teamID: team, vaultID: vault,
+      groupID: created.group.id, expectedVersion: 2,
+      idempotencyKey: `access:admin-owner-delete:${suffix}` }),
+    /team_access_denied/);
     const deleted = await access.deleteAccessGroup({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       expectedVersion: 2, idempotencyKey: `access:delete:${suffix}` });
