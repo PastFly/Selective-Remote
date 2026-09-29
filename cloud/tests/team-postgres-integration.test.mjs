@@ -402,6 +402,33 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        WHERE resource_id = $1 AND part = 'GENERAL' AND device_id = $2`,
       [childResourceID, ownerDeviceID],
     ), /resource_v2_published_wrapper_delete_forbidden/u);
+    const preparingClient = await pool.connect();
+    try {
+      await preparingClient.query("BEGIN");
+      await preparingClient.query(
+        `INSERT INTO vault_resource_ciphertext_versions
+         (team_id, vault_id, resource_id, part, key_version, policy_version,
+          registry_version, resource_version, manifest_version, nonce, ciphertext, auth_tag)
+         VALUES ($1, $2, $3, 'SECRET', 1, 1, 1, 1, 1, $4, $5, $6)`,
+        [created.team.id, shared.vault.id, childResourceID,
+          firstCiphertext.nonce, firstCiphertext.ciphertext, firstCiphertext.authTag],
+      );
+      const pointerAttempt = assert.rejects(pool.query(
+        `INSERT INTO vault_resource_manifest_pointers_v2
+         (team_id, vault_id, resource_id, part, key_version, manifest_version)
+         VALUES ($1, $2, $3, 'SECRET', 1, 1)`,
+        [created.team.id, shared.vault.id, childResourceID],
+      ), /resource_v2_published_ciphertext_required/u);
+      await preparingClient.query("ROLLBACK");
+      await pointerAttempt;
+      assert.equal((await pool.query(
+        "SELECT count(*)::integer AS count FROM vault_resource_ciphertext_versions WHERE resource_id = $1 AND part = 'SECRET'",
+        [childResourceID],
+      )).rows[0].count, 0);
+    } finally {
+      await preparingClient.query("ROLLBACK").catch(() => {});
+      preparingClient.release();
+    }
     // Two direct SQL updates on distinct wrapper rows must not both remove coverage.
     const wrapperClientA = await pool.connect();
     const wrapperClientB = await pool.connect();
@@ -458,6 +485,10 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        WHERE resource_id = $1`, [childResourceID]);
     assert.equal(Number(pointer.rows[0].key_version), 2);
     assert.equal(Number(pointer.rows[0].manifest_version), 2);
+    await assert.rejects(pool.query(
+      `UPDATE vault_resource_manifest_pointers_v2 SET manifest_version = 3
+       WHERE resource_id = $1 AND part = 'GENERAL'`, [childResourceID],
+    ), /resource_v2_published_ciphertext_required|invalid_resource_v2_manifest_advance/u);
     await assert.rejects(pool.query(
       `UPDATE vault_resource_ciphertext_versions
        SET lifecycle = 'OBSOLETE', obsolete_at = now()
