@@ -86,3 +86,10 @@ export function requiredCryptoParts(kind, mask) {
   }
   return [];
 }
+
+export function usabilityByPermission(availability) {
+  return Object.fromEntries(Object.entries(availability).map(([permission, status]) => [
+    permission, status === "NOT_REQUIRED" ? "YES"
+      : status === "WRAP_PRESENT_UNVERIFIED" ? "UNKNOWN" : "NO",
+  ]));
+}

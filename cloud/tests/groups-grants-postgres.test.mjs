@@ -251,9 +251,9 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const forwarding = randomUUID();
     await pool.query(`INSERT INTO vault_resource_registry
       (id, team_id, vault_id, policy_class, policy_kind)
-      VALUES ($1, $4, $5, 'folder', 'FOLDER'),
-             ($2, $4, $5, 'folder', 'FOLDER')`,
-    [folderA, folderB, forwarding, team, vault]);
+      VALUES ($1, $3, $4, 'folder', 'FOLDER'),
+             ($2, $3, $4, 'folder', 'FOLDER')`,
+    [folderA, folderB, team, vault]);
     await pool.query(`INSERT INTO vault_resource_registry
       (id, team_id, vault_id, policy_class, policy_kind, parent_folder_id)
       VALUES ($1, $2, $3, 'general', 'FORWARDING', $4)`,

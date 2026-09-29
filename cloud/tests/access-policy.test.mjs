@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   validateGrant, inheritedViewBit, evaluateAccessPaths, permissionBits,
-  requiredCryptoParts,
+  requiredCryptoParts, usabilityByPermission,
 } from "../src/access-policy.mjs";
 import { requireAccessMutation } from "../src/team-policy.mjs";
 
@@ -86,4 +86,12 @@ test("crypto work is derived per permission rather than from policy presence", (
   assert.deepEqual(requiredCryptoParts("CREDENTIAL", permissionBits.Reveal), ["SECRET"]);
   assert.deepEqual(requiredCryptoParts("CREDENTIAL", permissionBits.View | permissionBits.Reveal),
     ["METADATA", "SECRET"]);
+});
+
+
+test("mixed policy rights retain per-permission crypto usability", () => {
+  assert.deepEqual(usabilityByPermission({ ManageAccess: "NOT_REQUIRED",
+    View: "NO", Reveal: "WRAP_PRESENT_UNVERIFIED" }), {
+    ManageAccess: "YES", View: "NO", Reveal: "UNKNOWN",
+  });
 });

@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { requireAccessMutation, validateIdempotencyKey } from "./team-policy.mjs";
 import { applyGrantChanges, compileEffectiveAccess } from "./effective-access.mjs";
-import { permissionBits, requiredCryptoParts, validateGrant } from "./access-policy.mjs";
+import { permissionBits, requiredCryptoParts, usabilityByPermission, validateGrant } from "./access-policy.mjs";
 import { createPreviewToken, hashAccessRequest, validateAccessChangeRequest,
   verifyPreviewToken } from "./access-preview.mjs";
 
@@ -739,7 +739,8 @@ export class AccessStore {
       cryptoAvailableByPermission[label] = part === null ? "NOT_REQUIRED"
         : availableParts.has(part) ? "WRAP_PRESENT_UNVERIFIED" : "NO";
     }
-    return { ...result, cryptoAvailableByPermission };
+    return { ...result, cryptoAvailableByPermission,
+      effectiveUsableByPermission: usabilityByPermission(cryptoAvailableByPermission) };
   }
 
   async previewAccessChange(input) {
