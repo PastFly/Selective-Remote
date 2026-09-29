@@ -50,9 +50,12 @@ export function evaluateAccessPaths({ kind, paths, cryptoStatus = "NO",
       throw new Error("invalid_persisted_grant");
     }
     policyMask |= mask;
-    contributing.push({ ...path, effectiveMask: mask,
-      permission: kind === "CREDENTIAL" && mask === permissionBits.View
-        ? "ViewMetadata" : "View" });
+    const permissions = Object.entries(permissionBits)
+      .filter(([, bit]) => (mask & bit) !== 0)
+      .map(([name]) => name === "View" && kind === "CREDENTIAL"
+        ? "ViewMetadata" : name);
+    contributing.push({ ...path, effectiveMask: mask, permissions,
+      permission: permissions.length === 1 ? permissions[0] : undefined });
   }
   const policyAllowed = policyMask !== 0;
   let effectiveUsable = "NO";

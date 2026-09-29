@@ -67,3 +67,12 @@ test("existing Team role ceiling governs policy mutations", () => {
     }
   }
 });
+
+
+test("a direct grant reports each permission path without labeling Edit as View", () => {
+  const result = evaluateAccessPaths({ kind: "HOST", paths: [
+    { id: "host-editor", sourceType: "DIRECT", mask: permissionBits.View | permissionBits.Edit },
+  ], cryptoStatus: "NO", requiresCrypto: false });
+  assert.deepEqual(result.paths[0].permissions, ["View", "Edit"]);
+  assert.equal(result.paths[0].permission, undefined);
+});
