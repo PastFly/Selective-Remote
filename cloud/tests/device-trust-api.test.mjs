@@ -1,0 +1,48 @@
+import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+import test from "node:test";
+import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
+import { DeviceTrustService } from "../src/device-trust-service.mjs";
+
+const accountID = "11111111-1111-4111-8111-111111111111";
+const deviceID = "55555555-5555-4555-8555-555555555555";
+
+test("request API binds account and device to session, refusing caller-selected identity", async () => {
+  const identity = await generateTeamDeviceIdentity(webcrypto);
+  const seen = [];
+  const service = new DeviceTrustService({ async createRequest(value) {
+    seen.push(value);
+    return { requestID: value.requestID, status: "pending" };
+  } });
+  const session = { user_id: accountID, device_id: deviceID };
+  const key = "device-trust-request-1";
+  await service.request(session, { publicKey: identity.publicKey, keyVersion: 1 }, key);
+  assert.equal(seen[0].accountID, accountID);
+  assert.equal(seen[0].actorDeviceID, deviceID);
+  assert.equal(seen[0].deviceID, deviceID);
+  assert.equal(seen[0].keyDigest.length, 32);
+  await assert.rejects(service.request(session, { publicKey: identity.publicKey,
+    keyVersion: 1, deviceID: "66666666-6666-4666-8666-666666666666" }, key),
+  /device_trust_invalid/u);
+  await assert.rejects(service.request({ ...session, device_id: null },
+    { publicKey: identity.publicKey, keyVersion: 1 }, key), /device_trust_invalid/u);
+});
+
+test("untrusted client cannot start a challenge with a different account or stale clock", async () => {
+  const service = new DeviceTrustService({ async startChallenge() {
+    throw new Error("must_not_reach_store");
+  } });
+  const session = { user_id: accountID, device_id: deviceID };
+  const requestID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const key = "device-trust-challenge-1";
+  const identity = await generateTeamDeviceIdentity(webcrypto);
+  const challenge = { version: 1, accountID,
+    requestID, deviceID, publicKey: identity.publicKey,
+    approverPublicKey: identity.publicKey, nonce: "A".repeat(43),
+    issuedAt: 1_800_000_000, expiresAt: 1_800_000_300 };
+  await assert.rejects(service.startChallenge(session, requestID,
+    { challenge: { ...challenge, accountID: "22222222-2222-4222-8222-222222222222" } }, key),
+  /device_trust_invalid/u);
+  await assert.rejects(service.startChallenge(session, requestID,
+    { challenge }, key), /device_trust_invalid/u);
+});

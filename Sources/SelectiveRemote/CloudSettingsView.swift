@@ -42,6 +42,7 @@ struct CloudSettingsView: View {
     @State private var personalVaultUploading = false
     @State private var showsPersonalVaultUpload = false
     @State private var showsTeamManagement = false
+    @State private var showsDeviceTrust = false
     @State private var personalVaultRecoveryPhrase = ""
     @State private var personalVaultRecoveryConfirmation = ""
     @State private var includePersonalVaultCredentials = false
@@ -117,6 +118,11 @@ struct CloudSettingsView: View {
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                         }
+                    }
+
+                    Button(UpdateLocalization.text(ru: "Доверие устройств…", en: "Device Trust…"),
+                           systemImage: "checkmark.shield") {
+                        showsDeviceTrust = true
                     }
 
                     Button(
@@ -396,6 +402,11 @@ struct CloudSettingsView: View {
                     client: client,
                     onInventoryChanged: refreshInventory
                 )
+            }
+        }
+        .sheet(isPresented: $showsDeviceTrust) {
+            if let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint) {
+                SelectiveRemoteCloudDeviceTrustView(endpoint: url, client: client)
             }
         }
     }

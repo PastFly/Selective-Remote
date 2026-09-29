@@ -3,26 +3,32 @@ export class DeviceTrustStore {
   constructor(pool) { this.pool = pool; }
 
   async getSnapshot(accountID) {
-    const [root, directory, certificates] = await Promise.all([
-      this.pool.query(
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      const root = await client.query(
         `SELECT root_public_key, fingerprint, custodian_device_id, created_at
-         FROM device_trust_roots_v1 WHERE account_id = $1`, [accountID]),
-      this.pool.query(
+         FROM device_trust_roots_v1 WHERE account_id = $1`, [accountID]);
+      const directory = await client.query(
         `SELECT version, directory_json FROM device_trust_directories_v1
-         WHERE account_id = $1 ORDER BY version DESC LIMIT 1`, [accountID]),
-      this.pool.query(
-        `SELECT device_id, key_version, certificate_json
+         WHERE account_id = $1 ORDER BY version DESC LIMIT 1`, [accountID]);
+      const certificates = await client.query(
+        `SELECT DISTINCT ON (device_id) device_id, key_version, certificate_json
          FROM device_trust_certificates_v1 WHERE account_id = $1
-         ORDER BY device_id, key_version DESC`, [accountID]),
-    ]);
-    if (!root.rows[0]) return { state: "UNINITIALIZED" };
-    return { state: "ROOT_PUBLISHED",
-      rootPublicKey: root.rows[0].root_public_key.toString("base64url"),
-      rootFingerprint: root.rows[0].fingerprint.toString("hex"),
-      custodianDeviceID: root.rows[0].custodian_device_id,
-      createdAt: root.rows[0].created_at,
-      checkpoint: directory.rows[0]?.directory_json ?? null,
-      certificates: certificates.rows.map((row) => row.certificate_json) };
+         ORDER BY device_id, key_version DESC`, [accountID]);
+      await client.query("COMMIT");
+      if (!root.rows[0]) return { state: "UNINITIALIZED" };
+      return { state: "ROOT_PUBLISHED",
+        rootPublicKey: root.rows[0].root_public_key.toString("base64url"),
+        rootFingerprint: root.rows[0].fingerprint.toString("hex"),
+        custodianDeviceID: root.rows[0].custodian_device_id,
+        createdAt: root.rows[0].created_at,
+        checkpoint: directory.rows[0]?.directory_json ?? null,
+        certificates: certificates.rows.map((row) => row.certificate_json) };
+    } catch (error) {
+      try { await client.query("ROLLBACK"); } catch {}
+      throw error;
+    } finally { client.release(); }
   }
 
   async listRequests(accountID, actorDeviceID, custodian) {
@@ -40,7 +46,9 @@ export class DeviceTrustStore {
          ORDER BY created_at DESC LIMIT 1
        ) AS live_challenge ON true
        WHERE request.account_id = $1 AND ($2::boolean OR request.device_id = $3)
-       ORDER BY request.created_at DESC LIMIT 100`, [accountID, custodian, actorDeviceID]);
+       ORDER BY CASE WHEN request.state IN ('pending', 'challenged', 'answered')
+         THEN 0 ELSE 1 END, request.created_at DESC LIMIT 100`,
+      [accountID, custodian, actorDeviceID]);
     return result.rows.map((row) => ({ requestID: row.id, deviceID: row.device_id,
       keyVersion: Number(row.key_version), publicKey: row.public_key_json,
       status: row.state, createdAt: row.created_at, expiresAt: row.expires_at,
@@ -330,11 +338,18 @@ export class DeviceTrustStore {
       const root = await this.requireCustodian(client, accountID, actorDeviceID);
       const request = await this.lockedRequest(client, accountID, requestID);
       this.requireLiveRequest(request, ["answered"]);
+      const target = await client.query(
+        `SELECT revoked_at, key_approved_at FROM devices
+         WHERE user_id = $1 AND id = $2 FOR UPDATE`,
+        [accountID, request.device_id]);
+      if (!target.rows[0] || target.rows[0].revoked_at) {
+        throw new Error("device_trust_conflict");
+      }
       if (!root.root_public_key.equals(bundle.rootBytes)
-        || request.key_version !== bundle.keyVersion
+        || Number(request.key_version) !== bundle.keyVersion
         || !request.public_key.equals(bundle.publicKeyBytes)
         || certificate?.payload?.deviceID !== request.device_id
-        || certificate.payload.keyVersion !== request.key_version
+        || certificate.payload.keyVersion !== Number(request.key_version)
         || checkpoint?.payload?.version !== bundle.directoryVersion) {
         throw new Error("device_trust_invalid");
       }
@@ -378,9 +393,9 @@ export class DeviceTrustStore {
          VALUES ($1, $2, $3, $4, $5::jsonb)`,
         [accountID, bundle.directoryVersion, bundle.directoryBytes,
           bundle.directorySignature, JSON.stringify(checkpoint)]);
-      if (request.key_version > 1) {
+      if (Number(request.key_version) > 1) {
         const previous = oldEntries.find((entry) => entry.deviceID === request.device_id);
-        if (!previous || previous.keyVersion !== request.key_version - 1) {
+        if (!previous || previous.keyVersion !== Number(request.key_version) - 1) {
           throw new Error("device_trust_invalid");
         }
         await client.query(
@@ -392,13 +407,21 @@ export class DeviceTrustStore {
         const canonicalKey = JSON.stringify({ kty: "EC", crv: "P-256",
           x: currentKey.x, y: currentKey.y, ext: true, key_ops: [] });
         await client.query(
-          `UPDATE devices SET public_key = $3, key_approved_at = NULL
+          `UPDATE devices SET public_key = $3, key_registered_at = now(),
+             key_approved_at = NULL,
+             key_approved_by_device_id = NULL
            WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL`,
           [accountID, request.device_id, canonicalKey]);
+        await client.query(
+          `DELETE FROM team_membership_device_admissions AS admission
+           USING team_memberships AS membership
+           WHERE admission.membership_id = membership.id
+             AND membership.user_id = $1 AND admission.device_id = $2`,
+          [accountID, request.device_id]);
         const wrapper = await client.query(
           `SELECT 1 FROM shared_vault_key_wrappers WHERE device_id = $1 LIMIT 1`,
           [request.device_id]);
-        if (wrapper.rows[0]) {
+        if (target.rows[0].key_approved_at || wrapper.rows[0]) {
           await client.query(
             `WITH affected AS (
                UPDATE shared_vaults AS vault SET rotation_required = true, updated_at = now()
@@ -424,7 +447,7 @@ export class DeviceTrustStore {
            approver_device_id = $3, certificate_serial = $4
          WHERE account_id = $1 AND id = $2`,
         [accountID, requestID, actorDeviceID, bundle.serial]);
-      const action = request.key_version === 1 ? "device.approved" : "device.rekey_approved";
+      const action = Number(request.key_version) === 1 ? "device.approved" : "device.rekey_approved";
       await client.query(
         `INSERT INTO device_trust_account_events_v1
           (account_id, actor_device_id, target_device_id, action, key_version)

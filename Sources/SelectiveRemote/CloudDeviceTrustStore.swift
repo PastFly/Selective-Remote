@@ -7,6 +7,12 @@ protocol SelectiveRemoteDeviceTrustPinStore {
                  next: SelectiveRemoteDeviceTrustPin) throws
 }
 
+struct SelectiveRemoteDeviceTrustBootstrapBundle: Codable, Equatable {
+    let rootPublicKey: String
+    let certificate: SelectiveRemoteSignedDeviceCertificate
+    let checkpoint: SelectiveRemoteSignedDeviceDirectory
+}
+
 struct SelectiveRemoteDeviceTrustLocalStore: SelectiveRemoteDeviceTrustPinStore {
     private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
 
@@ -43,6 +49,76 @@ struct SelectiveRemoteDeviceTrustLocalStore: SelectiveRemoteDeviceTrustPinStore 
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
         return try envelopeStore.envelope(for: endpoint)?
             .deviceTrustPins[accountID.canonicalCloudString]
+    }
+
+    func bootstrapBundle(endpoint: URL, accountID: UUID) throws
+        -> SelectiveRemoteDeviceTrustBootstrapBundle? {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
+        return try envelopeStore.envelope(for: endpoint)?
+            .deviceTrustBootstrapBundles[accountID.canonicalCloudString]
+    }
+
+    func saveBootstrapBundleIfAbsent(_ bundle: SelectiveRemoteDeviceTrustBootstrapBundle,
+        endpoint: URL, accountID: UUID) throws -> SelectiveRemoteDeviceTrustBootstrapBundle {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
+        var committed = bundle
+        try envelopeStore.update(for: endpoint) { envelope in
+            let key = accountID.canonicalCloudString
+            if let existing = envelope.deviceTrustBootstrapBundles[key] {
+                guard existing == bundle else { throw SelectiveRemoteDeviceTrustError.untrustedRoot }
+                committed = existing
+            } else { envelope.deviceTrustBootstrapBundles[key] = bundle }
+        }
+        return committed
+    }
+
+    private func pendingKey(accountID: UUID, deviceID: UUID) -> String {
+        "\(accountID.canonicalCloudString)|\(deviceID.canonicalCloudString)"
+    }
+
+    func pendingRekey(endpoint: URL, accountID: UUID, deviceID: UUID) throws
+        -> SelectiveRemoteTeamDeviceIdentity? {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
+        guard let data = try envelopeStore.envelope(for: endpoint)?
+            .deviceTrustPendingRekeys[pendingKey(accountID: accountID, deviceID: deviceID)]
+        else { return nil }
+        return try SelectiveRemoteTeamDeviceIdentity(deviceID: deviceID,
+            privateKeyRepresentation: data)
+    }
+
+    func savePendingRekeyIfAbsent(_ identity: SelectiveRemoteTeamDeviceIdentity,
+        endpoint: URL, accountID: UUID) throws -> SelectiveRemoteTeamDeviceIdentity {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
+        let key = pendingKey(accountID: accountID, deviceID: identity.deviceID)
+        var committed = identity.privateKey.rawRepresentation
+        try envelopeStore.update(for: endpoint) { envelope in
+            if let existing = envelope.deviceTrustPendingRekeys[key] {
+                committed = existing
+            } else { envelope.deviceTrustPendingRekeys[key] = committed }
+        }
+        return try SelectiveRemoteTeamDeviceIdentity(deviceID: identity.deviceID,
+            privateKeyRepresentation: committed)
+    }
+
+    func commitPendingRekey(endpoint: URL, accountID: UUID, deviceID: UUID,
+        expectedPublicKey: SelectiveRemoteTeamDevicePublicKey) throws
+        -> SelectiveRemoteTeamDeviceIdentity {
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint.absoluteString)
+        let key = pendingKey(accountID: accountID, deviceID: deviceID)
+        var committed: Data?
+        try envelopeStore.update(for: endpoint) { envelope in
+            guard let data = envelope.deviceTrustPendingRekeys[key],
+                  let pending = try? SelectiveRemoteTeamDeviceIdentity(
+                    deviceID: deviceID, privateKeyRepresentation: data),
+                  pending.publicKey == expectedPublicKey
+            else { throw SelectiveRemoteDeviceTrustError.untrustedRoot }
+            envelope.teamDevicePrivateKeys[deviceID.canonicalCloudString] = data
+            envelope.deviceTrustPendingRekeys.removeValue(forKey: key)
+            committed = data
+        }
+        guard let committed else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
+        return try SelectiveRemoteTeamDeviceIdentity(deviceID: deviceID,
+            privateKeyRepresentation: committed)
     }
 
     func savePinIfAbsent(_ pin: SelectiveRemoteDeviceTrustPin, endpoint: URL)

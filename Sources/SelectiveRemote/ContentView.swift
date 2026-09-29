@@ -152,6 +152,7 @@ struct ContentView: View {
     @State private var newPersonalFolderName = ""
     @State private var newPersonalFolderParent = ""
     @State private var showsCloudManagement = false
+    @State private var showsDeviceTrust = false
     @State private var showsCloudOnboarding = false
     @State private var showsSyncCenter = false
     @State private var diagnosticsCloudSyncRequestID: UUID?
@@ -464,6 +465,11 @@ struct ContentView: View {
                         )
                     }
                 )
+            }
+        }
+        .sheet(isPresented: $showsDeviceTrust) {
+            if let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint) {
+                SelectiveRemoteCloudDeviceTrustView(endpoint: endpoint, client: cloudClient)
             }
         }
         .sheet(isPresented: $showsCloudOnboarding, onDismiss: {
@@ -2394,11 +2400,25 @@ struct ContentView: View {
            notificationAccountID == user.id,
            notificationCenter.currentAccountID == user.id,
            notificationCenter.sessionRevision == accountRevision {
-            notificationCenter.reconcileDevices(devices)
+            if let signed = try? await cloudClient.deviceTrustRequests(endpoint: endpoint),
+               cloudEndpoint == sourceEndpoint, cloudSessionAvailable,
+               notificationCenter.sessionRevision == accountRevision {
+                let secured = Set(signed.map(\.deviceID))
+                let ownID = UUID(uuidString: cloudDeviceID)
+                let actionable = signed.filter { $0.deviceID != ownID
+                    && ["pending", "challenged", "answered"].contains($0.status) }
+                notificationCenter.reconcileDevices(
+                    actionable.map(\.requestID) + devices.filter { !secured.contains($0) })
+            }
         }
     }
 
     private func openCloudDevices() {
+        refreshCloudSessionAvailability()
+        if cloudSessionAvailable {
+            showsDeviceTrust = true
+            return
+        }
         guard let endpoint = try? SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint),
               let url = SelectiveRemoteCloudPortalURL.devices(endpoint: endpoint)
         else { return }

@@ -35,6 +35,30 @@ struct CloudDeviceTrustV1Tests {
         }
     }
 
+    @Test("macOS challenge JSON uses canonical IDs and matches browser key fingerprint")
+    @MainActor
+    func challengeWireFormat() throws {
+        let url = try #require(Bundle.module.url(forResource: "device-trust-browser",
+                                                  withExtension: "json", subdirectory: "Fixtures"))
+        struct Fixture: Decodable {
+            let certificate: SelectiveRemoteSignedDeviceCertificate
+        }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        #expect(SelectiveRemoteCloudDeviceTrustCoordinator.keyFingerprint(
+            fixture.certificate.payload.publicKey)
+            == "77d9-426f-ba99-e6b1-a01d-ba38-904a-b03c-c7e8-8405-0914-f5ac-96d1-a7b7-b577-4fa8")
+        let challenge = try SelectiveRemoteDeviceTrustV1.createPossessionChallenge(
+            accountID: account, requestID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+            deviceID: device, publicKey: fixture.certificate.payload.publicKey,
+            issuedAt: 1_800_000_000).challenge
+        let encoded = try JSONEncoder().encode(challenge)
+        let text = try #require(String(data: encoded, encoding: .utf8))
+        #expect(text.contains("11111111-1111-4111-8111-111111111111"))
+        #expect(!text.contains("AAAAAAAA-AAAA"))
+        #expect(try JSONDecoder().decode(SelectiveRemoteDevicePossessionChallenge.self,
+            from: encoded) == challenge)
+    }
+
     @Test("valid account certificate cannot bypass Team epoch or admission")
     func teamWrapperEligibility() throws {
         let root = P256.Signing.PrivateKey()

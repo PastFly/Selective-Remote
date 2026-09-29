@@ -168,7 +168,45 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
       idempotencyKey: randomUUID() });
     await assert.rejects(store.rejectRequest({ accountID, actorDeviceID: firstID,
       requestID, idempotencyKey: randomUUID() }), /device_trust_conflict/u);
-    const revokedDirectory = await signDeviceDirectory({ root, accountID, version: 3,
+    const replacement = await generateTeamDeviceIdentity(webcrypto);
+    const rekeyID = randomUUID();
+    const replacementBytes = Buffer.concat([Buffer.from([4]),
+      Buffer.from(replacement.publicKey.x, "base64url"),
+      Buffer.from(replacement.publicKey.y, "base64url")]);
+    await store.createRequest({ accountID, actorDeviceID: secondID, deviceID: secondID,
+      requestID: rekeyID, publicKeyBytes: replacementBytes,
+      publicKeyJSON: keyJSON(replacement.publicKey),
+      keyDigest: createHash("sha256").update(replacementBytes).digest(),
+      keyVersion: 2, idempotencyKey: randomUUID() });
+    const rekeyChallenge = await createPossessionChallenge({ accountID,
+      requestID: rekeyID, deviceID: secondID, publicKey: replacement.publicKey,
+      issuedAt: Math.floor(Date.now() / 1000), cryptoValue: webcrypto });
+    const rekeyChallengeID = randomUUID();
+    await store.startChallenge({ accountID, actorDeviceID: firstID,
+      requestID: rekeyID, challengeID: rekeyChallengeID,
+      challengeBytes: Buffer.from(devicePossessionChallengeBytes(rekeyChallenge.challenge)),
+      challenge: rekeyChallenge.challenge, idempotencyKey: randomUUID() });
+    const rekeyAnswer = await answerPossessionChallenge({ challenge: rekeyChallenge.challenge,
+      devicePrivateKey: replacement.privateKey, devicePublicKey: replacement.publicKey,
+      cryptoValue: webcrypto });
+    await store.answerChallenge({ accountID, actorDeviceID: secondID,
+      requestID: rekeyID, challengeID: rekeyChallengeID,
+      proof: Buffer.from(rekeyAnswer.proof, "base64url"), idempotencyKey: randomUUID() });
+    const replacementCertificate = await issueDeviceCertificate({ root, accountID,
+      deviceID: secondID, publicKey: replacement.publicKey, keyVersion: 2,
+      issuedAt: Math.floor(Date.now() / 1000), serial: randomUUID(), cryptoValue: webcrypto });
+    const replacementDirectory = await signDeviceDirectory({ root, accountID, version: 3,
+      certificates: [firstCertificate, replacementCertificate], cryptoValue: webcrypto });
+    const replacementBundle = await validateSignedDeviceBundle({ rootPublicKey: root.publicKey,
+      certificate: replacementCertificate, checkpoint: replacementDirectory,
+      accountID, deviceID: secondID, publicKey: replacement.publicKey });
+    await store.approveRequest({ accountID, actorDeviceID: firstID,
+      requestID: rekeyID, challengeID: rekeyChallengeID,
+      bundle: replacementBundle, certificate: replacementCertificate,
+      checkpoint: replacementDirectory, idempotencyKey: randomUUID() });
+    const registered = await pool.query(`SELECT public_key FROM devices WHERE id = $1`, [secondID]);
+    assert.equal(registered.rows[0].public_key, keyJSON(replacement.publicKey));
+    const revokedDirectory = await signDeviceDirectory({ root, accountID, version: 4,
       certificates: [firstCertificate], cryptoValue: webcrypto });
     const revocation = await validateSignedDeviceDirectory({ rootPublicKey: root.publicKey,
       checkpoint: revokedDirectory, accountID });
@@ -179,6 +217,7 @@ test("PostgreSQL serializes bootstrap, proof, approval, rekey and signed revocat
     const audit = await pool.query(`SELECT action FROM device_trust_account_events_v1
       WHERE account_id = $1 ORDER BY id`, [accountID]);
     assert.deepEqual(audit.rows.map((row) => row.action),
-      ["device.approved", "device.pending", "device.approved", "device.revoked"]);
+      ["device.approved", "device.pending", "device.approved",
+        "device.rekey_requested", "device.rekey_approved", "device.revoked"]);
   } finally { await pool.end(); }
 });

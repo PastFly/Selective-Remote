@@ -177,6 +177,56 @@ struct SelectiveRemoteDevicePossessionChallenge: Codable, Equatable, Sendable {
     let nonce: String
     let issuedAt: Int
     let expiresAt: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case version, accountID, requestID, deviceID, publicKey
+        case approverPublicKey, nonce, issuedAt, expiresAt
+    }
+
+    init(version: Int, accountID: UUID, requestID: UUID, deviceID: UUID,
+         publicKey: SelectiveRemoteTeamDevicePublicKey,
+         approverPublicKey: SelectiveRemoteTeamDevicePublicKey,
+         nonce: String, issuedAt: Int, expiresAt: Int) {
+        self.version = version
+        self.accountID = accountID
+        self.requestID = requestID
+        self.deviceID = deviceID
+        self.publicKey = publicKey
+        self.approverPublicKey = approverPublicKey
+        self.nonce = nonce
+        self.issuedAt = issuedAt
+        self.expiresAt = expiresAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        try deviceTrustKeys(decoder, ["version", "accountID", "requestID", "deviceID",
+                                      "publicKey", "approverPublicKey", "nonce",
+                                      "issuedAt", "expiresAt"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        accountID = try deviceTrustUUID(values.decode(String.self, forKey: .accountID))
+        requestID = try deviceTrustUUID(values.decode(String.self, forKey: .requestID))
+        deviceID = try deviceTrustUUID(values.decode(String.self, forKey: .deviceID))
+        publicKey = try values.decode(SelectiveRemoteTeamDevicePublicKey.self, forKey: .publicKey)
+        approverPublicKey = try values.decode(SelectiveRemoteTeamDevicePublicKey.self,
+            forKey: .approverPublicKey)
+        nonce = try values.decode(String.self, forKey: .nonce)
+        issuedAt = try values.decode(Int.self, forKey: .issuedAt)
+        expiresAt = try values.decode(Int.self, forKey: .expiresAt)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(version, forKey: .version)
+        try values.encode(accountID.canonicalCloudString, forKey: .accountID)
+        try values.encode(requestID.canonicalCloudString, forKey: .requestID)
+        try values.encode(deviceID.canonicalCloudString, forKey: .deviceID)
+        try values.encode(publicKey, forKey: .publicKey)
+        try values.encode(approverPublicKey, forKey: .approverPublicKey)
+        try values.encode(nonce, forKey: .nonce)
+        try values.encode(issuedAt, forKey: .issuedAt)
+        try values.encode(expiresAt, forKey: .expiresAt)
+    }
 }
 
 struct SelectiveRemoteDeviceWrapperEligibility: Sendable {
@@ -336,11 +386,31 @@ enum SelectiveRemoteDeviceTrustV1 {
             .selectiveRemoteBase64URL
     }
 
+    static func certificateDigest(_ certificate: SelectiveRemoteSignedDeviceCertificate) throws -> String {
+        try digest(certificate)
+    }
+
     static func directoryDigest(_ directory: SelectiveRemoteSignedDeviceDirectory) throws -> String {
         guard let signature = Data(selectiveRemoteBase64URL: directory.signature, expectedLength: 64)
         else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
         return Data(SHA256.hash(data: try directoryBytes(directory.payload) + signature))
             .selectiveRemoteBase64URL
+    }
+
+    static func verifyDirectory(rootPublicKey: P256.Signing.PublicKey,
+        directory: SelectiveRemoteSignedDeviceDirectory,
+        pin: SelectiveRemoteDeviceTrustPin) throws -> Int {
+        guard pin.rootFingerprint == fingerprint(rootPublicKey),
+              pin.accountID == directory.payload.accountID,
+              directory.payload.version >= pin.highWater
+        else { throw SelectiveRemoteDeviceTrustError.untrustedRoot }
+        try verify(directory.signature, message: directoryBytes(directory.payload),
+                   key: rootPublicKey)
+        if directory.payload.version == pin.highWater,
+           try directoryDigest(directory) != pin.checkpointDigest {
+            throw SelectiveRemoteDeviceTrustError.staleDirectory
+        }
+        return directory.payload.version
     }
 
     private static func verify(_ signature: String, message: Data, key: P256.Signing.PublicKey) throws {
