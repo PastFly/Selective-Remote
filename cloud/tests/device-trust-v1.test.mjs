@@ -101,7 +101,8 @@ test("checkpoint rejects rollback, revoked devices and changed scope", async () 
     certificates: [], cryptoValue: webcrypto });
   await assert.rejects(verifyDeviceForWrapping({ ...base,
     checkpoint: revoked }), /device_trust/u);
-  const altered = { ...checkpoint, signature: `A${checkpoint.signature.slice(1)}` };
+  const altered = { ...checkpoint,
+    signature: `${checkpoint.signature[0] === "A" ? "B" : "A"}${checkpoint.signature.slice(1)}` };
   await assert.rejects(verifyDeviceForWrapping({ ...base, checkpoint: altered }), /device_trust/u);
 });
 

@@ -183,6 +183,33 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const childIdentity = await store.registerResourceIdentity({ ...resourceActor,
       resourceID: childResourceID, policyClass: "general", parentFolderID: folderResourceID });
     assert.equal(childIdentity.parent_folder_id, folderResourceID);
+    const folderA = "40a93a48-3b8f-4c92-9f1a-02984db9b132";
+    const folderB = "3a60769b-8d73-4a87-9d59-9d789d890f02";
+    for (const id of [folderA, folderB]) {
+      await store.registerResourceIdentity({ ...resourceActor,
+        resourceID: id, policyClass: "folder", parentFolderID: null });
+    }
+    const folderClientA = await pool.connect();
+    const folderClientB = await pool.connect();
+    try {
+      await Promise.all([folderClientA.query("BEGIN"), folderClientB.query("BEGIN")]);
+      const moves = [
+        folderClientA.query("UPDATE vault_resource_registry SET parent_folder_id = $2, resource_version = 2 WHERE id = $1", [folderA, folderB]),
+        folderClientB.query("UPDATE vault_resource_registry SET parent_folder_id = $2, resource_version = 2 WHERE id = $1", [folderB, folderA]),
+      ].map((promise, index) => promise.then(() => ({ index, ok: true }),
+        (error) => ({ index, ok: false, error })));
+      const firstMove = await Promise.race(moves);
+      await [folderClientA, folderClientB][firstMove.index].query(firstMove.ok ? "COMMIT" : "ROLLBACK");
+      const secondMove = await moves[1 - firstMove.index];
+      await [folderClientA, folderClientB][secondMove.index].query(secondMove.ok ? "COMMIT" : "ROLLBACK");
+      assert.equal([firstMove, secondMove].filter((item) => item.ok).length, 1);
+      assert.match(String([firstMove, secondMove].find((item) => !item.ok)?.error),
+        /cyclic_resource_parent|40P01/u);
+    } finally {
+      await Promise.allSettled([folderClientA.query("ROLLBACK"), folderClientB.query("ROLLBACK")]);
+      folderClientA.release();
+      folderClientB.release();
+    }
     assert.equal((await store.getResourceIdentity({ ...resourceActor, resourceID: childResourceID })).id,
       childResourceID);
     await pool.query(
@@ -229,6 +256,83 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       `SELECT count(*)::integer AS count FROM vault_resource_ciphertext_versions
        WHERE resource_id = $1`, [childResourceID])).rows[0].count, 0);
     assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
+    const lateDeviceID = "d22532d3-fbb4-4a99-ad03-151586b88412";
+    await pool.query(
+      `INSERT INTO devices
+       (id, user_id, name, platform, public_key, public_key_algorithm,
+        key_registered_at, key_approved_at)
+       VALUES ($1, $2, 'Late device', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+      [lateDeviceID, byEmail["owner@example.com"], JSON.stringify(identity.publicKey)],
+    );
+    await assert.rejects(pool.query(
+      `INSERT INTO team_membership_device_admissions
+       (membership_id, membership_epoch, device_id) VALUES ($1, $2, $3)`,
+      [created.membership.id, created.membership.epoch, lateDeviceID],
+    ), /resource_v2_admission_requires_rotation/u);
+    // A pointer must never expose an incomplete direct-SQL PREPARED version.
+    await pool.query(
+      `INSERT INTO vault_resource_ciphertext_versions
+       (team_id, vault_id, resource_id, part, key_version, policy_version,
+        registry_version, resource_version, manifest_version, nonce, ciphertext, auth_tag)
+       VALUES ($1, $2, $3, 'METADATA', 1, 1, 1, 1, 1, $4, $5, $6)`,
+      [created.team.id, shared.vault.id, childResourceID,
+        firstCiphertext.nonce, firstCiphertext.ciphertext, firstCiphertext.authTag],
+    );
+    await pool.query(
+      `INSERT INTO vault_resource_key_wrappers_v2
+       (team_id, vault_id, resource_id, part, key_version, membership_id,
+        membership_epoch, device_id, ephemeral_public_key, nonce, ciphertext, auth_tag)
+       VALUES ($1, $2, $3, 'METADATA', 1, $4, $5, $6, $7, $8, $9, $10)`,
+      [created.team.id, shared.vault.id, childResourceID,
+        created.membership.id, created.membership.epoch, ownerDeviceID,
+        JSON.stringify(firstWrapper.ephemeralPublicKey), firstWrapper.nonce,
+        firstWrapper.ciphertext, firstWrapper.authTag],
+    );
+    await assert.rejects(pool.query(
+      `INSERT INTO vault_resource_manifest_pointers_v2
+       (team_id, vault_id, resource_id, part, key_version, manifest_version)
+       VALUES ($1, $2, $3, 'METADATA', 1, 1)`,
+      [created.team.id, shared.vault.id, childResourceID],
+    ), /resource_v2_published_ciphertext_required/u);
+    await pool.query(
+      `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
+       WHERE resource_id = $1 AND part = 'METADATA'`, [childResourceID],
+    );
+    await assert.rejects(pool.query(
+      `INSERT INTO vault_resource_manifest_pointers_v2
+       (team_id, vault_id, resource_id, part, key_version, manifest_version)
+       VALUES ($1, $2, $3, 'METADATA', 1, 1)`,
+      [created.team.id, shared.vault.id, childResourceID],
+    ), /resource_v2_wrapper_coverage_incomplete/u);
+    await assert.rejects(pool.query(
+      `DELETE FROM vault_resource_key_wrappers_v2
+       WHERE resource_id = $1 AND part = 'GENERAL' AND device_id = $2`,
+      [childResourceID, ownerDeviceID],
+    ), /resource_v2_published_wrapper_delete_forbidden/u);
+    // Two direct SQL updates on distinct wrapper rows must not both remove coverage.
+    const wrapperClientA = await pool.connect();
+    const wrapperClientB = await pool.connect();
+    try {
+      await Promise.all([wrapperClientA.query("BEGIN"), wrapperClientB.query("BEGIN")]);
+      await Promise.all([
+        wrapperClientA.query("SELECT 1 FROM vault_resource_key_wrappers_v2 WHERE resource_id = $1 AND device_id = $2 AND part = 'GENERAL' FOR UPDATE", [childResourceID, ownerDeviceID]),
+        wrapperClientB.query("SELECT 1 FROM vault_resource_key_wrappers_v2 WHERE resource_id = $1 AND device_id = $2 AND part = 'GENERAL' FOR UPDATE", [childResourceID, ownerSecondDeviceID]),
+      ]);
+      const wrapperRaces = [
+        wrapperClientA.query("UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now() WHERE resource_id = $1 AND device_id = $2 AND part = 'GENERAL'", [childResourceID, ownerDeviceID]),
+        wrapperClientB.query("UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now() WHERE resource_id = $1 AND device_id = $2 AND part = 'GENERAL'", [childResourceID, ownerSecondDeviceID]),
+      ].map((promise, index) => promise.then(() => ({ index, ok: true }),
+        (error) => ({ index, ok: false, error })));
+      const firstWrapper = await Promise.race(wrapperRaces);
+      await [wrapperClientA, wrapperClientB][firstWrapper.index].query(firstWrapper.ok ? "COMMIT" : "ROLLBACK");
+      const secondWrapper = await wrapperRaces[1 - firstWrapper.index];
+      await [wrapperClientA, wrapperClientB][secondWrapper.index].query(secondWrapper.ok ? "COMMIT" : "ROLLBACK");
+      assert.equal([firstWrapper, secondWrapper].filter((item) => item.ok).length, 0);
+    } finally {
+      await Promise.allSettled([wrapperClientA.query("ROLLBACK"), wrapperClientB.query("ROLLBACK")]);
+      wrapperClientA.release();
+      wrapperClientB.release();
+    }
     await pool.query("UPDATE devices SET revoked_at = now() WHERE id = $1", [ownerSecondDeviceID]);
     const nextContext = { ...cryptoContext, keyVersion: 2, manifestVersion: 2 };
     const nextCEK = generateResourceCEK(webcrypto);
@@ -259,7 +363,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     await assert.rejects(pool.query(
       `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
        WHERE resource_id = $1 AND key_version = 2`, [childResourceID],
-    ), /resource_v2_last_published_wrapper/u);
+    ), /resource_v2_last_published_wrapper|resource_v2_published_wrapper_coverage/u);
     assert.equal((await pool.query(
       `SELECT count(*)::integer AS count FROM vault_resource_key_wrappers_v2
        WHERE resource_id = $1 AND key_version = 1 AND obsolete_at IS NULL`,
@@ -280,10 +384,19 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       resourceID: childResourceID, parentFolderID: null, expectedVersion: 1 });
     assert.equal(moved.id, childResourceID);
     assert.equal(moved.parent_folder_id, null);
+    await assert.rejects(store.tombstoneResourceIdentity({ ...resourceActor,
+      resourceID: childResourceID, expectedVersion: 2 }),
+    /resource_v2_published_identity_in_use/u);
+    const tombstoneID = "bbd94518-288d-4968-9e17-ab01ca044770";
+    await store.registerResourceIdentity({ ...resourceActor,
+      resourceID: tombstoneID, policyClass: "general", parentFolderID: null });
     await store.tombstoneResourceIdentity({ ...resourceActor,
-      resourceID: childResourceID, expectedVersion: 2 });
+      resourceID: tombstoneID, expectedVersion: 1 });
+    await assert.rejects(pool.query(
+      "DELETE FROM vault_resource_registry WHERE id = $1", [tombstoneID],
+    ), /resource_identity_hard_delete_forbidden/u);
     await assert.rejects(store.registerResourceIdentity({ ...resourceActor,
-      resourceID: childResourceID, policyClass: "general", parentFolderID: null }),
+      resourceID: tombstoneID, policyClass: "general", parentFolderID: null }),
     /resource_id_exists/u);
     await pool.query(
       "UPDATE shared_vaults SET format_state = 'V1_ACTIVE', format_schema_version = 1 WHERE id = $1",

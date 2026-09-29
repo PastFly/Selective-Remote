@@ -48,7 +48,8 @@ test("dormant publish locks registry, inserts ciphertext and wrappers, then adva
   assert.ok(at("BEGIN") < at("AS registry_actor_role"));
   assert.ok(at("AS crypto_resource_version") < at("INSERT INTO vault_resource_ciphertext_versions"));
   assert.ok(at("INSERT INTO vault_resource_ciphertext_versions") < at("INSERT INTO vault_resource_key_wrappers_v2"));
-  assert.ok(at("INSERT INTO vault_resource_key_wrappers_v2") < at("INSERT INTO vault_resource_manifest_pointers_v2"));
+  assert.ok(at("INSERT INTO vault_resource_key_wrappers_v2") < at("SET lifecycle = 'PUBLISHED'"));
+  assert.ok(at("SET lifecycle = 'PUBLISHED'") < at("INSERT INTO vault_resource_manifest_pointers_v2"));
   assert.ok(at("INSERT INTO vault_resource_manifest_pointers_v2") < at("COMMIT"));
   assert.match(statements[at("AS crypto_resource_version")], /FOR UPDATE/u);
 });

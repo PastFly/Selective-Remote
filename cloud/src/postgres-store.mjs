@@ -267,6 +267,13 @@ export class PostgresStore {
             wrapper.authTag],
         );
       }
+      // Promotion is still invisible until COMMIT; the pointer guard rejects PREPARED.
+      await client.query(
+        `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+           AND key_version = $5`,
+        [teamID, vaultID, resourceID, scope.part, scope.keyVersion],
+      );
       let pointer;
       if (existing.rows[0]) {
         pointer = await client.query(
@@ -287,12 +294,6 @@ export class PostgresStore {
         );
       }
       if (!pointer.rows[0]) throw new Error("resource_manifest_conflict");
-      await client.query(
-        `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
-         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
-           AND key_version = $5`,
-        [teamID, vaultID, resourceID, scope.part, scope.keyVersion],
-      );
       if (currentKey > 0) {
         await client.query(
           `UPDATE vault_resource_ciphertext_versions
