@@ -45,6 +45,22 @@ test('revoking a group path does not erase a direct path', () => {
   assert.deepEqual(hostImpact.after, ['Connect']);
 });
 
+test('same Connect action survives group-path revoke when direct Host grant remains', () => {
+  const overlapping = [
+    ...grants,
+    { id: 'support-host-connect', resourceId: 'host', recipient: 'support', actions: ['Connect'] },
+  ];
+  const before = effectiveAccess({ resources, groups, grants: overlapping }, 'host', 'alex');
+  assert.deepEqual(before.paths.filter((path) => path.actions.includes('Connect')).map((path) => path.grantId),
+    ['host-grant', 'support-host-connect']);
+  const preview = revokePreview({ resources, groups, grants: overlapping }, ['host'], 'support', 'support-host-connect');
+  assert.deepEqual(preview.removedGrantIds, ['support-host-connect']);
+  const after = effectiveAccess({ resources, groups, grants: preview.remainingGrants }, 'host', 'alex');
+  assert.ok(after.actions.includes('Connect'));
+  assert.deepEqual(after.paths.filter((path) => path.actions.includes('Connect')).map((path) => path.grantId),
+    ['host-grant']);
+});
+
 test('group grant preview includes members and inherited descendants', () => {
   const result = grantPreview({ resources, groups, grants }, ['folder'], 'support', { folder: ['View'] });
   const credential = result.impacts.find((impact) => impact.resourceId === 'credential' && impact.principalId === 'alex');

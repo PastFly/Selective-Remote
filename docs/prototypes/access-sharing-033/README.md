@@ -24,8 +24,13 @@ the manager usable. Effective Access lists direct, group, and inherited demo
 paths; preview shows the affected group members and descendants before a
 demo grant or revoke. Only the chosen recipient's matching grants are removed.
 The demo uses simple Vault and folder labels for illustration; a real ACL needs
-stable resource/folder IDs, a server-enforced move transaction, and expiry
-enforcement. The current app has none of those granular guarantees.
+stable resource/folder IDs, separate resource encryption, a server-enforced
+move transaction, and expiry enforcement. The current app has none of those
+granular guarantees. Host Connect, Snippet Run, and Forwarding Run here are
+**UX actions**, not security-grade permissions: a modified authorized client
+can perform them outside the app when it already has the necessary data.
+See the [proposed architecture](../../architecture/access-sharing-target-model.md)
+and [effective access algorithm](../../architecture/access-sharing-effective-access.md).
 
 The prototype intentionally disables `Credential.Use without Reveal` and
 explains that the current whole-Team-Vault client decryption cannot enforce
