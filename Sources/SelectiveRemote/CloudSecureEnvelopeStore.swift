@@ -7,19 +7,25 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     var personalVaultKeyMaterials: [String: Data]
     var deviceTrustRootKeys: [String: Data]
     var deviceTrustPins: [String: SelectiveRemoteDeviceTrustPin]
+    var deviceTrustBootstrapBundles: [String: SelectiveRemoteDeviceTrustBootstrapBundle]
+    var deviceTrustPendingRekeys: [String: Data]
 
     init(
         sessionToken: String? = nil,
         teamDevicePrivateKeys: [String: Data] = [:],
         personalVaultKeyMaterials: [String: Data] = [:],
         deviceTrustRootKeys: [String: Data] = [:],
-        deviceTrustPins: [String: SelectiveRemoteDeviceTrustPin] = [:]
+        deviceTrustPins: [String: SelectiveRemoteDeviceTrustPin] = [:],
+        deviceTrustBootstrapBundles: [String: SelectiveRemoteDeviceTrustBootstrapBundle] = [:],
+        deviceTrustPendingRekeys: [String: Data] = [:]
     ) {
         self.sessionToken = sessionToken
         self.teamDevicePrivateKeys = teamDevicePrivateKeys
         self.personalVaultKeyMaterials = personalVaultKeyMaterials
         self.deviceTrustRootKeys = deviceTrustRootKeys
         self.deviceTrustPins = deviceTrustPins
+        self.deviceTrustBootstrapBundles = deviceTrustBootstrapBundles
+        self.deviceTrustPendingRekeys = deviceTrustPendingRekeys
     }
 
     var isEmpty: Bool {
@@ -28,11 +34,14 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
             && personalVaultKeyMaterials.isEmpty
             && deviceTrustRootKeys.isEmpty
             && deviceTrustPins.isEmpty
+            && deviceTrustBootstrapBundles.isEmpty
+            && deviceTrustPendingRekeys.isEmpty
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionToken, teamDevicePrivateKeys, personalVaultKeyMaterials
-        case deviceTrustRootKeys, deviceTrustPins
+        case deviceTrustRootKeys, deviceTrustPins, deviceTrustBootstrapBundles
+        case deviceTrustPendingRekeys
     }
 
     init(from decoder: any Decoder) throws {
@@ -50,6 +59,11 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
             forKey: .deviceTrustRootKeys) ?? [:]
         deviceTrustPins = try values.decodeIfPresent([String: SelectiveRemoteDeviceTrustPin].self,
             forKey: .deviceTrustPins) ?? [:]
+        deviceTrustBootstrapBundles = try values.decodeIfPresent(
+            [String: SelectiveRemoteDeviceTrustBootstrapBundle].self,
+            forKey: .deviceTrustBootstrapBundles) ?? [:]
+        deviceTrustPendingRekeys = try values.decodeIfPresent([String: Data].self,
+            forKey: .deviceTrustPendingRekeys) ?? [:]
     }
 }
 

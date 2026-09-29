@@ -9,6 +9,82 @@ struct CloudDeviceTrustV1Tests {
     private let device = UUID(uuidString: "55555555-5555-4555-8555-555555555555")!
     private let serial = UUID(uuidString: "88888888-8888-4888-8888-888888888888")!
 
+    @Test("ECDH proof requires the real device key and a live challenge")
+    func possessionProof() throws {
+        let identity = P256.KeyAgreement.PrivateKey()
+        let publicKey = try SelectiveRemoteTeamDevicePublicKey(identity.publicKey)
+        let request = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+        let result = try SelectiveRemoteDeviceTrustV1.createPossessionChallenge(
+            accountID: account, requestID: request, deviceID: device,
+            publicKey: publicKey, issuedAt: 1_800_000_000)
+        let proof = try SelectiveRemoteDeviceTrustV1.answerPossessionChallenge(
+            result.challenge, devicePrivateKey: identity, devicePublicKey: publicKey)
+        #expect(try SelectiveRemoteDeviceTrustV1.verifyPossessionAnswer(
+            result.challenge, proof: proof, approverPrivateKey: result.privateKey,
+            now: 1_800_000_001))
+        #expect(throws: Error.self) {
+            try SelectiveRemoteDeviceTrustV1.verifyPossessionAnswer(
+                result.challenge, proof: proof, approverPrivateKey: result.privateKey,
+                now: 1_800_000_301)
+        }
+        #expect(throws: Error.self) {
+            try SelectiveRemoteDeviceTrustV1.answerPossessionChallenge(
+                result.challenge, devicePrivateKey: P256.KeyAgreement.PrivateKey(),
+                devicePublicKey: try SelectiveRemoteTeamDevicePublicKey(
+                    P256.KeyAgreement.PrivateKey().publicKey))
+        }
+    }
+
+    @Test("macOS challenge JSON uses canonical IDs and matches browser key fingerprint")
+    @MainActor
+    func challengeWireFormat() throws {
+        let url = try #require(Bundle.module.url(forResource: "device-trust-browser",
+                                                  withExtension: "json", subdirectory: "Fixtures"))
+        struct Fixture: Decodable {
+            let certificate: SelectiveRemoteSignedDeviceCertificate
+        }
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url))
+        #expect(SelectiveRemoteCloudDeviceTrustCoordinator.keyFingerprint(
+            fixture.certificate.payload.publicKey)
+            == "77d9-426f-ba99-e6b1-a01d-ba38-904a-b03c-c7e8-8405-0914-f5ac-96d1-a7b7-b577-4fa8")
+        let challenge = try SelectiveRemoteDeviceTrustV1.createPossessionChallenge(
+            accountID: account, requestID: UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!,
+            deviceID: device, publicKey: fixture.certificate.payload.publicKey,
+            issuedAt: 1_800_000_000).challenge
+        let encoded = try JSONEncoder().encode(challenge)
+        let text = try #require(String(data: encoded, encoding: .utf8))
+        #expect(text.contains("11111111-1111-4111-8111-111111111111"))
+        #expect(!text.contains("AAAAAAAA-AAAA"))
+        #expect(try JSONDecoder().decode(SelectiveRemoteDevicePossessionChallenge.self,
+            from: encoded) == challenge)
+    }
+
+    @Test("valid account certificate cannot bypass Team epoch or admission")
+    func teamWrapperEligibility() throws {
+        let root = P256.Signing.PrivateKey()
+        let key = try SelectiveRemoteTeamDevicePublicKey(P256.KeyAgreement.PrivateKey().publicKey)
+        let certificate = try SelectiveRemoteDeviceTrustV1.issueCertificate(root: root,
+            accountID: account, deviceID: device, publicKey: key, keyVersion: 1,
+            issuedAt: 1_800_000_000, serial: serial)
+        let directory = try SelectiveRemoteDeviceTrustV1.signDirectory(root: root,
+            accountID: account, version: 1, certificates: [certificate])
+        let pin = SelectiveRemoteDeviceTrustPin(accountID: account,
+            rootFingerprint: SelectiveRemoteDeviceTrustV1.fingerprint(root.publicKey),
+            highWater: 1, checkpointDigest: try SelectiveRemoteDeviceTrustV1.directoryDigest(directory))
+        let base = SelectiveRemoteDeviceWrapperEligibility(proofEstablished: true,
+            revoked: false, membershipActive: true, membershipEpoch: 2,
+            expectedEpoch: 2, admitted: true, capable: true)
+        #expect(SelectiveRemoteDeviceTrustV1.isDeviceEligibleForV2Wrapper(
+            rootPublicKey: root.publicKey, certificate: certificate,
+            directory: directory, pin: pin, expectedDeviceID: device, policy: base))
+        let stale = SelectiveRemoteDeviceWrapperEligibility(proofEstablished: true,
+            revoked: false, membershipActive: true, membershipEpoch: 1,
+            expectedEpoch: 2, admitted: true, capable: true)
+        #expect(!SelectiveRemoteDeviceTrustV1.isDeviceEligibleForV2Wrapper(
+            rootPublicKey: root.publicKey, certificate: certificate,
+            directory: directory, pin: pin, expectedDeviceID: device, policy: stale))
+    }
+
     private final class MemoryPinStore: SelectiveRemoteDeviceTrustPinStore {
         var current: SelectiveRemoteDeviceTrustPin?
         var rejectAdvance = false

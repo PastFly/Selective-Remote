@@ -7,6 +7,8 @@ import {
   createTrustRoot, issueDeviceCertificate, signDeviceDirectory,
   verifyDeviceForWrapping, wrapForVerifiedDevice, deviceDirectoryDigest,
   advancePinnedTrust,
+  createPossessionChallenge, answerPossessionChallenge, verifyPossessionAnswer,
+  isDeviceEligibleForV2Wrapper,
 } from "../public/device-trust-v1.js";
 
 const accountID = "11111111-1111-4111-8111-111111111111";
@@ -123,4 +125,52 @@ test("replacement needs a higher signed version and exact active certificate", a
     certificates: [], cryptoValue: webcrypto });
   await assert.rejects(verifyDeviceForWrapping({ ...base, certificate,
     checkpoint: changedSameVersion }), /device_trust/u);
+});
+
+test("ECDH possession proof binds account, request, device, key and short expiry", async () => {
+  const { identity } = await setup();
+  const requestID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const { challenge, privateKey } = await createPossessionChallenge({
+    accountID, requestID, deviceID, publicKey: identity.publicKey,
+    issuedAt: 1_800_000_000, cryptoValue: webcrypto,
+  });
+  const answer = await answerPossessionChallenge({ challenge,
+    devicePrivateKey: identity.privateKey, devicePublicKey: identity.publicKey,
+    cryptoValue: webcrypto });
+  assert.equal(await verifyPossessionAnswer({ challenge, answer,
+    approverPrivateKey: privateKey, now: 1_800_000_001, cryptoValue: webcrypto }), true);
+  await assert.rejects(verifyPossessionAnswer({ challenge: { ...challenge, deviceID: otherID },
+    answer, approverPrivateKey: privateKey, now: 1_800_000_001, cryptoValue: webcrypto }),
+  /device_trust/u);
+  await assert.rejects(verifyPossessionAnswer({ challenge, answer,
+    approverPrivateKey: privateKey, now: 1_800_000_301, cryptoValue: webcrypto }),
+  /device_trust/u);
+  const attacker = await generateTeamDeviceIdentity(webcrypto);
+  await assert.rejects(answerPossessionChallenge({ challenge,
+    devicePrivateKey: attacker.privateKey, devicePublicKey: attacker.publicKey,
+    cryptoValue: webcrypto }), /device_trust/u);
+  await assert.rejects(verifyPossessionAnswer({ challenge,
+    answer: { ...answer, proof: `A${answer.proof.slice(1)}` },
+    approverPrivateKey: privateKey, now: 1_800_000_001, cryptoValue: webcrypto }),
+  /device_trust/u);
+});
+
+test("signed account device needs independent Team admission and current epoch", async () => {
+  const { root, certificate, checkpoint, trust } = await setup();
+  const base = { rootPublicKey: root.publicKey, certificate, checkpoint, trust,
+    expectedDeviceID: deviceID, proofEstablished: true, revoked: false,
+    team: { membershipActive: true, membershipEpoch: 2, expectedEpoch: 2,
+      admitted: true, capable: true }, cryptoValue: webcrypto };
+  assert.equal((await isDeviceEligibleForV2Wrapper(base)).eligible, true);
+  for (const change of [
+    { proofEstablished: false }, { revoked: true },
+    { team: { ...base.team, membershipActive: false } },
+    { team: { ...base.team, membershipEpoch: 1 } },
+    { team: { ...base.team, admitted: false } },
+    { team: { ...base.team, capable: false } },
+  ]) assert.equal((await isDeviceEligibleForV2Wrapper({ ...base, ...change })).eligible, false);
+  const attacker = await generateTeamDeviceIdentity(webcrypto);
+  assert.equal((await isDeviceEligibleForV2Wrapper({ ...base,
+    certificate: { ...certificate, payload: { ...certificate.payload,
+      publicKey: attacker.publicKey } } })).eligible, false);
 });

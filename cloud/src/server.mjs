@@ -9,12 +9,16 @@ import { AuthRateLimiter } from "./rate-limiter.mjs";
 import { clientIPAddress } from "./request-security.mjs";
 import { isUUID, normalizeEmail } from "./security.mjs";
 import { CloudService } from "./service.mjs";
+import { DeviceTrustStore } from "./device-trust-store.mjs";
+import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
 const mailer = config.smtp ? createVerificationMailer(config) : null;
 const service = new CloudService(store, config, mailer);
+const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
+  (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
 const publicDirectory = fileURLToPath(new URL("../public/", import.meta.url));
 const maxBodyBytes = 34 * 1024 * 1024;
@@ -140,6 +144,50 @@ async function route(request, response) {
     if (method === "GET" && url.pathname === "/v1/devices") {
       return sendJSON(response, 200, { devices: await store.listDevices(session.user_id) });
     }
+    if (url.pathname === "/v1/device-trust") {
+      if (method === "GET") return handleOperation(response, () => deviceTrust.snapshot(session));
+      if (method === "POST") return handleOperation(response, async () => {
+        await requireDeviceTrustRateLimits(request, session);
+        const input = await readJSON(request, maxTeamBodyBytes);
+        return deviceTrust.publishRoot(session, input, idempotencyKey(request));
+      }, 201);
+    }
+    if (url.pathname === "/v1/device-trust/requests") {
+      if (method === "GET") return handleOperation(response, () => deviceTrust.requests(session));
+      if (method === "POST") return handleOperation(response, async () => {
+        await requireDeviceTrustRateLimits(request, session);
+        return deviceTrust.request(session, await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request));
+      }, 201);
+    }
+    const trustRequest = url.pathname.match(
+      /^\/v1\/device-trust\/requests\/([^/]+)\/(approve|reject|challenges)$/u);
+    if (trustRequest && method === "POST") return handleOperation(response, async () => {
+      await requireDeviceTrustRateLimits(request, session);
+      if (trustRequest[2] === "approve") return deviceTrust.approve(session, trustRequest[1],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
+      if (trustRequest[2] === "reject") return deviceTrust.reject(session, trustRequest[1],
+        idempotencyKey(request));
+      return deviceTrust.startChallenge(session, trustRequest[1],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
+    });
+    const trustChallenge = url.pathname.match(
+      /^\/v1\/device-trust\/requests\/([^/]+)\/challenges\/([^/]+)$/u);
+    if (trustChallenge) {
+      if (method === "GET") return handleOperation(response, () => deviceTrust.challenge(
+        session, trustChallenge[1], trustChallenge[2]));
+      if (method === "POST") return handleOperation(response, async () => {
+        await requireDeviceTrustRateLimits(request, session);
+        return deviceTrust.answerChallenge(session, trustChallenge[1], trustChallenge[2],
+          await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
+      });
+    }
+    const trustedDevice = url.pathname.match(/^\/v1\/device-trust\/devices\/([^/]+)\/revoke$/u);
+    if (trustedDevice && method === "POST") return handleOperation(response, async () => {
+      await requireDeviceTrustRateLimits(request, session);
+      return deviceTrust.revoke(session, trustedDevice[1],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
+    });
     if (method === "POST" && url.pathname === "/v1/devices/bootstrap-key") {
       return handleOperation(
         response,
@@ -173,6 +221,9 @@ async function route(request, response) {
     if (method === "DELETE" && deviceMatch) {
       if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
       try {
+        if (await deviceTrust.store.hasSignedIdentity(session.user_id, deviceMatch[1])) {
+          return sendError(response, 409, "device_trust_signed_revoke_required");
+        }
         const revoked = await store.revokeDevice(session.user_id, deviceMatch[1], session.device_id);
         return revoked ? empty(response, 204) : sendError(response, 404, "device_not_found");
       } catch (error) {
@@ -529,6 +580,11 @@ async function route(request, response) {
 async function requireTeamSensitiveRateLimits(request, session) {
   await authRateLimiter.require("team_sensitive_user", session.user_id);
   await authRateLimiter.require("team_sensitive_ip", clientIPAddress(request, config.proxySharedSecret));
+}
+
+async function requireDeviceTrustRateLimits(request, session) {
+  await authRateLimiter.require("device_trust_user", session.user_id);
+  await authRateLimiter.require("device_trust_ip", clientIPAddress(request, config.proxySharedSecret));
 }
 
 async function handleAuthOperation(request, response, ipScope, emailScope, operation, successStatus = 200, beforeSend = null) {

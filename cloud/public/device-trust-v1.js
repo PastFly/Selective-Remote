@@ -8,6 +8,7 @@ const b64url = /^[A-Za-z0-9_-]+$/u;
 const maxVersion = Number.MAX_SAFE_INTEGER;
 const certificateDomain = "selective-remote/device-certificate/v1\0";
 const directoryDomain = "selective-remote/device-directory/v1\0";
+const possessionDomain = "selective-remote/device-possession/v1\0";
 
 function fail() { throw new Error("device_trust_invalid"); }
 function exact(value, names) {
@@ -79,12 +80,16 @@ function certificateBytes(payload) {
     keyBytes(payload.publicKey), String(version(payload.keyVersion)),
     payload.issuerFingerprint, String(payload.issuedAt), id(payload.serial)]);
 }
+export function deviceCertificateBytes(payload) { return certificateBytes(payload); }
 function signedCertificateBytes(certificate) {
   exact(certificate, ["payload", "signature"]);
   return combine([certificateBytes(certificate.payload), bytes(certificate.signature, 64)]);
 }
 async function certificateDigest(certificate, crypto) {
   return b64(new Uint8Array(await crypto.subtle.digest("SHA-256", signedCertificateBytes(certificate))));
+}
+export async function deviceCertificateDigest(certificate, cryptoValue = globalThis.crypto) {
+  return certificateDigest(certificate, cryptoAPI(cryptoValue));
 }
 export async function deviceDirectoryDigest(checkpoint, cryptoValue = globalThis.crypto) {
   exact(checkpoint, ["payload", "signature"]);
@@ -108,6 +113,17 @@ function directoryBytes(payload) {
   const encoded = record(directoryDomain, fields);
   if (encoded.length > 65535) fail();
   return encoded;
+}
+export function deviceDirectoryBytes(payload) { return directoryBytes(payload); }
+export async function verifySignedDeviceDirectory({ rootPublicKey, checkpoint,
+  accountID, cryptoValue = globalThis.crypto }) {
+  const crypto = cryptoAPI(cryptoValue);
+  exact(checkpoint, ["payload", "signature"]);
+  if (checkpoint.payload.accountID !== id(accountID)) fail();
+  await verifySignature(rootPublicKey, directoryBytes(checkpoint.payload),
+    checkpoint.signature, crypto);
+  return { version: checkpoint.payload.version,
+    checkpointDigest: await deviceDirectoryDigest(checkpoint, crypto) };
 }
 async function verifySignature(rootPublicKey, payload, signature, crypto) {
   const key = await crypto.subtle.importKey("raw", rootBytes(rootPublicKey),
@@ -227,6 +243,28 @@ export function createIndexedDBDeviceTrustRepository(indexedDBValue = globalThis
         };
       });
     },
+    async loadBootstrapBundle(endpoint, accountID) {
+      return transact("readonly", (store, done) => {
+        const request = store.get(`bootstrap:${key(endpoint, accountID)}`);
+        request.onsuccess = () => done(request.result ?? null);
+      });
+    },
+    async saveBootstrapBundleIfAbsent(endpoint, accountID, bundle) {
+      exact(bundle, ["rootPublicKey", "certificate", "checkpoint"]);
+      return transact("readwrite", (store, done) => {
+        const recordKey = `bootstrap:${key(endpoint, accountID)}`;
+        const read = store.get(recordKey);
+        read.onsuccess = () => {
+          if (read.result) {
+            if (JSON.stringify(read.result) !== JSON.stringify(bundle)) store.transaction.abort();
+            else done(read.result);
+            return;
+          }
+          const write = store.add(bundle, recordKey);
+          write.onsuccess = () => done(bundle);
+        };
+      });
+    },
     async loadRoot(endpoint, accountID) {
       return transact("readonly", (store, done) => {
         const read = store.get(`root:${key(endpoint, accountID)}`);
@@ -312,6 +350,90 @@ export async function verifyDeviceForWrapping({ rootPublicKey, certificate, chec
     || entry.certificateDigest !== await certificateDigest(certificate, crypto)) fail();
   return { publicKey: certificate.payload.publicKey,
     highWater: checkpoint.payload.version, checkpointDigest };
+}
+
+function possessionBytes(challenge) {
+  exact(challenge, ["version", "accountID", "requestID", "deviceID", "publicKey",
+    "approverPublicKey", "nonce", "issuedAt", "expiresAt"]);
+  if (challenge.version !== 1 || !Number.isSafeInteger(challenge.issuedAt)
+    || challenge.issuedAt < 1 || !Number.isSafeInteger(challenge.expiresAt)
+    || challenge.expiresAt !== challenge.issuedAt + 300) fail();
+  return record(possessionDomain, [id(challenge.accountID), id(challenge.requestID),
+    id(challenge.deviceID), keyBytes(challenge.publicKey),
+    keyBytes(challenge.approverPublicKey), bytes(challenge.nonce, 32),
+    String(challenge.issuedAt), String(challenge.expiresAt)]);
+}
+export function devicePossessionChallengeBytes(challenge) { return possessionBytes(challenge); }
+
+async function possessionKey(privateKey, otherPublicKey, crypto) {
+  if (privateKey?.type !== "private" || privateKey.extractable !== false
+    || privateKey.algorithm?.name !== "ECDH"
+    || privateKey.algorithm?.namedCurve !== "P-256") fail();
+  const other = await crypto.subtle.importKey("jwk",
+    normalizeTeamDevicePublicKey(otherPublicKey),
+    { name: "ECDH", namedCurve: "P-256" }, false, []);
+  const shared = await crypto.subtle.deriveBits({ name: "ECDH", public: other }, privateKey, 256);
+  return crypto.subtle.importKey("raw", shared, { name: "HMAC", hash: "SHA-256" },
+    false, ["sign", "verify"]);
+}
+
+export async function createPossessionChallenge({ accountID, requestID, deviceID,
+  publicKey, issuedAt, cryptoValue = globalThis.crypto }) {
+  const crypto = cryptoAPI(cryptoValue);
+  const pair = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" },
+    false, ["deriveBits"]);
+  const approverPublicKey = normalizeTeamDevicePublicKey(
+    await crypto.subtle.exportKey("jwk", pair.publicKey));
+  const challenge = { version: 1, accountID: id(accountID), requestID: id(requestID),
+    deviceID: id(deviceID), publicKey: normalizeTeamDevicePublicKey(publicKey),
+    approverPublicKey, nonce: b64(crypto.getRandomValues(new Uint8Array(32))),
+    issuedAt, expiresAt: issuedAt + 300 };
+  possessionBytes(challenge);
+  return { challenge, privateKey: pair.privateKey };
+}
+
+export async function answerPossessionChallenge({ challenge, devicePrivateKey,
+  devicePublicKey, cryptoValue = globalThis.crypto }) {
+  const crypto = cryptoAPI(cryptoValue);
+  const transcript = possessionBytes(challenge);
+  if (!equalBytes(keyBytes(challenge.publicKey), keyBytes(devicePublicKey))) fail();
+  const key = await possessionKey(devicePrivateKey, challenge.approverPublicKey, crypto);
+  return { requestID: challenge.requestID,
+    proof: b64(new Uint8Array(await crypto.subtle.sign("HMAC", key, transcript))) };
+}
+
+export async function verifyPossessionAnswer({ challenge, answer, approverPrivateKey,
+  now, cryptoValue = globalThis.crypto }) {
+  const crypto = cryptoAPI(cryptoValue);
+  const transcript = possessionBytes(challenge);
+  exact(answer, ["requestID", "proof"]);
+  if (answer.requestID !== challenge.requestID || !Number.isSafeInteger(now)
+    || now < challenge.issuedAt || now >= challenge.expiresAt) fail();
+  const key = await possessionKey(approverPrivateKey, challenge.publicKey, crypto);
+  if (!await crypto.subtle.verify("HMAC", key, bytes(answer.proof, 32), transcript)) fail();
+  return true;
+}
+
+function equalBytes(left, right) {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index += 1) difference |= left[index] ^ right[index];
+  return difference === 0;
+}
+
+export async function isDeviceEligibleForV2Wrapper({ proofEstablished, revoked, team,
+  ...verification }) {
+  if (proofEstablished !== true || revoked !== false || !team
+    || team.membershipActive !== true || team.admitted !== true || team.capable !== true
+    || !Number.isSafeInteger(team.membershipEpoch)
+    || team.membershipEpoch < 1 || team.membershipEpoch !== team.expectedEpoch) {
+    return { eligible: false };
+  }
+  try {
+    const verified = await verifyDeviceForWrapping(verification);
+    return { eligible: true, publicKey: verified.publicKey,
+      highWater: verified.highWater, checkpointDigest: verified.checkpointDigest };
+  } catch { return { eligible: false }; }
 }
 
 export async function wrapForVerifiedDevice({ cek, context, rootPublicKey, certificate,

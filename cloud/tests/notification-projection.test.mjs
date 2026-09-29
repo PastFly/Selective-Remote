@@ -112,6 +112,16 @@ test("device and invitation adapters project only active source identities", () 
   assert.deepEqual(invitations, [{ kind: "invitation", scopeID: team, sourceID: invitation }]);
 });
 
+test("secure pending approval replaces the legacy cue and resolves with source state", () => {
+  const legacy = [{ id: device, keyRegistered: true, keyApprovedAt: null, revokedAt: null }];
+  const pending = [{ requestID: invitation, deviceID: device, status: "pending" }];
+  assert.deepEqual(deviceNotificationObservations(legacy, recipient, pending),
+    [{ kind: "deviceApproval", scopeID: recipient, sourceID: invitation }]);
+  assert.deepEqual(deviceNotificationObservations(legacy, recipient,
+    [{ ...pending[0], status: "approved" }]),
+  []);
+});
+
 test("typed sync adapter skips temporary states and keeps Team Vault identity", () => {
   assert.deepEqual(syncNotificationDecision({ status: "syncing" }, {
     scope: "team", recipient, teamVaultID: team,

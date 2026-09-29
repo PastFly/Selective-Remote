@@ -167,9 +167,82 @@ struct SelectiveRemoteDeviceTrustPin: Codable, Equatable, Sendable {
     let checkpointDigest: String
 }
 
+struct SelectiveRemoteDevicePossessionChallenge: Codable, Equatable, Sendable {
+    let version: Int
+    let accountID: UUID
+    let requestID: UUID
+    let deviceID: UUID
+    let publicKey: SelectiveRemoteTeamDevicePublicKey
+    let approverPublicKey: SelectiveRemoteTeamDevicePublicKey
+    let nonce: String
+    let issuedAt: Int
+    let expiresAt: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case version, accountID, requestID, deviceID, publicKey
+        case approverPublicKey, nonce, issuedAt, expiresAt
+    }
+
+    init(version: Int, accountID: UUID, requestID: UUID, deviceID: UUID,
+         publicKey: SelectiveRemoteTeamDevicePublicKey,
+         approverPublicKey: SelectiveRemoteTeamDevicePublicKey,
+         nonce: String, issuedAt: Int, expiresAt: Int) {
+        self.version = version
+        self.accountID = accountID
+        self.requestID = requestID
+        self.deviceID = deviceID
+        self.publicKey = publicKey
+        self.approverPublicKey = approverPublicKey
+        self.nonce = nonce
+        self.issuedAt = issuedAt
+        self.expiresAt = expiresAt
+    }
+
+    init(from decoder: any Decoder) throws {
+        try deviceTrustKeys(decoder, ["version", "accountID", "requestID", "deviceID",
+                                      "publicKey", "approverPublicKey", "nonce",
+                                      "issuedAt", "expiresAt"])
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        version = try values.decode(Int.self, forKey: .version)
+        accountID = try deviceTrustUUID(values.decode(String.self, forKey: .accountID))
+        requestID = try deviceTrustUUID(values.decode(String.self, forKey: .requestID))
+        deviceID = try deviceTrustUUID(values.decode(String.self, forKey: .deviceID))
+        publicKey = try values.decode(SelectiveRemoteTeamDevicePublicKey.self, forKey: .publicKey)
+        approverPublicKey = try values.decode(SelectiveRemoteTeamDevicePublicKey.self,
+            forKey: .approverPublicKey)
+        nonce = try values.decode(String.self, forKey: .nonce)
+        issuedAt = try values.decode(Int.self, forKey: .issuedAt)
+        expiresAt = try values.decode(Int.self, forKey: .expiresAt)
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(version, forKey: .version)
+        try values.encode(accountID.canonicalCloudString, forKey: .accountID)
+        try values.encode(requestID.canonicalCloudString, forKey: .requestID)
+        try values.encode(deviceID.canonicalCloudString, forKey: .deviceID)
+        try values.encode(publicKey, forKey: .publicKey)
+        try values.encode(approverPublicKey, forKey: .approverPublicKey)
+        try values.encode(nonce, forKey: .nonce)
+        try values.encode(issuedAt, forKey: .issuedAt)
+        try values.encode(expiresAt, forKey: .expiresAt)
+    }
+}
+
+struct SelectiveRemoteDeviceWrapperEligibility: Sendable {
+    let proofEstablished: Bool
+    let revoked: Bool
+    let membershipActive: Bool
+    let membershipEpoch: Int
+    let expectedEpoch: Int
+    let admitted: Bool
+    let capable: Bool
+}
+
 enum SelectiveRemoteDeviceTrustV1 {
     private static let certificateDomain = "selective-remote/device-certificate/v1\0"
     private static let directoryDomain = "selective-remote/device-directory/v1\0"
+    private static let possessionDomain = "selective-remote/device-possession/v1\0"
     private static let maxVersion = 9_007_199_254_740_991
 
     static func fingerprint(_ key: P256.Signing.PublicKey) -> String {
@@ -192,6 +265,89 @@ enum SelectiveRemoteDeviceTrustV1 {
     }
 
     private static func fields(_ values: [String]) -> [Data] { values.map { Data($0.utf8) } }
+
+    static func createPossessionChallenge(accountID: UUID, requestID: UUID,
+                                          deviceID: UUID, publicKey: SelectiveRemoteTeamDevicePublicKey,
+                                          issuedAt: Int) throws
+        -> (challenge: SelectiveRemoteDevicePossessionChallenge,
+            privateKey: P256.KeyAgreement.PrivateKey) {
+        let privateKey = P256.KeyAgreement.PrivateKey()
+        let publicApprover = try SelectiveRemoteTeamDevicePublicKey(privateKey.publicKey)
+        let nonce = SymmetricKey(size: .bits256).withUnsafeBytes { Data($0) }
+        let challenge = SelectiveRemoteDevicePossessionChallenge(version: 1,
+            accountID: accountID, requestID: requestID, deviceID: deviceID,
+            publicKey: publicKey, approverPublicKey: publicApprover,
+            nonce: nonce.selectiveRemoteBase64URL, issuedAt: issuedAt,
+            expiresAt: issuedAt + 300)
+        _ = try possessionBytes(challenge)
+        return (challenge, privateKey)
+    }
+
+    private static func possessionBytes(_ challenge: SelectiveRemoteDevicePossessionChallenge)
+        throws -> Data {
+        guard challenge.version == 1, valid(challenge.accountID), valid(challenge.requestID),
+              valid(challenge.deviceID), challenge.issuedAt > 0,
+              challenge.issuedAt < maxVersion - 300,
+              challenge.expiresAt == challenge.issuedAt + 300,
+              let nonce = Data(selectiveRemoteBase64URL: challenge.nonce, expectedLength: 32)
+        else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
+        let deviceKey = try challenge.publicKey.keyAgreementPublicKey.x963Representation
+        let approverKey = try challenge.approverPublicKey.keyAgreementPublicKey.x963Representation
+        return try encode(possessionDomain,
+            fields([canonical(challenge.accountID), canonical(challenge.requestID),
+                    canonical(challenge.deviceID)]) + [deviceKey, approverKey, nonce]
+            + fields([String(challenge.issuedAt), String(challenge.expiresAt)]))
+    }
+
+    static func answerPossessionChallenge(_ challenge: SelectiveRemoteDevicePossessionChallenge,
+                                          devicePrivateKey: P256.KeyAgreement.PrivateKey,
+                                          devicePublicKey: SelectiveRemoteTeamDevicePublicKey)
+        throws -> String {
+        let transcript = try possessionBytes(challenge)
+        guard challenge.publicKey == devicePublicKey,
+              devicePrivateKey.publicKey.x963Representation ==
+                (try devicePublicKey.keyAgreementPublicKey.x963Representation)
+        else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
+        let shared = try devicePrivateKey.sharedSecretFromKeyAgreement(
+            with: challenge.approverPublicKey.keyAgreementPublicKey)
+        let key = shared.withUnsafeBytes { SymmetricKey(data: Data($0)) }
+        return Data(HMAC<SHA256>.authenticationCode(for: transcript, using: key))
+            .selectiveRemoteBase64URL
+    }
+
+    static func verifyPossessionAnswer(_ challenge: SelectiveRemoteDevicePossessionChallenge,
+                                       proof: String,
+                                       approverPrivateKey: P256.KeyAgreement.PrivateKey,
+                                       now: Int) throws -> Bool {
+        let transcript = try possessionBytes(challenge)
+        guard now >= challenge.issuedAt, now < challenge.expiresAt,
+              let supplied = Data(selectiveRemoteBase64URL: proof, expectedLength: 32),
+              approverPrivateKey.publicKey.x963Representation ==
+                (try challenge.approverPublicKey.keyAgreementPublicKey.x963Representation)
+        else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
+        let shared = try approverPrivateKey.sharedSecretFromKeyAgreement(
+            with: challenge.publicKey.keyAgreementPublicKey)
+        let key = shared.withUnsafeBytes { SymmetricKey(data: Data($0)) }
+        let expected = Data(HMAC<SHA256>.authenticationCode(for: transcript, using: key))
+        guard expected.count == supplied.count else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
+        let mismatch = zip(expected, supplied).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) }
+        guard mismatch == 0 else { throw SelectiveRemoteDeviceTrustError.invalidSignature }
+        return true
+    }
+
+    static func isDeviceEligibleForV2Wrapper(rootPublicKey: P256.Signing.PublicKey,
+                                             certificate: SelectiveRemoteSignedDeviceCertificate,
+                                             directory: SelectiveRemoteSignedDeviceDirectory,
+                                             pin: SelectiveRemoteDeviceTrustPin,
+                                             expectedDeviceID: UUID,
+                                             policy: SelectiveRemoteDeviceWrapperEligibility) -> Bool {
+        guard policy.proofEstablished, !policy.revoked, policy.membershipActive,
+              policy.membershipEpoch > 0, policy.membershipEpoch == policy.expectedEpoch,
+              policy.admitted, policy.capable else { return false }
+        return (try? verify(rootPublicKey: rootPublicKey, certificate: certificate,
+                            directory: directory, pin: pin,
+                            expectedDeviceID: expectedDeviceID)) != nil
+    }
 
     static func certificateBytes(_ value: SelectiveRemoteDeviceCertificatePayload) throws -> Data {
         guard valid(value.accountID), valid(value.deviceID), valid(value.serial),
@@ -230,11 +386,31 @@ enum SelectiveRemoteDeviceTrustV1 {
             .selectiveRemoteBase64URL
     }
 
+    static func certificateDigest(_ certificate: SelectiveRemoteSignedDeviceCertificate) throws -> String {
+        try digest(certificate)
+    }
+
     static func directoryDigest(_ directory: SelectiveRemoteSignedDeviceDirectory) throws -> String {
         guard let signature = Data(selectiveRemoteBase64URL: directory.signature, expectedLength: 64)
         else { throw SelectiveRemoteDeviceTrustError.invalidRecord }
         return Data(SHA256.hash(data: try directoryBytes(directory.payload) + signature))
             .selectiveRemoteBase64URL
+    }
+
+    static func verifyDirectory(rootPublicKey: P256.Signing.PublicKey,
+        directory: SelectiveRemoteSignedDeviceDirectory,
+        pin: SelectiveRemoteDeviceTrustPin) throws -> Int {
+        guard pin.rootFingerprint == fingerprint(rootPublicKey),
+              pin.accountID == directory.payload.accountID,
+              directory.payload.version >= pin.highWater
+        else { throw SelectiveRemoteDeviceTrustError.untrustedRoot }
+        try verify(directory.signature, message: directoryBytes(directory.payload),
+                   key: rootPublicKey)
+        if directory.payload.version == pin.highWater,
+           try directoryDigest(directory) != pin.checkpointDigest {
+            throw SelectiveRemoteDeviceTrustError.staleDirectory
+        }
+        return directory.payload.version
     }
 
     private static func verify(_ signature: String, message: Data, key: P256.Signing.PublicKey) throws {

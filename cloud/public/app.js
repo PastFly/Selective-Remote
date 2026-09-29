@@ -32,6 +32,8 @@ import {
   syncNotificationDecision,
 } from "./notification-projection.js";
 import { createNotificationCenter } from "./notification-center.js";
+import { createIndexedDBDeviceTrustRepository } from "./device-trust-v1.js";
+import { createBrowserDeviceTrustPanel } from "./device-trust-ui.js";
 
 const syncObservationEvent = "selective-remote:sync-observation";
 const notificationSourceEvent = "selective-remote:notification-source";
@@ -1578,6 +1580,8 @@ export function teamArchiveErrorMessage(error, remotelyArchived = false) {
 export function initializeTeamWorkspace({
   documentValue = document,
   client,
+  deviceTrustRepository = null,
+  teamIdentityRepository = null,
   confirmValue = null,
   initialInvitationToken = null,
   setIntervalValue = globalThis.setInterval,
@@ -1593,6 +1597,7 @@ export function initializeTeamWorkspace({
   const devices = documentValue.querySelector("#team-devices");
   const deviceOrbit = documentValue.querySelector("#device-vault-orbit");
   const devicesRefresh = documentValue.querySelector("#team-devices-refresh");
+  const deviceTrustContainer = documentValue.querySelector("#device-trust-panel");
   const createTeamForm = documentValue.querySelector("#team-create-form");
   const acceptInvitationForm = documentValue.querySelector("#team-invitation-accept-form");
   const pendingInvitations = documentValue.querySelector("#team-pending-invitations");
@@ -1708,6 +1713,7 @@ export function initializeTeamWorkspace({
   const smartFilterButtons = [...documentValue.querySelectorAll("#team-resource-filters [data-team-smart-filter]")];
   const bulkActions = documentValue.querySelector("#team-bulk-actions");
   let identity = null;
+  let trustPanel = null;
   let teams = [];
   let vaults = [];
   let teamMembers = [];
@@ -2306,12 +2312,30 @@ export function initializeTeamWorkspace({
     const sessionID = client.session()?.id;
     const values = await client.listDevices();
     if (!sessionID || client.session()?.id !== sessionID || !identity) return;
+    const trustRequests = client.deviceTrustRequests
+      ? await client.deviceTrustRequests().catch(() => null) : null;
     const EventType = documentValue.defaultView?.CustomEvent;
     if (EventType) documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
-      detail: { recipient: sessionID, group: "devices", complete: true, sequence,
+      detail: { recipient: sessionID, group: "devices", complete: trustRequests !== null, sequence,
         at: new Date().toISOString(),
-        observations: deviceNotificationObservations(values, sessionID) },
+        observations: deviceNotificationObservations(values, sessionID,
+          trustRequests ?? [], client.deviceID()) },
     }));
+    if (deviceTrustContainer && deviceTrustRepository) {
+      try {
+        trustPanel ??= createBrowserDeviceTrustPanel({ container: deviceTrustContainer,
+          documentValue, client, repository: deviceTrustRepository,
+          identityRepository: teamIdentityRepository,
+          endpoint: globalThis.location.origin, accountID: sessionID, identity,
+          onUpdated: () => { void loadDevices().catch(() => {}); },
+          onRekeyCommitted: () => globalThis.location.reload() });
+        await trustPanel.refresh();
+      } catch {
+        deviceTrustContainer.textContent = activeInterfaceLocale(documentValue.documentElement?.lang) === "en"
+          ? "Device trust is unavailable. Verify local browser storage and refresh."
+          : "Доверие устройств недоступно. Проверьте локальное хранилище браузера и обновите страницу.";
+      }
+    }
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     devices.replaceChildren();
     if (deviceOrbit) {
@@ -3846,12 +3870,14 @@ export function initializeTeamWorkspace({
     },
     async activate(nextIdentity) {
       identity = nextIdentity;
+      trustPanel = null;
       renderOverviewSummary();
       await Promise.all([loadDevices(), loadPendingInvitations(), loadTeams()]);
       startWorkspaceRefresh();
     },
     deactivate() {
       identity = null;
+      trustPanel = null;
       stopWorkspaceRefresh();
       teams = [];
       vaults = [];
@@ -4025,8 +4051,12 @@ export async function initializeCloudAccount({
   const conflictApply = documentValue.querySelector("#local-vault-conflicts-apply");
   const client = createAuthenticatedVaultClient({ fetchValue });
   const requestConfirmation = createConfirmationRequester({ documentValue });
-  const teamWorkspace = initializeTeamWorkspace({ documentValue, client, initialInvitationToken: initialTeamInvitationToken });
   const teamDeviceRepository = createIndexedDBTeamDeviceRepository();
+  const deviceTrustRepository = globalThis.indexedDB?.open
+    ? createIndexedDBDeviceTrustRepository() : null;
+  const teamWorkspace = initializeTeamWorkspace({ documentValue, client,
+    deviceTrustRepository, teamIdentityRepository: teamDeviceRepository,
+    initialInvitationToken: initialTeamInvitationToken });
   const accountDevices = createAccountDeviceCoordinator({
     repository: createIndexedDBVaultRepository(),
     legacyDeviceID: () => vault.deviceID(),

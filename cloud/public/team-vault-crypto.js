@@ -8,6 +8,7 @@ const payloadContextLabel = "selective-remote/team-vault-payload/v1";
 const databaseName = "selective-remote-cloud";
 const storeName = "local-vault";
 const identityKeyPrefix = "team-device-key:";
+const pendingRekeyPrefix = "team-device-rekey:";
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const base64URLPattern = /^[A-Za-z0-9_-]+$/u;
 const maxCiphertextCharacters = 32 * 1024 * 1024;
@@ -589,6 +590,54 @@ export function createIndexedDBTeamDeviceRepository(indexedDBValue = globalThis.
       } finally {
         database.close();
       }
+    },
+    async loadPendingRekey(deviceID) {
+      const normalized = normalizedUUID(deviceID, "invalid_team_device_identity");
+      const value = await transaction(indexedDBValue, "readonly",
+        (store) => store.get(`${pendingRekeyPrefix}${normalized}`));
+      return value == null ? null : validatedStoredIdentity(value, normalized);
+    },
+    async savePendingRekeyIfAbsent(value) {
+      const normalized = validatedStoredIdentity(value,
+        normalizedUUID(value?.deviceID, "invalid_team_device_identity"));
+      const existing = await this.loadPendingRekey(normalized.deviceID);
+      if (existing) {
+        if (existing.publicKey.x !== normalized.publicKey.x
+          || existing.publicKey.y !== normalized.publicKey.y) {
+          throw new Error("team_device_rekey_conflict");
+        }
+        return existing;
+      }
+      await transaction(indexedDBValue, "readwrite",
+        (store) => store.add(clone(normalized), `${pendingRekeyPrefix}${normalized.deviceID}`));
+      return normalized;
+    },
+    async commitPendingRekey(deviceID, publicKey) {
+      const normalized = normalizedUUID(deviceID, "invalid_team_device_identity");
+      const expected = normalizeTeamDevicePublicKey(publicKey);
+      const database = await openDatabase(indexedDBValue);
+      try {
+        return await new Promise((resolve, reject) => {
+          const tx = database.transaction(storeName, "readwrite");
+          const store = tx.objectStore(storeName);
+          let committed = null;
+          const read = store.get(`${pendingRekeyPrefix}${normalized}`);
+          read.onsuccess = () => {
+            try {
+              const pending = validatedStoredIdentity(read.result, normalized);
+              if (pending.publicKey.x !== expected.x || pending.publicKey.y !== expected.y) {
+                throw new Error("team_device_rekey_conflict");
+              }
+              store.put(clone(pending), `${identityKeyPrefix}${normalized}`);
+              store.delete(`${pendingRekeyPrefix}${normalized}`);
+              committed = pending;
+            } catch { tx.abort(); }
+          };
+          tx.onerror = () => reject(new Error("team_device_storage_failed"));
+          tx.onabort = () => reject(new Error("team_device_rekey_conflict"));
+          tx.oncomplete = () => resolve(committed);
+        });
+      } finally { database.close(); }
     },
   };
 }
