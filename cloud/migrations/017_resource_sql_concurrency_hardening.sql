@@ -41,12 +41,11 @@ BEGIN
         RAISE EXCEPTION 'resource_v2_preparing_required';
     END IF;
     IF TG_OP = 'UPDATE' THEN
-        IF OLD.deleted_at IS NULL
-           AND (NEW.deleted_at IS NOT NULL
-                OR NEW.parent_folder_id IS DISTINCT FROM OLD.parent_folder_id)
-           AND EXISTS (SELECT 1 FROM vault_resource_manifest_pointers_v2
-                        WHERE team_id = OLD.team_id AND vault_id = OLD.vault_id
-                          AND resource_id = OLD.id) THEN
+        -- Every registry UPDATE advances resource_version. A current ciphertext
+        -- remains bound to the old version until an atomic rotation replaces it.
+        IF EXISTS (SELECT 1 FROM vault_resource_manifest_pointers_v2
+                   WHERE team_id = OLD.team_id AND vault_id = OLD.vault_id
+                     AND resource_id = OLD.id) THEN
             RAISE EXCEPTION 'resource_v2_published_identity_in_use';
         END IF;
     END IF;
@@ -106,6 +105,13 @@ CREATE TRIGGER a_resource_v2_manifest_serialization
 CREATE FUNCTION serialize_resource_device_admission() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE membership_team uuid; vault_row record;
 BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.membership_id, NEW.membership_epoch, NEW.device_id)
+           IS DISTINCT FROM (OLD.membership_id, OLD.membership_epoch, OLD.device_id) THEN
+            RAISE EXCEPTION 'resource_v2_admission_identity_immutable';
+        END IF;
+        RETURN NEW;
+    END IF;
     SELECT team_id INTO membership_team FROM team_memberships
      WHERE id = NEW.membership_id AND epoch = NEW.membership_epoch;
     FOR vault_row IN SELECT id FROM shared_vaults
@@ -121,8 +127,28 @@ BEGIN
 END;
 $$;
 CREATE TRIGGER a_resource_device_admission_serialization
-    BEFORE INSERT ON team_membership_device_admissions
+    BEFORE INSERT OR UPDATE ON team_membership_device_admissions
     FOR EACH ROW EXECUTE FUNCTION serialize_resource_device_admission();
+
+-- A revoked device or membership epoch cannot be revived after its wrappers
+-- have been retired. New enrollment must use a new device or membership epoch.
+CREATE FUNCTION forbid_resource_recipient_reactivation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL THEN
+        IF TG_TABLE_NAME = 'devices' THEN
+            RAISE EXCEPTION 'device_revocation_irreversible';
+        END IF;
+        RAISE EXCEPTION 'membership_revocation_irreversible';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER a_device_revocation_irreversible
+    BEFORE UPDATE OF revoked_at ON devices
+    FOR EACH ROW EXECUTE FUNCTION forbid_resource_recipient_reactivation();
+CREATE TRIGGER a_membership_revocation_irreversible
+    BEFORE UPDATE OF revoked_at ON team_memberships
+    FOR EACH ROW EXECUTE FUNCTION forbid_resource_recipient_reactivation();
 
 -- Publication can only point at a fully promoted ciphertext. The store promotes
 -- inside the same transaction before moving the pointer, preserving atomicity.
@@ -242,6 +268,29 @@ BEGIN
               AND ciphertext_version.registry_version = current_resource.resource_version
         ) THEN
             RAISE EXCEPTION 'resource_v2_published_ciphertext_required';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM vault_resource_key_wrappers_v2 AS wrapper
+            JOIN team_memberships AS membership
+              ON membership.id = wrapper.membership_id
+             AND membership.team_id = wrapper.team_id
+             AND membership.epoch = wrapper.membership_epoch
+             AND membership.revoked_at IS NULL
+            JOIN devices AS device ON device.id = wrapper.device_id
+             AND device.user_id = membership.user_id
+             AND device.revoked_at IS NULL
+             AND device.public_key IS NOT NULL
+             AND device.public_key_algorithm = 'p256-ecdh-v1'
+            JOIN team_membership_device_admissions AS admission
+              ON admission.membership_id = membership.id
+             AND admission.membership_epoch = membership.epoch
+             AND admission.device_id = device.id
+            WHERE wrapper.team_id = NEW.team_id AND wrapper.vault_id = NEW.vault_id
+              AND wrapper.resource_id = NEW.resource_id AND wrapper.part = NEW.part
+              AND wrapper.key_version = NEW.key_version AND wrapper.obsolete_at IS NULL
+            FOR SHARE OF membership, device, admission
+        ) THEN
+            RAISE EXCEPTION 'resource_v2_eligible_wrapper_required';
         END IF;
         IF EXISTS (
             SELECT 1 FROM team_memberships AS membership

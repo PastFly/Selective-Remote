@@ -345,6 +345,15 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        WHERE resource_id = $1`, [childResourceID])).rows[0].count, 0);
     assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
     assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
+    await assert.rejects(pool.query(
+      `UPDATE vault_resource_registry SET resource_version = resource_version + 1
+       WHERE id = $1`, [childResourceID],
+    ), /resource_v2_published_identity_in_use/u);
+    await assert.rejects(pool.query(
+      `UPDATE team_membership_device_admissions SET device_id = $1
+       WHERE membership_id = $2 AND membership_epoch = $3 AND device_id = $4`,
+      [ownerSecondDeviceID, created.membership.id, created.membership.epoch, ownerDeviceID],
+    ), /resource_v2_admission_identity_immutable/u);
     await assert.rejects(store.publishResourceCryptoVersion({ ...publish,
       ciphertext: { ...firstCiphertext, authTag: "A".repeat(22) } }),
     /resource_idempotency_conflict/u);
@@ -397,6 +406,23 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        VALUES ($1, $2, $3, 'METADATA', 1, 1)`,
       [created.team.id, shared.vault.id, childResourceID],
     ), /resource_v2_wrapper_coverage_incomplete/u);
+    const noRecipientClient = await pool.connect();
+    try {
+      await noRecipientClient.query("BEGIN");
+      await noRecipientClient.query(
+        "UPDATE devices SET revoked_at = now() WHERE id IN ($1, $2)",
+        [ownerDeviceID, ownerSecondDeviceID],
+      );
+      await assert.rejects(noRecipientClient.query(
+        `INSERT INTO vault_resource_manifest_pointers_v2
+         (team_id, vault_id, resource_id, part, key_version, manifest_version)
+         VALUES ($1, $2, $3, 'METADATA', 1, 1)`,
+        [created.team.id, shared.vault.id, childResourceID],
+      ), /resource_v2_eligible_wrapper_required/u);
+    } finally {
+      await noRecipientClient.query("ROLLBACK");
+      noRecipientClient.release();
+    }
     await assert.rejects(pool.query(
       `DELETE FROM vault_resource_key_wrappers_v2
        WHERE resource_id = $1 AND part = 'GENERAL' AND device_id = $2`,
@@ -461,6 +487,24 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
     const revokedWrapper = await store.revokeResourceWrapper(wrapperRevoke);
     assert.equal(revokedWrapper.device_id, ownerSecondDeviceID);
     assert.deepEqual(await store.revokeResourceWrapper(wrapperRevoke), revokedWrapper);
+    await assert.rejects(pool.query(
+      "UPDATE devices SET revoked_at = NULL WHERE id = $1", [ownerSecondDeviceID],
+    ), /device_revocation_irreversible/u);
+    const membershipRollback = await pool.connect();
+    try {
+      await membershipRollback.query("BEGIN");
+      await membershipRollback.query(
+        "UPDATE team_memberships SET revoked_at = now() WHERE id = $1",
+        [created.membership.id],
+      );
+      await assert.rejects(membershipRollback.query(
+        "UPDATE team_memberships SET revoked_at = NULL, revoked_by_user_id = NULL WHERE id = $1",
+        [created.membership.id],
+      ), /membership_revocation_irreversible/u);
+    } finally {
+      await membershipRollback.query("ROLLBACK");
+      membershipRollback.release();
+    }
     await assert.rejects(store.revokeResourceWrapper({ ...wrapperRevoke,
       deviceID: ownerDeviceID, idempotencyKey: "integration:resource-wrapper-revoke-2" }),
     /resource_v2_published_wrapper_coverage/u);
