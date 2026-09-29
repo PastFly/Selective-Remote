@@ -585,6 +585,36 @@ async function route(request, response) {
         201,
       );
     }
+    const whoHasAccessMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/who-has-access\/([^/]+)$/i,
+    );
+    if (method === "GET" && whoHasAccessMatch) {
+      if (!whoHasAccessMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.listWhoHasAccess(
+        session, whoHasAccessMatch[1], whoHasAccessMatch[2], whoHasAccessMatch[3], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        },
+      ));
+    }
+    const resourcesByPrincipalMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/resources-by-principal\/([^/]+)\/([^/]+)$/i,
+    );
+    if (method === "GET" && resourcesByPrincipalMatch) {
+      if (!isUUID(resourcesByPrincipalMatch[1]) || !isUUID(resourcesByPrincipalMatch[2])
+        || !isUUID(resourcesByPrincipalMatch[4])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.listResourcesByPrincipal(
+        session, resourcesByPrincipalMatch[1], resourcesByPrincipalMatch[2],
+        resourcesByPrincipalMatch[3].toUpperCase(), resourcesByPrincipalMatch[4], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        },
+      ));
+    }
     const effectiveAccessMatch = url.pathname.match(
       /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/effective-access\/([^/]+)$/i,
     );

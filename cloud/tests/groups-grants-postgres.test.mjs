@@ -113,6 +113,10 @@ test("group names are validated before SQL", async () => {
   await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
   await assert.rejects(access.listAccessGrants({ limit: 51 }), /invalid_access_page/);
+  await assert.rejects(access.listWhoHasAccess({ resourceID: "bad" }),
+    /invalid_access_resource/);
+  await assert.rejects(access.listResourcesByPrincipal({ limit: 51 }),
+    /invalid_access_page/);
   await assert.rejects(access.previewAccessChange({ request: { changes: [] } }),
     /invalid_access_request/);
   await assert.rejects(access.commitAccessChange({ token: "unsigned",
@@ -194,6 +198,14 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     assert.equal(effectiveBefore.policyMask, 1);
     assert.equal(effectiveBefore.effectiveUsable, "NO");
     assert.equal(effectiveBefore.paths.length, 2);
+    const holders = await access.listWhoHasAccess({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
+      limit: 50 });
+    assert.equal(holders.rows.some((row) => row.userID === viewer), true);
+    const groupResources = await access.listResourcesByPrincipal({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, principalKind: "GROUP",
+      principalID: created.group.id, limit: 50 });
+    assert.equal(groupResources.rows.some((row) => row.resourceID === host), true);
     const removed = await access.removeAccessGroupMember({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       edgeID: edge.member.id, expectedVersion: 1,
@@ -229,6 +241,11 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     assert.equal((await access.getEffectiveAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: snippet,
       subjectUserID: viewer })).policyMask, 1);
+    const viewerResources = await access.listResourcesByPrincipal({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, principalKind: "USER",
+      principalID: viewer, limit: 50 });
+    assert.equal(viewerResources.rows.some((row) => row.resourceID === host), true);
+    assert.equal(viewerResources.rows.some((row) => row.resourceID === snippet), true);
     await assert.rejects(access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
       teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
       name: "Stale", idempotencyKey: `access:stale:${suffix}` }), /access_policy_conflict/);

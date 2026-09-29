@@ -222,6 +222,159 @@ export class AccessStore {
     }
   }
 
+  async listWhoHasAccess({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, limit = 50, cursor = null }) {
+    if (!uuidPattern.test(resourceID ?? "")) throw new Error("invalid_access_resource");
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50
+      || (cursor !== null && !uuidPattern.test(cursor))) {
+      throw new Error("invalid_access_page");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await readAccessActor(client, { actorUserID, actorDeviceID, teamID });
+      const vault = await client.query(
+        `SELECT 1 FROM shared_vaults WHERE id = $1 AND team_id = $2
+           AND archived_at IS NULL AND format_state = 'V2_PREPARING'
+           AND format_schema_version = 2`,
+        [vaultID, teamID],
+      );
+      if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+      const members = await client.query(
+        `SELECT user_id FROM team_memberships WHERE team_id = $1
+           AND revoked_at IS NULL AND ($2::uuid IS NULL OR user_id > $2::uuid)
+         ORDER BY user_id LIMIT $3`,
+        [teamID, cursor, limit + 1],
+      );
+      const rows = [];
+      for (const member of members.rows.slice(0, limit)) {
+        const access = await this.readEffectiveAccessInSnapshot(client, {
+          actorUserID, actorDeviceID, teamID, vaultID, resourceID,
+          subjectUserID: member.user_id,
+        });
+        if (access.policyAllowed) rows.push({ userID: member.user_id,
+          policyMask: access.policyMask, effectiveUsable: access.effectiveUsable,
+          paths: access.paths });
+      }
+      await client.query("COMMIT");
+      return { rows, nextCursor: members.rows.length > limit
+        ? members.rows[limit - 1].user_id : null };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async listResourcesByPrincipal({ actorUserID, actorDeviceID, teamID, vaultID,
+    principalKind, principalID, limit = 50, cursor = null }) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50
+      || (cursor !== null && !uuidPattern.test(cursor))) {
+      throw new Error("invalid_access_page");
+    }
+    if (!["USER", "GROUP"].includes(principalKind)
+      || !uuidPattern.test(principalID ?? "")) throw new Error("invalid_access_request");
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await readAccessActor(client, { actorUserID, actorDeviceID, teamID });
+      const vault = await client.query(
+        `SELECT 1 FROM shared_vaults WHERE id = $1 AND team_id = $2
+           AND archived_at IS NULL AND format_state = 'V2_PREPARING'
+           AND format_schema_version = 2`,
+        [vaultID, teamID],
+      );
+      if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+      if (principalKind === "GROUP") {
+        const group = await client.query(
+          `SELECT 1 FROM team_access_groups WHERE id = $1 AND team_id = $2
+             AND deleted_at IS NULL`, [principalID, teamID],
+        );
+        if (!group.rows[0]) throw new Error("access_group_not_found");
+      }
+      const page = await client.query(
+        `SELECT id, team_id, vault_id, policy_kind, parent_folder_id, deleted_at
+         FROM vault_resource_registry WHERE team_id = $1 AND vault_id = $2
+           AND deleted_at IS NULL AND policy_kind IS NOT NULL
+           AND ($3::uuid IS NULL OR id > $3::uuid)
+         ORDER BY id LIMIT $4`,
+        [teamID, vaultID, cursor, limit + 1],
+      );
+      const rows = [];
+      for (const resource of page.rows.slice(0, limit)) {
+        if (principalKind === "USER") {
+          const access = await this.readEffectiveAccessInSnapshot(client, {
+            actorUserID, actorDeviceID, teamID, vaultID,
+            resourceID: resource.id, subjectUserID: principalID,
+          });
+          if (access.policyAllowed) rows.push({ resourceID: resource.id,
+            policyMask: access.policyMask, paths: access.paths,
+            effectiveUsable: access.effectiveUsable });
+          continue;
+        }
+        const ancestorRows = await client.query(
+          `WITH RECURSIVE path AS (
+             SELECT id, team_id, vault_id, policy_kind, parent_folder_id,
+               deleted_at, 1 AS depth, ARRAY[id] AS seen
+             FROM vault_resource_registry WHERE team_id = $1 AND vault_id = $2
+               AND id = $3
+             UNION ALL
+             SELECT parent.id, parent.team_id, parent.vault_id, parent.policy_kind,
+               parent.parent_folder_id, parent.deleted_at, path.depth + 1,
+               path.seen || parent.id
+             FROM vault_resource_registry AS parent
+             JOIN path ON parent.id = path.parent_folder_id
+             WHERE parent.team_id = $1 AND parent.vault_id = $2 AND path.depth < 64
+               AND NOT parent.id = ANY(path.seen)
+           ) SELECT id, team_id, vault_id, policy_kind, parent_folder_id,
+               deleted_at FROM path ORDER BY depth`,
+          [teamID, vaultID, resource.parent_folder_id],
+        );
+        const target = { id: resource.id, teamID, vaultID,
+          kind: resource.policy_kind, parentFolderID: resource.parent_folder_id,
+          deletedAt: resource.deleted_at };
+        const ancestors = ancestorRows.rows.map((item) => ({ id: item.id,
+          teamID: item.team_id, vaultID: item.vault_id,
+          kind: item.policy_kind, parentFolderID: item.parent_folder_id,
+          deletedAt: item.deleted_at }));
+        const grants = await client.query(
+          `SELECT id, team_id, vault_id, principal_kind, principal_id,
+             target_kind, target_id, permission_mask, revoked_at
+           FROM vault_access_grants WHERE team_id = $1 AND vault_id = $2
+             AND principal_kind = 'GROUP' AND principal_id = $3
+             AND revoked_at IS NULL
+             AND ((target_kind = 'VAULT' AND target_id = $2)
+               OR (target_kind = 'FOLDER' AND target_id = ANY($4::uuid[]))
+               OR (target_kind = $5 AND target_id = $6))
+           ORDER BY id LIMIT 1001`,
+          [teamID, vaultID, principalID, ancestors.map((item) => item.id),
+            resource.policy_kind === "FOLDER" ? "FOLDER" : "RESOURCE", resource.id],
+        );
+        if (grants.rows.length > 1000) throw new Error("access_result_too_large");
+        const access = compileEffectiveAccess({ target, ancestors,
+          membership: { id: "group-policy", userID: "group-policy", epoch: 1 },
+          groupIDs: [principalID], cryptoStatus: "NO", requiresCrypto: true,
+          grants: grants.rows.map((item) => ({ id: item.id, teamID: item.team_id,
+            vaultID: item.vault_id, principalKind: item.principal_kind,
+            principalID: item.principal_id, targetKind: item.target_kind,
+            targetID: item.target_id, mask: item.permission_mask,
+            revokedAt: item.revoked_at })) });
+        if (access.policyAllowed) rows.push({ resourceID: resource.id,
+          policyMask: access.policyMask, paths: access.paths,
+          effectiveUsable: "UNKNOWN" });
+      }
+      await client.query("COMMIT");
+      return { rows, nextCursor: page.rows.length > limit
+        ? page.rows[limit - 1].id : null };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async renameAccessGroup(input) {
     const name = accessGroupName(input?.name);
     const { actorUserID, actorDeviceID, teamID, vaultID, groupID,

@@ -411,6 +411,19 @@ export class CloudService {
       actorDeviceID: session.device_id, teamID, vaultID, resourceID, subjectUserID });
   }
 
+  async listWhoHasAccess(session, teamID, vaultID, resourceID, page = {}) {
+    return this.store.access.listWhoHasAccess({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID, resourceID,
+      limit: Number(page.limit ?? 50), cursor: page.cursor ?? null });
+  }
+
+  async listResourcesByPrincipal(session, teamID, vaultID, principalKind,
+    principalID, page = {}) {
+    return this.store.access.listResourcesByPrincipal({ actorUserID: session.user_id,
+      actorDeviceID: session.device_id, teamID, vaultID, principalKind,
+      principalID, limit: Number(page.limit ?? 50), cursor: page.cursor ?? null });
+  }
+
   async renameTeam(session, teamID, input, idempotencyKey) {
     const result = await this.store.renameTeam({
       actorUserID: session.user_id,
