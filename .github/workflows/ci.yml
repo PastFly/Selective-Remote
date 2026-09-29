@@ -66,11 +66,13 @@ jobs:
         working-directory: cloud
         run: npm ci
 
-      - name: Apply migrations and test Team transactions
+      - name: Apply migrations and test Team and device-trust storage
         working-directory: cloud
         env:
           TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
-        run: node --test tests/team-postgres-integration.test.mjs
+        run: |
+          node --test tests/team-postgres-integration.test.mjs
+          node --test tests/device-trust-postgres.test.mjs
 
   test:
     name: Swift tests on macOS
