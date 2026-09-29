@@ -98,6 +98,9 @@ test("PostgreSQL enforces scoped grants, Credential mask, and Team group lifetim
 test("group names are validated before SQL", async () => {
   const access = new AccessStore({});
   await assert.rejects(access.createAccessGroup({ name: "" }), /invalid_access_group_name/);
+  await assert.rejects(access.renameAccessGroup({ name: "\n" }), /invalid_access_group_name/);
+  await assert.rejects(access.addAccessGroupMember({ targetMembershipID: "bad" }),
+    /invalid_access_membership/);
 });
 
 test("Team group creation is gated by admitted Owner and exact idempotent request", {
@@ -132,6 +135,32 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     assert.equal(created.group.name, "Operators");
     assert.equal(created.group.team_id, team);
     assert.equal((await access.createAccessGroup(input)).group.id, created.group.id);
+    const page = await access.listAccessGroups({ actorUserID: user, actorDeviceID: device,
+      teamID: team, limit: 50 });
+    assert.equal(page.rows.some((row) => row.id === created.group.id), true);
+    const renamed = await access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
+      name: "On-call", idempotencyKey: `access:rename:${suffix}` });
+    assert.equal(renamed.group.name, "On-call");
+    assert.equal(Number(renamed.group.version), 2);
+    const viewer = (await pool.query(`INSERT INTO users (email, username, display_name,
+      email_verified_at) VALUES ($1, $2, 'Access viewer', now()) RETURNING id`,
+    [`access-viewer-${suffix}@example.com`, `access_viewer_${suffix}`])).rows[0].id;
+    const viewerMembership = (await pool.query(`INSERT INTO team_memberships
+      (team_id, user_id, role) VALUES ($1, $2, 'viewer') RETURNING id`,
+    [team, viewer])).rows[0].id;
+    const edge = await access.addAccessGroupMember({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
+      targetMembershipID: viewerMembership, idempotencyKey: `access:member-add:${suffix}` });
+    assert.equal(edge.member.user_id, viewer);
+    const removed = await access.removeAccessGroupMember({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
+      edgeID: edge.member.id, expectedVersion: 1,
+      idempotencyKey: `access:member-remove:${suffix}` });
+    assert.equal(removed.removed, true);
+    await assert.rejects(access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
+      name: "Stale", idempotencyKey: `access:stale:${suffix}` }), /access_policy_conflict/);
     await assert.rejects(access.createAccessGroup({ ...input, name: "Changed" }),
       /access_idempotency_conflict/);
     await assert.rejects(access.createAccessGroup({ ...input, vaultID: v1Vault,
