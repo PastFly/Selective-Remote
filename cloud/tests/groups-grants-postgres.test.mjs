@@ -113,6 +113,7 @@ test("group names are validated before SQL", async () => {
   await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
   await assert.rejects(access.listAccessGrants({ limit: 51 }), /invalid_access_page/);
+  await assert.rejects(access.listAccessGroups({ cursor: "bad" }), /invalid_access_page/);
   await assert.rejects(access.listWhoHasAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
   await assert.rejects(access.listResourcesByPrincipal({ limit: 51 }),
@@ -170,6 +171,14 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const viewerMembership = (await pool.query(`INSERT INTO team_memberships
       (team_id, user_id, role) VALUES ($1, $2, 'viewer') RETURNING id`,
     [team, viewer])).rows[0].id;
+    const viewerDevice = randomUUID();
+    await pool.query(`INSERT INTO devices (id, user_id, name, platform, public_key,
+      public_key_algorithm, key_registered_at, key_approved_at)
+      VALUES ($1, $2, 'Viewer browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+    [viewerDevice, viewer, JSON.stringify({ kty: "EC", crv: "P-256",
+      x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
+    await assert.rejects(access.listAccessGroups({ actorUserID: viewer,
+      actorDeviceID: viewerDevice, teamID: team }), /team_access_denied/);
     const edge = await access.addAccessGroupMember({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       targetMembershipID: viewerMembership, idempotencyKey: `access:member-add:${suffix}` });
@@ -298,9 +307,15 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const viewerDelta = movePreview.details.find((item) => item.subjectUserID === viewer);
     assert.equal(viewerDelta.before.policyMask, 1);
     assert.equal(viewerDelta.after.policyMask, 0);
+    const policyVersionBeforeMove = Number((await pool.query(
+      `SELECT access_policy_version FROM shared_vaults WHERE id = $1`, [vault],
+    )).rows[0].access_policy_version);
     const moved = await access.commitAccessChange({ ...moveInput,
       token: movePreview.token, idempotencyKey: `access:move:${suffix}` });
     assert.equal(moved.applied, 1);
+    assert.equal(Number((await pool.query(
+      `SELECT access_policy_version FROM shared_vaults WHERE id = $1`, [vault],
+    )).rows[0].access_policy_version), policyVersionBeforeMove + 1);
     assert.equal((await pool.query(`SELECT parent_folder_id FROM vault_resource_registry
       WHERE id = $1`, [forwarding])).rows[0].parent_folder_id, folderB);
     assert.equal(moved.notificationCandidates.some((item) => item.userID === viewer
@@ -331,6 +346,9 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
     await pool.query(`INSERT INTO team_memberships (team_id, user_id, role)
       VALUES ($1, $2, 'admin')`, [team, admin]);
+    assert.equal((await access.listAccessGroups({ actorUserID: admin,
+      actorDeviceID: adminDevice, teamID: team })).rows.some(
+      (row) => row.id === created.group.id), true);
     await pool.query(`INSERT INTO vault_access_grants
       (team_id, vault_id, principal_kind, principal_id, membership_id,
        membership_epoch, target_kind, target_id, permission_mask,

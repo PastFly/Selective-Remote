@@ -157,33 +157,30 @@ export class AccessStore {
   }
 
   async listAccessGroups({ actorUserID, actorDeviceID, teamID, limit = 50, cursor = null }) {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50
+      || (cursor !== null && !uuidPattern.test(cursor))) {
       throw new Error("invalid_access_page");
     }
-    const actor = await this.pool.query(
-      `SELECT 1 FROM team_memberships AS membership
-       JOIN teams AS team ON team.id = membership.team_id AND team.archived_at IS NULL
-       JOIN devices AS device ON device.id = $3 AND device.user_id = membership.user_id
-         AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
-         AND device.public_key_algorithm = 'p256-ecdh-v1'
-       LEFT JOIN team_membership_device_admissions AS admission
-         ON admission.membership_id = membership.id
-        AND admission.membership_epoch = membership.epoch AND admission.device_id = device.id
-       WHERE membership.team_id = $1 AND membership.user_id = $2
-         AND membership.revoked_at IS NULL
-         AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)`,
-      [teamID, actorUserID, actorDeviceID],
-    );
-    if (!actor.rows[0]) throw new Error("team_not_found");
-    const page = await this.pool.query(
-      `SELECT id, team_id, name, version, created_at, updated_at
-       FROM team_access_groups WHERE team_id = $1 AND deleted_at IS NULL
-         AND ($2::uuid IS NULL OR id > $2::uuid)
-       ORDER BY id LIMIT $3`,
-      [teamID, cursor, limit + 1],
-    );
-    const rows = page.rows.slice(0, limit);
-    return { rows, nextCursor: page.rows.length > limit ? rows.at(-1).id : null };
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+      await readAccessActor(client, { actorUserID, actorDeviceID, teamID });
+      const page = await client.query(
+        `SELECT id, team_id, name, version, created_at, updated_at
+         FROM team_access_groups WHERE team_id = $1 AND deleted_at IS NULL
+           AND ($2::uuid IS NULL OR id > $2::uuid)
+         ORDER BY id LIMIT $3`,
+        [teamID, cursor, limit + 1],
+      );
+      await client.query("COMMIT");
+      const rows = page.rows.slice(0, limit);
+      return { rows, nextCursor: page.rows.length > limit ? rows.at(-1).id : null };
+    } catch (error) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   async listAccessGrants({ actorUserID, actorDeviceID, teamID, vaultID,
@@ -1124,6 +1121,11 @@ export class AccessStore {
               change.expectedResourceVersion],
           );
           if (!row.rows[0]) throw new Error("access_policy_conflict");
+          await client.query(
+            `UPDATE shared_vaults SET access_policy_version = access_policy_version + 1
+             WHERE id = $1 AND team_id = $2`,
+            [vaultID, teamID],
+          );
           await client.query(
             `INSERT INTO team_audit_events
                (team_id, actor_user_id, action, target_vault_id, metadata)
