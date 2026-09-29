@@ -361,6 +361,59 @@ async function route(request, response) {
         limit: url.searchParams.get("limit"), cursor: url.searchParams.get("cursor"),
       }));
     }
+    const accessGroupMemberMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/access-groups\/([^/]+)\/members\/([^/]+)$/i,
+    );
+    if (method === "DELETE" && accessGroupMemberMatch) {
+      if (!accessGroupMemberMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, async () => service.removeAccessGroupMember(
+        session, accessGroupMemberMatch[1], accessGroupMemberMatch[2],
+        accessGroupMemberMatch[3], await readJSON(request, maxTeamBodyBytes),
+        idempotencyKey(request),
+      ));
+    }
+    const accessGroupMembersMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/access-groups\/([^/]+)\/members$/i,
+    );
+    if (method === "POST" && accessGroupMembersMatch) {
+      if (!accessGroupMembersMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, async () => service.addAccessGroupMember(
+        session, accessGroupMembersMatch[1], accessGroupMembersMatch[2],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request),
+      ), 201);
+    }
+    const accessGroupMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/access-groups\/([^/]+)$/i,
+    );
+    if (accessGroupMatch) {
+      if (!accessGroupMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      if (method === "PATCH") return handleOperation(response,
+        async () => service.renameAccessGroup(session, accessGroupMatch[1],
+          accessGroupMatch[2], await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request)));
+      if (method === "DELETE") return handleOperation(response,
+        async () => service.deleteAccessGroup(session, accessGroupMatch[1],
+          accessGroupMatch[2], await readJSON(request, maxTeamBodyBytes),
+          idempotencyKey(request)));
+    }
+    const accessGroupsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/access-groups$/i);
+    if (accessGroupsMatch) {
+      if (!isUUID(accessGroupsMatch[1])) return sendError(response, 404, "team_not_found");
+      if (method === "GET") return handleOperation(response,
+        () => service.listAccessGroups(session, accessGroupsMatch[1], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        }));
+      if (method === "POST") return handleOperation(response,
+        async () => service.createAccessGroup(session, accessGroupsMatch[1],
+          await readJSON(request, maxTeamBodyBytes), idempotencyKey(request)), 201);
+    }
     const teamInvitationsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/invitations$/i);
     if (teamInvitationsMatch) {
       if (!isUUID(teamInvitationsMatch[1])) return sendError(response, 404, "team_not_found");
@@ -532,6 +585,86 @@ async function route(request, response) {
         201,
       );
     }
+    const whoHasAccessMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/who-has-access\/([^/]+)$/i,
+    );
+    if (method === "GET" && whoHasAccessMatch) {
+      if (!whoHasAccessMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.listWhoHasAccess(
+        session, whoHasAccessMatch[1], whoHasAccessMatch[2], whoHasAccessMatch[3], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        },
+      ));
+    }
+    const resourcesByPrincipalMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/resources-by-principal\/([^/]+)\/([^/]+)$/i,
+    );
+    if (method === "GET" && resourcesByPrincipalMatch) {
+      if (!isUUID(resourcesByPrincipalMatch[1]) || !isUUID(resourcesByPrincipalMatch[2])
+        || !isUUID(resourcesByPrincipalMatch[4])) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.listResourcesByPrincipal(
+        session, resourcesByPrincipalMatch[1], resourcesByPrincipalMatch[2],
+        resourcesByPrincipalMatch[3].toUpperCase(), resourcesByPrincipalMatch[4], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        },
+      ));
+    }
+    const effectiveAccessMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/effective-access\/([^/]+)$/i,
+    );
+    if (method === "GET" && effectiveAccessMatch) {
+      if (!effectiveAccessMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.getEffectiveAccess(
+        session, effectiveAccessMatch[1], effectiveAccessMatch[2],
+        effectiveAccessMatch[3], url.searchParams.get("subjectUserID"),
+      ));
+    }
+    const accessGrantsMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/access-grants$/i,
+    );
+    if (method === "GET" && accessGrantsMatch) {
+      if (!accessGrantsMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, () => service.listAccessGrants(
+        session, accessGrantsMatch[1], accessGrantsMatch[2], {
+          limit: url.searchParams.get("limit") ?? 50,
+          cursor: url.searchParams.get("cursor"),
+        },
+      ));
+    }
+    const accessPreviewMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/access-preview$/i,
+    );
+    if (method === "POST" && accessPreviewMatch) {
+      if (!accessPreviewMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, async () => service.previewAccessChange(
+        session, accessPreviewMatch[1], accessPreviewMatch[2],
+        await readJSON(request, maxTeamBodyBytes),
+      ));
+    }
+    const accessCommitMatch = url.pathname.match(
+      /^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/access-commit$/i,
+    );
+    if (method === "POST" && accessCommitMatch) {
+      if (!accessCommitMatch.slice(1).every(isUUID)) {
+        return sendError(response, 404, "team_not_found");
+      }
+      return handleOperation(response, async () => service.commitAccessChange(
+        session, accessCommitMatch[1], accessCommitMatch[2],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request),
+      ));
+    }
     const teamVaultMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)$/i);
     if (teamVaultMatch) {
       if (!isUUID(teamVaultMatch[1]) || !isUUID(teamVaultMatch[2])) {
@@ -615,6 +748,10 @@ function handleOperationError(response, error) {
   if (!publicError) throw error;
   if (publicError.code === "rate_limited" && Number.isInteger(error.retryAfterSeconds)) {
     response.setHeader("Retry-After", String(Math.max(1, error.retryAfterSeconds)));
+  }
+  if (publicError.code === "group_grants_must_be_revoked_first") {
+    return sendJSON(response, 409, { error: publicError.code,
+      safeCount: error.safeCount === "1001+" ? "1001+" : null });
   }
   return sendError(response, publicError.status, publicError.code);
 }

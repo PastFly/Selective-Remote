@@ -73,6 +73,8 @@ jobs:
         run: |
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/device-trust-postgres.test.mjs
+          node --test tests/groups-grants-postgres.test.mjs
+          node --test tests/access-scale-postgres.test.mjs
 
   test:
     name: Swift tests on macOS

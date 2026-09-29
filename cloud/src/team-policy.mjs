@@ -63,3 +63,13 @@ export function requireMembershipChange(actor, target, nextRole = null) {
   }
   if (nextRole !== null) validateTeamRole(nextRole);
 }
+
+export function requireAccessMutation(actorRole, targetRole = null) {
+  requireTeamPermission(actorRole, "manage_member");
+  if (targetRole !== null) {
+    validateTeamRole(targetRole);
+    if (actorRole === "admin" && !["editor", "viewer"].includes(targetRole)) {
+      throw new Error("team_access_denied");
+    }
+  }
+}
