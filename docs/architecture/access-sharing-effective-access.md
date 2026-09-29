@@ -4,9 +4,9 @@ Status: proposed v2 algorithm, 2026-09-29. The current product has no resource A
 
 ## Identity and decision inputs
 
-All IDs are immutable and server-bound to `teamID`, `vaultID`, resource type and ciphertext version. A member is identified by `membershipID + epoch`; a device by admitted device ID/generation. A session supplies no authoritative group, parent or grant claim. The evaluator loads them from one consistent policy snapshot.
+All IDs are immutable and server-bound to `teamID`, `vaultID`, coarse policy class and ciphertext version. Exact resource type stays encrypted. A member is identified by `membershipID + epoch`; a device by admitted device ID/generation. A session supplies no authoritative group, parent or grant claim. The evaluator loads them from one consistent policy snapshot.
 
-Inputs: active Team membership/role/epoch; device admission and capability; Vault v2 state/access; active flat-group membership; active direct, group, Vault and ancestor-Folder grants; server-registered resource identity/parent/state; grant expiry; policy version; current ciphertext/key generation and recipient wrap availability. The server can verify existence and authorized delivery of a wrap but cannot prove the client successfully decrypted it. The client must check authenticated associated data and actual unwrap/decryption. The output therefore distinguishes `serverAllowed`, `keyReady`, and `effectivePermissions`; no UI may claim plaintext access from policy alone.
+Inputs: active Team membership/role/epoch; device admission and capability; Vault v2 state/access; active flat-group membership; active direct, group, Vault and ancestor-Folder grants; server-registered resource identity/parent/state; grant expiry; policy version; current ciphertext/key generation and recipient wrap availability. The server can verify existence and authorized delivery of a wrap but cannot prove the client successfully decrypted it. The client must check authenticated associated data and actual unwrap/decryption. The output therefore distinguishes `POLICY_ALLOWED`, `CRYPTO_AVAILABLE` and `EFFECTIVE_USABLE`; no UI may claim plaintext access from policy alone. `CRYPTO_AVAILABLE` is `UNKNOWN` until a recipient device verifies unwrap and ciphertext.
 
 Team Owner/Admin grants policy administration only under existing Team policy. It does not silently grant decryption of every v2 resource. `activeV2VaultAccess` below means an admitted catalog/container entitlement, **not** possession of the legacy whole-Vault key. `ManageAccess` is never a synonym for `Reveal`, and a key custodian must supply valid wraps for any new decrypting recipient.
 
@@ -31,40 +31,49 @@ evaluate(teamID, membershipID, epoch, deviceID, resourceID, now, snapshot):
                                          snapshot.policyVersion)
   paths = []
   for edge in candidateEdges sorted by stable grantID:
-    if not sameTeamVaultAndType(edge, r): continue
-    allowed = mapScopeMaskToTargetActions(edge.resourceType, edge.mask, r.type)
-              intersect permittedActions(r.type)
+    if not sameTeamVaultAndPolicyClass(edge, r): continue
+    allowed = mapScopeMaskToTargetActions(edge.resourceType, edge.mask, r.policyClass)
+              intersect permittedActions(r.policyClass)
     if allowed is empty: continue
     paths.append({grantID, principal, directOrAncestor, ancestorChain,
                   actions: allowed, expiry, policyVersion})
   policyAllowed = union(paths.actions)
   policyAllowed = applyExistingTeamRoleMutationCeiling(policyAllowed,
                                                         membership.role)
-  keyReady = currentAuthorizedWrapAvailable(r, membershipID, epoch,
-                                            deviceID, snapshot.keyVersion)
-  effective = policyAllowed
-  for action in decryptRequiringActions(r.type):
-    if not keyReady: effective.remove(action)
-  if rotationPending(r): effective.remove(protectedWriteAndGrantActions)
+  if r.policyClass == secret and Reveal not in policyAllowed:
+    policyAllowed.remove(Edit)
+  cryptoAvailable = {}
+  usable = {}
+  for action in policyAllowed:
+    part = encryptedPartNeeded(action, r.policyClass)
+    if part is NONE: usable.add(action); cryptoAvailable[action] = NOT_REQUIRED; continue
+    wrap = currentAuthorizedWrapInPublishedManifest(r, part, membershipID,
+                                                   epoch, deviceID, snapshot.partKeyEpoch(part))
+    cryptoAvailable[action] = wrap ? UNKNOWN_UNTIL_CLIENT_VERIFIES : NO
+    if wrap and clientProvesCurrentUnwrapAndAEAD(r, part, snapshot.publishedManifest):
+      cryptoAvailable[action] = YES
+      usable.add(action)
+  if rotationPending(r): usable.remove(protectedWriteAndGrantActions)
   blockedReasons = specificMissingPreconditionsAndActions(policyAllowed,
-                                                          keyReady, r.state)
-  return {serverAllowed: policyAllowed, keyReady, effectivePermissions: effective,
-          contributingPaths: paths, blockedReasons, policyVersion,
-          keyVersion: r.keyVersion}
+                                                          cryptoAvailable, r.state)
+  return {POLICY_ALLOWED: policyAllowed, CRYPTO_AVAILABLE: cryptoAvailable,
+          EFFECTIVE_USABLE: usable, contributingPaths: paths, blockedReasons,
+          vaultPolicyVersion, registryVersion, accessRevision,
+          partContentRevisions, partKeyEpochs, manifestRevision}
 ```
 
-The server enforces `policyAllowed` at list, envelope/wrap fetch, writes and grant changes using the authoritative snapshot. A write additionally checks expected resource/policy/key versions and a current eligible custodian. The client displays `effectivePermissions` only after validating the wrap and authenticated ciphertext. Policy paths should still appear when a missing wrap blocks use, with `blockedReasons=KEY_UNAVAILABLE`, so the Owner can repair the key state. Response details are redacted for a caller who cannot discover the resource; external not-found and unauthorized shapes are indistinguishable.
+The `clientProves...` line is a **local client check**, not a server oracle. Server responses can report `POLICY_ALLOWED` and part-specific wrap presence, never assert `EFFECTIVE_USABLE` for another device. On a Credential, `ViewMetadata` checks only its metadata part; `Reveal` and `Edit` check the secret part. `ManageAccess` needs policy authority but no content CEK. The server enforces `policyAllowed` at list, envelope/wrap fetch, writes and grant changes using the authoritative snapshot. A write additionally checks expected registry/access/content/key versions and a current eligible custodian. The client displays usable content rights only after validating the current published manifest, wrap and authenticated ciphertext. Policy paths still appear when a missing/broken wrap blocks use, with `blockedReasons=KEY_UNAVAILABLE`, so the Owner can repair the key state. `ROTATION_PENDING` may allow still-entitled readers to use the prior current version but blocks new protected writes and grants. Response details are redacted for a caller who cannot discover the resource; external not-found and unauthorized shapes are indistinguishable. Exact version semantics are in [concurrency](access-sharing-v2-concurrency.md).
 
 ## Multiple independent paths
 
-Illustrative Host `host-7` in Vault `Production`, Folder `ssh`. Member `alex` is in flat group `Support L2`. Two grants on this Host both carry `Connect` in the **prototype's UX vocabulary**:
+Illustrative Host `host-7` in Vault `Production`, Folder `ssh`. Member `alex` is in flat group `Support L2`. Two grants on this Host both carry `View`:
 
 | Path | Grant | Explanation | Before group revoke | After group revoke |
 | --- | --- | --- | --- | --- |
-| 1 | group grant on Host | `Support L2 → Production → host-7` | Contributes `Connect` | Removed |
-| 2 | direct grant on Host | `alex → host-7` | Contributes `Connect` | Still contributes `Connect` |
+| 1 | group grant on Host | `Support L2 → Production → host-7` | Contributes `View` | Removed |
+| 2 | direct grant on Host | `alex → host-7` | Contributes `View` | Still contributes `View` |
 
-The union remains `Connect` after revoking path 1. A removal operation targets the exact `grantID`, never an action name on the member; the preview shows path 2 as a remaining alternative. In the proposed security-grade v1 permission set, Host.Connect is **UX-only**; the same path-union rule applies to enforceable Host.View. A real restriction on connecting requires target credential/gateway control, beyond this v1 ACL.
+The union remains `View` after revoking path 1. A removal operation targets the exact `grantID`, never an action name on the member; the preview shows path 2 as a remaining alternative. A real restriction on connecting requires target credential/gateway control, beyond this v1 ACL.
 
 ## Preview and commit
 

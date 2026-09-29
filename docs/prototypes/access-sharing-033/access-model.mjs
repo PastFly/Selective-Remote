@@ -1,20 +1,27 @@
 // Pure demo model. It does not authorize access or model the current Cloud server.
 const actionSets = Object.freeze({
-  host: ['View', 'Connect', 'Edit', 'Manage Access'],
+  host: ['View', 'Edit', 'Manage Access'],
   credential: ['View metadata', 'Reveal', 'Edit', 'Manage Access'],
-  snippet: ['View', 'Run', 'Edit', 'Manage Access'],
-  forwarding: ['View', 'Run', 'Edit', 'Manage Access'],
+  snippet: ['View', 'Edit', 'Manage Access'],
+  forwarding: ['View'],
   folder: ['View', 'Manage Access'],
 });
 
 export const actionsFor = (type) => actionSets[type] ?? [];
 
+export function normalizeGrantActions(type, proposed) {
+  const valid = actionsFor(type);
+  const selected = new Set(proposed.filter((action) => valid.includes(action)));
+  if (type === 'credential' && selected.has('Edit')) selected.add('Reveal');
+  return valid.filter((action) => selected.has(action));
+}
+
 export function presetFor(type, preset) {
   const actions = actionsFor(type);
   if (preset === 'view') return actions.slice(0, 1);
-  if (preset === 'connect' || preset === 'operate') return actions.slice(0, Math.min(2, actions.length));
-  if (preset === 'edit') return actions.filter((action) => action === actions[0] || action === 'Edit');
-  if (preset === 'manage') return actions.filter((action) => action === actions[0] || action === 'Manage Access');
+  if (preset === 'reveal' && type === 'credential') return actions.slice(0, 2);
+  if (preset === 'edit' && actions.includes('Edit')) return normalizeGrantActions(type, [actions[0], 'Edit']);
+  if (preset === 'manage' && actions.includes('Manage Access')) return ['Manage Access'];
   return [];
 }
 
@@ -39,7 +46,8 @@ export function effectiveAccess(model, resourceId, principalId) {
     // Folder View gives discovery of descendants, never execution or secret reveal.
     const inherited = origin.id !== target.id;
     const actions = inherited
-      ? grant.actions.includes('View') ? valid.slice(0, 1) : []
+      ? [grant.actions.includes('View') ? valid[0] : null,
+        grant.actions.includes('Manage Access') && valid.includes('Manage Access') ? 'Manage Access' : null].filter(Boolean)
       : grant.actions.filter((action) => valid.includes(action));
     if (!actions.length) return [];
     return [{ grantId: grant.id, origin: grant.recipient, inheritedFrom: origin.id === target.id ? null : origin.id, actions }];
@@ -73,7 +81,8 @@ export function revokePreview(model, resourceIds, recipient, onlyGrantId = null)
 
 export function grantPreview(model, resourceIds, recipient, actionById) {
   const newGrants = resourceIds.map((resourceId) => ({
-    id: `preview-${resourceId}`, resourceId, recipient, actions: actionById[resourceId] ?? [],
+    id: `preview-${resourceId}`, resourceId, recipient,
+    actions: normalizeGrantActions(model.resources.find((item) => item.id === resourceId)?.type, actionById[resourceId] ?? []),
   }));
   const selectedResources = model.resources.filter((item) => resourceIds.includes(item.id));
   const affectedResources = model.resources.filter((item) => selectedResources.some((selected) => covers(selected, item)));

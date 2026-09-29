@@ -26,9 +26,12 @@ demo grant or revoke. Only the chosen recipient's matching grants are removed.
 The demo uses simple Vault and folder labels for illustration; a real ACL needs
 stable resource/folder IDs, separate resource encryption, a server-enforced
 move transaction, and expiry enforcement. The current app has none of those
-granular guarantees. Host Connect, Snippet Run, and Forwarding Run here are
-**UX actions**, not security-grade permissions: a modified authorized client
-can perform them outside the app when it already has the necessary data.
+granular guarantees. Host Connect, Snippet Run, Forwarding Run and Forwarding
+Edit/Manage are excluded from V1 grant controls. Connect/Run can only be **UX
+actions** without target-side enforcement: a modified authorized client can
+perform them outside the app when it already has the necessary data. The
+Effective Access panel shows synthetic `POLICY_ALLOWED` paths and explicitly
+does not claim `CRYPTO_AVAILABLE` or `EFFECTIVE_USABLE`.
 See the [proposed architecture](../../architecture/access-sharing-target-model.md)
 and [effective access algorithm](../../architecture/access-sharing-effective-access.md).
 

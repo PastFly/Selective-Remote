@@ -1,4 +1,4 @@
-import { actionsFor, effectiveAccess, grantPreview, presetFor, revokePreview } from './access-model.mjs';
+import { actionsFor, effectiveAccess, grantPreview, normalizeGrantActions, presetFor, revokePreview } from './access-model.mjs';
 
 const resources = [
   { id: "host-prod", type: "host", title: "production-01.example", folder: "Production / ssh", vault: "Production", icon: "▣" },
@@ -53,12 +53,18 @@ Object.assign(copy.en, {
   groupMembership: "Group membership", noMembers: "No members yet", noAccess: "No access in the demo model",
   scale: "Demo scale", filterCloud: "Search Cloud", previousPage: "Previous", nextPage: "Next", page: "Page",
 });
+Object.assign(copy.ru, {
+  policyOnly: "POLICY_ALLOWED: демонстрационные пути. CRYPTO_AVAILABLE и EFFECTIVE_USABLE не проверяются: Vault v2, wrapper и допуск клиента ещё не реализованы.",
+});
+Object.assign(copy.en, {
+  policyOnly: "POLICY_ALLOWED: demo paths only. CRYPTO_AVAILABLE and EFFECTIVE_USABLE are not evaluated: Vault v2, wrapper and client admission are not implemented.",
+});
 const state = {
   locale: "ru", theme: "graphite", surface: "mac", macSection: "hosts", cloudSection: "manager", perspective: "people",
-  query: "", selectedResource: "host-prod", selectedPrincipal: "member-alex", dialog: null, preset: "connect", recipient: "group-support", expiry: "forever", preview: false, customMode: false, customActions: new Set(),
+  query: "", selectedResource: "host-prod", selectedPrincipal: "member-alex", dialog: null, preset: "view", recipient: "group-support", expiry: "forever", preview: false, customMode: false, customActions: new Set(),
   context: null, toast: "", volume: 6, cloudQuery: "", cloudPage: 0, groups: [...initialGroups], grants: [
     { id: "demo-folder-support", resourceId: "folder-prod", recipient: "group-support", actions: ["View"], expiry: "forever" },
-    { id: "demo-host-alex", resourceId: "host-prod", recipient: "member-alex", actions: ["Connect"], expiry: "forever" },
+    { id: "demo-host-alex", resourceId: "host-prod", recipient: "member-alex", actions: ["View"], expiry: "forever" },
   ], bulkSelected: new Set(), bulkMode: "grant", groupDraft: "",
 };
 const T = (key) => copy[state.locale][key] ?? key;
@@ -70,7 +76,7 @@ const principal = (id) => [...demoPeople().map((p) => ({ ...p, type: "member" })
 const principalName = (id) => principal(id)?.name ?? id;
 const typeName = (type) => T({ host: "hosts", credential: "credentials", snippet: "snippets", folder: "folders", forwarding: "forwarding" }[type] ?? type);
 const model = () => ({ resources: demoResources(), groups: state.groups, grants: state.grants });
-const activeActions = (item, preset = state.preset) => state.customMode ? [...state.customActions].filter((action) => actionsFor(item.type).includes(action)) : presetFor(item.type, preset);
+const activeActions = (item, preset = state.preset) => state.customMode ? normalizeGrantActions(item.type, [...state.customActions]) : presetFor(item.type, preset);
 const actionLabel = (action) => T({ "View": "view", "View metadata": "viewMetadata", "Connect": "connect", "Run": "run", "Reveal": "reveal", "Edit": "edit", "Manage Access": "manageAccess" }[action] ?? action);
 function cloudPage(items) {
   const filtered = items.filter((item) => (item.title ?? item.name).toLowerCase().includes(state.cloudQuery.toLowerCase()));
@@ -118,7 +124,7 @@ function principalEffective(item, principalId) {
 function effectiveSummary(item, selectedId = state.selectedPrincipal) {
   const header = `<div class="detail-title"><div class="resource-icon">${item.icon}</div><div><h3>${esc(item.title)}</h3><small class="muted">${esc(item.vault)} ${esc(T("vault"))} · ${esc(typeName(item.type))}</small></div></div>`;
   const principals = selectedId ? [principal(selectedId)].filter(Boolean) : [...demoPeople(), ...state.groups].filter((entry) => state.volume === 6 || effectiveAccess(model(), item.id, entry.id).paths.length);
-  return `${header}${principals.map((entry) => `<section class="effective-person"><h4>${esc(entry.name)}</h4>${principalEffective(item, entry.id)}</section>`).join("")}<p class="hint">${esc(T("allPaths"))}</p>`;
+  return `${header}<div class="notice"><p>${esc(T("policyOnly"))}</p></div>${principals.map((entry) => `<section class="effective-person"><h4>${esc(entry.name)}</h4>${principalEffective(item, entry.id)}</section>`).join("")}<p class="hint">${esc(T("allPaths"))}</p>`;
 }
 function managerView() {
   const principals = [...demoPeople().map((item) => ({ ...item, type: "member" })), ...state.groups.map((item) => ({ ...item, type: "group", initials: "◫" }))];
@@ -146,7 +152,9 @@ function presetOptions(chosen) {
   if (new Set(chosen.map((item) => item.type)).size > 1) return [["view", T("view")], ["manage", T("manage")]];
   const type = chosen[0].type;
   if (type === "folder") return [["view", T("view")], ["manage", T("manage")]];
-  return [["view", T("view")], ["connect", T(type === "credential" ? "reveal" : type === "host" ? "connect" : "run")], ["edit", T("edit")], ["manage", T("manage")]];
+  if (type === "forwarding") return [["view", T("view")]];
+  if (type === "credential") return [["view", T("view")], ["reveal", T("reveal")], ["edit", T("edit")], ["manage", T("manage")]];
+  return [["view", T("view")], ["edit", T("edit")], ["manage", T("manage")]];
 }
 function renderShareBody(item, bulk = false) {
   const chosen = bulk ? [...state.bulkSelected].map(resource) : [item];
