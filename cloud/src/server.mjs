@@ -625,6 +625,7 @@ async function route(request, response) {
       return handleOperation(response, () => service.getEffectiveAccess(
         session, effectiveAccessMatch[1], effectiveAccessMatch[2],
         effectiveAccessMatch[3], url.searchParams.get("subjectUserID"),
+        url.searchParams.get("subjectDeviceID"),
       ));
     }
     const accessGrantsMatch = url.pathname.match(

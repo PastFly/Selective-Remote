@@ -405,10 +405,15 @@ export class CloudService {
       limit: Number(limit), cursor });
   }
 
-  async getEffectiveAccess(session, teamID, vaultID, resourceID, subjectUserID) {
-    if (!isUUID(subjectUserID)) throw new Error("invalid_access_request");
+  async getEffectiveAccess(session, teamID, vaultID, resourceID, subjectUserID,
+    subjectDeviceID = null) {
+    if (!isUUID(subjectUserID)
+      || (subjectDeviceID !== null && !isUUID(subjectDeviceID))) {
+      throw new Error("invalid_access_request");
+    }
     return this.store.access.getEffectiveAccess({ actorUserID: session.user_id,
-      actorDeviceID: session.device_id, teamID, vaultID, resourceID, subjectUserID });
+      actorDeviceID: session.device_id, teamID, vaultID, resourceID,
+      subjectUserID, subjectDeviceID });
   }
 
   async listWhoHasAccess(session, teamID, vaultID, resourceID, page = {}) {

@@ -112,6 +112,8 @@ test("group names are validated before SQL", async () => {
     /invalid_access_version/);
   await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
     /invalid_access_resource/);
+  await assert.rejects(access.getEffectiveAccess({ resourceID: randomUUID(),
+    subjectDeviceID: "bad" }), /invalid_access_device/);
   await assert.rejects(access.listAccessGrants({ limit: 51 }), /invalid_access_page/);
   await assert.rejects(access.listAccessGroups({ cursor: "bad" }), /invalid_access_page/);
   await assert.rejects(access.listWhoHasAccess({ resourceID: "bad" }),
@@ -177,6 +179,10 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       VALUES ($1, $2, 'Viewer browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
     [viewerDevice, viewer, JSON.stringify({ kty: "EC", crv: "P-256",
       x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
+    await pool.query(`INSERT INTO team_membership_device_admissions
+      (membership_id, membership_epoch, device_id)
+      SELECT id, epoch, $2 FROM team_memberships WHERE id = $1`,
+    [viewerMembership, viewerDevice]);
     await assert.rejects(access.listAccessGroups({ actorUserID: viewer,
       actorDeviceID: viewerDevice, teamID: team }), /team_access_denied/);
     const edge = await access.addAccessGroupMember({ actorUserID: user,
@@ -204,13 +210,23 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const effectiveBefore = await access.getEffectiveAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
       subjectUserID: viewer });
-    assert.equal(effectiveBefore.policyMask, 1);
-    assert.equal(effectiveBefore.effectiveUsable, "NO");
-    assert.equal(effectiveBefore.paths.length, 2);
+    assert.equal(effectiveBefore.policyEffective.policyMask, 1);
+    assert.equal(effectiveBefore.policyEffective.paths.length, 2);
+    assert.equal(Object.hasOwn(effectiveBefore, "deviceUsability"), false);
+    assert.equal(Object.hasOwn(effectiveBefore, "effectiveUsable"), false);
+    const withoutWrap = await access.getEffectiveAccess({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
+      subjectUserID: viewer, subjectDeviceID: viewerDevice });
+    assert.deepEqual(withoutWrap.policyEffective, effectiveBefore.policyEffective);
+    assert.equal(withoutWrap.deviceUsability.deviceID, viewerDevice);
+    assert.equal(withoutWrap.deviceUsability.effectiveUsable, "NO");
+    assert.equal(withoutWrap.deviceUsability.cryptoAvailableByPermission.View, "NO");
     const holders = await access.listWhoHasAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
       limit: 50 });
     assert.equal(holders.rows.some((row) => row.userID === viewer), true);
+    assert.equal(Object.hasOwn(holders.rows.find((row) => row.userID === viewer),
+      "deviceUsability"), false);
     const groupResources = await access.listResourcesByPrincipal({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, principalKind: "GROUP",
       principalID: created.group.id, limit: 50 });
@@ -225,8 +241,8 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     const effectiveAfter = await access.getEffectiveAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
       subjectUserID: viewer });
-    assert.equal(effectiveAfter.policyMask, 1);
-    assert.equal(effectiveAfter.paths.length, 1);
+    assert.equal(effectiveAfter.policyEffective.policyMask, 1);
+    assert.equal(effectiveAfter.policyEffective.paths.length, 1);
     const snippet = randomUUID();
     await pool.query(`INSERT INTO vault_resource_registry
       (id, team_id, vault_id, policy_class, policy_kind)
@@ -238,8 +254,8 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       teamID: team, vaultID: vault, request, sessionSecret: "test-session-secret" };
     let preview = await access.previewAccessChange(previewInput);
     assert.equal(preview.details.length, 1);
-    assert.equal(preview.details[0].before.policyMask, 0);
-    assert.equal(preview.details[0].after.policyMask, 1);
+    assert.equal(preview.details[0].before.policyEffective.policyMask, 0);
+    assert.equal(preview.details[0].after.policyEffective.policyMask, 1);
     const directGroup = (await pool.query(`INSERT INTO team_access_groups
       (team_id, name, created_by_user_id)
       VALUES ($1, 'Direct SQL revision', $2) RETURNING id`,
@@ -275,12 +291,14 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
     assert.equal(listed.rows.some((grant) => grant.id === applied.grants[0].grantID), true);
     assert.equal((await access.getEffectiveAccess({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, resourceID: snippet,
-      subjectUserID: viewer })).policyMask, 1);
+      subjectUserID: viewer })).policyEffective.policyMask, 1);
     const viewerResources = await access.listResourcesByPrincipal({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, principalKind: "USER",
       principalID: viewer, limit: 50 });
     assert.equal(viewerResources.rows.some((row) => row.resourceID === host), true);
     assert.equal(viewerResources.rows.some((row) => row.resourceID === snippet), true);
+    assert.equal(Object.hasOwn(viewerResources.rows.find((row) => row.resourceID === host),
+      "deviceUsability"), false);
     const folderA = randomUUID();
     const folderB = randomUUID();
     const forwarding = randomUUID();
@@ -305,8 +323,8 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       sessionSecret: "test-session-secret" };
     const movePreview = await access.previewAccessChange(moveInput);
     const viewerDelta = movePreview.details.find((item) => item.subjectUserID === viewer);
-    assert.equal(viewerDelta.before.policyMask, 1);
-    assert.equal(viewerDelta.after.policyMask, 0);
+    assert.equal(viewerDelta.before.policyEffective.policyMask, 1);
+    assert.equal(viewerDelta.after.policyEffective.policyMask, 0);
     const policyVersionBeforeMove = Number((await pool.query(
       `SELECT access_policy_version FROM shared_vaults WHERE id = $1`, [vault],
     )).rows[0].access_policy_version);
@@ -344,8 +362,26 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       VALUES ($1, $2, 'Admin browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
     [adminDevice, admin, JSON.stringify({ kty: "EC", crv: "P-256",
       x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
-    await pool.query(`INSERT INTO team_memberships (team_id, user_id, role)
-      VALUES ($1, $2, 'admin')`, [team, admin]);
+    const adminMembership = (await pool.query(`INSERT INTO team_memberships
+      (team_id, user_id, role) VALUES ($1, $2, 'admin') RETURNING id`,
+    [team, admin])).rows[0].id;
+    const authorityProbe = randomUUID();
+    await pool.query(`INSERT INTO vault_resource_registry
+      (id, team_id, vault_id, policy_class, policy_kind)
+      VALUES ($1, $2, $3, 'general', 'HOST')`,
+    [authorityProbe, team, vault]);
+    await pool.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, membership_id,
+       membership_epoch, target_kind, target_id, permission_mask,
+       created_by_user_id)
+      SELECT $1, $2, 'USER', membership.user_id, membership.id,
+        membership.epoch, 'RESOURCE', $3, 8, $4
+      FROM team_memberships AS membership WHERE membership.id IN ($5, $6)`,
+    [team, vault, authorityProbe, user, viewerMembership, adminMembership]);
+    await assert.rejects(access.createAccessGroup({ actorUserID: viewer,
+      actorDeviceID: viewerDevice, teamID: team, vaultID: vault,
+      name: 'Unauthorized', idempotencyKey: `access:viewer-managed:${suffix}` }),
+    /team_access_denied/);
     assert.equal((await access.listAccessGroups({ actorUserID: admin,
       actorDeviceID: adminDevice, teamID: team })).rows.some(
       (row) => row.id === created.group.id), true);
@@ -402,6 +438,72 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       expectedVersion: 1, idempotencyKey: `access:large-delete:${suffix}` });
     assert.equal(bounded.deleted, true);
     assert.equal(bounded.revokedGrants, 1000);
+    const unadmittedDevice = randomUUID();
+    await pool.query(`INSERT INTO devices (id, user_id, name, platform, public_key,
+      public_key_algorithm, key_registered_at, key_approved_at)
+      VALUES ($1, $2, 'Unadmitted viewer browser', 'web', $3,
+        'p256-ecdh-v1', now(), now())`,
+    [unadmittedDevice, viewer, JSON.stringify({ kty: "EC", crv: "P-256",
+      x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
+    const policyVersion = (await pool.query(`SELECT access_policy_version
+      FROM shared_vaults WHERE id = $1`, [vault])).rows[0].access_policy_version;
+    const registryVersion = (await pool.query(`SELECT resource_version
+      FROM vault_resource_registry WHERE id = $1`, [host])).rows[0].resource_version;
+    await pool.query(`INSERT INTO vault_resource_ciphertext_versions
+      (team_id, vault_id, resource_id, part, key_version, policy_version,
+       registry_version, resource_version, manifest_version, nonce,
+       ciphertext, auth_tag)
+      VALUES ($1, $2, $3, 'GENERAL', 1, $4, $5, $5, 1, $6, $7, $8)`,
+    [team, vault, host, policyVersion, registryVersion,
+      "A".repeat(16), "B".repeat(24), "C".repeat(22)]);
+    const admitted = await pool.query(`SELECT admission.membership_id,
+      admission.membership_epoch, admission.device_id
+      FROM team_membership_device_admissions AS admission
+      JOIN team_memberships AS membership ON membership.id = admission.membership_id
+        AND membership.epoch = admission.membership_epoch
+        AND membership.team_id = $1 AND membership.revoked_at IS NULL
+      JOIN devices AS device ON device.id = admission.device_id
+        AND device.revoked_at IS NULL`, [team]);
+    for (const recipient of admitted.rows) {
+      await pool.query(`INSERT INTO vault_resource_key_wrappers_v2
+        (team_id, vault_id, resource_id, part, key_version, membership_id,
+         membership_epoch, device_id, ephemeral_public_key, nonce,
+         ciphertext, auth_tag)
+        VALUES ($1, $2, $3, 'GENERAL', 1, $4, $5, $6, $7, $8, $9, $10)`,
+      [team, vault, host, recipient.membership_id, recipient.membership_epoch,
+        recipient.device_id, JSON.stringify({ kty: "EC", crv: "P-256",
+          x: "A".repeat(43), y: "B".repeat(43) }),
+        "A".repeat(16), "B".repeat(43), "C".repeat(22)]);
+    }
+    await pool.query(`UPDATE vault_resource_ciphertext_versions
+      SET lifecycle = 'PUBLISHED' WHERE vault_id = $1 AND resource_id = $2`,
+    [vault, host]);
+    await pool.query(`INSERT INTO vault_resource_manifest_pointers_v2
+      (team_id, vault_id, resource_id, part, key_version, manifest_version)
+      VALUES ($1, $2, $3, 'GENERAL', 1, 1)`, [team, vault, host]);
+    const scope = { actorUserID: user, actorDeviceID: device,
+      teamID: team, vaultID: vault, resourceID: host, subjectUserID: viewer };
+    const principalOnly = await access.getEffectiveAccess(scope);
+    const wrapped = await access.getEffectiveAccess({ ...scope,
+      subjectDeviceID: viewerDevice });
+    const unadmitted = await access.getEffectiveAccess({ ...scope,
+      subjectDeviceID: unadmittedDevice });
+    const foreignDevice = await access.getEffectiveAccess({ ...scope,
+      subjectDeviceID: device });
+    const missingDevice = await access.getEffectiveAccess({ ...scope,
+      subjectDeviceID: randomUUID() });
+    assert.deepEqual(wrapped.policyEffective, principalOnly.policyEffective);
+    assert.deepEqual(unadmitted.policyEffective, principalOnly.policyEffective);
+    assert.equal(wrapped.deviceUsability.effectiveUsable, "UNKNOWN");
+    assert.equal(wrapped.deviceUsability.cryptoAvailableByPermission.View,
+      "WRAP_PRESENT_UNVERIFIED");
+    assert.equal(unadmitted.deviceUsability.effectiveUsable, "NO");
+    assert.deepEqual(unadmitted.deviceUsability.blockedReasons,
+      ["DEVICE_NOT_ADMITTED"]);
+    assert.deepEqual(foreignDevice.deviceUsability.blockedReasons,
+      ["DEVICE_NOT_ADMITTED"]);
+    assert.deepEqual(missingDevice.deviceUsability.blockedReasons,
+      ["DEVICE_NOT_ADMITTED"]);
   } finally {
     await pool.end();
   }
