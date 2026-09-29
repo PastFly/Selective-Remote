@@ -225,10 +225,17 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       permissionMask: 1 }] };
     const previewInput = { actorUserID: user, actorDeviceID: device,
       teamID: team, vaultID: vault, request, sessionSecret: "test-session-secret" };
-    const preview = await access.previewAccessChange(previewInput);
+    let preview = await access.previewAccessChange(previewInput);
     assert.equal(preview.details.length, 1);
     assert.equal(preview.details[0].before.policyMask, 0);
     assert.equal(preview.details[0].after.policyMask, 1);
+    await pool.query(`INSERT INTO team_access_groups
+      (team_id, name, created_by_user_id) VALUES ($1, 'Direct SQL revision', $2)`,
+    [team, user]);
+    await assert.rejects(access.commitAccessChange({ ...previewInput,
+      token: preview.token, idempotencyKey: `access:stale-preview:${suffix}` }),
+    /access_preview_conflict/);
+    preview = await access.previewAccessChange(previewInput);
     await assert.rejects(access.commitAccessChange({ ...previewInput,
       token: preview.token + "x", idempotencyKey: `access:bad-token:${suffix}` }),
     /access_preview_conflict/);
