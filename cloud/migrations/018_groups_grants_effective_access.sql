@@ -29,6 +29,17 @@ CREATE TABLE team_policy_revisions (
     revision bigint NOT NULL DEFAULT 0 CHECK (revision >= 0)
 );
 
+CREATE TABLE team_access_mutation_receipts (
+    actor_user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    operation text NOT NULL CHECK (operation ~ '^[a-z][a-z0-9_.-]{0,63}$'),
+    idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 16 AND 128
+        AND idempotency_key ~ '^[A-Za-z0-9._:-]+$'),
+    request_sha256 text NOT NULL CHECK (request_sha256 ~ '^[0-9a-f]{64}$'),
+    response jsonb NOT NULL DEFAULT '{}'::jsonb CHECK (jsonb_typeof(response) = 'object'),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_user_id, operation, idempotency_key)
+);
+
 CREATE TABLE team_access_groups (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id uuid NOT NULL REFERENCES teams(id) ON DELETE CASCADE,

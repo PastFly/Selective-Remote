@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { applyMigrations, loadMigrations } from "../src/migrations.mjs";
+import { AccessStore } from "../src/access-store.mjs";
 
 const directory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const databaseURL = process.env.TEST_DATABASE_URL;
@@ -12,7 +13,7 @@ test("migration 018 defines the dormant access-policy schema", async () => {
   const migrations = await loadMigrations(directory);
   assert.equal(migrations.at(-1)?.version, 18);
   const sql = migrations.at(-1)?.sql ?? "";
-  for (const name of ["team_policy_revisions", "team_access_groups", "team_access_group_members", "vault_access_grants", "policy_kind", "access_policy_version"]) {
+  for (const name of ["team_policy_revisions", "team_access_groups", "team_access_group_members", "vault_access_grants", "policy_kind", "access_policy_version", "team_access_mutation_receipts"]) {
     assert.match(sql, new RegExp(name));
   }
 });
@@ -89,6 +90,53 @@ test("PostgreSQL enforces scoped grants, Credential mask, and Team group lifetim
   } finally {
     await client.query("ROLLBACK").catch(() => {});
     client.release();
+    await pool.end();
+  }
+});
+
+
+test("group names are validated before SQL", async () => {
+  const access = new AccessStore({});
+  await assert.rejects(access.createAccessGroup({ name: "" }), /invalid_access_group_name/);
+});
+
+test("Team group creation is gated by admitted Owner and exact idempotent request", {
+  skip: databaseURL ? false : "TEST_DATABASE_URL is not configured",
+}, async () => {
+  const pool = new pg.Pool({ connectionString: databaseURL, max: 3 });
+  const suffix = randomUUID().slice(0, 12);
+  try {
+    await applyMigrations(pool, directory, { info() {} });
+    const user = (await pool.query(`INSERT INTO users (email, username, display_name, email_verified_at)
+      VALUES ($1, $2, 'Access owner', now()) RETURNING id`,
+    [`access-owner-${suffix}@example.com`, `access_owner_${suffix}`])).rows[0].id;
+    const device = randomUUID();
+    await pool.query(`INSERT INTO devices (id, user_id, name, platform, public_key,
+      public_key_algorithm, key_registered_at, key_approved_at)
+      VALUES ($1, $2, 'Test browser', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+    [device, user, JSON.stringify({ kty: "EC", crv: "P-256", x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
+    const team = (await pool.query(`INSERT INTO teams (name, created_by_user_id)
+      VALUES ('Access owner fixture', $1) RETURNING id`, [user])).rows[0].id;
+    await pool.query(`INSERT INTO team_memberships (team_id, user_id, role)
+      VALUES ($1, $2, 'owner')`, [team, user]);
+    const vault = (await pool.query(`INSERT INTO shared_vaults
+      (team_id, name, created_by_user_id, format_state, format_schema_version)
+      VALUES ($1, 'Preparing', $2, 'V2_PREPARING', 2) RETURNING id`, [team, user])).rows[0].id;
+    const v1Vault = (await pool.query(`INSERT INTO shared_vaults
+      (team_id, name, created_by_user_id) VALUES ($1, 'Legacy', $2) RETURNING id`,
+    [team, user])).rows[0].id;
+    const access = new AccessStore(pool);
+    const input = { actorUserID: user, actorDeviceID: device, teamID: team, vaultID: vault,
+      name: "Operators", idempotencyKey: `access:create:${suffix}` };
+    const created = await access.createAccessGroup(input);
+    assert.equal(created.group.name, "Operators");
+    assert.equal(created.group.team_id, team);
+    assert.equal((await access.createAccessGroup(input)).group.id, created.group.id);
+    await assert.rejects(access.createAccessGroup({ ...input, name: "Changed" }),
+      /access_idempotency_conflict/);
+    await assert.rejects(access.createAccessGroup({ ...input, vaultID: v1Vault,
+      idempotencyKey: `access:v1:${suffix}` }), /access_v2_preparing_required/);
+  } finally {
     await pool.end();
   }
 });
