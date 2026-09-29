@@ -48,7 +48,8 @@ test("dormant publish locks registry, inserts ciphertext and wrappers, then adva
   assert.ok(at("BEGIN") < at("AS registry_actor_role"));
   assert.ok(at("AS crypto_resource_version") < at("INSERT INTO vault_resource_ciphertext_versions"));
   assert.ok(at("INSERT INTO vault_resource_ciphertext_versions") < at("INSERT INTO vault_resource_key_wrappers_v2"));
-  assert.ok(at("INSERT INTO vault_resource_key_wrappers_v2") < at("INSERT INTO vault_resource_manifest_pointers_v2"));
+  assert.ok(at("INSERT INTO vault_resource_key_wrappers_v2") < at("SET lifecycle = 'PUBLISHED'"));
+  assert.ok(at("SET lifecycle = 'PUBLISHED'") < at("INSERT INTO vault_resource_manifest_pointers_v2"));
   assert.ok(at("INSERT INTO vault_resource_manifest_pointers_v2") < at("COMMIT"));
   assert.match(statements[at("AS crypto_resource_version")], /FOR UPDATE/u);
 });
@@ -93,4 +94,34 @@ test("stale manifest and v1 custodian cannot publish", async () => {
   assert.ok(!f.queries.some(({ sql }) => sql.includes("INSERT INTO vault_resource_ciphertext_versions")));
   const v1 = fake(() => ({ rows: [] }));
   await assert.rejects(v1.store.publishResourceCryptoVersion(await input()), /team_not_found/u);
+});
+
+test("deadlock retries are bounded and repeat the whole publish with fresh CAS", async () => {
+  let resourceReads = 0;
+  const f = fake((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("AS crypto_resource_version")) {
+      resourceReads += 1;
+      if (resourceReads === 1) throw Object.assign(new Error("deadlock"), { code: "40P01" });
+      return { rows: [{ crypto_resource_version: 1 }] };
+    }
+    if (sql.includes("AS current_manifest_version")) return { rows: [] };
+    if (sql.includes("RETURNING manifest_version")) return { rows: [{ manifest_version: 1 }] };
+    return { rows: [] };
+  });
+  assert.equal((await f.store.publishResourceCryptoVersion(await input())).manifest_version, 1);
+  assert.equal(resourceReads, 2);
+  assert.equal(f.queries.filter(({ sql }) => sql === "ROLLBACK").length, 1);
+  assert.equal(f.queries.filter(({ sql }) => sql === "COMMIT").length, 1);
+
+  const exhausted = fake((sql) => {
+    if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };
+    if (sql.includes("AS crypto_resource_version")) {
+      throw Object.assign(new Error("deadlock"), { code: "40P01" });
+    }
+    return { rows: [] };
+  });
+  await assert.rejects(exhausted.store.publishResourceCryptoVersion(await input()),
+    (error) => error.code === "40P01");
+  assert.equal(exhausted.queries.filter(({ sql }) => sql === "ROLLBACK").length, 3);
 });

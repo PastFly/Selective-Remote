@@ -1,4 +1,5 @@
 import pg from "pg";
+import { createHash } from "node:crypto";
 import {
   requireInvitationPermission,
   requireMembershipChange,
@@ -15,6 +16,9 @@ const { Pool } = pg;
 const newResourceUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const scopedUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const resourceClasses = new Set(["folder", "secret", "general"]);
+const resourceParts = new Set(["GENERAL", "METADATA", "SECRET"]);
+const resourceRaceSQLStates = new Set(["40P01", "40001"]);
+const maxResourceRaceRetries = 2;
 
 function requireResourceIdentityInput({ resourceID, policyClass, parentFolderID }) {
   if (!newResourceUUID.test(resourceID)) throw new Error("invalid_resource_id");
@@ -25,6 +29,11 @@ function requireResourceIdentityInput({ resourceID, policyClass, parentFolderID 
 }
 
 async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID }) {
+  await client.query(
+    `SELECT id FROM shared_vaults
+     WHERE team_id = $1 AND id = $2 AND archived_at IS NULL FOR UPDATE`,
+    [teamID, vaultID],
+  );
   const result = await client.query(
     `SELECT membership.role AS registry_actor_role
      FROM team_memberships AS membership
@@ -41,12 +50,50 @@ async function requireRegistryCustodian(client, { actorUserID, actorDeviceID, te
        AND membership.revoked_at IS NULL
        AND (device.key_approved_at IS NOT NULL OR admission.device_id IS NOT NULL)
        AND vault.format_state = 'V2_PREPARING' AND vault.format_schema_version = 2
-     FOR UPDATE OF vault, membership`,
+     FOR UPDATE OF membership`,
     [teamID, vaultID, actorUserID, actorDeviceID],
   );
   const role = result.rows[0]?.registry_actor_role;
   if (!role) throw new Error("team_not_found");
   requireTeamPermission(role, "manage_vault_keys");
+}
+
+async function claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+  operation, payload }) {
+  if (idempotencyKey === undefined) return null;
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1
+    || idempotencyKey.length > 200) throw new Error("invalid_resource_idempotency_key");
+  const digest = createHash("sha256").update(JSON.stringify({ operation, payload })).digest("hex");
+  const values = [teamID, vaultID, idempotencyKey, operation, digest];
+  const inserted = await client.query(
+    `INSERT INTO vault_resource_mutation_receipts_v2
+       (team_id, vault_id, idempotency_key, operation, request_sha256, result)
+     VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)
+     ON CONFLICT DO NOTHING RETURNING idempotency_key`, values,
+  );
+  if (inserted.rows[0]) return { idempotencyKey, pending: true };
+  const previous = await client.query(
+    `SELECT operation, request_sha256, result
+     FROM vault_resource_mutation_receipts_v2
+     WHERE team_id = $1 AND vault_id = $2 AND idempotency_key = $3 FOR UPDATE`,
+    values.slice(0, 3),
+  );
+  const row = previous.rows[0];
+  if (!row || row.operation !== operation || row.request_sha256 !== digest) {
+    throw new Error("resource_idempotency_conflict");
+  }
+  return { idempotencyKey, replay: row.result };
+}
+
+async function finishResourceMutation(client, receipt, { teamID, vaultID }, result) {
+  if (!receipt?.pending) return result;
+  const stable = JSON.parse(JSON.stringify(result));
+  await client.query(
+    `UPDATE vault_resource_mutation_receipts_v2 SET result = $4::jsonb
+     WHERE team_id = $1 AND vault_id = $2 AND idempotency_key = $3`,
+    [teamID, vaultID, receipt.idempotencyKey, JSON.stringify(stable)],
+  );
+  return stable;
 }
 
 export class PostgresStore {
@@ -89,12 +136,19 @@ export class PostgresStore {
 
   // Internal v2-preparation primitive. No route activates this path for v1 Vaults.
   async registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, policyClass, parentFolderID = null }) {
+    resourceID, policyClass, parentFolderID = null, idempotencyKey, _retryAttempt = 0 }) {
     requireResourceIdentityInput({ resourceID, policyClass, parentFolderID });
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "create_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, policyClass, parentFolderID } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `INSERT INTO vault_resource_registry
            (id, team_id, vault_id, policy_class, parent_folder_id)
@@ -103,10 +157,16 @@ export class PostgresStore {
            schema_version, resource_version, created_at, deleted_at`,
         [resourceID, teamID, vaultID, policyClass, parentFolderID],
       );
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.registerResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, policyClass, parentFolderID, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       if (error?.code === "23505") throw new Error("resource_id_exists");
       throw error;
     } finally { client.release(); }
@@ -134,7 +194,7 @@ export class PostgresStore {
   }
 
   async moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID, resourceID,
-    parentFolderID, expectedVersion }) {
+    parentFolderID, expectedVersion, idempotencyKey, _retryAttempt = 0 }) {
     if (parentFolderID !== null && !scopedUUID.test(parentFolderID)) {
       throw new Error("invalid_resource_parent");
     }
@@ -145,6 +205,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "move_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, parentFolderID, expectedVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `UPDATE vault_resource_registry
          SET parent_folder_id = $4, resource_version = resource_version + 1
@@ -155,16 +222,22 @@ export class PostgresStore {
         [teamID, vaultID, resourceID, parentFolderID, expectedVersion],
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.moveResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, parentFolderID, expectedVersion, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
 
   async tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedVersion }) {
+    resourceID, expectedVersion, idempotencyKey, _retryAttempt = 0 }) {
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
       throw new Error("invalid_resource_version");
     }
@@ -172,6 +245,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "tombstone_identity", payload: { actorUserID, actorDeviceID,
+          resourceID, expectedVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const result = await client.query(
         `UPDATE vault_resource_registry
          SET deleted_at = now(), resource_version = resource_version + 1
@@ -182,17 +262,24 @@ export class PostgresStore {
         [teamID, vaultID, resourceID, expectedVersion],
       );
       if (!result.rows[0]) throw new Error("resource_version_conflict");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, result.rows[0]);
       await client.query("COMMIT");
-      return result.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.tombstoneResourceIdentity({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, expectedVersion, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
 
   // Dormant internal primitive: no HTTP route calls this method. Publication is one transaction.
   async publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
-    resourceID, expectedManifestVersion, ciphertext, wrappers }) {
+    resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
+    _retryAttempt = 0 }) {
     const scope = validateResourceCipherEnvelope(ciphertext);
     if (!scopedUUID.test(teamID) || !scopedUUID.test(vaultID) || !scopedUUID.test(resourceID)
       || scope.teamID !== teamID || scope.vaultID !== vaultID || scope.resourceID !== resourceID
@@ -215,6 +302,13 @@ export class PostgresStore {
     try {
       await client.query("BEGIN");
       await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "publish_crypto", payload: { actorUserID, actorDeviceID,
+          resourceID, expectedManifestVersion, ciphertext, wrappers } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
       const resource = await client.query(
         `SELECT resource.resource_version AS crypto_resource_version
          FROM vault_resource_registry AS resource
@@ -267,6 +361,13 @@ export class PostgresStore {
             wrapper.authTag],
         );
       }
+      // Promotion is still invisible until COMMIT; the pointer guard rejects PREPARED.
+      await client.query(
+        `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+           AND key_version = $5`,
+        [teamID, vaultID, resourceID, scope.part, scope.keyVersion],
+      );
       let pointer;
       if (existing.rows[0]) {
         pointer = await client.query(
@@ -287,12 +388,6 @@ export class PostgresStore {
         );
       }
       if (!pointer.rows[0]) throw new Error("resource_manifest_conflict");
-      await client.query(
-        `UPDATE vault_resource_ciphertext_versions SET lifecycle = 'PUBLISHED'
-         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
-           AND key_version = $5`,
-        [teamID, vaultID, resourceID, scope.part, scope.keyVersion],
-      );
       if (currentKey > 0) {
         await client.query(
           `UPDATE vault_resource_ciphertext_versions
@@ -304,14 +399,82 @@ export class PostgresStore {
         await client.query(
           `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
            WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
-             AND key_version = $5`,
+             AND key_version = $5 AND obsolete_at IS NULL`,
           [teamID, vaultID, resourceID, scope.part, currentKey],
         );
       }
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID }, pointer.rows[0]);
       await client.query("COMMIT");
-      return pointer.rows[0];
+      return stable;
     } catch (error) {
       await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.publishResourceCryptoVersion({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, expectedManifestVersion, ciphertext, wrappers, idempotencyKey,
+          _retryAttempt: _retryAttempt + 1 });
+      }
+      throw error;
+    } finally { client.release(); }
+  }
+
+  // Internal cleanup after recipient revocation; current admitted devices retain coverage.
+  async revokeResourceWrapper({ actorUserID, actorDeviceID, teamID, vaultID,
+    resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID,
+    expectedManifestVersion, idempotencyKey, _retryAttempt = 0 }) {
+    if (![teamID, vaultID, resourceID, membershipID, deviceID].every((id) => scopedUUID.test(id))
+      || !resourceParts.has(part)
+      || !Number.isSafeInteger(keyVersion) || keyVersion < 1
+      || !Number.isSafeInteger(membershipEpoch) || membershipEpoch < 1
+      || !Number.isSafeInteger(expectedManifestVersion) || expectedManifestVersion < 1) {
+      throw new Error("invalid_resource_v2_wrapper_revoke");
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      await requireRegistryCustodian(client, { actorUserID, actorDeviceID, teamID, vaultID });
+      const receipt = await claimResourceMutation(client, { teamID, vaultID, idempotencyKey,
+        operation: "revoke_wrapper", payload: { actorUserID, actorDeviceID, resourceID,
+          part, keyVersion, membershipID, membershipEpoch, deviceID, expectedManifestVersion } });
+      if (receipt?.replay) {
+        await client.query("COMMIT");
+        return receipt.replay;
+      }
+      const resource = await client.query(
+        `SELECT id FROM vault_resource_registry
+         WHERE team_id = $1 AND vault_id = $2 AND id = $3 AND deleted_at IS NULL
+         FOR UPDATE`, [teamID, vaultID, resourceID],
+      );
+      if (!resource.rows[0]) throw new Error("resource_not_found");
+      const pointer = await client.query(
+        `SELECT manifest_version, key_version FROM vault_resource_manifest_pointers_v2
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+         FOR UPDATE`, [teamID, vaultID, resourceID, part],
+      );
+      if (Number(pointer.rows[0]?.manifest_version) !== expectedManifestVersion
+        || Number(pointer.rows[0]?.key_version) !== keyVersion) {
+        throw new Error("resource_manifest_conflict");
+      }
+      const revoked = await client.query(
+        `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
+         WHERE team_id = $1 AND vault_id = $2 AND resource_id = $3 AND part = $4
+           AND key_version = $5 AND membership_id = $6 AND membership_epoch = $7
+           AND device_id = $8 AND obsolete_at IS NULL
+         RETURNING team_id, vault_id, resource_id, part, key_version,
+           membership_id, membership_epoch, device_id, obsolete_at`,
+        [teamID, vaultID, resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID],
+      );
+      if (!revoked.rows[0]) throw new Error("resource_wrapper_not_found");
+      const stable = await finishResourceMutation(client, receipt, { teamID, vaultID },
+        revoked.rows[0]);
+      await client.query("COMMIT");
+      return stable;
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        return this.revokeResourceWrapper({ actorUserID, actorDeviceID, teamID, vaultID,
+          resourceID, part, keyVersion, membershipID, membershipEpoch, deviceID,
+          expectedManifestVersion, idempotencyKey, _retryAttempt: _retryAttempt + 1 });
+      }
       throw error;
     } finally { client.release(); }
   }
