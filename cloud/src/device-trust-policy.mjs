@@ -1,7 +1,7 @@
 import { createHash, webcrypto } from "node:crypto";
 import { normalizeTeamDevicePublicKey } from "../public/team-vault-crypto.js";
 import { deviceCertificateBytes, deviceDirectoryBytes, deviceDirectoryDigest,
-  verifyDeviceForWrapping } from "../public/device-trust-v1.js";
+  verifyDeviceForWrapping, verifySignedDeviceDirectory } from "../public/device-trust-v1.js";
 
 const fail = () => { throw new Error("device_trust_invalid"); };
 const encoded = (value, length) => {
@@ -37,5 +37,16 @@ export async function validateSignedDeviceBundle({ rootPublicKey, certificate,
       directoryVersion: checkpoint.payload.version,
       serial: certificate.payload.serial,
       checkpointDigest };
+  } catch { fail(); }
+}
+
+export async function validateSignedDeviceDirectory({ rootPublicKey, checkpoint, accountID }) {
+  try {
+    const root = encoded(rootPublicKey, 65);
+    await verifySignedDeviceDirectory({ rootPublicKey, checkpoint, accountID,
+      cryptoValue: webcrypto });
+    return { rootBytes: root, directoryVersion: checkpoint.payload.version,
+      directoryBytes: Buffer.from(deviceDirectoryBytes(checkpoint.payload)),
+      directorySignature: encoded(checkpoint.signature, 64) };
   } catch { fail(); }
 }

@@ -2,6 +2,9 @@
 ALTER TABLE device_trust_certificates_v1 ADD COLUMN serial uuid;
 ALTER TABLE device_trust_certificates_v1 ADD COLUMN certificate_json jsonb;
 ALTER TABLE device_trust_directories_v1 ADD COLUMN directory_json jsonb;
+ALTER TABLE device_trust_roots_v1 ADD COLUMN custodian_device_id uuid;
+ALTER TABLE device_trust_roots_v1 ADD CONSTRAINT device_trust_custodian_same_account
+    FOREIGN KEY (account_id, custodian_device_id) REFERENCES devices(user_id, id);
 ALTER TABLE device_trust_certificates_v1
     ADD CONSTRAINT device_trust_certificate_serial_unique UNIQUE (account_id, serial);
 

@@ -46,7 +46,8 @@ test("signed device trust records are additive, unique and bounded in PostgreSQL
     [account, Buffer.from("directory"), signature]);
     await assert.rejects(pool.query(`INSERT INTO device_trust_directories_v1
       (account_id, version, directory_bytes, signature) VALUES ($1, 1, $2, $3)`,
-    [account, Buffer.from("directory"), signature]), (error) => error.code === "23505");
+    [account, Buffer.from("directory"), signature]),
+    (error) => error.message === "stale_device_directory");
     const vaultState = await pool.query(`SELECT count(*)::int AS count FROM shared_vaults
       WHERE format_state = 'V2_ACTIVE'`);
     assert.equal(vaultState.rows[0].count, v2Before);

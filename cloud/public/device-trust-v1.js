@@ -112,6 +112,16 @@ function directoryBytes(payload) {
   return encoded;
 }
 export function deviceDirectoryBytes(payload) { return directoryBytes(payload); }
+export async function verifySignedDeviceDirectory({ rootPublicKey, checkpoint,
+  accountID, cryptoValue = globalThis.crypto }) {
+  const crypto = cryptoAPI(cryptoValue);
+  exact(checkpoint, ["payload", "signature"]);
+  if (checkpoint.payload.accountID !== id(accountID)) fail();
+  await verifySignature(rootPublicKey, directoryBytes(checkpoint.payload),
+    checkpoint.signature, crypto);
+  return { version: checkpoint.payload.version,
+    checkpointDigest: await deviceDirectoryDigest(checkpoint, crypto) };
+}
 async function verifySignature(rootPublicKey, payload, signature, crypto) {
   const key = await crypto.subtle.importKey("raw", rootBytes(rootPublicKey),
     { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);
@@ -328,6 +338,7 @@ function possessionBytes(challenge) {
     keyBytes(challenge.approverPublicKey), bytes(challenge.nonce, 32),
     String(challenge.issuedAt), String(challenge.expiresAt)]);
 }
+export function devicePossessionChallengeBytes(challenge) { return possessionBytes(challenge); }
 
 async function possessionKey(privateKey, otherPublicKey, crypto) {
   if (privateKey?.type !== "private" || privateKey.extractable !== false
