@@ -249,9 +249,8 @@ export class AccessStore {
           actorUserID, actorDeviceID, teamID, vaultID, resourceID,
           subjectUserID: member.user_id,
         });
-        if (access.policyAllowed) rows.push({ userID: member.user_id,
-          policyMask: access.policyMask, effectiveUsable: access.effectiveUsable,
-          paths: access.paths });
+        if (access.policyEffective.policyAllowed) rows.push({
+          userID: member.user_id, policyEffective: access.policyEffective });
       }
       await client.query("COMMIT");
       return { rows, nextCursor: members.rows.length > limit
@@ -305,9 +304,8 @@ export class AccessStore {
             actorUserID, actorDeviceID, teamID, vaultID,
             resourceID: resource.id, subjectUserID: principalID,
           });
-          if (access.policyAllowed) rows.push({ resourceID: resource.id,
-            policyMask: access.policyMask, paths: access.paths,
-            effectiveUsable: access.effectiveUsable });
+          if (access.policyEffective.policyAllowed) rows.push({
+            resourceID: resource.id, policyEffective: access.policyEffective });
           continue;
         }
         const ancestorRows = await client.query(
@@ -351,14 +349,16 @@ export class AccessStore {
         if (grants.rows.length > 1000) throw new Error("access_result_too_large");
         const access = compileEffectiveAccess({ target, ancestors,
           membership: { id: "group-policy", userID: "group-policy", epoch: 1 },
-          groupIDs: [principalID], cryptoStatus: "NO", requiresCrypto: true,
+          groupIDs: [principalID], cryptoStatus: "NO", requiresCrypto: false,
           grants: grants.rows.map((item) => ({ id: item.id, teamID: item.team_id,
             vaultID: item.vault_id, principalKind: item.principal_kind,
             principalID: item.principal_id, targetKind: item.target_kind,
             targetID: item.target_id, mask: item.permission_mask,
             revokedAt: item.revoked_at })) });
         if (access.policyAllowed) rows.push({ resourceID: resource.id,
-          policyMask: access.policyMask, paths: access.paths });
+          policyEffective: { policyAllowed: access.policyAllowed,
+            policyMask: access.policyMask, paths: access.paths,
+            blockedReasons: access.blockedReasons } });
       }
       await client.query("COMMIT");
       return { rows, nextCursor: page.rows.length > limit
@@ -578,6 +578,8 @@ export class AccessStore {
 
   async getEffectiveAccess(input) {
     if (!uuidPattern.test(input?.resourceID ?? "")) throw new Error("invalid_access_resource");
+    if (input?.subjectDeviceID != null
+      && !uuidPattern.test(input.subjectDeviceID)) throw new Error("invalid_access_device");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -701,6 +703,33 @@ export class AccessStore {
       targetKind: item.target_kind, targetID: item.target_id,
       mask: item.permission_mask, revokedAt: item.revoked_at }));
     const grants = applyGrantChanges(storedGrants, changes, { strict: false });
+    const policy = compileEffectiveAccess({ target, ancestors, membership,
+      groupIDs, grants, cryptoStatus: "NO", requiresCrypto: false });
+    const policyEffective = { policyAllowed: policy.policyAllowed,
+      policyMask: policy.policyMask, paths: policy.paths,
+      blockedReasons: policy.policyAllowed ? [] : ["POLICY_DENIED"] };
+    if (input.subjectDeviceID == null) return { policyEffective };
+
+    const deviceID = input.subjectDeviceID;
+    const device = await client.query(
+      `SELECT device.id FROM devices AS device
+       JOIN team_membership_device_admissions AS admission
+         ON admission.device_id = device.id
+        AND admission.membership_id = $3 AND admission.membership_epoch = $4
+       WHERE device.id = $1 AND device.user_id = $2
+         AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+         AND device.public_key_algorithm = 'p256-ecdh-v1'`,
+      [deviceID, membership.userID, membership.id, membership.epoch],
+    );
+    const contentMask = policy.policyMask
+      & (permissionBits.View | permissionBits.Reveal | permissionBits.Edit);
+    if (!device.rows[0] || !contentMask) return { policyEffective,
+      deviceUsability: { deviceID, effectiveUsable: "NO",
+        cryptoAvailable: "NO", cryptoAvailableByPermission: {},
+        effectiveUsableByPermission: {},
+        blockedReasons: [!device.rows[0] ? "DEVICE_NOT_ADMITTED"
+          : policy.policyAllowed ? "NO_DEVICE_CONTENT_PERMISSION" : "POLICY_DENIED"] } };
+
     const wrapperRows = await client.query(
       `SELECT DISTINCT pointer.part FROM vault_resource_manifest_pointers_v2 AS pointer
        JOIN vault_resource_ciphertext_versions AS cipher
@@ -719,36 +748,34 @@ export class AccessStore {
          AND device.revoked_at IS NULL AND device.user_id = $4
        WHERE pointer.team_id = $1 AND pointer.vault_id = $2
          AND pointer.resource_id = $3 AND wrapper.membership_id = $5
-         AND wrapper.membership_epoch = $6`,
+         AND wrapper.membership_epoch = $6 AND wrapper.device_id = $7`,
       [teamID, vaultID, resourceID, membership.userID,
-        membership.id, membership.epoch],
+        membership.id, membership.epoch, deviceID],
     );
     const availableParts = new Set(wrapperRows.rows.map((item) => item.part));
-    // Derive crypto work from effective bits; ManageAccess alone needs no CEK.
-    const policy = compileEffectiveAccess({ target, ancestors, membership,
-      groupIDs, grants, cryptoStatus: "NO", requiresCrypto: false });
-    const requiredParts = policy.policyMask
-      ? requiredCryptoParts(target.kind, policy.policyMask) : [];
+    const requiredParts = requiredCryptoParts(target.kind, contentMask);
     const cryptoStatus = requiredParts.length > 0
       && requiredParts.every((part) => availableParts.has(part))
       ? "WRAP_PRESENT_UNVERIFIED" : "NO";
-    const result = compileEffectiveAccess({ target, ancestors, membership,
-      groupIDs, grants, cryptoStatus, requiresCrypto: requiredParts.length > 0 });
     const cryptoAvailableByPermission = {};
     for (const [name, bit] of Object.entries(permissionBits)) {
-      if ((result.policyMask & bit) === 0) continue;
+      if ((contentMask & bit) === 0) continue;
       const part = target.kind === "CREDENTIAL"
         ? (name === "Reveal" || name === "Edit" ? "SECRET"
           : name === "View" ? "METADATA" : null)
-        : target.kind === "FOLDER" || ["ManageAccess", "Manage", "Create"].includes(name)
-          ? null : "GENERAL";
+        : target.kind === "FOLDER" ? null : "GENERAL";
       const label = name === "View" && target.kind === "CREDENTIAL"
         ? "ViewMetadata" : name;
       cryptoAvailableByPermission[label] = part === null ? "NOT_REQUIRED"
         : availableParts.has(part) ? "WRAP_PRESENT_UNVERIFIED" : "NO";
     }
-    return { ...result, cryptoAvailableByPermission,
-      effectiveUsableByPermission: usabilityByPermission(cryptoAvailableByPermission) };
+    const effectiveUsable = requiredParts.length === 0 ? "YES"
+      : cryptoStatus === "WRAP_PRESENT_UNVERIFIED" ? "UNKNOWN" : "NO";
+    return { policyEffective, deviceUsability: { deviceID,
+      effectiveUsable, cryptoAvailable: cryptoStatus,
+      cryptoAvailableByPermission,
+      effectiveUsableByPermission: usabilityByPermission(cryptoAvailableByPermission),
+      blockedReasons: effectiveUsable === "NO" ? ["KEY_UNAVAILABLE"] : [] } };
   }
 
   async previewAccessChange(input) {
@@ -1031,9 +1058,11 @@ export class AccessStore {
       const before = await this.readEffectiveAccessInSnapshot(client, accessInput);
       const after = await this.readEffectiveAccessInSnapshot(client, accessInput,
         hypothetical, parentOverrides);
-      const gainedMask = after.policyMask & ~before.policyMask;
-      const lostMask = before.policyMask & ~after.policyMask;
-      const pathIdentity = (access) => access.paths.map((path) =>
+      const gainedMask = after.policyEffective.policyMask
+        & ~before.policyEffective.policyMask;
+      const lostMask = before.policyEffective.policyMask
+        & ~after.policyEffective.policyMask;
+      const pathIdentity = (access) => access.policyEffective.paths.map((path) =>
         [path.id, path.effectiveMask]);
       if (hashAccessRequest(pathIdentity(before)) !== hashAccessRequest(pathIdentity(after))) {
         requireAccessMutation(actor.role, allSubjects.get(pair.subjectUserID).role);

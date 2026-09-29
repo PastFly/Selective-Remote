@@ -34,3 +34,21 @@ test("Team groups keep Vault context as a gate, not an ownership key", async () 
   assert.equal(seen.vaultID, "22222222-2222-4222-8222-222222222222");
   assert.equal(seen.actorDeviceID, "device");
 });
+
+test("Effective Access forwards only an explicit validated subject device", async () => {
+  const subject = "11111111-1111-4111-8111-111111111111";
+  const device = "22222222-2222-4222-8222-222222222222";
+  const seen = [];
+  const service = new CloudService({ access: {
+    async getEffectiveAccess(input) { seen.push(input); return { policyEffective: {} }; },
+  } }, { sessionPepper: "secret" });
+  const session = { user_id: "actor", device_id: "actor-device" };
+  await service.getEffectiveAccess(session, "team", "vault", "resource", subject);
+  await service.getEffectiveAccess(session, "team", "vault", "resource", subject, device);
+  assert.equal(seen[0].subjectDeviceID, null);
+  assert.equal(seen[1].subjectDeviceID, device);
+  assert.equal(seen[1].actorDeviceID, "actor-device");
+  await assert.rejects(service.getEffectiveAccess(session, "team", "vault",
+    "resource", subject, "invalid"), /invalid_access_request/);
+  assert.equal(seen.length, 2);
+});
