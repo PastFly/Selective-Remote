@@ -5,25 +5,34 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
     var sessionToken: String?
     var teamDevicePrivateKeys: [String: Data]
     var personalVaultKeyMaterials: [String: Data]
+    var deviceTrustRootKeys: [String: Data]
+    var deviceTrustPins: [String: SelectiveRemoteDeviceTrustPin]
 
     init(
         sessionToken: String? = nil,
         teamDevicePrivateKeys: [String: Data] = [:],
-        personalVaultKeyMaterials: [String: Data] = [:]
+        personalVaultKeyMaterials: [String: Data] = [:],
+        deviceTrustRootKeys: [String: Data] = [:],
+        deviceTrustPins: [String: SelectiveRemoteDeviceTrustPin] = [:]
     ) {
         self.sessionToken = sessionToken
         self.teamDevicePrivateKeys = teamDevicePrivateKeys
         self.personalVaultKeyMaterials = personalVaultKeyMaterials
+        self.deviceTrustRootKeys = deviceTrustRootKeys
+        self.deviceTrustPins = deviceTrustPins
     }
 
     var isEmpty: Bool {
         sessionToken == nil
             && teamDevicePrivateKeys.isEmpty
             && personalVaultKeyMaterials.isEmpty
+            && deviceTrustRootKeys.isEmpty
+            && deviceTrustPins.isEmpty
     }
 
     private enum CodingKeys: String, CodingKey {
         case sessionToken, teamDevicePrivateKeys, personalVaultKeyMaterials
+        case deviceTrustRootKeys, deviceTrustPins
     }
 
     init(from decoder: any Decoder) throws {
@@ -37,6 +46,10 @@ struct SelectiveRemoteCloudSecureEnvelope: Codable, Equatable {
             [String: Data].self,
             forKey: .personalVaultKeyMaterials
         ) ?? [:]
+        deviceTrustRootKeys = try values.decodeIfPresent([String: Data].self,
+            forKey: .deviceTrustRootKeys) ?? [:]
+        deviceTrustPins = try values.decodeIfPresent([String: SelectiveRemoteDeviceTrustPin].self,
+            forKey: .deviceTrustPins) ?? [:]
     }
 }
 
