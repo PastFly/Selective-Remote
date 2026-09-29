@@ -12,7 +12,7 @@ Team Owner/Admin grants policy administration only under existing Team policy. I
 
 ## Deterministic evaluator
 
-`permissionMask` is intersected with the action set for the resource type. `ViewMetadata` on a Credential means only its deliberately encrypted/sanitized catalog representation; it never includes a secret. An inherited Folder/Vault path applies only if the immutable ancestry chain is valid in the same Vault. No deny rules or nested groups exist.
+`permissionMask` is intersected with the action set for the resource type. A Folder `View` maps only to descendant `View` or Credential `ViewMetadata`; Folder `ManageAccess` maps to descendant policy management, never Reveal. Vault `View` maps to discovery/ordinary View but never Credential Reveal; Vault `Create` and container `Edit` are container operations, not child Edit. Broader descendant Edit/Reveal requires an explicit resource grant in V1. `ViewMetadata` on a Credential means only its deliberately encrypted/sanitized catalog representation; it never includes a secret. An inherited Folder/Vault path applies only if the immutable ancestry chain is valid in the same Vault. No deny rules or nested groups exist.
 
 ```text
 evaluate(teamID, membershipID, epoch, deviceID, resourceID, now, snapshot):
@@ -32,7 +32,8 @@ evaluate(teamID, membershipID, epoch, deviceID, resourceID, now, snapshot):
   paths = []
   for edge in candidateEdges sorted by stable grantID:
     if not sameTeamVaultAndType(edge, r): continue
-    allowed = edge.mask intersect permittedActions(r.type)
+    allowed = mapScopeMaskToTargetActions(edge.resourceType, edge.mask, r.type)
+              intersect permittedActions(r.type)
     if allowed is empty: continue
     paths.append({grantID, principal, directOrAncestor, ancestorChain,
                   actions: allowed, expiry, policyVersion})
