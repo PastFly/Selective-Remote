@@ -80,6 +80,7 @@ function certificateBytes(payload) {
     keyBytes(payload.publicKey), String(version(payload.keyVersion)),
     payload.issuerFingerprint, String(payload.issuedAt), id(payload.serial)]);
 }
+export function deviceCertificateBytes(payload) { return certificateBytes(payload); }
 function signedCertificateBytes(certificate) {
   exact(certificate, ["payload", "signature"]);
   return combine([certificateBytes(certificate.payload), bytes(certificate.signature, 64)]);
@@ -110,6 +111,7 @@ function directoryBytes(payload) {
   if (encoded.length > 65535) fail();
   return encoded;
 }
+export function deviceDirectoryBytes(payload) { return directoryBytes(payload); }
 async function verifySignature(rootPublicKey, payload, signature, crypto) {
   const key = await crypto.subtle.importKey("raw", rootBytes(rootPublicKey),
     { name: "ECDSA", namedCurve: "P-256" }, false, ["verify"]);

@@ -23,8 +23,22 @@ test("numbered migrations have stable checksums", async () => {
     { version: 13, name: "013_resource_registry_foundation.sql" },
     { version: 14, name: "014_resource_crypto_v2.sql" },
     { version: 15, name: "015_device_trust_v1.sql" },
+    { version: 16, name: "016_secure_device_approval.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
+});
+
+test("secure device approval schema is account scoped, expiring and append-only for signed history", async () => {
+  const migration = (await loadMigrations(migrationsDirectory)).find(({ version }) => version === 16);
+  assert.ok(migration);
+  assert.match(migration.sql, /CREATE TABLE device_trust_requests_v1/u);
+  assert.match(migration.sql, /CREATE TABLE device_trust_challenges_v1/u);
+  assert.match(migration.sql, /CREATE TABLE device_trust_account_events_v1/u);
+  assert.match(migration.sql, /CREATE TABLE device_trust_revocations_v1/u);
+  assert.match(migration.sql, /UNIQUE \(account_id, serial\)/u);
+  assert.match(migration.sql, /CREATE UNIQUE INDEX device_trust_one_open_request/u);
+  assert.match(migration.sql, /CREATE UNIQUE INDEX device_trust_one_live_challenge/u);
+  assert.doesNotMatch(migration.sql, /private_key|vault_plaintext|DROP TABLE|TRUNCATE/iu);
 });
 
 test("resource crypto v2 storage is additive, scoped and rejects v1 Vaults", async () => {
