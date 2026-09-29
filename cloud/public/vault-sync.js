@@ -722,6 +722,45 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return result.devices.map(normalizedAccountDevice);
     },
 
+    async deviceTrustSnapshot() {
+      const response = await authorizedRequest("/v1/device-trust");
+      const result = await responseJSON(response, "device_trust_download_failed");
+      if (!response.ok || !["UNINITIALIZED", "ROOT_PUBLISHED"].includes(result?.state)) {
+        throw new Error("device_trust_download_failed");
+      }
+      return result;
+    },
+
+    async deviceTrustRequests() {
+      const response = await authorizedRequest("/v1/device-trust/requests");
+      const result = await responseJSON(response, "device_trust_download_failed");
+      if (!response.ok || !Array.isArray(result?.requests) || result.requests.length > 100) {
+        throw new Error("device_trust_download_failed");
+      }
+      return result.requests;
+    },
+
+    async deviceTrustMutation(path, body, idempotencyKey) {
+      const response = await authorizedRequest(path, {
+        method: "POST",
+        headers: { "Idempotency-Key": normalizedIdempotencyKey(idempotencyKey) },
+        ...(body === null ? {} : { body: JSON.stringify(body) }),
+      });
+      const result = await responseJSON(response, "device_trust_update_failed");
+      if (!response.ok) throw new Error(result?.error || "device_trust_update_failed");
+      return result;
+    },
+
+    async deviceTrustChallenge(requestID, challengeID) {
+      const request = normalizedUUID(requestID, "device_trust_invalid");
+      const challenge = normalizedUUID(challengeID, "device_trust_invalid");
+      const response = await authorizedRequest(
+        `/v1/device-trust/requests/${request}/challenges/${challenge}`);
+      const result = await responseJSON(response, "device_trust_download_failed");
+      if (!response.ok || !result?.challenge) throw new Error("device_trust_download_failed");
+      return result;
+    },
+
     async revokeDevice(deviceID) {
       const normalizedDeviceID = normalizedUUID(deviceID, "invalid_device");
       const response = await authorizedRequest(`/v1/devices/${normalizedDeviceID}`, { method: "DELETE" });

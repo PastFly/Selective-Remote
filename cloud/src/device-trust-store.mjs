@@ -65,6 +65,13 @@ export class DeviceTrustStore {
       expiresAt: row.expires_at };
   }
 
+  async hasSignedIdentity(accountID, deviceID) {
+    const result = await this.pool.query(
+      `SELECT 1 FROM device_trust_certificates_v1
+       WHERE account_id = $1 AND device_id = $2 LIMIT 1`, [accountID, deviceID]);
+    return !!result.rows[0];
+  }
+
   async requireCustodian(client, accountID, actorDeviceID) {
     const root = await client.query(
       `SELECT custodian_device_id, root_public_key FROM device_trust_roots_v1
@@ -242,7 +249,7 @@ export class DeviceTrustStore {
     return this.mutate(accountID, "challenge.start", idempotencyKey, async (client) => {
       await this.requireCustodian(client, accountID, actorDeviceID);
       const request = await this.lockedRequest(client, accountID, requestID);
-      this.requireLiveRequest(request, ["pending", "challenged"]);
+      this.requireLiveRequest(request, ["pending", "challenged", "answered"]);
       if (challenge.deviceID && challenge.deviceID !== request.device_id) {
         throw new Error("device_trust_invalid");
       }
@@ -337,6 +344,7 @@ export class DeviceTrustStore {
         [accountID, requestID, challengeID]);
       const challenge = result.rows[0];
       if (!challenge || challenge.state !== "answered"
+        || !Buffer.isBuffer(challenge.proof) || challenge.proof.length !== 32
         || new Date(challenge.expires_at).getTime() <= Date.now()) {
         throw new Error("device_trust_conflict");
       }
@@ -370,6 +378,43 @@ export class DeviceTrustStore {
          VALUES ($1, $2, $3, $4, $5::jsonb)`,
         [accountID, bundle.directoryVersion, bundle.directoryBytes,
           bundle.directorySignature, JSON.stringify(checkpoint)]);
+      if (request.key_version > 1) {
+        const previous = oldEntries.find((entry) => entry.deviceID === request.device_id);
+        if (!previous || previous.keyVersion !== request.key_version - 1) {
+          throw new Error("device_trust_invalid");
+        }
+        await client.query(
+          `INSERT INTO device_trust_revocations_v1
+            (account_id, device_id, key_version, checkpoint_version)
+           VALUES ($1, $2, $3, $4)`,
+          [accountID, request.device_id, previous.keyVersion, bundle.directoryVersion]);
+        const currentKey = request.public_key_json;
+        const canonicalKey = JSON.stringify({ kty: "EC", crv: "P-256",
+          x: currentKey.x, y: currentKey.y, ext: true, key_ops: [] });
+        await client.query(
+          `UPDATE devices SET public_key = $3, key_approved_at = NULL
+           WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL`,
+          [accountID, request.device_id, canonicalKey]);
+        const wrapper = await client.query(
+          `SELECT 1 FROM shared_vault_key_wrappers WHERE device_id = $1 LIMIT 1`,
+          [request.device_id]);
+        if (wrapper.rows[0]) {
+          await client.query(
+            `WITH affected AS (
+               UPDATE shared_vaults AS vault SET rotation_required = true, updated_at = now()
+               FROM team_memberships AS membership
+               WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+                 AND vault.team_id = membership.team_id AND vault.archived_at IS NULL
+               RETURNING vault.id, vault.key_generation
+             )
+             INSERT INTO shared_vault_rotation_tasks
+               (vault_id, from_generation, removed_device_id)
+             SELECT id, key_generation, $2 FROM affected
+             ON CONFLICT (vault_id, from_generation, removed_device_id)
+               WHERE removed_device_id IS NOT NULL DO NOTHING`,
+            [accountID, request.device_id]);
+        }
+      }
       await client.query(
         `UPDATE device_trust_challenges_v1 SET state = 'consumed', consumed_at = now()
          WHERE account_id = $1 AND request_id = $2 AND id = $3`,
@@ -386,6 +431,82 @@ export class DeviceTrustStore {
          VALUES ($1, $2, $3, $4, $5)`,
         [accountID, actorDeviceID, request.device_id, action, request.key_version]);
       return { requestID, status: "approved", directoryVersion: bundle.directoryVersion };
+    });
+  }
+
+  async revokeDevice({ accountID, actorDeviceID, deviceID, checkpoint,
+    bundle, idempotencyKey }) {
+    return this.mutate(accountID, "device.revoke", idempotencyKey, async (client) => {
+      const root = await this.requireCustodian(client, accountID, actorDeviceID);
+      if (deviceID === actorDeviceID || !root.root_public_key.equals(bundle.rootBytes)) {
+        throw new Error("device_trust_forbidden");
+      }
+      const prior = await client.query(
+        `SELECT version, directory_json FROM device_trust_directories_v1
+         WHERE account_id = $1 ORDER BY version DESC LIMIT 1`, [accountID]);
+      const old = prior.rows[0];
+      const entries = old?.directory_json?.payload?.entries;
+      if (!Array.isArray(entries) || bundle.directoryVersion !== Number(old.version) + 1) {
+        throw new Error("device_trust_conflict");
+      }
+      const removed = entries.find((entry) => entry.deviceID === deviceID);
+      if (!removed || checkpoint.payload.entries.some((entry) => entry.deviceID === deviceID)
+        || JSON.stringify(entries.filter((entry) => entry.deviceID !== deviceID)
+          .map((entry) => [entry.deviceID, entry.keyVersion, entry.certificateDigest]))
+          !== JSON.stringify(checkpoint.payload.entries.map((entry) =>
+            [entry.deviceID, entry.keyVersion, entry.certificateDigest]))) {
+        throw new Error("device_trust_invalid");
+      }
+      const device = await client.query(
+        `UPDATE devices SET revoked_at = now() WHERE user_id = $1 AND id = $2
+         AND revoked_at IS NULL RETURNING id, key_approved_at`, [accountID, deviceID]);
+      if (!device.rows[0]) throw new Error("device_trust_conflict");
+      await client.query(
+        `INSERT INTO device_trust_directories_v1
+          (account_id, version, directory_bytes, signature, directory_json)
+         VALUES ($1, $2, $3, $4, $5::jsonb)`,
+        [accountID, bundle.directoryVersion, bundle.directoryBytes,
+          bundle.directorySignature, JSON.stringify(checkpoint)]);
+      await client.query(
+        `INSERT INTO device_trust_revocations_v1
+          (account_id, device_id, key_version, checkpoint_version)
+         VALUES ($1, $2, $3, $4)`,
+        [accountID, deviceID, removed.keyVersion, bundle.directoryVersion]);
+      await client.query(
+        `UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND device_id = $2
+         AND revoked_at IS NULL`, [accountID, deviceID]);
+      await client.query(
+        `UPDATE device_trust_requests_v1 SET state = 'revoked', decided_at = now()
+         WHERE account_id = $1 AND device_id = $2
+           AND state IN ('pending', 'challenged', 'answered')`, [accountID, deviceID]);
+      await client.query(
+        `UPDATE device_trust_challenges_v1 SET state = 'expired'
+         WHERE account_id = $1 AND request_id IN
+           (SELECT id FROM device_trust_requests_v1 WHERE account_id = $1 AND device_id = $2)
+           AND state IN ('offered', 'answered')`, [accountID, deviceID]);
+      const wrapper = await client.query(
+        `SELECT 1 FROM shared_vault_key_wrappers WHERE device_id = $1 LIMIT 1`, [deviceID]);
+      if (device.rows[0].key_approved_at || wrapper.rows[0]) {
+        await client.query(
+          `WITH affected AS (
+             UPDATE shared_vaults AS vault SET rotation_required = true, updated_at = now()
+             FROM team_memberships AS membership
+             WHERE membership.user_id = $1 AND membership.revoked_at IS NULL
+               AND vault.team_id = membership.team_id AND vault.archived_at IS NULL
+             RETURNING vault.id, vault.key_generation
+           )
+           INSERT INTO shared_vault_rotation_tasks
+             (vault_id, from_generation, removed_device_id)
+           SELECT id, key_generation, $2 FROM affected
+           ON CONFLICT (vault_id, from_generation, removed_device_id)
+             WHERE removed_device_id IS NOT NULL DO NOTHING`, [accountID, deviceID]);
+      }
+      await client.query(
+        `INSERT INTO device_trust_account_events_v1
+          (account_id, actor_device_id, target_device_id, action, key_version)
+         VALUES ($1, $2, $3, 'device.revoked', $4)`,
+        [accountID, actorDeviceID, deviceID, removed.keyVersion]);
+      return { deviceID, status: "revoked", directoryVersion: bundle.directoryVersion };
     });
   }
 }

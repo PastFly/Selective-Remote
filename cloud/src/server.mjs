@@ -181,6 +181,12 @@ async function route(request, response) {
           await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
       });
     }
+    const trustedDevice = url.pathname.match(/^\/v1\/device-trust\/devices\/([^/]+)\/revoke$/u);
+    if (trustedDevice && method === "POST") return handleOperation(response, async () => {
+      await requireDeviceTrustRateLimits(request, session);
+      return deviceTrust.revoke(session, trustedDevice[1],
+        await readJSON(request, maxTeamBodyBytes), idempotencyKey(request));
+    });
     if (method === "POST" && url.pathname === "/v1/devices/bootstrap-key") {
       return handleOperation(
         response,
@@ -214,6 +220,9 @@ async function route(request, response) {
     if (method === "DELETE" && deviceMatch) {
       if (!isUUID(deviceMatch[1])) return sendError(response, 400, "invalid_device");
       try {
+        if (await deviceTrust.store.hasSignedIdentity(session.user_id, deviceMatch[1])) {
+          return sendError(response, 409, "device_trust_signed_revoke_required");
+        }
         const revoked = await store.revokeDevice(session.user_id, deviceMatch[1], session.device_id);
         return revoked ? empty(response, 204) : sendError(response, 404, "device_not_found");
       } catch (error) {

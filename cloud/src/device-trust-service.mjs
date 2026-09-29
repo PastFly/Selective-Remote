@@ -3,7 +3,7 @@ import { normalizeTeamDevicePublicKey } from "../public/team-vault-crypto.js";
 import { devicePossessionChallengeBytes } from "../public/device-trust-v1.js";
 import { isUUID, validateDevicePublicKey } from "./security.mjs";
 import { validateIdempotencyKey } from "./team-policy.mjs";
-import { validateSignedDeviceBundle } from "./device-trust-policy.mjs";
+import { validateSignedDeviceBundle, validateSignedDeviceDirectory } from "./device-trust-policy.mjs";
 
 function invalid() { throw new Error("device_trust_invalid"); }
 function record(value, keys) {
@@ -119,6 +119,17 @@ export class DeviceTrustService {
       deviceID: certificate.payload.deviceID, publicKey: certificate.payload.publicKey });
     return this.store.approveRequest({ accountID, actorDeviceID, requestID,
       challengeID: input.challengeID, bundle, certificate, checkpoint: input.checkpoint,
+      idempotencyKey: validateIdempotencyKey(key) });
+  }
+
+  async revoke(session, deviceID, input, key) {
+    const { accountID, actorDeviceID } = sessionIdentity(session);
+    uuid(deviceID);
+    record(input, ["rootPublicKey", "checkpoint"]);
+    const bundle = await validateSignedDeviceDirectory({
+      rootPublicKey: input.rootPublicKey, checkpoint: input.checkpoint, accountID });
+    return this.store.revokeDevice({ accountID, actorDeviceID, deviceID,
+      checkpoint: input.checkpoint, bundle,
       idempotencyKey: validateIdempotencyKey(key) });
   }
 }

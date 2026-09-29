@@ -117,12 +117,20 @@ export function serializeNotificationState(state) {
     items: state.items.map((item) => safeItem(item, state.recipient)).filter(Boolean) });
 }
 
-export function deviceNotificationObservations(devices, recipient) {
+export function deviceNotificationObservations(devices, recipient, trustRequests = [], currentDeviceID = null) {
   if (!uuid.test(recipient) || !Array.isArray(devices)) return [];
-  return devices.filter((device) => uuid.test(device?.id) && device.keyRegistered === true
+  const secure = Array.isArray(trustRequests) ? trustRequests.filter((request) =>
+    uuid.test(request?.requestID) && uuid.test(request?.deviceID)
+      && request.deviceID !== currentDeviceID
+      && ["pending", "challenged", "answered"].includes(request.status)) : [];
+  const secureDevices = new Set((Array.isArray(trustRequests) ? trustRequests : [])
+    .filter((request) => uuid.test(request?.deviceID)).map((request) => request.deviceID));
+  return [...secure.map((request) => ({ kind: "deviceApproval", scopeID: recipient,
+    sourceID: request.requestID })), ...devices.filter((device) => !secureDevices.has(device?.id)
+    && uuid.test(device?.id) && device.keyRegistered === true
     && device.keyApprovedAt === null && device.revokedAt === null)
-    .slice(0, maxSourceItems)
-    .map((device) => ({ kind: "deviceApproval", scopeID: recipient, sourceID: device.id }));
+    .map((device) => ({ kind: "deviceApproval", scopeID: recipient, sourceID: device.id }))]
+    .slice(0, maxSourceItems);
 }
 
 export function invitationNotificationObservations(invitations) {

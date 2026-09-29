@@ -88,6 +88,9 @@ function signedCertificateBytes(certificate) {
 async function certificateDigest(certificate, crypto) {
   return b64(new Uint8Array(await crypto.subtle.digest("SHA-256", signedCertificateBytes(certificate))));
 }
+export async function deviceCertificateDigest(certificate, cryptoValue = globalThis.crypto) {
+  return certificateDigest(certificate, cryptoAPI(cryptoValue));
+}
 export async function deviceDirectoryDigest(checkpoint, cryptoValue = globalThis.crypto) {
   exact(checkpoint, ["payload", "signature"]);
   const crypto = cryptoAPI(cryptoValue);
@@ -237,6 +240,28 @@ export function createIndexedDBDeviceTrustRepository(indexedDBValue = globalThis
           }
           const write = store.add(root, recordKey);
           write.onsuccess = () => done(root);
+        };
+      });
+    },
+    async loadBootstrapBundle(endpoint, accountID) {
+      return transact("readonly", (store, done) => {
+        const request = store.get(`bootstrap:${key(endpoint, accountID)}`);
+        request.onsuccess = () => done(request.result ?? null);
+      });
+    },
+    async saveBootstrapBundleIfAbsent(endpoint, accountID, bundle) {
+      exact(bundle, ["rootPublicKey", "certificate", "checkpoint"]);
+      return transact("readwrite", (store, done) => {
+        const recordKey = `bootstrap:${key(endpoint, accountID)}`;
+        const read = store.get(recordKey);
+        read.onsuccess = () => {
+          if (read.result) {
+            if (JSON.stringify(read.result) !== JSON.stringify(bundle)) store.transaction.abort();
+            else done(read.result);
+            return;
+          }
+          const write = store.add(bundle, recordKey);
+          write.onsuccess = () => done(bundle);
         };
       });
     },
