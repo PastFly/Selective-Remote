@@ -22,6 +22,9 @@ CREATE INDEX vault_resource_wrappers_v2_active_version
        (team_id, vault_id, resource_id, part, key_version,
         membership_id, membership_epoch, device_id)
     WHERE obsolete_at IS NULL;
+CREATE INDEX vault_resource_wrappers_v2_active_device
+    ON vault_resource_key_wrappers_v2 (device_id, membership_id, membership_epoch)
+    WHERE obsolete_at IS NULL;
 
 CREATE FUNCTION serialize_resource_registry_mutation() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE scope_row record;
@@ -130,10 +133,33 @@ CREATE TRIGGER a_resource_device_admission_serialization
     BEFORE INSERT OR UPDATE ON team_membership_device_admissions
     FOR EACH ROW EXECUTE FUNCTION serialize_resource_device_admission();
 
--- A revoked device or membership epoch cannot be revived after its wrappers
--- have been retired. New enrollment must use a new device or membership epoch.
-CREATE FUNCTION forbid_resource_recipient_reactivation() RETURNS trigger LANGUAGE plpgsql AS $$
+-- Recipient identity and key material cannot be changed while an admitted
+-- device has a live wrapper. Key rotation first retires the admission in the
+-- same transaction; a later admission after publication requires rotation.
+CREATE FUNCTION guard_resource_recipient_state() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF TG_TABLE_NAME = 'devices' THEN
+        IF NEW.id <> OLD.id OR NEW.user_id <> OLD.user_id THEN
+            RAISE EXCEPTION 'device_identity_immutable';
+        END IF;
+        IF (NEW.public_key IS DISTINCT FROM OLD.public_key
+            OR NEW.public_key_algorithm IS DISTINCT FROM OLD.public_key_algorithm)
+           AND EXISTS (
+                SELECT 1 FROM vault_resource_key_wrappers_v2 AS wrapper
+                JOIN team_membership_device_admissions AS admission
+                  ON admission.membership_id = wrapper.membership_id
+                 AND admission.membership_epoch = wrapper.membership_epoch
+                 AND admission.device_id = wrapper.device_id
+                WHERE wrapper.device_id = OLD.id AND wrapper.obsolete_at IS NULL
+           ) THEN
+            RAISE EXCEPTION 'resource_v2_device_key_in_use';
+        END IF;
+    ELSE
+        IF (NEW.id, NEW.team_id, NEW.user_id, NEW.epoch)
+           IS DISTINCT FROM (OLD.id, OLD.team_id, OLD.user_id, OLD.epoch) THEN
+            RAISE EXCEPTION 'membership_identity_immutable';
+        END IF;
+    END IF;
     IF OLD.revoked_at IS NOT NULL AND NEW.revoked_at IS NULL THEN
         IF TG_TABLE_NAME = 'devices' THEN
             RAISE EXCEPTION 'device_revocation_irreversible';
@@ -143,12 +169,12 @@ BEGIN
     RETURN NEW;
 END;
 $$;
-CREATE TRIGGER a_device_revocation_irreversible
-    BEFORE UPDATE OF revoked_at ON devices
-    FOR EACH ROW EXECUTE FUNCTION forbid_resource_recipient_reactivation();
-CREATE TRIGGER a_membership_revocation_irreversible
-    BEFORE UPDATE OF revoked_at ON team_memberships
-    FOR EACH ROW EXECUTE FUNCTION forbid_resource_recipient_reactivation();
+CREATE TRIGGER a_device_resource_identity_guard
+    BEFORE UPDATE OF id, user_id, public_key, public_key_algorithm, revoked_at ON devices
+    FOR EACH ROW EXECUTE FUNCTION guard_resource_recipient_state();
+CREATE TRIGGER a_membership_resource_identity_guard
+    BEFORE UPDATE OF id, team_id, user_id, epoch, revoked_at ON team_memberships
+    FOR EACH ROW EXECUTE FUNCTION guard_resource_recipient_state();
 
 -- Publication can only point at a fully promoted ciphertext. The store promotes
 -- inside the same transaction before moving the pointer, preserving atomicity.

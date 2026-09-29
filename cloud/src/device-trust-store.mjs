@@ -431,17 +431,17 @@ export class DeviceTrustStore {
         const canonicalKey = JSON.stringify({ kty: "EC", crv: "P-256",
           x: currentKey.x, y: currentKey.y, ext: true, key_ops: [] });
         await client.query(
-          `UPDATE devices SET public_key = $3, key_registered_at = now(),
-             key_approved_at = NULL,
-             key_approved_by_device_id = NULL
-           WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL`,
-          [accountID, request.device_id, canonicalKey]);
-        await client.query(
           `DELETE FROM team_membership_device_admissions AS admission
            USING team_memberships AS membership
            WHERE admission.membership_id = membership.id
              AND membership.user_id = $1 AND admission.device_id = $2`,
           [accountID, request.device_id]);
+        await client.query(
+          `UPDATE devices SET public_key = $3, key_registered_at = now(),
+             key_approved_at = NULL,
+             key_approved_by_device_id = NULL
+           WHERE user_id = $1 AND id = $2 AND revoked_at IS NULL`,
+          [accountID, request.device_id, canonicalKey]);
         const wrapper = await client.query(
           `SELECT 1 FROM shared_vault_key_wrappers WHERE device_id = $1 LIMIT 1`,
           [request.device_id]);

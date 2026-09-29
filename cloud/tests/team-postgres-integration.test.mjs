@@ -381,6 +381,20 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        WHERE membership_id = $2 AND membership_epoch = $3 AND device_id = $4`,
       [ownerSecondDeviceID, created.membership.id, created.membership.epoch, ownerDeviceID],
     ), /resource_v2_admission_identity_immutable/u);
+    await assert.rejects(pool.query(
+      "UPDATE devices SET user_id = $1 WHERE id = $2",
+      [byEmail["other@example.com"], ownerSecondDeviceID],
+    ), /device_identity_immutable/u);
+    await assert.rejects(pool.query(
+      "UPDATE devices SET public_key = NULL WHERE id = $1", [ownerSecondDeviceID],
+    ), /resource_v2_device_key_in_use/u);
+    await assert.rejects(pool.query(
+      "UPDATE devices SET public_key_algorithm = NULL WHERE id = $1", [ownerSecondDeviceID],
+    ), /resource_v2_device_key_in_use/u);
+    await assert.rejects(pool.query(
+      "UPDATE team_memberships SET user_id = $1 WHERE id = $2",
+      [byEmail["other@example.com"], created.membership.id],
+    ), /membership_identity_immutable/u);
     await assert.rejects(store.publishResourceCryptoVersion({ ...publish,
       ciphertext: { ...firstCiphertext, authTag: "A".repeat(22) } }),
     /resource_idempotency_conflict/u);
