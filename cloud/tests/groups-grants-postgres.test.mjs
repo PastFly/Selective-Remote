@@ -110,6 +110,8 @@ test("group names are validated before SQL", async () => {
     /invalid_access_membership/);
   await assert.rejects(access.deleteAccessGroup({ expectedVersion: 0 }),
     /invalid_access_version/);
+  await assert.rejects(access.getEffectiveAccess({ resourceID: "bad" }),
+    /invalid_access_resource/);
 });
 
 test("Team group creation is gated by admitted Owner and exact idempotent request", {
@@ -162,11 +164,40 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       targetMembershipID: viewerMembership, idempotencyKey: `access:member-add:${suffix}` });
     assert.equal(edge.member.user_id, viewer);
+    const folder = randomUUID();
+    const host = randomUUID();
+    await pool.query(`INSERT INTO vault_resource_registry
+      (id, team_id, vault_id, policy_class, policy_kind)
+      VALUES ($1, $3, $4, 'folder', 'FOLDER'),
+             ($2, $3, $4, 'general', 'HOST')`, [folder, host, team, vault]);
+    await pool.query(`UPDATE vault_resource_registry SET parent_folder_id = $2,
+      resource_version = 2 WHERE id = $1`, [host, folder]);
+    await pool.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, target_kind,
+       target_id, permission_mask, created_by_user_id)
+      VALUES ($1, $2, 'GROUP', $3, 'FOLDER', $4, 1, $5)`,
+    [team, vault, created.group.id, folder, user]);
+    await pool.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, membership_id,
+       membership_epoch, target_kind, target_id, permission_mask, created_by_user_id)
+      VALUES ($1, $2, 'USER', $3, $4, 1, 'RESOURCE', $5, 1, $6)`,
+    [team, vault, viewer, viewerMembership, host, user]);
+    const effectiveBefore = await access.getEffectiveAccess({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
+      subjectUserID: viewer });
+    assert.equal(effectiveBefore.policyMask, 1);
+    assert.equal(effectiveBefore.effectiveUsable, "NO");
+    assert.equal(effectiveBefore.paths.length, 2);
     const removed = await access.removeAccessGroupMember({ actorUserID: user,
       actorDeviceID: device, teamID: team, vaultID: vault, groupID: created.group.id,
       edgeID: edge.member.id, expectedVersion: 1,
       idempotencyKey: `access:member-remove:${suffix}` });
     assert.equal(removed.removed, true);
+    const effectiveAfter = await access.getEffectiveAccess({ actorUserID: user,
+      actorDeviceID: device, teamID: team, vaultID: vault, resourceID: host,
+      subjectUserID: viewer });
+    assert.equal(effectiveAfter.policyMask, 1);
+    assert.equal(effectiveAfter.paths.length, 1);
     await assert.rejects(access.renameAccessGroup({ actorUserID: user, actorDeviceID: device,
       teamID: team, vaultID: vault, groupID: created.group.id, expectedVersion: 1,
       name: "Stale", idempotencyKey: `access:stale:${suffix}` }), /access_policy_conflict/);
