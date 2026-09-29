@@ -858,7 +858,7 @@ export class AccessStore {
         if (users.rows.length > 1000) throw new Error("access_batch_too_large");
         for (const user of users.rows) {
           allSubjects.set(user.user_id, { userID: user.user_id,
-            membershipID: user.id, epoch: Number(user.epoch) });
+            membershipID: user.id, epoch: Number(user.epoch), role: user.role });
         }
         for (const resource of subtree.rows) {
           allResources.set(resource.id, resource);
@@ -960,7 +960,7 @@ export class AccessStore {
       for (const subject of subjects) {
         requireAccessMutation(actor.role, subject.role);
         allSubjects.set(subject.user_id, { userID: subject.user_id,
-          membershipID: subject.id, epoch: Number(subject.epoch) });
+          membershipID: subject.id, epoch: Number(subject.epoch), role: subject.role });
       }
       let resourceRows;
       if (targetKind === "RESOURCE") {
@@ -1036,6 +1036,11 @@ export class AccessStore {
         hypothetical, parentOverrides);
       const gainedMask = after.policyMask & ~before.policyMask;
       const lostMask = before.policyMask & ~after.policyMask;
+      const pathIdentity = (access) => access.paths.map((path) =>
+        [path.id, path.effectiveMask]);
+      if (hashAccessRequest(pathIdentity(before)) !== hashAccessRequest(pathIdentity(after))) {
+        requireAccessMutation(actor.role, allSubjects.get(pair.subjectUserID).role);
+      }
       if (gainedMask) widened++;
       if (lostMask) lost++;
       details.push({ ...pair, before, after, gainedMask, lostMask });

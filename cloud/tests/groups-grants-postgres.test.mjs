@@ -331,6 +331,22 @@ test("Team group creation is gated by admitted Owner and exact idempotent reques
       x: "A".repeat(43), y: "B".repeat(43), ext: true, key_ops: [] })]);
     await pool.query(`INSERT INTO team_memberships (team_id, user_id, role)
       VALUES ($1, $2, 'admin')`, [team, admin]);
+    await pool.query(`INSERT INTO vault_access_grants
+      (team_id, vault_id, principal_kind, principal_id, membership_id,
+       membership_epoch, target_kind, target_id, permission_mask,
+       created_by_user_id)
+      VALUES ($1, $2, 'USER', $3, $4, 1, 'FOLDER', $5, 1, $3)`,
+    [team, vault, user, ownerMembership, folderA]);
+    const adminMoveRequest = { changes: [{ type: "RESOURCE_MOVE",
+      resourceID: forwarding, newParentFolderID: folderA,
+      expectedResourceVersion: 2 }] };
+    await assert.rejects(access.previewAccessChange({ actorUserID: admin,
+      actorDeviceID: adminDevice, teamID: team, vaultID: vault,
+      request: adminMoveRequest, sessionSecret: "test-session-secret" }),
+    /team_access_denied/);
+    assert.equal((await pool.query(`SELECT parent_folder_id
+      FROM vault_resource_registry WHERE id = $1`,
+    [forwarding])).rows[0].parent_folder_id, folderB);
     await assert.rejects(access.deleteAccessGroup({ actorUserID: admin,
       actorDeviceID: adminDevice, teamID: team, vaultID: vault,
       groupID: created.group.id, expectedVersion: 2,
