@@ -12,6 +12,7 @@ import { generateResourceCEK, encryptResourcePart, wrapResourceCEK } from "../pu
 const databaseURL = process.env.TEST_DATABASE_URL;
 const migrationsDirectory = fileURLToPath(new URL("../migrations/", import.meta.url));
 const ownerDeviceID = "33cc880e-084a-4d9a-b1ea-f99d2ff86032";
+const ownerSecondDeviceID = "625a4479-dbc4-4f2b-88b8-f42179275d46";
 const adminDeviceID = "e5cb5666-8db7-4fd8-88f7-0a3b0a8df156";
 const viewerDeviceID = "aef6452c-1ad8-48bb-b4b5-ea9c207b707b";
 const viewerSecondDeviceID = "5a5bcf31-01d0-40d5-95ae-7d041553b5d9";
@@ -191,6 +192,18 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       [created.membership.id, created.membership.epoch, ownerDeviceID],
     );
     const identity = await generateTeamDeviceIdentity(webcrypto);
+    await pool.query(
+      `INSERT INTO devices
+       (id, user_id, name, platform, public_key, public_key_algorithm,
+        key_registered_at, key_approved_at)
+       VALUES ($1, $2, 'Second owner device', 'web', $3, 'p256-ecdh-v1', now(), now())`,
+      [ownerSecondDeviceID, byEmail["owner@example.com"], JSON.stringify(identity.publicKey)],
+    );
+    await pool.query(
+      `INSERT INTO team_membership_device_admissions
+       (membership_id, membership_epoch, device_id) VALUES ($1, $2, $3)`,
+      [created.membership.id, created.membership.epoch, ownerSecondDeviceID],
+    );
     const cryptoContext = { teamID: created.team.id, vaultID: shared.vault.id,
       resourceID: childResourceID, part: "GENERAL", keyVersion: 1,
       policyVersion: 1, registryVersion: 1, resourceVersion: 1, manifestVersion: 1 };
@@ -201,8 +214,13 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       context: { ...cryptoContext, membershipID: created.membership.id,
         membershipEpoch: Number(created.membership.epoch), deviceID: ownerDeviceID },
       recipientPublicKey: identity.publicKey, cryptoValue: webcrypto });
+    const secondDeviceWrapper = await wrapResourceCEK({ cek: firstCEK,
+      context: { ...cryptoContext, membershipID: created.membership.id,
+        membershipEpoch: Number(created.membership.epoch), deviceID: ownerSecondDeviceID },
+      recipientPublicKey: identity.publicKey, cryptoValue: webcrypto });
     const publish = { ...resourceActor, resourceID: childResourceID,
-      expectedManifestVersion: 0, ciphertext: firstCiphertext, wrappers: [firstWrapper] };
+      expectedManifestVersion: 0, ciphertext: firstCiphertext,
+      wrappers: [firstWrapper, secondDeviceWrapper] };
     await assert.rejects(store.publishResourceCryptoVersion({ ...publish, wrappers: [{
       ...firstWrapper, context: { ...firstWrapper.context,
         membershipID: "7f49f2e1-03bc-4218-9c34-d7629b686160" },
@@ -211,6 +229,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
       `SELECT count(*)::integer AS count FROM vault_resource_ciphertext_versions
        WHERE resource_id = $1`, [childResourceID])).rows[0].count, 0);
     assert.equal(Number((await store.publishResourceCryptoVersion(publish)).manifest_version), 1);
+    await pool.query("UPDATE devices SET revoked_at = now() WHERE id = $1", [ownerSecondDeviceID]);
     const nextContext = { ...cryptoContext, keyVersion: 2, manifestVersion: 2 };
     const nextCEK = generateResourceCEK(webcrypto);
     const nextCiphertext = await encryptResourcePart({ plaintext: new TextEncoder().encode("fixture-v2"),
@@ -232,6 +251,20 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
        WHERE resource_id = $1`, [childResourceID]);
     assert.equal(Number(pointer.rows[0].key_version), 2);
     assert.equal(Number(pointer.rows[0].manifest_version), 2);
+    await assert.rejects(pool.query(
+      `UPDATE vault_resource_ciphertext_versions
+       SET lifecycle = 'OBSOLETE', obsolete_at = now()
+       WHERE resource_id = $1 AND key_version = 2`, [childResourceID],
+    ), /resource_v2_published_ciphertext_in_use/u);
+    await assert.rejects(pool.query(
+      `UPDATE vault_resource_key_wrappers_v2 SET obsolete_at = now()
+       WHERE resource_id = $1 AND key_version = 2`, [childResourceID],
+    ), /resource_v2_last_published_wrapper/u);
+    assert.equal((await pool.query(
+      `SELECT count(*)::integer AS count FROM vault_resource_key_wrappers_v2
+       WHERE resource_id = $1 AND key_version = 1 AND obsolete_at IS NULL`,
+      [childResourceID],
+    )).rows[0].count, 0);
     await assert.rejects(store.getResourceIdentity({ ...resourceActor,
       teamID: "2da9bfce-9882-4edc-9303-04cebdb31323", resourceID: childResourceID }),
     /team_not_found/u);

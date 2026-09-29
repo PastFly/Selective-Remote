@@ -84,7 +84,8 @@ function encode(bytes) {
   return btoa(text).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
 }
 
-function decode(value, length = null) {
+function decode(value, length = null, allowEmpty = false) {
+  if (allowEmpty && value === "") return new Uint8Array();
   if (typeof value !== "string" || !b64url.test(value)) throw new Error("invalid_resource_v2_envelope");
   let binary;
   try { binary = atob(value.replaceAll("-", "+").replaceAll("_", "/")
@@ -134,7 +135,7 @@ export async function decryptResourcePart({ envelope, cek, context, cryptoValue 
   validateResourceCipherEnvelope(envelope);
   const normalized = expectedContext(envelope.context, context, ciphertextFields);
   const nonce = decode(envelope.nonce, 12);
-  const body = decode(envelope.ciphertext);
+  const body = decode(envelope.ciphertext, null, true);
   const tag = decode(envelope.authTag, 16);
   if (body.length > maxPlaintext) throw new Error("invalid_resource_v2_envelope");
   const sealed = new Uint8Array(body.length + tag.length);
@@ -153,7 +154,7 @@ export function validateResourceCipherEnvelope(envelope) {
   exactKeys(envelope.context, ciphertextFields);
   resourceCiphertextAAD(envelope.context);
   decode(envelope.nonce, 12);
-  if (decode(envelope.ciphertext).length > maxPlaintext) throw new Error("invalid_resource_v2_envelope");
+  if (decode(envelope.ciphertext, null, true).length > maxPlaintext) throw new Error("invalid_resource_v2_envelope");
   decode(envelope.authTag, 16);
   return envelope.context;
 }
@@ -226,8 +227,10 @@ export function validateResourceKeyWrapper(wrapper) {
 export function prepareResourceRotation({ context, oldCEK, cryptoValue = globalThis.crypto }) {
   keyBytes(oldCEK);
   const current = normalizeContext(context, ciphertextFields);
-  if (current.keyVersion === Number.MAX_SAFE_INTEGER) throw new Error("resource_v2_version_exhausted");
-  return { state: "PREPARED", context: { ...current, keyVersion: current.keyVersion + 1 },
+  if (current.keyVersion === Number.MAX_SAFE_INTEGER
+    || current.manifestVersion === Number.MAX_SAFE_INTEGER) throw new Error("resource_v2_version_exhausted");
+  return { state: "PREPARED", context: { ...current, keyVersion: current.keyVersion + 1,
+    manifestVersion: current.manifestVersion + 1 },
     cek: generateResourceCEK(cryptoValue) };
 }
 

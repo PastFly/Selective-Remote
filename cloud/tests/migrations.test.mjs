@@ -36,8 +36,10 @@ test("resource crypto v2 storage is additive, scoped and rejects v1 Vaults", asy
   assert.match(migration.sql, /format_state = 'V2_PREPARING'/u);
   assert.match(migration.sql, /membership_epoch/u);
   assert.match(migration.sql, /FOR SHARE OF membership, device, admission/u);
+  assert.match(migration.sql, /FOR UPDATE OF resource FOR SHARE OF vault/u);
   assert.match(migration.sql, /immutable_resource_v2_ciphertext/u);
   assert.match(migration.sql, /invalid_resource_v2_manifest_advance/u);
+  assert.match(migration.sql, /resource_v2_last_published_wrapper/u);
   assert.doesNotMatch(migration.sql, /DROP TABLE|TRUNCATE|UPDATE shared_vaults SET format_state/iu);
 });
 

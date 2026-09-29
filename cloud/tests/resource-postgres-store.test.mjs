@@ -66,7 +66,7 @@ test("a wrapper insert failure rolls back without publishing a pointer", async (
   assert.ok(!f.queries.some(({ sql }) => sql.includes("INSERT INTO vault_resource_manifest_pointers_v2")));
 });
 
-test("ciphertext failure and interrupted commit leave publication uncommitted", async () => {
+test("ciphertext failure and simulated commit interruption invoke rollback path", async () => {
   for (const failure of ["INSERT INTO vault_resource_ciphertext_versions", "COMMIT"]) {
     const f = fake((sql) => {
       if (sql.includes("AS registry_actor_role")) return { rows: [{ registry_actor_role: "owner" }] };

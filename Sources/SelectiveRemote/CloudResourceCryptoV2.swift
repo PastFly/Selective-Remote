@@ -72,7 +72,7 @@ struct SelectiveRemoteResourceCipherEnvelope: Codable, Equatable, Sendable {
         authTag = try values.decode(String.self, forKey: .authTag)
         guard formatVersion == 2, algorithm == "AES-256-GCM", aadVersion == 2,
               Data(selectiveRemoteBase64URL: nonce, expectedLength: 12) != nil,
-              Data(selectiveRemoteBase64URL: ciphertext) != nil,
+              (ciphertext.isEmpty || Data(selectiveRemoteBase64URL: ciphertext) != nil),
               Data(selectiveRemoteBase64URL: authTag, expectedLength: 16) != nil
         else { throw SelectiveRemoteResourceCryptoV2Error.invalidEnvelope }
     }
@@ -184,7 +184,7 @@ enum SelectiveRemoteResourceCryptoV2 {
         guard cek.count == 32, envelope.context == context,
               envelope.formatVersion == 2, envelope.algorithm == "AES-256-GCM", envelope.aadVersion == 2,
               let nonce = Data(selectiveRemoteBase64URL: envelope.nonce, expectedLength: 12),
-              let body = Data(selectiveRemoteBase64URL: envelope.ciphertext),
+              let body = envelope.ciphertext.isEmpty ? Data() : Data(selectiveRemoteBase64URL: envelope.ciphertext),
               body.count <= 24 * 1024 * 1024,
               let tag = Data(selectiveRemoteBase64URL: envelope.authTag, expectedLength: 16)
         else { throw SelectiveRemoteResourceCryptoV2Error.invalidEnvelope }

@@ -67,6 +67,15 @@ test("resource ciphertext authenticates scope, part, versions, nonce and body", 
   assert.notEqual(second.nonce, envelope.nonce);
 });
 
+test("authenticated empty resource parts round-trip without a malformed base64 exception", async () => {
+  const cek = generateResourceCEK(webcrypto);
+  const envelope = await encryptResourcePart({ plaintext: new Uint8Array(), cek,
+    context: content, cryptoValue: webcrypto });
+  assert.equal(envelope.ciphertext, "");
+  assert.deepEqual(await decryptResourcePart({ envelope, cek, context: content,
+    cryptoValue: webcrypto }), new Uint8Array());
+});
+
 test("wrapper-v2 is bound to recipient, epoch, team, Vault, resource and part", async () => {
   const identity = await generateTeamDeviceIdentity(webcrypto);
   const other = await generateTeamDeviceIdentity(webcrypto);
@@ -91,11 +100,12 @@ test("wrapper-v2 is bound to recipient, epoch, team, Vault, resource and part", 
     context: recipient, privateKey: identity.privateKey, cryptoValue: webcrypto }));
 });
 
-test("rotation preparation creates a fresh CEK and advances only key version", () => {
+test("rotation preparation creates a fresh CEK and advances key and manifest versions", () => {
   const oldCEK = generateResourceCEK(webcrypto);
   const next = prepareResourceRotation({ context: content, oldCEK, cryptoValue: webcrypto });
   assert.equal(next.state, "PREPARED");
   assert.equal(next.context.keyVersion, 2);
+  assert.equal(next.context.manifestVersion, 8);
   assert.equal(next.context.policyVersion, content.policyVersion);
   assert.notDeepEqual(next.cek, oldCEK);
 });

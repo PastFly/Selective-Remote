@@ -78,4 +78,12 @@ struct CloudResourceCryptoV2Tests {
         #expect(try SelectiveRemoteResourceCryptoV2.decrypt(fixture.ciphertext,
             cek: cek, context: context) == Data(fixture.plaintext.utf8))
     }
+
+    @Test("empty authenticated resource part round-trips")
+    func emptyPart() throws {
+        let cek = SelectiveRemoteResourceCryptoV2.generateCEK()
+        let envelope = try SelectiveRemoteResourceCryptoV2.encrypt(Data(), cek: cek, context: context)
+        #expect(envelope.ciphertext.isEmpty)
+        #expect(try SelectiveRemoteResourceCryptoV2.decrypt(envelope, cek: cek, context: context).isEmpty)
+    }
 }
