@@ -1766,6 +1766,11 @@ struct SelectiveRemoteTeamHostsView: View {
                                     path: path
                                 )
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
+                                    .contextMenu {
+                                        Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+                                            AccessRegistrationPrerequisite.show(kind: .folder)
+                                        }
+                                    }
                                     .draggable(teamFolderDragValue(teamID: teamID, path: path))
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .contentShape(Rectangle())
@@ -2081,6 +2086,9 @@ struct SelectiveRemoteTeamHostsView: View {
 
     @ViewBuilder
     private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
+        Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+            AccessRegistrationPrerequisite.show(kind: .host)
+        }
         Button(
             UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
             systemImage: "sidebar.right"
@@ -2424,7 +2432,8 @@ struct SelectiveRemoteTeamHostsView: View {
     private func mutate(
         _ change: SelectiveRemoteTeamHostMutationChange,
         context: SelectiveRemoteTeamHostVaultContext,
-        selectedRecordID: UUID?
+        selectedRecordID: UUID?,
+        changesAncestry: Bool = false
     ) {
         guard !isMutating else { return }
         isMutating = true
@@ -2432,6 +2441,14 @@ struct SelectiveRemoteTeamHostsView: View {
             defer { isMutating = false }
             do {
                 let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let decision = try await AccessMoveDecision.fetch(
+                    teamID: context.teamID, vaultID: context.vaultID, endpoint: url,
+                    client: SelectiveRemoteCloudAPIClient(), changesAncestry: changesAncestry
+                )
+                if let explanation = decision.explanation {
+                    mutationMessage = .init(text: explanation, isError: true)
+                    return
+                }
                 let deviceID = resolvedDeviceID()
                 let identity = try await identityManager.identity(
                     endpoint: url,
@@ -2523,7 +2540,10 @@ struct SelectiveRemoteTeamHostsView: View {
             }
             guard !updates.isEmpty else { return false }
             sortMode = .manual
-            mutate(.organize(updates), context: context, selectedRecordID: host.recordID)
+            mutate(.organize(updates), context: context, selectedRecordID: host.recordID,
+                   changesAncestry: updates.contains { update in
+                       scopedHosts.first(where: { $0.recordID == update.recordID })?.profile.group != update.profile.group
+                   })
             return true
         }
         guard !isMutating,
@@ -2553,7 +2573,10 @@ struct SelectiveRemoteTeamHostsView: View {
         }
         sortMode = .manual
         mutate(.organize(plan.updates), context: context,
-               selectedRecordID: plan.selectedRecordID)
+               selectedRecordID: plan.selectedRecordID,
+               changesAncestry: plan.updates.contains { update in
+                   store.hosts.first(where: { $0.recordID == update.recordID && $0.vaultID == context.vaultID })?.profile.group != update.profile.group
+               })
         return true
     }
 

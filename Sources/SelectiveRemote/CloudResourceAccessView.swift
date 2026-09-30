@@ -33,6 +33,12 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             Text("Team \(model.reference.teamID.canonicalCloudString) · Vault \(model.reference.vaultID.canonicalCloudString)")
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
             if let context = model.context { CloudAccessStateView(context: context) }
+            if model.reference.kind == .vault && model.context?.formatState == .preparing {
+                SelectiveRemoteRegisteredResourcePicker(
+                    vault: model.reference, client: model.client, session: model.session,
+                    onCommitted: onCommitted
+                )
+            }
             if let error = model.errorMessage { CloudAccessErrorView(message: error) { Task { await model.load() } } }
             if model.committed { Label(CloudAccessLocalization.text("Сервер подтвердил изменение доступа.", "The server committed the access change."), systemImage: "checkmark.circle").foregroundStyle(.green) }
             Picker(CloudAccessLocalization.text("Раздел доступа", "Access view"), selection: $tab) {

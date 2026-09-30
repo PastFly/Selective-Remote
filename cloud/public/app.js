@@ -31,6 +31,7 @@ import {
 import {
   deviceNotificationObservations, invitationNotificationObservations,
   syncNotificationDecision,
+  committedAccessObservations,
 } from "./notification-projection.js";
 import { createNotificationCenter } from "./notification-center.js";
 import { createIndexedDBDeviceTrustRepository } from "./device-trust-v1.js";
@@ -1733,7 +1734,12 @@ export function initializeTeamWorkspace({
   const accessView = documentValue.querySelector("#team-access-view");
   const accessManager = accessView && typeof client.accessClient === "function"
     ? createAccessManager({ root: accessView, client: client.accessClient(),
-      resolveLabel: accessResolveLabel, onCommitted: onAccessCommitted }) : null;
+      resolveLabel: accessResolveLabel, onCommitted: (result, scope) => {
+        onAccessCommitted(result, scope);
+        if (activeView === "activity" && selectedTeam?.id === scope.teamID) {
+          void loadActivity().catch(() => setText(message, "Не удалось обновить журнал активности."));
+        }
+      } }) : null;
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
@@ -1768,6 +1774,20 @@ export function initializeTeamWorkspace({
   }
 
   function activityActionLabel(action) {
+    const accessAction = {
+      "group.created": ["создал(а) группу доступа", "created an access group"],
+      "group.renamed": ["переименовал(а) группу доступа", "renamed an access group"],
+      "group.deleted": ["удалил(а) группу доступа", "deleted an access group"],
+      "group.member.added": ["добавил(а) участника в группу доступа", "added an access group member"],
+      "group.member.removed": ["удалил(а) участника из группы доступа", "removed an access group member"],
+      "grant.created": ["создал(а) разрешение", "created an access grant"],
+      "grant.changed": ["изменил(а) разрешение", "changed an access grant"],
+      "grant.revoked": ["отозвал(а) разрешение", "revoked an access grant"],
+      "bulk_grant.applied": ["применил(а) пакет разрешений", "applied a grant batch"],
+      "bulk_revoke.applied": ["применил(а) пакет отзывов", "applied a revoke batch"],
+      "resource.move_access_changed": ["изменил(а) родительскую папку ресурса", "changed a resource parent folder"],
+    }[action];
+    if (accessAction) return accessAction[documentValue.documentElement?.lang === "en" ? 1 : 0];
     return ({
       "team.created": "создал(а) команду", "team.renamed": "переименовал(а) команду",
       "team.archived": "архивировал(а) команду", "team.membership_role_changed": "изменил(а) роль участника",
@@ -4077,7 +4097,18 @@ export async function initializeCloudAccount({
     ? createIndexedDBDeviceTrustRepository() : null;
   const teamWorkspace = initializeTeamWorkspace({ documentValue, client,
     deviceTrustRepository, teamIdentityRepository: teamDeviceRepository,
-    initialInvitationToken: initialTeamInvitationToken });
+    initialInvitationToken: initialTeamInvitationToken,
+    onAccessCommitted(result, scope) {
+      const recipient = client.session()?.id;
+      const EventType = documentValue.defaultView?.CustomEvent;
+      if (!recipient || !EventType) return;
+      for (const observation of committedAccessObservations(result, scope, recipient)) {
+        documentValue.dispatchEvent(new EventType(notificationSourceEvent, {
+          detail: { ...observation, recipient, at: new Date().toISOString() },
+        }));
+      }
+    },
+  });
   const accountDevices = createAccountDeviceCoordinator({
     repository: createIndexedDBVaultRepository(),
     legacyDeviceID: () => vault.deviceID(),
@@ -5051,6 +5082,9 @@ export function initializePortalNavigation({
     } else if (item.group === "sync:personal") {
       selectWorkspacePanel("local-vault", "all");
       requestedWorkspaceRoute = "/app/personal-vault";
+    } else if (item.group?.startsWith("access:")) {
+      selectWorkspacePanel("team-vault", null, "access");
+      requestedWorkspaceRoute = "/app/team-access";
     } else if (item.group?.startsWith("sync:team:")) {
       const exactVaultAvailable = teamUI?.selectVaultForNotification?.(item.sourceID) === true;
       selectWorkspacePanel("team-vault", null, exactVaultAvailable ? "hosts" : "teams");

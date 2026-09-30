@@ -1481,6 +1481,11 @@ struct ContentView: View {
                                     systemImage: path.isEmpty ? "tray" : "folder"
                                 )
                                 .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
+                                .contextMenu {
+                                    Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+                                        AccessRegistrationPrerequisite.show(kind: .folder)
+                                    }
+                                }
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .contentShape(Rectangle())
                                 .background(sidebarTeamDropTargetID == "\(teamID.uuidString):\(path)"
@@ -1678,6 +1683,9 @@ struct ContentView: View {
 
     @ViewBuilder
     private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
+        Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+            AccessRegistrationPrerequisite.show(kind: .host)
+        }
         Button(
             UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
             systemImage: "sidebar.right"
@@ -1853,12 +1861,23 @@ struct ContentView: View {
                 )
         }
         guard !updates.isEmpty else { return false }
+        let changesAncestry = updates.contains { update in
+            scopedHosts.first(where: { $0.recordID == update.recordID })?.profile.group != update.profile.group
+        }
         sidebarTeamMutationInProgress = true
         teamHostSortMode = .manual
         Task { @MainActor in
             defer { sidebarTeamMutationInProgress = false }
             do {
                 let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
+                let decision = try await AccessMoveDecision.fetch(
+                    teamID: context.teamID, vaultID: context.vaultID, endpoint: endpoint,
+                    client: cloudClient, changesAncestry: changesAncestry
+                )
+                if let explanation = decision.explanation {
+                    model.errorMessage = explanation
+                    return
+                }
                 let deviceID = UUID(uuidString: cloudDeviceID)
                     .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
                 cloudDeviceID = deviceID.canonicalCloudString
@@ -2437,6 +2456,10 @@ struct ContentView: View {
         case .syncError, .conflict:
             showsSyncCenter = true
         case .failClosed, .wrapperIssue:
+            refreshCloudSessionAvailability()
+            if cloudSessionAvailable { showsCloudManagement = true }
+            else { showsSyncCenter = true }
+        case .accessGained, .accessLost:
             refreshCloudSessionAvailability()
             if cloudSessionAvailable { showsCloudManagement = true }
             else { showsSyncCenter = true }

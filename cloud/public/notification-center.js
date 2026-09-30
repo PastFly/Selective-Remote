@@ -28,6 +28,14 @@ const copy = {
     en: ["Team key access needs attention", "Review device access in Team management.", "Review Access"],
     ru: ["Требуется доступ к ключу команды", "Проверьте доступ устройства в управлении командой.", "Проверить доступ"],
   },
+  accessGained: {
+    en: ["Team access added", "Review access in the Team Vault.", "Review Team"],
+    ru: ["Добавлен доступ команды", "Проверьте доступ в Team Vault.", "Проверить команду"],
+  },
+  accessLost: {
+    en: ["Team access removed", "Review access in the Team Vault.", "Review Team"],
+    ru: ["Доступ команды удалён", "Проверьте доступ в Team Vault.", "Проверить команду"],
+  },
 };
 
 export function notificationCopy(item, locale = "ru") {
@@ -38,7 +46,7 @@ export function notificationCopy(item, locale = "ru") {
 export function visibleNotifications(items, filter = "all") {
   if (filter === "needsAction") return items.filter((item) => item.resolvedAt === null);
   if (filter === "sync") return items.filter((item) => ["syncError", "conflict", "failClosed", "wrapperIssue"].includes(item.kind));
-  if (filter === "security") return items.filter((item) => ["deviceApproval", "failClosed", "wrapperIssue"].includes(item.kind));
+  if (filter === "security") return items.filter((item) => ["deviceApproval", "failClosed", "wrapperIssue", "accessGained", "accessLost"].includes(item.kind));
   return items;
 }
 

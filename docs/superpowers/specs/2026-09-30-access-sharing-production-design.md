@@ -37,6 +37,8 @@ The active reader compares the complete Team group/edge/policy-revision snapshot
 
 ## Backend additions needed by product integration
 
+The native per-Vault Access entry can select registered resources from the bounded authenticated metadata directory and verify the exact row before opening the real resource sheet. This provides API-backed routing while legacy contextual models lack a persisted V2 identity mapping. It does not associate registry IDs with legacy records or reveal V1 names as V2 labels.
+
 1. Authenticated scoped read-only Access Vault/context directory, including lifecycle and explicit operation availability, with no ciphertext/key material. Resource metadata supports both bounded pages and an exact Team/Vault/resource lookup with identical authorization, so editing an off-page grant never guesses its policy kind or scans the entire inventory.
 2. Bounded server group search, group-member list and registry resource list (opaque IDs, kind, parent and version only). Reuse existing bounded Team member search. Never send encrypted-name search text to the server; search authorized decrypted labels locally and label that scope honestly.
 3. Signed group-operation preview and commit for create/rename/delete/member add/remove. Bind actor membership/device, Team revision, Vault context, group/edge/subject versions, affected Vault policies and request. Recheck after locks within the same mutation transaction. Existing HTTP mutations must not provide an unsigned bypass.
@@ -66,6 +68,19 @@ Complete RU/EN, Light/Graphite, restrained text/icon states. Mac keyboard, Voice
 Scale fixtures: 5/100/1000 members and 50/500/5000 resources with bounded pages and no giant matrix. Test stale responses across Team/Vault changes, malformed DTOs, denied plaintext canaries, stale role/member/preview, cross-scope IDs, alternate paths, batch overflow, group delete overflow, Personal copy identity and both DnD paths.
 
 Local synthetic rendering is `LOCAL_VISUAL_PREVIEW`, never `AUTHENTICATED_STAGING_E2E`. Define test session mode and origin before browser acceptance. Real HTTPS staging acceptance is deferred until separately authorized deployment and Owner credentials/manual validation.
+
+## Draft PR #210 parity and remaining design inputs
+
+PR #210 remains an open Draft reference. Its synthetic interaction prototype is superseded for the current release by the authenticated Cloud Access Manager and native resource sheet. The table records the usable design input without treating the prototype as production evidence.
+
+| PR #210 material | 0.32.0 status | Remaining decision |
+|---|---|---|
+| Synthetic Mac/Cloud Share, Who and Effective flows | Real authenticated Cloud and native components implemented against the PREPARING API; registered resources can be chosen from the native per-Vault server directory. Legacy item menus explain missing identity mapping. | Verify the rendered acceptance matrix and the later persisted V2 mapping/materialization before item-specific routing. |
+| Permission vocabulary and policy-only Effective display | Five resource masks, all contributing paths and separate device usability follow the approved #217 contract. | Do not reuse prototype Forwarding/Folder labels that differ from #217. |
+| Per-part CEKs, direct device wraps and revocation comparison | Design input only; no production CEK delivery or active-generation fix-forward publication. | Specify, implement and verify key publication, authenticated recipient binding, anti-rollback and recovery in separate bounded work. |
+| Migration state machine and old-client rollout | Design input only; V1 remains whole-Vault. Copy retains the Personal original and creates fresh V1 record/linked Credential identities. | Specify recoverable V1→V2 migration, authoritative record/Folder registry mapping and old-client gates before activation. |
+
+The current implementation's committed notifications use only effective deltas for the authenticated account; Audit labels are safe server action metadata. No stage, deployment or V2 activation was inferred from the local fixtures. Recommend closing #210 only after its unique crypto, migration and rollout inputs are extracted into accepted follow-up documents; do not merge or close it automatically.
 
 Required gates: targeted tests, PostgreSQL 16 integration/concurrency/scale checks, full Cloud tests, full Swift regression, Release build, rendered matrix, independent review, formal exact-head Codex Security scan, CI, Test DMG, verified Continuity and fresh Owner gate. Final #210 audit extracts useful remaining docs and recommends closure; no wholesale merge or automatic closure.
 

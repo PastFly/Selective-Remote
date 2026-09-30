@@ -169,7 +169,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 reference: reference,
                 client: .init(client: client),
                 session: .init(endpoint: endpoint),
-                onCommitted: { _ in onInventoryChanged() }
+                onCommitted: { commit in
+                    MacNotificationCenter.shared.observeCommittedAccess(
+                        commit.notificationCandidates, referenceVaultID: reference.vaultID
+                    )
+                    onInventoryChanged()
+                }
             )
         }
         .onChange(of: selectedTeamID) { _, _ in

@@ -81,6 +81,28 @@ final class MacNotificationCenter: ObservableObject {
         refreshItems()
     }
 
+    func observeCommittedAccess(_ candidates: [CloudAccessNotificationCandidate],
+                                referenceVaultID: UUID, at: Date = .now) {
+        guard let account, referenceVaultID.isSelectiveRemoteCloudUUID else { return }
+        var seen = Set<String>()
+        for candidate in candidates where candidate.userID == account.recipient &&
+            candidate.resourceID.isSelectiveRemoteCloudUUID {
+            guard let vaultID = candidate.vaultID ?? Optional(referenceVaultID),
+                  vaultID.isSelectiveRemoteCloudUUID else { continue }
+            for (kind, mask) in [(NotificationKind.accessGained, candidate.gainedMask),
+                                 (.accessLost, candidate.lostMask)] where mask > 0 {
+                let key = "\(vaultID.canonicalCloudString)/\(candidate.resourceID.canonicalCloudString)/\(kind.rawValue)"
+                guard seen.insert(key).inserted else { continue }
+                account.reconcile(group: .access(vaultID), observations: [
+                    .init(kind: kind, scopeID: vaultID.canonicalCloudString,
+                          sourceID: candidate.resourceID.canonicalCloudString)
+                ], complete: false, at: at)
+            }
+        }
+        persistAccount()
+        refreshItems()
+    }
+
     func observeHostIdentity(profileID: UUID, at: Date = .now) {
         local.observeHostIdentity(profileID: profileID, at: at)
         persistLocal()

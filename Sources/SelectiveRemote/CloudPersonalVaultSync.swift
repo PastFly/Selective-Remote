@@ -282,7 +282,7 @@ enum SelectiveRemotePersonalVaultExporter {
         return formatter.string(from: value)
     }
 
-    private static func derivedID(sourceID: UUID, discriminator: String) -> UUID {
+    static func derivedID(sourceID: UUID, discriminator: String) -> UUID {
         var bytes = Array(SHA256.hash(data: Data("selective-remote/personal-vault/v1\0\(sourceID.canonicalCloudString)\0\(discriminator)".utf8)).prefix(16))
         bytes[6] = (bytes[6] & 0x0f) | 0x50
         bytes[8] = (bytes[8] & 0x3f) | 0x80
