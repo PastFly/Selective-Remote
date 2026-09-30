@@ -26,6 +26,7 @@ test("numbered migrations have stable checksums", async () => {
     { version: 16, name: "016_secure_device_approval.sql" },
     { version: 17, name: "017_resource_sql_concurrency_hardening.sql" },
     { version: 18, name: "018_groups_grants_effective_access.sql" },
+    { version: 19, name: "019_vault_v2_migration_publication.sql" },
   ]);
   for (const migration of migrations) assert.match(migration.checksum, /^[0-9a-f]{64}$/);
 });

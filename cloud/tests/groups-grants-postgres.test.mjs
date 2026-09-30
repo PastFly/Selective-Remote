@@ -11,8 +11,8 @@ const databaseURL = process.env.TEST_DATABASE_URL;
 
 test("migration 018 defines the dormant access-policy schema", async () => {
   const migrations = await loadMigrations(directory);
-  assert.equal(migrations.at(-1)?.version, 18);
-  const sql = migrations.at(-1)?.sql ?? "";
+  assert.ok(migrations.some(m => m.version === 18));
+  const sql = migrations.find(m => m.version === 18)?.sql ?? "";
   for (const name of ["team_policy_revisions", "team_access_groups", "team_access_group_members", "vault_access_grants", "policy_kind", "access_policy_version", "team_access_mutation_receipts"]) {
     assert.match(sql, new RegExp(name));
   }

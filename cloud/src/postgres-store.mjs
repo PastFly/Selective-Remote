@@ -1,3 +1,4 @@
+import { VaultMigrationStore } from './vault-migration-store.mjs';
 import pg from "pg";
 import { AccessStore } from "./access-store.mjs";
 import { createHash } from "node:crypto";
@@ -102,6 +103,8 @@ export class PostgresStore {
     this.pool = pool ?? new Pool({ connectionString: databaseURL, max: 10 });
     this.access = new AccessStore(this.pool);
   }
+
+  migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
 
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
@@ -2274,7 +2277,10 @@ export class PostgresStore {
          AND membership.revoked_at IS NULL`,
       [teamID, vaultID, actorUserID, actorDeviceID],
     );
-    if (!access.rows[0]) throw new Error("team_not_found");
+    if (!access.rows[0]) {
+      await this.requireLegacyPublication(teamID, vaultID, actorUserID);
+      throw new Error("team_not_found");
+    }
     if (!access.rows[0].actor_key_authorized) throw new Error("device_approval_required");
     if (!access.rows[0].actor_has_wrapper) {
       try {
@@ -2309,6 +2315,16 @@ export class PostgresStore {
     return result.rows;
   }
 
+  async requireLegacyPublication(teamID, vaultID, actorUserID, client = this.pool) {
+    const result = await client.query(`SELECT v.active_publication_attempt_id FROM shared_vaults v
+      JOIN teams t ON t.id=v.team_id AND t.archived_at IS NULL
+      JOIN team_memberships m ON m.team_id=t.id AND m.user_id=$3 AND m.revoked_at IS NULL
+      JOIN users u ON u.id=m.user_id AND u.disabled_at IS NULL
+      WHERE v.team_id=$1 AND v.id=$2 AND v.archived_at IS NULL
+        AND v.active_publication_attempt_id IS NOT NULL`, [teamID,vaultID,actorUserID]);
+    if (result.rows.some(row => row.active_publication_attempt_id != null)) throw new Error("vault_upgrade_required");
+  }
+
   async getSharedVault(teamID, vaultID, actorUserID, actorDeviceID) {
     const result = await this.pool.query(
       `SELECT vault.id, vault.team_id, vault.name, vault.revision, vault.key_generation,
@@ -2341,7 +2357,7 @@ export class PostgresStore {
       [teamID, vaultID, actorUserID, actorDeviceID],
     );
     const row = result.rows[0];
-    if (!row) throw new Error("team_not_found");
+    if (!row) { await this.requireLegacyPublication(teamID, vaultID, actorUserID); throw new Error("team_not_found"); }
     if (!row.device_key_authorized) throw new Error("device_approval_required");
     return row;
   }
@@ -2356,7 +2372,7 @@ export class PostgresStore {
   }) {
     return this.withTeamMutation(actorUserID, "team.vault.put", idempotencyKey, async (client) => {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
-      if (!context) throw new Error("team_not_found");
+      if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
       requireTeamPermission(context.role, "write_vault");
       const currentRevision = Number(context.revision);
@@ -2447,7 +2463,7 @@ export class PostgresStore {
   }) {
     return this.withTeamMutation(actorUserID, "team.vault.wrapper.grant", idempotencyKey, async (client) => {
       const context = await lockSharedVaultActor(client, teamID, vaultID, actorUserID, actorDeviceID);
-      if (!context) throw new Error("team_not_found");
+      if (!context) { await this.requireLegacyPublication(teamID, vaultID, actorUserID, client); throw new Error("team_not_found"); }
       if (!context.device_key_authorized) throw new Error("device_approval_required");
       if (!Number.isSafeInteger(keyGeneration) || keyGeneration !== Number(context.key_generation)
         || Number(context.revision) === 0 || context.rotation_required === true) {
