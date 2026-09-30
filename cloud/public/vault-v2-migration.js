@@ -31,6 +31,12 @@ const enc = new TextEncoder(),
   dec = new TextDecoder(),
   idPattern =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+function requireRecipientAccount(target) {
+  if (typeof target?.accountID !== "string" || !idPattern.test(target.accountID)
+    || target.accountID !== target.certificate?.payload?.accountID
+    || target.accountID !== target.checkpoint?.payload?.accountID)
+    throw Error("recipient_account_mismatch");
+}
 export const migrationBytes = (value) =>
   enc.encode(
     "selective-remote/vault-migration/v2\0" + canonicalMigrationJSON(value),
@@ -356,6 +362,7 @@ export async function prepareLegacyMigration({
   for (const r of state.resources) for (const part of (r.kind === "CREDENTIAL" ? ["METADATA","SECRET"] : ["GENERAL"])) {
     const targets = await recipientTargets(r, part);
     if (!Array.isArray(targets) || !targets.length || targets.length > 100) throw Error("recipient_missing");
+    for (const target of targets) requireRecipientAccount(target);
     targetCache.set(r.id + ":" + part, targets);
     wrapperCount += targets.length; partCount++;
   }
@@ -419,6 +426,7 @@ export async function prepareLegacyMigration({
         await faultAt("ciphertext");
         const wrappers = [];
         for (const target of targets) {
+          requireRecipientAccount(target);
           const wrap = await wrapForVerifiedDevice({
             cek,
             context: {

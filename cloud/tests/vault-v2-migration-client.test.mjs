@@ -180,6 +180,27 @@ test("untrusted recipient and missing self wrapper fail before signing", async (
     prepare(f, doc, { identity: { ...f.identity, privateKey: null } }),
   );
 });
+test("recipient account must bind both signed records before persistence or trust lookup", async () => {
+  for (const variant of ["different_account", "missing_account", "certificate_account", "directory_account"]) {
+    const f = await migrationFixture();
+    const target = structuredClone(f.recipient);
+    if (variant === "different_account") target.accountID = uuid();
+    if (variant === "missing_account") delete target.accountID;
+    if (variant === "certificate_account") target.certificate.payload.accountID = uuid();
+    if (variant === "directory_account") target.checkpoint.payload.accountID = uuid();
+    let persisted = 0, trustLookups = 0;
+    await assert.rejects(prepare(f, legacy([record("host")]), {
+      recipientTargets: () => [target],
+      persistCheckpoint: async () => { persisted++; },
+      pinnedTrust: {
+        loadPin: async (...args) => { trustLookups++; return f.pinnedTrust.loadPin(...args); },
+        advancePin: f.pinnedTrust.advancePin,
+      },
+    }), /recipient_account_mismatch/);
+    assert.equal(persisted, 0);
+    assert.equal(trustLookups, 0);
+  }
+});
 test("every client preparation fault leaves resumable encrypted checkpoint and no persisted CEK", async () => {
   for (const stage of [
     "identities_persisted",
