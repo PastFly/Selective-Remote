@@ -65,14 +65,19 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             HStack {
                 Button(CloudAccessLocalization.text("Обновить", "Refresh")) { Task { await model.load() } }.disabled(model.busy)
                 Spacer()
-                if model.preview?.nextCursor != nil {
-                    Button(CloudAccessLocalization.text("Следующая страница последствий", "Next impact page")) { Task { await model.nextPreviewPage() } }.disabled(model.busy)
-                } else if model.preview != nil {
-                    Button(CloudAccessLocalization.text("Подтвердить…", "Confirm…")) { confirmation = true }
-                        .keyboardShortcut(.defaultAction).disabled(!model.canCommit)
-                } else if tab == 0 {
-                    Button(CloudAccessLocalization.text("Просмотреть изменение", "Preview change")) { Task { await model.previewSelection() } }
-                        .keyboardShortcut(.defaultAction).disabled(!model.canMutate || model.busy || (model.selection.isEmpty && model.editingGrant == nil))
+                TimelineView(.periodic(from: .now, by: 1)) { _ in
+                    if model.preview?.nextCursor != nil {
+                        Button(CloudAccessLocalization.text("Следующая страница последствий", "Next impact page")) { Task { await model.nextPreviewPage() } }.disabled(model.busy)
+                    } else if model.canRepreview {
+                        Button(CloudAccessLocalization.text("Просмотреть снова", "Preview again")) { Task { await model.repreview() } }
+                            .keyboardShortcut(.defaultAction)
+                    } else if model.preview != nil {
+                        Button(CloudAccessLocalization.text("Подтвердить…", "Confirm…")) { confirmation = true }
+                            .keyboardShortcut(.defaultAction).disabled(!model.canCommit)
+                    } else if tab == 0 {
+                        Button(CloudAccessLocalization.text("Просмотреть изменение", "Preview change")) { Task { await model.previewSelection() } }
+                            .keyboardShortcut(.defaultAction).disabled(!model.canMutate || model.busy || (model.selection.isEmpty && model.editingGrant == nil))
+                    }
                 }
             }
         }

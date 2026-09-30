@@ -295,24 +295,20 @@ try {
         url.pathname.endsWith("/access-group-preview")
       ) {
         const request = JSON.parse(options.body);
+        const detail = {
+          vaultID, resourceID, subjectUserID: userID,
+          before: { policyEffective: policy }, after: { policyEffective: policy },
+          gainedMask: 0, lostMask: 0,
+        };
+        const malformed = qa.malformedPreview;
         body = {
           token: "synthetic-preview",
           snapshotID: "a".repeat(64),
-          details: request.cursor
-            ? [
-                {
-                  vaultID,
-                  resourceID,
-                  subjectUserID: userID,
-                  before: { policyEffective: policy },
-                  after: { policyEffective: policy },
-                  gainedMask: 0,
-                  lostMask: 0,
-                },
-              ]
-            : [],
+          details: malformed === "incomplete" ? [] :
+            malformed === "duplicate" ? [detail] : request.cursor ? [detail] : [],
           affectedGrants: [],
-          counts: { pairs: 1, widened: 0, lost: 0, affectedGrants: 0 },
+          counts: { pairs: malformed === "duplicate" || (malformed === "changed-counts" && request.cursor) ? 2 : 1,
+            widened: 0, lost: 0, affectedGrants: 0 },
           nextCursor: request.cursor ? null : "50",
         };
       } else if (
@@ -498,6 +494,20 @@ try {
   await root.getByRole("button", { name: "Cancel", exact: true }).last().focus();
   await page.keyboard.press("Escape");
   assert.equal(await page.evaluate(() => qa.manager.state().preview), null);
+  for (const malformed of ["incomplete", "duplicate", "changed-counts"]) {
+    await page.evaluate((value) => {
+      qa.malformedPreview = value;
+      qa.manager.setDraft({ changes: [{ type: "GRANT_REVOKE", grantID: qa.ids.resourceID, expectedVersion: 1 }] });
+    }, malformed);
+    await root.getByRole("button", { name: "Preview consequences", exact: true }).click();
+    const confirm = root.getByRole("button", { name: "Confirm change", exact: true });
+    assert.equal(await confirm.isDisabled(), true, malformed);
+    await root.getByRole("button", { name: "Load more consequences", exact: true }).click();
+    await page.waitForFunction(() => qa.manager.state().preview === null);
+    assert.equal(await confirm.count(), 0, malformed);
+    assert.equal(await page.evaluate(() => qa.commits), 1, malformed);
+  }
+  await page.evaluate(() => { qa.malformedPreview = null; });
   await page.evaluate(() => {
     document.documentElement.lang = "ru";
     document.dispatchEvent(new CustomEvent("selective-remote:locale-changed"));

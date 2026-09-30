@@ -50,6 +50,7 @@ final class SelectiveRemoteCloudAccessCoordinator {
     private var authoritativePolicyLoaded = false
     var canMutate: Bool { authoritativePolicyLoaded && context?.canMutate == true && (reference.kind == .vault || resource != nil) }
     var canCommit: Bool { canMutate && !busy && completePreview && preview != nil && preview?.nextCursor == nil && request != nil && preparedAt.map { Date().timeIntervalSince($0) < 60 } == true }
+    var canRepreview: Bool { preview != nil && preview?.nextCursor == nil && request != nil && canMutate && !busy && !canCommit }
     var currentKind: CloudAccessKind { editingKind ?? reference.kind }
 
     init(reference: SelectiveRemoteCloudAccessReference, client: SelectiveRemoteCloudAccessClient, session: CloudAccessSession) {
@@ -216,6 +217,10 @@ final class SelectiveRemoteCloudAccessCoordinator {
             try acceptPreviewPage(page, group: value.group != nil)
             preview = page; impacts = page.details; affectedGrants = page.affectedGrants ?? []; request = value; preparedAt = Date(); idempotencyKey = UUID().canonicalCloudString; busy = false
         } catch { guard stamp == previewGeneration, scope == generation else { return }; busy = false; clearPreview(); errorMessage = error.localizedDescription }
+    }
+    func repreview() async {
+        guard preview != nil, canMutate, !busy, let request else { return }
+        await prepare(request)
     }
     func nextPreviewPage() async {
         guard let cursor = preview?.nextCursor, let request, let previous = preview else { return }

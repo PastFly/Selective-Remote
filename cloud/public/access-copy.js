@@ -121,8 +121,8 @@ const copy = {
     "Other paths remain: revoking one grant may preserve effective access.",
   ],
   firstGrant: [
-    "Предпросмотр показывает права, которые получит участник.",
-    "Preview shows the permissions this member will gain.",
+    "Предпросмотр показывает права, которые получат выбранные получатели.",
+    "Preview shows the permissions the selected recipients will gain.",
   ],
   expired: [
     "Предпросмотр устарел. Обновите данные и проверьте последствия снова.",

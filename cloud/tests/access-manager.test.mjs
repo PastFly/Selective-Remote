@@ -55,6 +55,8 @@ const context = { teamID, vaultID, role: "owner" };
 test("first grant and surviving-path revoke use distinct copy", () => {
   const first = accessConsequence({ gainedMask: 1, lostMask: 0, after: { policyEffective: { paths: [] } } }, "en");
   assert.match(first, /will gain/);
+  assert.match(first, /selected recipients/);
+  assert.doesNotMatch(first, /this member/);
   assert.doesNotMatch(first, /revoking/);
   const surviving = accessConsequence({ gainedMask: 0, lostMask: 1, after: { policyEffective: { paths: [{}] } } }, "en");
   assert.match(surviving, /Other paths remain/);

@@ -2,10 +2,33 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
+import Vision
 @testable import SelectiveRemote
 
+@MainActor
+private func renderedAccessText(_ model: SelectiveRemoteCloudAccessCoordinator, output: URL) async throws -> [String] {
+    let host = NSHostingView(rootView: SelectiveRemoteCloudResourceAccessView(coordinator: model)
+        .frame(width: 640, height: 680))
+    host.frame = CGRect(x: 0, y: 0, width: 640, height: 680)
+    let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    defer { window.orderOut(nil) }
+    try await Task.sleep(for: .milliseconds(50))
+    window.layoutIfNeeded()
+    host.layoutSubtreeIfNeeded()
+    let image = try #require(CGWindowListCreateImage(.null, .optionIncludingWindow,
+        CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
+    let png = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+    try png.write(to: output)
+    let request = VNRecognizeTextRequest()
+    request.recognitionLevel = .accurate
+    try VNImageRequestHandler(cgImage: image).perform([request])
+    return (request.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+}
+
 struct CloudAccessTests {
-    @Test func deviceCodesHaveLocalizedSafeCopy() {
+    @Test func deviceCodesHaveLocalizedSafeCopy() throws {
         #expect(CloudAccessLocalization.deviceStatus("YES", english: false) == "Доступно")
         #expect(CloudAccessLocalization.deviceStatus("WRAP_PRESENT_UNVERIFIED", english: true) == "Key present, unverified")
         #expect(CloudAccessLocalization.deviceStatus("SECRET_CANARY", english: true) == "Status unknown")
@@ -13,7 +36,14 @@ struct CloudAccessTests {
         #expect(CloudAccessLocalization.deviceReason("SECRET_CANARY", english: true) == "Availability reason unknown")
         #expect(CloudAccessLocalization.kind("USER", english: false) == "Участник")
         #expect(CloudAccessLocalization.kind("FOLDER", english: true) == "Folder")
+        #expect(CloudAccessLocalization.kind("HOST", english: false) == "Хост")
+        #expect(CloudAccessLocalization.kind("HOST", english: true) == "Host")
+        #expect(CloudAccessLocalization.kind("CREDENTIAL", english: false) == "Учётные данные")
+        #expect(CloudAccessLocalization.kind("FORWARDING", english: true) == "Forwarding")
         #expect(CloudAccessLocalization.kind("SECRET_CANARY", english: false) == "Тип неизвестен")
+        let reference = try SelectiveRemoteCloudAccessReference(teamID: UUID(), vaultID: UUID(), resourceID: UUID(), kind: .host)
+        #expect(!reference.title.hasPrefix("HOST ·"))
+        #expect(reference.title.hasSuffix(reference.resourceID.canonicalCloudString))
     }
     @Test func firstGrantDoesNotShowRevokeGuidance() {
         #expect(CloudAccessLocalization.revokeGuidance(hasExistingGrants: false) == nil)
@@ -94,10 +124,35 @@ private struct AccessFixture {
     }
 }
 extension CloudAccessTests {
+    @Test @MainActor func repreviewPreservesBoundMoveRequest() async throws {
+        let f = try AccessFixture()
+        let t = try AccessFixtureTransport(f.loadReplies(previews: [f.preview(), f.preview()]))
+        let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
+        await m.load()
+        let request = CloudAccessRequest(changes: [.move(resourceID: f.reference.resourceID,
+            newParentFolderID: UUID(), expectedResourceVersion: 1)])
+        await m.prepare(request)
+        #expect(m.canCommit)
+        await m.repreview()
+        #expect(m.request == request)
+        #expect(m.canCommit)
+        let previews = await t.captured().filter { $0.url?.path == f.base + "/access-preview" }
+        #expect(previews.count == 2)
+        if previews.count == 2 {
+            #expect(previews[0].httpBody == previews[1].httpBody)
+            #expect(!String(decoding: previews[1].httpBody ?? Data(), as: UTF8.self).contains("GRANT_CREATE"))
+        }
+    }
     @Test @MainActor @available(macOS, deprecated: 14)
     func actualAccessSheetWindowServerMatrix() async throws {
         let output = ProcessInfo.processInfo.environment["SR_CAPTURE_ACCESS_MATRIX"]
         if let output { try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true) }
+        let languageKey = "SelectiveRemote.applicationLanguage.v1"
+        let priorLanguage = UserDefaults.standard.object(forKey: languageKey)
+        defer {
+            if let priorLanguage { UserDefaults.standard.set(priorLanguage, forKey: languageKey) }
+            else { UserDefaults.standard.removeObject(forKey: languageKey) }
+        }
         for scenario in ["loading", "empty", "v1", "preparing", "ready", "active",
                          "direct", "group", "multiple-paths", "no-key", "unknown", "error"] {
             let fixture = try AccessFixture()
@@ -156,6 +211,7 @@ extension CloudAccessTests {
             if ["direct", "group", "multiple-paths"].contains(scenario) {
                 #expect(coordinator.who.first?.policyEffective.paths.count == (scenario == "multiple-paths" ? 2 : 1))
             }
+            guard let output else { continue }
             let section: CloudAccessSection = ["direct", "group", "multiple-paths"].contains(scenario) ? .who :
                 (["no-key", "unknown"].contains(scenario) ? .effective : .share)
             for english in [false, true] {
@@ -180,16 +236,13 @@ extension CloudAccessTests {
                         let bitmap = NSBitmapImageRep(cgImage: image)
                         window.orderOut(nil)
                         #expect(bitmap.pixelsWide > 0 && bitmap.pixelsHigh > 0)
-                        if let output {
-                            let name = "\(scenario)-\(english ? "en" : "ru")-\(dark ? "graphite" : "light")-\(width).png"
-                            try #require(bitmap.representation(using: .png, properties: [:]))
-                                .write(to: URL(fileURLWithPath: output).appending(path: name))
-                        }
+                        let name = "\(scenario)-\(english ? "en" : "ru")-\(dark ? "graphite" : "light")-\(width).png"
+                        try #require(bitmap.representation(using: .png, properties: [:]))
+                            .write(to: URL(fileURLWithPath: output).appending(path: name))
                     }
                 }
             }
         }
-        UserDefaults.standard.removeObject(forKey: "SelectiveRemote.applicationLanguage.v1")
     }
     @Test func exactMetadataTransportBearerAndLowercaseIDs() async throws {
         let fixture = try AccessFixture(kind: .credential)
@@ -443,12 +496,34 @@ extension CloudAccessTests {
             [f.preview(cursor: "1", details: [one], pairs: 2), f.preview(details: [two], pairs: 3)],
             [f.preview(cursor: "1", details: [one], pairs: 2), f.preview(pairs: 2)]
         ]
-        for pages in cases {
+        let capture = ProcessInfo.processInfo.environment["SR_CAPTURE_ACCESS_MATRIX"]
+        if let capture { try FileManager.default.createDirectory(atPath: capture, withIntermediateDirectories: true) }
+        let languageKey = "SelectiveRemote.applicationLanguage.v1"
+        let priorLanguage = UserDefaults.standard.object(forKey: languageKey)
+        UserDefaults.standard.set("english", forKey: languageKey)
+        defer {
+            if let priorLanguage { UserDefaults.standard.set(priorLanguage, forKey: languageKey) }
+            else { UserDefaults.standard.removeObject(forKey: languageKey) }
+        }
+        for (index, pages) in cases.enumerated() {
             let t = try AccessFixtureTransport(f.loadReplies(previews: pages))
             let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
             await m.load(); m.setSelection([.init(kind: .user, id: UUID(), name: "Member")]); await m.previewSelection()
+            if let capture, m.preview?.nextCursor != nil {
+                let labels = try await renderedAccessText(m, output: URL(fileURLWithPath: capture).appending(path: "invalid-preview-\(index)-pending.png"))
+                #expect(labels.joined(separator: " ").contains("Next impact page"))
+                #expect(!labels.joined(separator: " ").contains("Confirm"))
+                try labels.joined(separator: "\n").write(to: URL(fileURLWithPath: capture).appending(path: "invalid-preview-\(index)-pending-ocr.txt"), atomically: true, encoding: .utf8)
+            }
             if m.preview?.nextCursor != nil { await m.nextPreviewPage() }
             #expect(!m.canCommit); #expect(m.preview == nil)
+            if let capture {
+                let labels = try await renderedAccessText(m, output: URL(fileURLWithPath: capture).appending(path: "invalid-preview-\(index)-terminal.png"))
+                #expect(labels.joined(separator: " ").contains("Preview change"))
+                #expect(!labels.joined(separator: " ").contains("Confirm"))
+                try labels.joined(separator: "\n").write(to: URL(fileURLWithPath: capture).appending(path: "invalid-preview-\(index)-terminal-ocr.txt"), atomically: true, encoding: .utf8)
+                #expect(await t.captured().filter { $0.url?.path == f.base + "/access-commit" }.isEmpty)
+            }
         }
     }
     @Test @MainActor func zeroPairGroupGrantsStillPageAndValidateExactTerminalTotal() async throws {

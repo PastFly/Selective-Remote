@@ -43,7 +43,7 @@ struct SelectiveRemoteCloudAccessReference: Hashable, Identifiable, Sendable {
               kind != .vault || resourceID == vaultID else { throw CloudAccessError.invalidRequest }
         self.teamID = teamID; self.vaultID = vaultID; self.resourceID = resourceID; self.kind = kind; self.displayName = displayName
     }
-    var title: String { displayName?.isEmpty == false ? displayName! : "\(kind.rawValue) · \(resourceID.canonicalCloudString)" }
+    var title: String { displayName?.isEmpty == false ? displayName! : "\(CloudAccessLocalization.kind(kind.rawValue)) · \(resourceID.canonicalCloudString)" }
 }
 
 struct CloudAccessSession: Sendable { let endpoint: URL }
