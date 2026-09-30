@@ -1,6 +1,13 @@
 import CryptoKit
 import SwiftUI
 
+@MainActor
+enum SelectiveRemoteCloudSessionTransition {
+    static func notify() {
+        NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)
+    }
+}
+
 struct CloudSettingsView: View {
     @ObservedObject var model: AppModel
 
@@ -388,7 +395,7 @@ struct CloudSettingsView: View {
         }
         .onChange(of: accountUser?.id) { _, _ in
             showsTeamManagement = false
-            NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)
+            SelectiveRemoteCloudSessionTransition.notify()
         }
         .onChange(of: endpoint) { _, _ in showsTeamManagement = false }
         .sheet(isPresented: $showsAccountSheet) {
@@ -595,6 +602,7 @@ struct CloudSettingsView: View {
     }
 
     private func signIn(email: String, password: String, endpoint url: URL) {
+        SelectiveRemoteCloudSessionTransition.notify()
         accountPhase = .signingIn
         accountErrorMessage = nil
         inventoryErrorMessage = nil

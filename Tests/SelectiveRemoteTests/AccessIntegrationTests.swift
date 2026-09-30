@@ -29,6 +29,45 @@ struct AccessIntegrationTests {
     private let vault = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
     private let resource = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
 
+    @Test("Sign-in invalidates mounted Team actions before asynchronous login")
+    func signInInvalidatesQueuedManagementAction() async throws {
+        let endpoint = URL(string: "https://access.example.test")!
+        let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
+        let oldToken = String(repeating: "t", count: 43)
+        tokenStore.saveToken(oldToken, for: endpoint)
+        let probe = AccessManagementRequestProbe()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokenStore,
+            dataLoader: { try await probe.load($0) })
+        let session = AccessManagementSessionFlag()
+        let observer = NotificationCenter.default.addObserver(
+            forName: .selectiveRemoteCloudSessionChanged, object: nil, queue: nil
+        ) { _ in MainActor.assumeIsolated { session.active = false } }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        CloudManagementActionQueue.enqueue(whileActive: { session.isActive() }) {
+            _ = try? await client.createTeam(endpoint: endpoint, name: "Old session")
+        }
+        SelectiveRemoteCloudSessionTransition.notify()
+        #expect(session.active == false)
+        #expect(tokenStore.token(for: endpoint) == oldToken)
+        for _ in 0..<100 {
+            if session.checks >= 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.checks == 2)
+        #expect(await probe.count == 0)
+
+        session.active = true
+        CloudManagementActionQueue.enqueue(whileActive: { session.isActive() }) {
+            _ = try? await client.createTeam(endpoint: endpoint, name: "New session")
+        }
+        for _ in 0..<100 {
+            if await probe.count == 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await probe.count == 1)
+    }
+
     @Test("A queued Team action cannot call the client after session invalidation")
     func queuedManagementActionStopsBeforeClientCall() async throws {
         let endpoint = URL(string: "https://access.example.test")!
