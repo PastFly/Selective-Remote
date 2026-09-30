@@ -33,6 +33,8 @@ Existing production Vaults remain V1. Show â€œGranular access requires Vault v2â
 
 V2_PREPARING supports the existing dormant policy API and displays preparation intent. V2_READY shows controlled-activation readiness and blockers. V2_ACTIVE fixtures render the normal access surface, paths and device usability. **The merged active encrypted generation is frozen and has no fix-forward recipient publication API.** Preserve that boundary: real READY/ACTIVE group/grant/move writes return a useful `crypto_publication_required`/publication gate and never silently mutate recipients. Do not relax legacy AccessStore PREPARING predicates or expose operator migration APIs. Production activation and complete active-generation ACL delivery require their own crypto publication gate. This limitation must appear in the candidate report; fixture success is not production activation evidence.
 
+The active reader compares the complete Team group/edge/policy-revision snapshot. Therefore any group mutation, even unrelated group create/rename, is blocked while a Team has a current ACTIVE publication or live READY attempt. Serialize the final freeze check and mutation using a group-table ROW EXCLUSIVE lock that conflicts with publication's SHARE ROW EXCLUSIVE lock; the Team row lock alone does not exclude publication. Expose group-mutation availability separately from PREPARING grant availability; a PREPARING context must not invalidate another published Vault.
+
 ## Backend additions needed by product integration
 
 1. Authenticated scoped read-only Access Vault/context directory, including lifecycle and explicit operation availability, with no ciphertext/key material.
