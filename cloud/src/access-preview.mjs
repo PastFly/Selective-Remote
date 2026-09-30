@@ -127,3 +127,26 @@ export function validateAccessChangeRequest(request) {
   if (principals.size > 20 || targets.size > 50) throw new Error("access_batch_too_large");
   return changes;
 }
+
+export function validateAccessGroupRequest(request) {
+  const fields = {
+    GROUP_CREATE: ['type', 'name'],
+    GROUP_RENAME: ['type', 'groupID', 'expectedVersion', 'name'],
+    GROUP_DELETE: ['type', 'groupID', 'expectedVersion'],
+    GROUP_MEMBER_ADD: ['type', 'groupID', 'targetMembershipID'],
+    GROUP_MEMBER_REMOVE: ['type', 'groupID', 'edgeID', 'expectedVersion'],
+  }[request?.type];
+  if (!fields || typeof request !== 'object' || Array.isArray(request)
+    || Object.keys(request).some(key => !fields.includes(key))
+    || fields.some(key => !Object.hasOwn(request, key))) throw new Error('invalid_access_request');
+  for (const key of ['groupID', 'edgeID', 'targetMembershipID']) {
+    if (fields.includes(key) && !uuid.test(request[key] ?? '')) throw new Error('invalid_access_request');
+  }
+  if (fields.includes('expectedVersion') && (!Number.isSafeInteger(request.expectedVersion)
+    || request.expectedVersion < 1)) throw new Error('invalid_access_version');
+  if (fields.includes('name') && (typeof request.name !== 'string' || !request.name.trim()
+    || request.name.length > 120 || /[\u0000-\u001f\u007f]/u.test(request.name))) {
+    throw new Error('invalid_access_group_name');
+  }
+  return request;
+}

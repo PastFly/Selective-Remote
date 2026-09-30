@@ -361,6 +361,23 @@ async function route(request, response) {
         limit: url.searchParams.get("limit"), cursor: url.searchParams.get("cursor"),
       }));
     }
+    const accessVaultsMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/access-vaults$/i);
+    if (method === "GET" && accessVaultsMatch) {
+      if (!isUUID(accessVaultsMatch[1])) return sendError(response,404,"team_not_found");
+      return handleOperation(response,()=>service.listAccessVaults(session,accessVaultsMatch[1],{
+        limit:url.searchParams.get("limit") ?? 50,cursor:url.searchParams.get("cursor")}));
+    }
+    const accessSurfaceMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/(access-context|access-resources|access-devices|access-group-preview|access-group-commit)$/i);
+    if (accessSurfaceMatch) {
+      const [,teamID,vaultID,operation] = accessSurfaceMatch;
+      if (!isUUID(teamID) || !isUUID(vaultID)) return sendError(response,404,"team_not_found");
+      const page = {limit:url.searchParams.get("limit") ?? 50,cursor:url.searchParams.get("cursor")};
+      if (method === "GET" && operation === "access-context") return handleOperation(response,()=>service.getAccessContext(session,teamID,vaultID));
+      if (method === "GET" && operation === "access-resources") return handleOperation(response,()=>service.listAccessResources(session,teamID,vaultID,{...page,kind:url.searchParams.get("kind")}));
+      if (method === "GET" && operation === "access-devices") return handleOperation(response,()=>service.listAccessDevices(session,teamID,vaultID,{...page,subjectUserID:url.searchParams.get("subjectUserID")}));
+      if (method === "POST" && operation === "access-group-preview") return handleOperation(response,async()=>service.previewAccessGroupChange(session,teamID,vaultID,await readJSON(request,maxTeamBodyBytes)));
+      if (method === "POST" && operation === "access-group-commit") return handleOperation(response,async()=>service.commitAccessGroupChange(session,teamID,vaultID,await readJSON(request,maxTeamBodyBytes),idempotencyKey(request)));
+    }
     const accessGroupMemberMatch = url.pathname.match(
       /^\/v1\/teams\/([^/]+)\/access-groups\/([^/]+)\/members\/([^/]+)$/i,
     );
@@ -377,6 +394,11 @@ async function route(request, response) {
     const accessGroupMembersMatch = url.pathname.match(
       /^\/v1\/teams\/([^/]+)\/access-groups\/([^/]+)\/members$/i,
     );
+    if (method === "GET" && accessGroupMembersMatch) {
+      if (!accessGroupMembersMatch.slice(1).every(isUUID)) return sendError(response,404,"team_not_found");
+      return handleOperation(response,()=>service.listAccessGroupMembers(session,accessGroupMembersMatch[1],accessGroupMembersMatch[2],{
+        limit:url.searchParams.get("limit") ?? 50,cursor:url.searchParams.get("cursor")}));
+    }
     if (method === "POST" && accessGroupMembersMatch) {
       if (!accessGroupMembersMatch.slice(1).every(isUUID)) {
         return sendError(response, 404, "team_not_found");
@@ -409,6 +431,7 @@ async function route(request, response) {
         () => service.listAccessGroups(session, accessGroupsMatch[1], {
           limit: url.searchParams.get("limit") ?? 50,
           cursor: url.searchParams.get("cursor"),
+          search: url.searchParams.get("search") ?? "",
         }));
       if (method === "POST") return handleOperation(response,
         async () => service.createAccessGroup(session, accessGroupsMatch[1],

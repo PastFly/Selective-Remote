@@ -19,7 +19,7 @@ function requestHash(value) {
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
-async function readAccessActor(client, { actorUserID, actorDeviceID, teamID }) {
+export async function readAccessActor(client, { actorUserID, actorDeviceID, teamID }) {
   // Read actor first so outsiders cannot distinguish an existing V1 Vault from an absent one.
   const actor = await client.query(
     `SELECT membership.id, membership.role, membership.epoch
@@ -41,7 +41,7 @@ async function readAccessActor(client, { actorUserID, actorDeviceID, teamID }) {
   return actor.rows[0];
 }
 
-async function requirePreparingActor(client, input, relatedVaultIDs = []) {
+export async function requirePreparingActor(client, input, relatedVaultIDs = []) {
   const { actorUserID, actorDeviceID, teamID, vaultID } = input;
   const actor = await readAccessActor(client, input);
   const vaultIDs = [...new Set([vaultID, ...relatedVaultIDs])].sort();
@@ -52,6 +52,9 @@ async function requirePreparingActor(client, input, relatedVaultIDs = []) {
       [id, teamID],
     );
     if (!vault.rows[0]) throw new Error("access_policy_conflict");
+    if (["V2_READY", "V2_ACTIVE"].includes(vault.rows[0].format_state)) {
+      throw new Error("crypto_publication_required");
+    }
     if (id === vaultID && (vault.rows[0].format_state !== "V2_PREPARING"
       || Number(vault.rows[0].format_schema_version) !== 2)) {
       throw new Error("access_v2_preparing_required");
@@ -156,11 +159,12 @@ export class AccessStore {
     });
   }
 
-  async listAccessGroups({ actorUserID, actorDeviceID, teamID, limit = 50, cursor = null }) {
+  async listAccessGroups({ actorUserID, actorDeviceID, teamID, limit = 50, cursor = null, search = "" }) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 50
       || (cursor !== null && !uuidPattern.test(cursor))) {
       throw new Error("invalid_access_page");
     }
+    if (typeof search !== "string" || search.length > 120) throw new Error("invalid_access_request");
     const client = await this.pool.connect();
     try {
       await client.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -169,8 +173,9 @@ export class AccessStore {
         `SELECT id, team_id, name, version, created_at, updated_at
          FROM team_access_groups WHERE team_id = $1 AND deleted_at IS NULL
            AND ($2::uuid IS NULL OR id > $2::uuid)
+         AND strpos(lower(name), lower($4)) > 0
          ORDER BY id LIMIT $3`,
-        [teamID, cursor, limit + 1],
+        [teamID, cursor, limit + 1, search],
       );
       await client.query("COMMIT");
       const rows = page.rows.slice(0, limit);
@@ -594,7 +599,7 @@ export class AccessStore {
     }
   }
 
-  async readEffectiveAccessInSnapshot(client, input, changes = [], parentOverrides = new Map()) {
+  async readEffectiveAccessInSnapshot(client, input, changes = [], parentOverrides = new Map(), groupOverride = null) {
     const { teamID, vaultID, resourceID, subjectUserID } = input;
     await readAccessActor(client, input);
     const vault = await client.query(
@@ -677,7 +682,10 @@ export class AccessStore {
          AND edge.removed_at IS NULL`,
       [teamID, membership.userID, membership.id, membership.epoch],
     );
-    const groupIDs = groupRows.rows.map((item) => item.group_id);
+    let groupIDs = groupRows.rows.map((item) => item.group_id);
+    if (groupOverride) groupIDs = groupOverride.present
+      ? [...new Set([...groupIDs, groupOverride.groupID])]
+      : groupIDs.filter((id) => id !== groupOverride.groupID);
     const grantRows = await client.query(
       `SELECT id, team_id, vault_id, principal_kind, principal_id,
          membership_id, membership_epoch, target_kind, target_id,
@@ -790,7 +798,7 @@ export class AccessStore {
       const preview = await this.buildAccessPreview(client, input);
       const token = createPreviewToken(preview.binding, input.sessionSecret);
       await client.query("COMMIT");
-      return { token, details: preview.details.slice(offset, offset + 50),
+      return { token, snapshotID: hashAccessRequest(preview.binding), details: preview.details.slice(offset, offset + 50),
         counts: preview.counts,
         nextCursor: offset + 50 < preview.details.length
           ? String(offset + 50) : null };
@@ -807,12 +815,15 @@ export class AccessStore {
     const changes = validateAccessChangeRequest(request);
     const actor = await readAccessActor(client, input);
     const vault = await client.query(
-      `SELECT access_policy_version FROM shared_vaults
-       WHERE id = $1 AND team_id = $2 AND archived_at IS NULL
-         AND format_state = 'V2_PREPARING' AND format_schema_version = 2`,
+      `SELECT access_policy_version, format_state, format_schema_version FROM shared_vaults
+       WHERE id = $1 AND team_id = $2 AND archived_at IS NULL`,
       [vaultID, teamID],
     );
-    if (!vault.rows[0]) throw new Error("access_v2_preparing_required");
+    if (["V2_READY", "V2_ACTIVE"].includes(vault.rows[0]?.format_state)) {
+      throw new Error("crypto_publication_required");
+    }
+    if (vault.rows[0]?.format_state !== "V2_PREPARING"
+      || vault.rows[0]?.format_schema_version !== 2) throw new Error("access_v2_preparing_required");
     const teamRevision = await client.query(
       `SELECT revision FROM team_policy_revisions WHERE team_id = $1`, [teamID],
     );
@@ -1132,6 +1143,7 @@ export class AccessStore {
         );
         preview = await this.buildAccessPreview(client, input);
       }
+      verifyPreviewToken(input.token, input.sessionSecret);
       const { expiresAt, ...signedBinding } = signed;
       if (signed.actorMembershipID !== actor.id
         || Number(signed.actorEpoch) !== Number(actor.epoch)
@@ -1219,9 +1231,11 @@ export class AccessStore {
         await client.query(
           `INSERT INTO team_audit_events
              (team_id, actor_user_id, action, target_vault_id, metadata)
-           VALUES ($1, $2, 'bulk_grant.applied', $3, $4::jsonb)`,
+           VALUES ($1, $2, $5, $3, $4::jsonb)`,
           [teamID, actorUserID, vaultID,
-            JSON.stringify({ count: committedGrants.length })],
+            JSON.stringify({ count: committedGrants.length }),
+            committedGrants.every((item) => item.type === "GRANT_REVOKE")
+              ? "bulk_revoke.applied" : "bulk_grant.applied"],
         );
       }
       // Candidates are returned only from a successful committed transaction.
