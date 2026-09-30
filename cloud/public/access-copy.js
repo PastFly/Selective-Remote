@@ -46,6 +46,17 @@ const copy = {
   direct: ["Прямой", "Direct"],
   inherited: ["Унаследован от контейнера", "Inherited from container"],
   policy: ["Права пользователя", "User policy"],
+  allowed: ["разрешён", "allowed"],
+  denied: ["запрещён", "denied"],
+  USER: ["Участник", "Member"],
+  GROUP: ["Группа", "Group"],
+  RESOURCE: ["Ресурс", "Resource"],
+  FOLDER: ["Папка", "Folder"],
+  VAULT: ["Vault", "Vault"],
+  HOST: ["Хост", "Host"],
+  CREDENTIAL: ["Учётные данные", "Credential"],
+  SNIPPET: ["Сниппет", "Snippet"],
+  FORWARDING: ["Туннель", "Forwarding"],
   device: ["Устройство участника", "Member device"],
   chooseDevice: ["Выберите конкретное устройство", "Choose an explicit device"],
   checkDevice: ["Проверить устройство", "Check device"],
@@ -108,6 +119,10 @@ const copy = {
   preserved: [
     "Другие пути сохраняются: отзыв одной выдачи может оставить эффективный доступ.",
     "Other paths remain: revoking one grant may preserve effective access.",
+  ],
+  firstGrant: [
+    "Предпросмотр показывает права, которые получит участник.",
+    "Preview shows the permissions this member will gain.",
   ],
   expired: [
     "Предпросмотр устарел. Обновите данные и проверьте последствия снова.",
@@ -208,7 +223,12 @@ export function accessErrorCopy(error, locale = "ru") {
   ])[locale === "en" ? 1 : 0];
 }
 export function accessConsequence(detail, locale = "ru") {
-  return `${accessCopy("gained", locale)}: ${detail.gainedMask}; ${accessCopy("lost", locale)}: ${detail.lostMask}. ${accessCopy("preserved", locale)}`;
+  const suffix = detail.lostMask && detail.after?.policyEffective?.paths?.length
+    ? accessCopy("preserved", locale)
+    : detail.gainedMask && !detail.lostMask
+      ? accessCopy("firstGrant", locale)
+      : "";
+  return `${accessCopy("gained", locale)}: ${detail.gainedMask}; ${accessCopy("lost", locale)}: ${detail.lostMask}.${suffix ? ` ${suffix}` : ""}`;
 }
 
 const reasons = {

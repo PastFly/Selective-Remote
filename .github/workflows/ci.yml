@@ -75,6 +75,7 @@ jobs:
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/groups-grants-postgres.test.mjs
           node --test tests/access-scale-postgres.test.mjs
+          node --test tests/access-surface-postgres.test.mjs
           node --test tests/vault-v2-migration-postgres.test.mjs
           node scripts/benchmark-vault-v2-migration.mjs 100 1000
 

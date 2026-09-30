@@ -47,7 +47,8 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 Text(CloudAccessLocalization.share).tag(0)
                 Text(CloudAccessLocalization.who).tag(1)
                 Text(CloudAccessLocalization.effective).tag(2)
-            }.pickerStyle(.segmented)
+            }.pickerStyle(.segmented).labelsHidden()
+                .accessibilityLabel(CloudAccessLocalization.text("Раздел доступа", "Access view"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if model.context?.formatState == .preparing {
@@ -113,8 +114,10 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     if recipientGroups {
+                        if model.groups.isEmpty { Text(CloudAccessLocalization.text("На этой странице нет групп.", "No groups on this page.")).foregroundStyle(.secondary) }
                         ForEach(model.groups) { g in recipientRow(.init(kind: .group, id: g.id, name: g.name)) }
                     } else {
+                        if model.members.isEmpty { Text(CloudAccessLocalization.text("На этой странице нет участников.", "No members on this page.")).foregroundStyle(.secondary) }
                         ForEach(model.members) { m in recipientRow(.init(kind: .user, id: m.userID, name: "\(m.displayName) · @\(m.username)")) }
                     }
                 }
@@ -131,8 +134,8 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             Text(CloudAccessLocalization.text("Разрешения в Vault", "Grants in this Vault")).font(.headline)
             ForEach(model.grants) { grant in
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("\(grant.principal_kind.rawValue) · \(grant.principal_id.canonicalCloudString)").font(.caption).textSelection(.enabled)
-                    Text("\(grant.target_kind.rawValue) · \(grant.target_id.canonicalCloudString) · \(grant.permission_mask)").font(.caption).foregroundStyle(.secondary)
+                    Text("\(CloudAccessLocalization.kind(grant.principal_kind.rawValue)) · \(grant.principal_id.canonicalCloudString)").font(.caption).textSelection(.enabled)
+                    Text("\(CloudAccessLocalization.kind(grant.target_kind.rawValue)) · \(grant.target_id.canonicalCloudString)").font(.caption).foregroundStyle(.secondary)
                     HStack {
                         Button(CloudAccessLocalization.text("Изменить", "Change")) { Task { await model.edit(grant) } }
                         Button(CloudAccessLocalization.text("Просмотр отзыва", "Preview revoke"), role: .destructive) { Task { await model.revoke([grant]) } }
@@ -140,8 +143,9 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 }.padding(.vertical, 3)
             }
             if model.grantCursor != nil { Button(CloudAccessLocalization.text("Следующая страница разрешений", "Next grants page")) { Task { await model.loadMoreGrants() } } }
-            Text(CloudAccessLocalization.text("Отзыв одного пути может сохранить доступ по другим путям. Предварительный просмотр показывает фактическую потерю разрешений.", "Revoking one path may preserve access through other paths. Preview shows the actual permission loss."))
-                .font(.caption).foregroundStyle(.secondary)
+            if let guidance = CloudAccessLocalization.revokeGuidance(hasExistingGrants: !model.grants.isEmpty) {
+                Text(guidance).font(.caption).foregroundStyle(.secondary)
+            }
         }
     }
     private func recipientRow(_ recipient: CloudAccessRecipient) -> some View {
@@ -201,12 +205,12 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 if let effective = model.effective {
                     CloudAccessPolicyView(policy: effective.policyEffective)
                     if let device = effective.deviceUsability {
-                        Text(CloudAccessLocalization.text("Доступность на устройстве", "Device usability") + ": " + device.effectiveUsable.rawValue).font(.headline)
-                        Text(CloudAccessLocalization.text("Ключ", "Key") + ": " + device.cryptoAvailable).font(.caption)
+                        Text(CloudAccessLocalization.text("Доступность на устройстве", "Device usability") + ": " + CloudAccessLocalization.deviceStatus(device.effectiveUsable.rawValue)).font(.headline)
+                        Text(CloudAccessLocalization.text("Ключ", "Key") + ": " + CloudAccessLocalization.deviceStatus(device.cryptoAvailable)).font(.caption)
                         ForEach(device.cryptoAvailableByPermission.keys.sorted(), id: \.self) { key in
-                            Text("\(CloudAccessLocalization.permission(key)): \(device.cryptoAvailableByPermission[key] ?? "UNKNOWN") · \(device.effectiveUsableByPermission[key] ?? "UNKNOWN")").font(.caption)
+                            Text("\(CloudAccessLocalization.permission(key)): \(CloudAccessLocalization.deviceStatus(device.cryptoAvailableByPermission[key] ?? "UNKNOWN")) · \(CloudAccessLocalization.deviceStatus(device.effectiveUsableByPermission[key] ?? "UNKNOWN"))").font(.caption)
                         }
-                        ForEach(device.blockedReasons, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(device.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceReason($0)).font(.caption).foregroundStyle(.secondary) }
                     }
                 }
                 Text(CloudAccessLocalization.text("UNKNOWN означает: наличие обёртки не подтверждает расшифровку. Устройство выбирается явно для участника.", "UNKNOWN means a present wrapper does not prove decryption. Choose the member's device explicitly."))
@@ -271,15 +275,15 @@ struct CloudAccessPolicyView: View {
     let policy: CloudAccessPolicy
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(CloudAccessLocalization.text("Политика", "Policy") + ": " + (policy.policyAllowed ? CloudAccessLocalization.text("разрешено", "allowed") : CloudAccessLocalization.text("запрещено", "denied")) + " · \(policy.policyMask)").font(.caption)
+            Text(CloudAccessLocalization.text("Политика", "Policy") + ": " + (policy.policyAllowed ? CloudAccessLocalization.text("разрешено", "allowed") : CloudAccessLocalization.text("запрещено", "denied"))).font(.caption)
             ForEach(policy.paths) { path in
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("\(path.principalKind.rawValue) · \(path.principalID.canonicalCloudString)")
-                    Text("\(path.grantTargetKind.rawValue) · \(path.grantTargetID.canonicalCloudString)")
-                    Text((path.sourceType == .direct ? CloudAccessLocalization.text("Прямой", "Direct") : CloudAccessLocalization.text("Наследуемый", "Inherited")) + " · " + path.permissions.map(CloudAccessLocalization.permission).joined(separator: ", ") + " · \(path.mask) → \(path.effectiveMask)")
+                    Text("\(CloudAccessLocalization.kind(path.principalKind.rawValue)) · \(path.principalID.canonicalCloudString)")
+                    Text("\(CloudAccessLocalization.kind(path.grantTargetKind.rawValue)) · \(path.grantTargetID.canonicalCloudString)")
+                    Text((path.sourceType == .direct ? CloudAccessLocalization.text("Прямой", "Direct") : CloudAccessLocalization.text("Наследуемый", "Inherited")) + " · " + path.permissions.map(CloudAccessLocalization.permission).joined(separator: ", "))
                 }.font(.caption).textSelection(.enabled).padding(6).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 5))
             }
-            ForEach(policy.blockedReasons, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+            ForEach(policy.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceReason($0)).font(.caption).foregroundStyle(.secondary) }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

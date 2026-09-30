@@ -138,7 +138,7 @@ export function createAccessManager({
     policyKind: row.policyKind ?? "RESOURCE",
     resourceVersion: row.resourceVersion,
   });
-  const label = (row) => accessLabel(ref(row), resolveLabel);
+  const label = (row) => accessLabel(ref(row), resolveLabel, t);
   function resetPages() {
     for (const p of Object.values(pages)) {
       p.rows = [];
@@ -306,6 +306,7 @@ export function createAccessManager({
     render();
     const result = await client.preview({ ...scope }, request);
     if (active(g) && dg === draftGeneration && seq === previewSequence) {
+      validateImpact(result);
       impact = {
         ...result,
         request,
@@ -336,7 +337,13 @@ export function createAccessManager({
       render();
       throw new Error("access_preview_conflict");
     }
-    impact = {
+    for (const key of ["pairs", "widened", "lost", "affectedGrants"])
+      if (prior.counts?.[key] !== result.counts?.[key]) {
+        impact = null;
+        render();
+        throw new Error("access_preview_incomplete");
+      }
+    const combined = {
       ...prior,
       token: result.token,
       details: [...prior.details, ...result.details],
@@ -347,7 +354,31 @@ export function createAccessManager({
       nextCursor: result.nextCursor,
       complete: result.nextCursor === null,
     };
+    try {
+      validateImpact(combined, prior.counts);
+    } catch (e) {
+      impact = null;
+      render();
+      throw e;
+    }
+    impact = combined;
     render();
+  }
+  function validateImpact(value, expectedCounts = value.counts) {
+    const counts = value.counts ?? {};
+    for (const key of ["pairs", "widened", "lost", "affectedGrants"])
+      if (Number.isInteger(expectedCounts[key]) && counts[key] !== expectedCounts[key])
+        throw new Error("access_preview_incomplete");
+    const pairs = value.details.map((d) => `${d.vaultID}/${d.resourceID}/${d.subjectUserID}`);
+    const grants = (value.affectedGrants ?? []).map((g) => g.grantID);
+    if (new Set(pairs).size !== pairs.length || new Set(grants).size !== grants.length)
+      throw new Error("access_preview_incomplete");
+    if ((Number.isInteger(counts.pairs) && pairs.length > counts.pairs) ||
+        (Number.isInteger(counts.affectedGrants) && grants.length > counts.affectedGrants) ||
+        (value.nextCursor === null &&
+          ((Number.isInteger(counts.pairs) && pairs.length !== counts.pairs) ||
+           (Number.isInteger(counts.affectedGrants) && grants.length !== counts.affectedGrants))))
+      throw new Error("access_preview_incomplete");
   }
   async function confirm() {
     if (committing) return committing;
@@ -453,7 +484,7 @@ export function createAccessManager({
   function pathList(policy) {
     const list = node("ul", null, { class: "access-paths" });
     for (const path of policy?.paths ?? []) {
-      const text = `${path.principalKind} · ${path.principalID} → ${path.grantTargetKind} · ${path.grantTargetID} · ${t(path.sourceType === "DIRECT" ? "direct" : "inherited")} · ${path.permissions.map(t).join(", ")} (${path.effectiveMask})`;
+      const text = `${t(path.principalKind)} · ${path.principalID} → ${t(path.grantTargetKind)} · ${path.grantTargetID} · ${t(path.sourceType === "DIRECT" ? "direct" : "inherited")} · ${path.permissions.map(t).join(", ")}`;
       list.append(node("li", text));
     }
     return list;
@@ -461,7 +492,7 @@ export function createAccessManager({
   function showPolicy(parent, value) {
     const p = value?.policyEffective ?? value;
     parent.append(
-      node("p", `${t("policy")}: ${p?.policyMask ?? 0}`),
+      node("p", `${t("policy")}: ${t(p?.policyAllowed ? "allowed" : "denied")}`),
       pathList(p),
     );
     if (value?.deviceUsability) {
@@ -929,12 +960,13 @@ export function createAccessManager({
   function renderGrants(parent) {
     if (capability?.formatState !== "V2_PREPARING") return;
     const section = node("section", null, { class: "access-detail" });
-    section.append(node("h3", t("grants")), node("p", t("preserved")));
+    section.append(node("h3", t("grants")));
+    if (pages.grants.rows.length) section.append(node("p", t("preserved")));
     for (const row of pages.grants.rows) {
       const item = node("div", null, { class: "access-grant" });
       item.append(
         check(
-          `${row.principal_kind} · ${row.principal_id} → ${row.target_kind} · ${row.target_id} (${row.permission_mask})`,
+          `${t(row.principal_kind)} · ${row.principal_id} → ${t(row.target_kind)} · ${row.target_id}`,
           grantSelection.has(row.id),
           (checked) => {
             if (checked) {
@@ -1062,18 +1094,15 @@ export function createAccessManager({
           [
             t(action),
             operation.name,
-            operation.principalKind,
+            operation.principalKind && t(operation.principalKind),
             operation.principalID,
-            operation.targetKind,
+            operation.targetKind && t(operation.targetKind),
             operation.targetID,
             operation.groupID,
             operation.grantID,
             operation.edgeID,
             operation.targetMembershipID,
             operation.resourceID,
-            operation.permissionMask === undefined
-              ? null
-              : `${t("policy")}: ${operation.permissionMask}`,
           ]
             .filter((value) => value !== null && value !== undefined)
             .join(" · "),
@@ -1096,7 +1125,7 @@ export function createAccessManager({
         item.append(
           node(
             "h4",
-            `${detail.subjectUserID} · ${accessLabel({ teamID: scope.teamID, vaultID: detail.vaultID, resourceID: detail.resourceID, policyKind: "RESOURCE" }, resolveLabel)}`,
+            `${detail.subjectUserID} · ${accessLabel({ teamID: scope.teamID, vaultID: detail.vaultID, resourceID: detail.resourceID, policyKind: "RESOURCE" }, resolveLabel, t)}`,
           ),
           node("p", accessConsequence(detail, locale())),
           node("h5", t("before")),
@@ -1110,7 +1139,7 @@ export function createAccessManager({
         section.append(
           node(
             "p",
-            `${grant.vaultID} · ${grant.targetKind} · ${grant.targetID} · ${grant.permissionMask}`,
+            `${grant.vaultID} · ${t(grant.targetKind)} · ${grant.targetID}`,
           ),
         );
       if (impact.nextCursor)

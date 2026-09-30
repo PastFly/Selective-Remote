@@ -1,8 +1,24 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import SelectiveRemote
 
 struct CloudAccessTests {
+    @Test func deviceCodesHaveLocalizedSafeCopy() {
+        #expect(CloudAccessLocalization.deviceStatus("YES", english: false) == "Доступно")
+        #expect(CloudAccessLocalization.deviceStatus("WRAP_PRESENT_UNVERIFIED", english: true) == "Key present, unverified")
+        #expect(CloudAccessLocalization.deviceStatus("SECRET_CANARY", english: true) == "Status unknown")
+        #expect(CloudAccessLocalization.deviceReason("KEY_UNAVAILABLE", english: false) == "Ключ ресурса недоступен")
+        #expect(CloudAccessLocalization.deviceReason("SECRET_CANARY", english: true) == "Availability reason unknown")
+        #expect(CloudAccessLocalization.kind("USER", english: false) == "Участник")
+        #expect(CloudAccessLocalization.kind("FOLDER", english: true) == "Folder")
+        #expect(CloudAccessLocalization.kind("SECRET_CANARY", english: false) == "Тип неизвестен")
+    }
+    @Test func firstGrantDoesNotShowRevokeGuidance() {
+        #expect(CloudAccessLocalization.revokeGuidance(hasExistingGrants: false) == nil)
+        #expect(CloudAccessLocalization.revokeGuidance(hasExistingGrants: true, english: true)?.contains("Revoking one path") == true)
+    }
     @Test func resourcePermissionVocabularyAndReveal() throws {
         #expect(CloudAccessKind.host.allowedMask == 13)
         #expect(CloudAccessKind.credential.allowedMask == 15)
@@ -78,6 +94,103 @@ private struct AccessFixture {
     }
 }
 extension CloudAccessTests {
+    @Test @MainActor @available(macOS, deprecated: 14)
+    func actualAccessSheetWindowServerMatrix() async throws {
+        let output = ProcessInfo.processInfo.environment["SR_CAPTURE_ACCESS_MATRIX"]
+        if let output { try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true) }
+        for scenario in ["loading", "empty", "v1", "preparing", "ready", "active",
+                         "direct", "group", "multiple-paths", "no-key", "unknown", "error"] {
+            let fixture = try AccessFixture()
+            var routes = try fixture.loadReplies()
+            if scenario == "error" {
+                routes[fixture.base + "/access-context"] = [(try fixture.data(["error": "access_request_failed"]), 503)]
+            } else if scenario != "loading" {
+                var context = fixture.context
+                context["formatState"] = ["v1": "V1_ACTIVE", "ready": "V2_READY", "active": "V2_ACTIVE"][scenario] ?? "V2_PREPARING"
+                context["policyMutationAvailable"] = scenario == "preparing" || scenario == "empty"
+                context["groupMutationAvailable"] = scenario == "preparing" || scenario == "empty"
+                routes[fixture.base + "/access-context"] = [(try fixture.data(context), 200)]
+            }
+            let subject = UUID(), device = UUID()
+            if ["direct", "group", "multiple-paths"].contains(scenario) {
+                func path(_ group: Bool) -> [String: Any] {
+                    ["id": UUID().canonicalCloudString,
+                     "principalKind": group ? "GROUP" : "USER", "principalID": UUID().canonicalCloudString,
+                     "grantTargetKind": group ? "FOLDER" : "RESOURCE", "grantTargetID": fixture.reference.resourceID.canonicalCloudString,
+                     "sourceType": group ? "INHERITED_CONTAINER" : "DIRECT", "mask": 1, "effectiveMask": 1,
+                     "permissions": ["View"]]
+                }
+                let paths = scenario == "direct" ? [path(false)] : scenario == "group" ? [path(true)] : [path(false), path(true)]
+                let policy: [String: Any] = ["policyAllowed": true, "policyMask": 1, "paths": paths, "blockedReasons": []]
+                routes[fixture.base + "/who-has-access/" + fixture.reference.resourceID.canonicalCloudString] =
+                    [(try fixture.data(["rows": [["userID": subject.canonicalCloudString, "policyEffective": policy]], "nextCursor": NSNull()]), 200)]
+            }
+            if ["no-key", "unknown"].contains(scenario) {
+                let member: [String: Any] = ["id": UUID().canonicalCloudString, "userID": subject.canonicalCloudString,
+                    "username": "fixture", "displayName": "Fixture member", "role": "viewer", "epoch": 1,
+                    "joinedAt": "2026-09-30T00:00:00Z"]
+                routes["/v1/teams/" + fixture.reference.teamID.canonicalCloudString + "/members"] =
+                    [(try fixture.data(["members": [member], "nextCursor": NSNull(), "total": 1]), 200)]
+                routes[fixture.base + "/access-devices"] = [(try fixture.data(["rows": [["id": device.canonicalCloudString,
+                    "name": "Fixture device", "platform": "macOS", "admitted": true]], "nextCursor": NSNull()]), 200)]
+                let usable = scenario == "no-key" ? "NO" : "UNKNOWN"
+                let crypto = scenario == "no-key" ? "NO" : "WRAP_PRESENT_UNVERIFIED"
+                let policy: [String: Any] = ["policyAllowed": true, "policyMask": 1, "paths": [], "blockedReasons": []]
+                let deviceState: [String: Any] = ["deviceID": device.canonicalCloudString, "effectiveUsable": usable,
+                    "cryptoAvailable": crypto, "cryptoAvailableByPermission": ["View": crypto],
+                    "effectiveUsableByPermission": ["View": usable],
+                    "blockedReasons": scenario == "no-key" ? ["KEY_UNAVAILABLE"] : []]
+                routes[fixture.base + "/effective-access/" + fixture.reference.resourceID.canonicalCloudString] =
+                    [(try fixture.data(["policyEffective": policy, "deviceUsability": deviceState]), 200)]
+            }
+            let transport = AccessFixtureTransport(routes)
+            let coordinator = SelectiveRemoteCloudAccessCoordinator(reference: fixture.reference,
+                client: fixture.client(transport), session: fixture.session)
+            if scenario != "loading" { await coordinator.load() }
+            if scenario != "loading" && scenario != "error" { #expect(coordinator.errorMessage == nil, "\(scenario): \(coordinator.errorMessage ?? "unknown")") }
+            if ["no-key", "unknown"].contains(scenario) {
+                await coordinator.selectSubject(subject)
+                await coordinator.selectDevice(device)
+                #expect(coordinator.effective?.deviceUsability?.effectiveUsable.rawValue == (scenario == "no-key" ? "NO" : "UNKNOWN"))
+            }
+            if ["direct", "group", "multiple-paths"].contains(scenario) {
+                #expect(coordinator.who.first?.policyEffective.paths.count == (scenario == "multiple-paths" ? 2 : 1))
+            }
+            let section: CloudAccessSection = ["direct", "group", "multiple-paths"].contains(scenario) ? .who :
+                (["no-key", "unknown"].contains(scenario) ? .effective : .share)
+            for english in [false, true] {
+                UserDefaults.standard.set(english ? "english" : "russian", forKey: "SelectiveRemote.applicationLanguage.v1")
+                for dark in [false, true] {
+                    for width in [480, 820] {
+                        let view = SelectiveRemoteCloudResourceAccessView(coordinator: coordinator, initialSection: section)
+                            .frame(width: CGFloat(width), height: 680)
+                            .preferredColorScheme(dark ? .dark : .light)
+                        let hosting = NSHostingView(rootView: view)
+                        hosting.frame = CGRect(x: 0, y: 0, width: width, height: 680)
+                        let window = NSWindow(contentRect: hosting.frame, styleMask: [.titled, .closable],
+                            backing: .buffered, defer: false)
+                        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                        window.contentView = hosting
+                        window.makeKeyAndOrderFront(nil)
+                        try await Task.sleep(for: .milliseconds(50))
+                        window.layoutIfNeeded()
+                        hosting.layoutSubtreeIfNeeded()
+                        let image = try #require(CGWindowListCreateImage(.null, .optionIncludingWindow,
+                            CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
+                        let bitmap = NSBitmapImageRep(cgImage: image)
+                        window.orderOut(nil)
+                        #expect(bitmap.pixelsWide > 0 && bitmap.pixelsHigh > 0)
+                        if let output {
+                            let name = "\(scenario)-\(english ? "en" : "ru")-\(dark ? "graphite" : "light")-\(width).png"
+                            try #require(bitmap.representation(using: .png, properties: [:]))
+                                .write(to: URL(fileURLWithPath: output).appending(path: name))
+                        }
+                    }
+                }
+            }
+        }
+        UserDefaults.standard.removeObject(forKey: "SelectiveRemote.applicationLanguage.v1")
+    }
     @Test func exactMetadataTransportBearerAndLowercaseIDs() async throws {
         let fixture = try AccessFixture(kind: .credential)
         let transport = try AccessFixtureTransport([fixture.base + "/access-resources/" + fixture.reference.resourceID.canonicalCloudString: [(fixture.data(fixture.row), 200)]])

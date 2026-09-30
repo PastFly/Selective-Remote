@@ -36,4 +36,45 @@ enum CloudAccessLocalization {
         }
     }
     static func mask(_ mask: Int, kind: CloudAccessKind) -> String { kind.permissions.filter { mask & $0.bit != 0 }.map { permission($0.name) }.joined(separator: ", ") }
+    static func deviceStatus(_ code: String, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let pair: (String, String)
+        switch code {
+        case "YES": pair = ("Доступно", "Available")
+        case "NO": pair = ("Недоступно", "Unavailable")
+        case "UNKNOWN": pair = ("Не подтверждено", "Unverified")
+        case "WRAP_PRESENT_UNVERIFIED": pair = ("Ключ есть, не проверен", "Key present, unverified")
+        case "KEY_UNAVAILABLE": pair = ("Ключ недоступен", "Key unavailable")
+        default: pair = ("Статус неизвестен", "Status unknown")
+        }
+        return english ? pair.1 : pair.0
+    }
+    static func deviceReason(_ code: String, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let pair: (String, String)
+        switch code {
+        case "POLICY_DENIED": pair = ("Политика не предоставляет доступ", "Policy does not grant access")
+        case "DEVICE_NOT_ADMITTED": pair = ("Устройство не допущено", "Device is not admitted")
+        case "KEY_UNAVAILABLE": pair = ("Ключ ресурса недоступен", "Resource key is unavailable")
+        case "NO_DEVICE_CONTENT_PERMISSION": pair = ("Нет прав на содержимое для устройства", "No device content permission")
+        default: pair = ("Причина недоступности неизвестна", "Availability reason unknown")
+        }
+        return english ? pair.1 : pair.0
+    }
+    static func revokeGuidance(hasExistingGrants: Bool, english: Bool = UpdateLocalization.usesEnglish) -> String? {
+        guard hasExistingGrants else { return nil }
+        return english
+            ? "Revoking one path may preserve access through other paths. Preview shows the actual permission loss."
+            : "Отзыв одного пути может сохранить доступ по другим путям. Предварительный просмотр показывает фактическую потерю разрешений."
+    }
+    static func kind(_ code: String, english: Bool = UpdateLocalization.usesEnglish) -> String {
+        let pair: (String, String)
+        switch code {
+        case "USER": pair = ("Участник", "Member")
+        case "GROUP": pair = ("Группа", "Group")
+        case "RESOURCE": pair = ("Ресурс", "Resource")
+        case "FOLDER": pair = ("Папка", "Folder")
+        case "VAULT": pair = ("Vault", "Vault")
+        default: pair = ("Тип неизвестен", "Kind unknown")
+        }
+        return english ? pair.1 : pair.0
+    }
 }

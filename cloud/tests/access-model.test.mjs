@@ -32,6 +32,8 @@ test("opaque labels require scoped locally authorized resolver and UNKNOWN stays
     ),
     `HOST · ${id}`,
   );
+  assert.equal(accessLabel({ id, policyKind: "CREDENTIAL" }, () => null,
+    (kind) => kind === "CREDENTIAL" ? "Учётные данные" : kind), `Учётные данные · ${id}`);
   assert.equal(
     effectiveSummary({
       policyEffective: { policyAllowed: true, policyMask: 1, paths: [] },

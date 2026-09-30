@@ -159,12 +159,12 @@ export function normalizeMutation(request) {
   }
   return normalizeOperation(request, groupFields);
 }
-export function accessLabel(ref, resolveLabel = () => null) {
+export function accessLabel(ref, resolveLabel = () => null, kindLabel = (kind) => kind) {
   // The resolver's contract is authorized scoped local V2 decryption. No V1 document is consulted.
   const value = resolveLabel(Object.freeze({ ...ref }));
   return typeof value === "string" && value.trim()
     ? value
-    : `${ref.policyKind ?? ref.kind ?? "RESOURCE"} · ${ref.id ?? ref.resourceID}`;
+    : `${kindLabel(ref.policyKind ?? ref.kind ?? "RESOURCE")} · ${ref.id ?? ref.resourceID}`;
 }
 export function effectiveSummary(value) {
   return {

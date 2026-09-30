@@ -1,0 +1,40 @@
+{
+  "evidenceMode": "LOCAL_VISUAL_PREVIEW",
+  "testSessionMode": "FRESH_ANONYMOUS",
+  "origin": "http://127.0.0.1",
+  "productionActivation": false,
+  "cloud": {
+    "component": "cloud/public/access-manager.js",
+    "route": "initializeTeamWorkspace().setView(\"access\")",
+    "scenarioNames": ["empty", "loading", "v1", "preparing", "ready", "active", "direct", "group", "multiple-paths", "no-key", "unknown", "error"],
+    "locales": ["ru", "en"],
+    "themes": ["light", "graphite"],
+    "viewports": ["desktop", "tablet", "mobile"],
+    "expectedImages": 144,
+    "filenamePattern": "{scenario}-{locale}-{theme}-{viewport}.png",
+    "outputDirectory": "/private/tmp/access-task5-cloud-final",
+    "detailManifest": "/private/tmp/access-task5-cloud-final/manifest.json",
+    "log": "/private/tmp/task5-cloud-matrix-final3.log",
+    "keyboardSmokeLog": "/private/tmp/task5-cloud-keyboard.log",
+    "horizontalOverflowCount": 0,
+    "pageErrorCount": 0,
+    "scale": [
+      {"members": 5, "resources": 50, "visibleMembers": 5, "visibleResources": 50, "requests": 6, "syntheticElapsedMs": 2},
+      {"members": 100, "resources": 500, "visibleMembers": 50, "visibleResources": 50, "requests": 6, "syntheticElapsedMs": 1},
+      {"members": 1000, "resources": 5000, "visibleMembers": 50, "visibleResources": 50, "requests": 6, "syntheticElapsedMs": 2}
+    ],
+    "timingNote": "Local synthetic response and browser-render times are in the detail manifest; they are not backend measurements."
+  },
+  "native": {
+    "component": "SelectiveRemoteCloudResourceAccessView",
+    "capture": "NSHostingView in a WindowServer NSWindow",
+    "scenarioNames": ["loading", "empty", "v1", "preparing", "ready", "active", "direct", "group", "multiple-paths", "no-key", "unknown", "error"],
+    "locales": ["ru", "en"],
+    "appearances": ["light", "graphite"],
+    "widthPoints": [480, 820],
+    "expectedImages": 96,
+    "filenamePattern": "{scenario}-{locale}-{appearance}-{widthPoints}.png",
+    "outputDirectory": "/private/tmp/access-task5-native-final",
+    "log": "/private/tmp/task5-native-render-final5.log"
+  }
+}
