@@ -166,6 +166,29 @@ test(
         },
       );
       let group, edge;
+      await t.test("exact resource metadata is bounded, scoped and gated", async () => {
+        const expected = {id:resource,teamID:team,vaultID:vault,policyKind:"HOST",parentFolderID:null,resourceVersion:1};
+        assert.deepEqual(await service.getAccessResource(session,team,vault,resource), expected);
+        const otherTeam=(await fixtureQuery(`INSERT INTO teams(name,created_by_user_id) VALUES('Other exact metadata',$1) RETURNING id`,[user])).rows[0].id;
+        await fixtureQuery(`INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,'owner')`,[otherTeam,user]);
+        const otherVault=(await fixtureQuery(`INSERT INTO shared_vaults(team_id,name,created_by_user_id,format_state,format_schema_version) VALUES($1,'Other',$2,'V2_PREPARING',2) RETURNING id`,[otherTeam,user])).rows[0].id;
+        const sameTeamVault=(await fixtureQuery(`INSERT INTO shared_vaults(team_id,name,created_by_user_id,format_state,format_schema_version) VALUES($1,'Same Team other Vault',$2,'V2_PREPARING',2) RETURNING id`,[team,user])).rows[0].id;
+        const foreign=randomUUID(),tombstone=randomUUID();
+        await fixtureQuery(`INSERT INTO vault_resource_registry(id,team_id,vault_id,policy_class,policy_kind) VALUES($1,$2,$3,'general','SNIPPET')`,[foreign,otherTeam,otherVault]);
+        await fixtureQuery(`INSERT INTO vault_resource_registry(id,team_id,vault_id,policy_class,policy_kind,deleted_at) VALUES($1,$2,$3,'general','HOST',now())`,[tombstone,team,vault]);
+        for(const args of [[team,vault,foreign],[team,sameTeamVault,resource],[otherTeam,otherVault,resource],[team,vault,randomUUID()],[team,vault,tombstone]]) await assert.rejects(service.getAccessResource(session,...args),/access_resource_not_found/);
+        assert.equal((await service.getAccessResource(session,otherTeam,otherVault,foreign)).policyKind,'SNIPPET');
+        await assert.rejects(service.getAccessResource({...session,device_id:randomUUID()},team,vault,resource),/team_not_found/);
+        await fixtureQuery(`UPDATE team_memberships SET role='viewer' WHERE id=$1`,[membership]);
+        await assert.rejects(service.getAccessResource(session,team,vault,resource),/team_access_denied/);
+        await fixtureQuery(`UPDATE team_memberships SET role='owner' WHERE id=$1`,[membership]);
+        for(const state of ['V1_ACTIVE','V2_READY','V2_ACTIVE']) {
+          await fixtureQuery(`UPDATE shared_vaults SET format_state=$2,format_schema_version=CASE WHEN $2='V1_ACTIVE' THEN 1 ELSE 2 END WHERE id=$1`,[vault,state]);
+          await assert.rejects(service.getAccessResource(session,team,vault,resource),state==='V1_ACTIVE'?/access_v2_preparing_required/:/crypto_publication_required/);
+        }
+        await fixtureQuery(`UPDATE shared_vaults SET format_state='V2_PREPARING',format_schema_version=2 WHERE id=$1`,[vault]);
+        await assert.rejects(service.getAccessResource(session,team,vault,'invalid'),/invalid_access_resource/);
+      });
       await t.test(
         "create, literal search, rename, members; stable snapshot ID",
         async () => {

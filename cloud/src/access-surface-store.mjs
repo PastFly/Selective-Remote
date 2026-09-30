@@ -126,6 +126,21 @@ export class AccessSurfaceStore extends AccessStore {
       );
     });
   }
+  async getAccessResource(input) {
+    if (!uuid.test(input.resourceID ?? "")) throw new Error("invalid_access_resource");
+    return this.withRead(input, async (client) => {
+      await preparingContext(client, input);
+      const row = (await client.query(
+        `SELECT id,team_id AS "teamID",vault_id AS "vaultID",policy_kind AS "policyKind",
+          parent_folder_id AS "parentFolderID",resource_version AS "resourceVersion"
+         FROM vault_resource_registry WHERE team_id=$1 AND vault_id=$2 AND id=$3
+           AND deleted_at IS NULL AND policy_kind IS NOT NULL`,
+        [input.teamID, input.vaultID, input.resourceID],
+      )).rows[0];
+      if (!row) throw new Error("access_resource_not_found");
+      return { ...row, resourceVersion: Number(row.resourceVersion) };
+    });
+  }
   async listAccessGroupMembers(input) {
     const { limit, cursor } = pageInput(input);
     return this.withRead(input, async (client) => {

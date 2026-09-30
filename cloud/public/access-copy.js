@@ -116,6 +116,10 @@ const copy = {
   retry: ["Повторить", "Retry"],
 };
 const errors = {
+  access_resource_not_found: [
+    "Ресурс недоступен или удалён. Обновите выдачи доступа.",
+    "Resource unavailable or deleted. Refresh access grants.",
+  ],
   access_commit_in_progress: [
     "Изменение сохраняется. Дождитесь ответа сервера.",
     "Change is being committed. Wait for the server response.",

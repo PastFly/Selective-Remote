@@ -28,7 +28,13 @@ const server = createServer(async (req, res) => {
       "Content-Type",
       name.endsWith(".js") ? "application/javascript" : "text/css",
     );
-    res.end(await readFile(`${publicRoot}/${name}`));
+    res.end(
+      await readFile(
+        name === "access-manager.js" && process.env.ACCESS_MANAGER_SOURCE
+          ? process.env.ACCESS_MANAGER_SOURCE
+          : `${publicRoot}/${name}`,
+      ),
+    );
   } catch {
     res.writeHead(404);
     res.end();
@@ -53,12 +59,23 @@ try {
       userID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
       deviceID = "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
       resourceID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
-      groupID = "ffffffff-ffff-4fff-8fff-ffffffffffff";
+      groupID = "ffffffff-ffff-4fff-8fff-ffffffffffff",
+      groupBID = "12121212-1212-4212-8212-121212121212",
+      offPageID = "13131313-1313-4313-8313-131313131313";
     window.qa = {
       requests: [],
       commits: 0,
       callbacks: 0,
-      ids: { teamID, vaultID, userID, deviceID, resourceID, groupID },
+      ids: {
+        teamID,
+        vaultID,
+        userID,
+        deviceID,
+        resourceID,
+        groupID,
+        groupBID,
+        offPageID,
+      },
     };
     const paths = [
       {
@@ -135,6 +152,15 @@ try {
                 : [],
           resource_acl_v2: false,
         };
+      else if (url.pathname.endsWith(`/access-resources/${offPageID}`))
+        body = {
+          id: offPageID,
+          teamID,
+          vaultID,
+          policyKind: "CREDENTIAL",
+          parentFolderID: null,
+          resourceVersion: 2,
+        };
       else if (url.pathname.endsWith("/access-resources"))
         body = {
           rows: [
@@ -157,7 +183,7 @@ try {
               principal_kind: "USER",
               principal_id: userID,
               target_kind: "RESOURCE",
-              target_id: resourceID,
+              target_id: offPageID,
               permission_mask: 15,
               version: "1",
             },
@@ -173,9 +199,12 @@ try {
               name: "Synthetic group",
               version: "1",
             },
+            { id: groupBID, team_id: teamID, name: "Group B", version: "7" },
           ],
           nextCursor: null,
         };
+      else if (url.pathname.endsWith(`/access-groups/${groupBID}/members`))
+        body = { rows: [], nextCursor: null };
       else if (url.pathname.endsWith(`/access-groups/${groupID}/members`))
         body = {
           rows: [
@@ -369,6 +398,79 @@ try {
     await root.innerText().then((v) => v.includes("DENIED_PLAINTEXT_CANARY")),
     false,
   );
+  // Regression: switching group detail must never rebind an open rename.
+  await root
+    .getByRole("navigation")
+    .getByRole("button", { name: "Groups", exact: true })
+    .click();
+  const groupA = root
+    .locator(".access-directory li")
+    .filter({ hasText: "Synthetic group" });
+  const groupB = root
+    .locator(".access-directory li")
+    .filter({ hasText: "Group B" });
+  await groupA.getByRole("button", { name: "Rename", exact: true }).click();
+  await groupB
+    .getByRole("button", { name: "Group members", exact: true })
+    .click();
+  await root
+    .getByRole("heading", { name: "Group members: Group B", exact: true })
+    .waitFor();
+  const renameForm = root
+    .locator(".access-detail")
+    .filter({ has: page.getByLabel("Group name", { exact: true }) });
+  await renameForm.getByLabel("Group name", { exact: true }).fill("Renamed A");
+  await renameForm.getByRole("button", { name: "Rename", exact: true }).click();
+  assert.deepEqual(await page.evaluate(() => qa.manager.state().draft), {
+    type: "GROUP_RENAME",
+    groupID: await page.evaluate(() => qa.ids.groupID),
+    expectedVersion: 1,
+    name: "Renamed A",
+  });
+  await page.evaluate(() => qa.manager.setDraft(null));
+  // Regression: grant target is intentionally absent from registry first page.
+  await root
+    .locator(".access-grant")
+    .getByRole("button", { name: "Change permissions", exact: true })
+    .click();
+  const grantForm = root.locator(".access-grant-editor");
+  await grantForm.waitFor();
+  await grantForm.getByRole("button", { name: "Edit", exact: true }).click();
+  assert.equal(
+    await grantForm
+      .getByRole("checkbox", { name: "Reveal secret", exact: true })
+      .isChecked(),
+    true,
+  );
+  await grantForm
+    .getByRole("button", { name: "Change permissions", exact: true })
+    .click();
+  assert.deepEqual(await page.evaluate(() => qa.manager.state().draft), {
+    changes: [
+      {
+        type: "GRANT_CHANGE",
+        grantID: await page.evaluate(() => qa.ids.resourceID),
+        expectedVersion: 1,
+        permissionMask: 7,
+      },
+    ],
+  });
+  await root
+    .getByRole("button", { name: "Preview consequences", exact: true })
+    .click();
+  await root
+    .getByRole("button", { name: "Load more consequences", exact: true })
+    .waitFor();
+  assert.equal(
+    await page.evaluate(
+      () =>
+        qa.requests.filter((r) =>
+          r.path.endsWith("/access-resources/" + qa.ids.offPageID),
+        ).length,
+    ),
+    1,
+  );
+  await page.evaluate(() => qa.manager.setDraft(null));
   await page.evaluate(() => {
     document.documentElement.lang = "ru";
     document.dispatchEvent(new CustomEvent("selective-remote:locale-changed"));

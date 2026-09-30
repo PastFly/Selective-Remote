@@ -27,7 +27,8 @@ export function createAccessManager({
   let focusIndex = 0,
     previewSequence = 0,
     focusPreview = false,
-    groupNameDraft = "";
+    groupNameDraft = "",
+    editSequence = 0;
   let scope = { ...context },
     generation = 0,
     draftGeneration = 0,
@@ -166,6 +167,8 @@ export function createAccessManager({
   }
   function setDraft(value) {
     if (committing) throw new Error("access_commit_in_progress");
+    editSequence++;
+    details = null;
     draft = value === null ? null : normalizeMutation(value);
     impact = null;
     draftGeneration++;
@@ -239,6 +242,7 @@ export function createAccessManager({
     capability = null;
     resetPages();
     details = null;
+    editSequence++;
     selectedGroup = null;
     selectedResource = null;
     selectedPrincipal = null;
@@ -282,6 +286,8 @@ export function createAccessManager({
     groupNameDraft = "";
     recipients.clear();
     targets.clear();
+    details = null;
+    editSequence++;
     selectedGroup = null;
     selectedResource = null;
     selectedPrincipal = null;
@@ -583,7 +589,14 @@ export function createAccessManager({
             "rename",
             () => {
               selectedGroup = row;
-              details = { type: "rename", name: row.name };
+              editSequence++;
+              details = {
+                type: "rename",
+                groupID: row.id,
+                expectedVersion: row.version,
+                groupName: row.name,
+                name: row.name,
+              };
               render();
             },
             !groupAvailable(),
@@ -816,9 +829,81 @@ export function createAccessManager({
       paging(section, "who");
       parent.append(section);
     }
+    if (details?.type === "grant") {
+      const form = node("section", null, {
+        class: "access-detail access-grant-editor",
+        "aria-label": t("change"),
+      });
+      form.append(
+        node("h3", t("change")),
+        node("p", `${details.kind} · ${details.targetID}`),
+      );
+      for (const preset of ["view", "edit", "manage"]) {
+        let mask = null;
+        try {
+          mask = presetMask(details.kind, preset);
+        } catch {}
+        form.append(
+          button(
+            preset,
+            () => {
+              details.permissionMask = mask;
+              clearDraft();
+              render();
+            },
+            mask === null,
+          ),
+        );
+      }
+      for (const permission of permissionsFor(details.kind))
+        form.append(
+          check(
+            t(permission.name),
+            !!(details.permissionMask & permission.bit),
+            (checked) => {
+              let mask = checked
+                ? details.permissionMask | permission.bit
+                : details.permissionMask & ~permission.bit;
+              if (details.kind === "CREDENTIAL") {
+                if (permission.bit === 4 && checked) mask |= 2;
+                if (permission.bit === 2 && !checked) mask &= ~4;
+              }
+              details.permissionMask = mask;
+              clearDraft();
+              render();
+            },
+          ),
+        );
+      form.append(
+        button("change", () => {
+          validateMask(details.kind, details.permissionMask);
+          const request = {
+            changes: [
+              {
+                type: "GRANT_CHANGE",
+                grantID: details.grantID,
+                expectedVersion: details.expectedVersion,
+                permissionMask: details.permissionMask,
+              },
+            ],
+          };
+          details = null;
+          editSequence++;
+          setDraft(request);
+        }),
+        button("cancel", () => {
+          details = null;
+          editSequence++;
+          render();
+        }),
+      );
+      parent.append(form);
+    }
     if (details?.type === "rename") {
       const form = node("section", null, { class: "access-detail" });
       form.append(
+        node("h3", `${t("rename")}: ${details.groupName}`),
+        node("p", details.groupID),
         input("groupName", details.name, (value) => {
           details.name = value;
           clearDraft();
@@ -826,8 +911,8 @@ export function createAccessManager({
         button("rename", () => {
           setDraft({
             type: "GROUP_RENAME",
-            groupID: selectedGroup.id,
-            expectedVersion: selectedGroup.version,
+            groupID: details.groupID,
+            expectedVersion: details.expectedVersion,
             name: details.name,
           });
           details = null;
@@ -879,28 +964,42 @@ export function createAccessManager({
         ),
         button(
           "change",
-          () => {
-            if (row.target_kind === "RESOURCE") {
-              const target = pages.resources.rows.find(
-                (r) => r.id === row.target_id,
+          async () => {
+            const g = generation,
+              sequence = ++editSequence,
+              requestScope = { ...scope };
+            let kind;
+            if (row.target_kind === "VAULT") {
+              if (row.target_id !== requestScope.vaultID)
+                throw new Error("access_scope_mismatch");
+              kind = "VAULT";
+            } else {
+              const target = await client.getResource(
+                requestScope,
+                row.target_id,
               );
-              if (!target) throw new Error("invalid_access_request");
-              validateMask(target.policyKind, permissionMask);
-            } else
-              validateMask(
-                row.target_kind === "FOLDER" ? "FOLDER" : "VAULT",
-                permissionMask,
-              );
-            setDraft({
-              changes: [
-                {
-                  type: "GRANT_CHANGE",
-                  grantID: row.id,
-                  expectedVersion: row.version,
-                  permissionMask,
-                },
-              ],
-            });
+              if (
+                (row.target_kind === "FOLDER" &&
+                  target.policyKind !== "FOLDER") ||
+                (row.target_kind === "RESOURCE" &&
+                  target.policyKind === "FOLDER")
+              )
+                throw new Error("access_scope_mismatch");
+              kind = target.policyKind;
+            }
+            if (!active(g) || sequence !== editSequence) return;
+            validateMask(kind, row.permission_mask);
+            clearDraft();
+            details = {
+              type: "grant",
+              grantID: row.id,
+              expectedVersion: row.version,
+              kind,
+              targetKind: row.target_kind,
+              targetID: row.target_id,
+              permissionMask: row.permission_mask,
+            };
+            render();
           },
           !policyAvailable(),
         ),
@@ -1164,6 +1263,7 @@ export function createAccessManager({
     if (event.key === "Escape" && !committing) {
       clearDraft();
       details = null;
+      editSequence++;
       render();
       root.focus?.();
     }

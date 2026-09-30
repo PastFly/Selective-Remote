@@ -375,6 +375,10 @@ export class CloudService {
     return this.store.access.listAccessResources({actorUserID:session.user_id,
       actorDeviceID:session.device_id,teamID,vaultID,limit:Number(limit),cursor,kind});
   }
+  async getAccessResource(session, teamID, vaultID, resourceID) {
+    return this.store.access.getAccessResource({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,resourceID});
+  }
   async listAccessDevices(session, teamID, vaultID, {subjectUserID,limit = 50,cursor = null} = {}) {
     return this.store.access.listAccessDevices({actorUserID:session.user_id,
       actorDeviceID:session.device_id,teamID,vaultID,subjectUserID,limit:Number(limit),cursor});

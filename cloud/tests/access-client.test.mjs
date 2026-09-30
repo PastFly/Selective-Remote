@@ -284,3 +284,32 @@ test("a successful HTTP response with mismatched mutation scope is rejected", as
     /access_scope_mismatch/,
   );
 });
+
+test("exact resource lookup validates requested ID and scope without scanning pages", async () => {
+  const calls = [];
+  let body = {
+    id: userID,
+    teamID,
+    vaultID,
+    policyKind: "CREDENTIAL",
+    parentFolderID: null,
+    resourceVersion: 2,
+  };
+  const c = createAccessClient({
+    request: async (path) => {
+      calls.push(path);
+      return new Response(JSON.stringify(body));
+    },
+  });
+  assert.equal(
+    (await c.getResource(scope, userID.toUpperCase())).policyKind,
+    "CREDENTIAL",
+  );
+  assert.deepEqual(calls, [
+    `/v1/teams/${teamID}/vaults/${vaultID}/access-resources/${userID}`,
+  ]);
+  body = { ...body, id: deviceID };
+  await assert.rejects(c.getResource(scope, userID), /access_scope_mismatch/);
+  body = { ...body, id: userID, teamID: deviceID };
+  await assert.rejects(c.getResource(scope, userID), /access_scope_mismatch/);
+});

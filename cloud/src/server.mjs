@@ -367,6 +367,11 @@ async function route(request, response) {
       return handleOperation(response,()=>service.listAccessVaults(session,accessVaultsMatch[1],{
         limit:url.searchParams.get("limit") ?? 50,cursor:url.searchParams.get("cursor")}));
     }
+    const accessResourceMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/access-resources\/([^/]+)$/i);
+    if (method === "GET" && accessResourceMatch) {
+      if (!accessResourceMatch.slice(1).every(isUUID)) return sendError(response,404,"team_not_found");
+      return handleOperation(response,()=>service.getAccessResource(session,...accessResourceMatch.slice(1)));
+    }
     const accessSurfaceMatch = url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/(access-context|access-resources|access-devices|access-group-preview|access-group-commit)$/i);
     if (accessSurfaceMatch) {
       const [,teamID,vaultID,operation] = accessSurfaceMatch;

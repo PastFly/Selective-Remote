@@ -247,6 +247,12 @@ export function createAccessClient({
         nextCursor: r.nextCursor === null ? null : accessID(r.nextCursor),
       };
     },
+    async getResource(s, resourceID) {
+      const id = accessID(resourceID, "invalid_access_resource");
+      const row = resource(await json(`${base(s)}/access-resources/${id}`), s);
+      if (row.id !== id) scopeMismatch();
+      return row;
+    },
     listGrants(s, options = {}) {
       return page(`${base(s)}/access-grants`, options, (r) => {
         if (
