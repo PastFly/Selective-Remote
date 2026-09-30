@@ -1,5 +1,9 @@
 import SwiftUI
 
+enum RegisteredResourceDirectory {
+    static func available(in state: CloudAccessFormatState) -> Bool { state == .preparing }
+}
+
 // The registry is the only source for resource identities. This picker deliberately
 // does not associate a selected registry row with any legacy V1 record or path.
 struct SelectiveRemoteRegisteredResourcePicker: View {
@@ -17,6 +21,7 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
     @State private var error: String?
     @State private var loaded = false
     @State private var pageNumber = 1
+    @State private var requestGeneration = UUID()
 
     var body: some View {
         DisclosureGroup(CloudAccessLocalization.text("Зарегистрированные ресурсы", "Registered resources")) {
@@ -68,29 +73,43 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
     }
 
     private func load(reset: Bool) async {
-        guard !loading else { return }
+        guard reset || !loading else { return }
+        let generation = UUID()
+        requestGeneration = generation
         loading = true
-        defer { loading = false }
+        defer { if requestGeneration == generation { loading = false } }
         if reset { rows = []; cursor = nil; error = nil; loaded = false; pageNumber = 1 }
+        let requestedKind = kind
+        let requestedCursor = reset ? nil : cursor
         do {
             let page = try await client.resources(vault, session: session,
-                                                  cursor: reset ? nil : cursor, kind: kind)
+                                                  cursor: requestedCursor, kind: requestedKind)
+            guard requestGeneration == generation, kind == requestedKind else { return }
             rows = page.rows
             cursor = page.nextCursor
             if !reset { pageNumber += 1 }
             loaded = true
         } catch {
+            guard requestGeneration == generation, kind == requestedKind else { return }
             self.error = error.localizedDescription
         }
     }
 
     private func open(_ row: CloudAccessResource) async {
+        let generation = requestGeneration
         do {
             let exact = try await client.getResource(vault, resourceID: row.id, session: session)
+            guard requestGeneration == generation, kind == row.policyKind else { return }
             guard exact.policyKind == row.policyKind else { throw CloudAccessError.scopeMismatch }
-            selected = try .init(teamID: vault.teamID, vaultID: vault.vaultID,
-                                 resourceID: exact.id, kind: exact.policyKind)
+            let reference = try SelectiveRemoteCloudAccessReference(
+                teamID: vault.teamID, vaultID: vault.vaultID,
+                resourceID: exact.id, kind: exact.policyKind
+            )
+            AccessResourceEntry.dispatch(reference: reference, kind: exact.policyKind,
+                                         open: { selected = $0 },
+                                         prerequisite: AccessRegistrationPrerequisite.show)
         } catch {
+            guard requestGeneration == generation, kind == row.policyKind else { return }
             self.error = error.localizedDescription
         }
     }

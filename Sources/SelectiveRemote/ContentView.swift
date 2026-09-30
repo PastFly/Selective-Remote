@@ -1483,7 +1483,7 @@ struct ContentView: View {
                                 .draggable(sidebarTeamFolderDragValue(teamID: teamID, path: path))
                                 .contextMenu {
                                     Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                                        AccessRegistrationPrerequisite.show(kind: .folder)
+                                        AccessResourceEntry.showLegacy(kind: .folder)
                                     }
                                 }
                                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1684,7 +1684,7 @@ struct ContentView: View {
     @ViewBuilder
     private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessRegistrationPrerequisite.show(kind: .host)
+            AccessResourceEntry.showLegacy(kind: .host)
         }
         Button(
             UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
@@ -1870,24 +1870,35 @@ struct ContentView: View {
             defer { sidebarTeamMutationInProgress = false }
             do {
                 let endpoint = try SelectiveRemoteCloudEndpoint.normalized(cloudEndpoint)
-                let decision = try await AccessMoveDecision.fetch(
-                    teamID: context.teamID, vaultID: context.vaultID, endpoint: endpoint,
-                    client: cloudClient, changesAncestry: changesAncestry
+                let outcome = try await AccessMoveDecision.perform(
+                    changesAncestry: changesAncestry,
+                    decide: {
+                        try await AccessMoveDecision.fetch(
+                            teamID: context.teamID, vaultID: context.vaultID,
+                            endpoint: endpoint, client: cloudClient,
+                            changesAncestry: true
+                        )
+                    },
+                    persist: {
+                        let deviceID = UUID(uuidString: cloudDeviceID)
+                            .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
+                        cloudDeviceID = deviceID.canonicalCloudString
+                        let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
+                            .identity(endpoint: endpoint, deviceID: deviceID)
+                        let service = try SelectiveRemoteTeamHostMutationService()
+                        return try await service.apply(
+                            .organize(updates), to: context, endpoint: endpoint,
+                            identity: identity
+                        )
+                    }
                 )
-                if let explanation = decision.explanation {
+                guard let snapshot = outcome.result else {
+                    let explanation = outcome.decision.explanation ?? CloudAccessLocalization.text(
+                        "Перенос не сохранён.", "The move was not saved."
+                    )
                     model.errorMessage = explanation
                     return
                 }
-                let deviceID = UUID(uuidString: cloudDeviceID)
-                    .flatMap { $0.isSelectiveRemoteCloudUUID ? $0 : nil } ?? UUID()
-                cloudDeviceID = deviceID.canonicalCloudString
-                let identity = try await SelectiveRemoteTeamDeviceIdentityManager()
-                    .identity(endpoint: endpoint, deviceID: deviceID)
-                let service = try SelectiveRemoteTeamHostMutationService()
-                let snapshot = try await service.apply(
-                    .organize(updates), to: context, endpoint: endpoint,
-                    identity: identity
-                )
                 teamHosts.replaceVault(with: snapshot)
                 selectedTeamHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
                     teamID: context.teamID, vaultID: context.vaultID,

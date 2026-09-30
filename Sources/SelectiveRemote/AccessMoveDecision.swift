@@ -26,6 +26,15 @@ enum AccessMoveDecision: Sendable {
         return decide(formatState: context.formatState, changesAncestry: true)
     }
 
+    @MainActor
+    static func perform<T>(changesAncestry: Bool,
+                           decide: () async throws -> Self,
+                           persist: () async throws -> T) async throws -> (decision: Self, result: T?) {
+        let decision: Self = changesAncestry ? try await decide() : .persistLegacyOrReorder
+        guard decision.explanation == nil else { return (decision, nil) }
+        return (decision, try await persist())
+    }
+
     var explanation: String? {
         switch self {
         case .persistLegacyOrReorder: nil

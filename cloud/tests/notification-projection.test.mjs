@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accessAuditActionLabel } from "../public/access-audit.js";
 import {
   createNotificationState, reconcileNotifications, markNotificationRead,
   notificationCounts, notificationItems, serializeNotificationState,
@@ -14,6 +15,14 @@ const invitation = "33333333-3333-4333-8333-333333333333";
 const team = "44444444-4444-4444-8444-444444444444";
 const at = "2026-09-28T19:00:00.000Z";
 const later = "2026-09-28T19:05:00.000Z";
+
+test("Audit action labels are localized and do not interpolate metadata", () => {
+  const secret = "decrypted-name-SECRET";
+  assert.equal(accessAuditActionLabel("grant.created", "en", { name: secret }), "created an access grant");
+  assert.equal(accessAuditActionLabel("resource.move_access_changed", "ru", { name: secret }),
+    "изменил(а) родительскую папку ресурса");
+  assert.equal(accessAuditActionLabel("unknown", "en", { name: secret }), null);
+});
 
 test("committed access candidates filter current recipient and effective deltas", () => {
   const result = committedAccessObservations({ notificationCandidates: [

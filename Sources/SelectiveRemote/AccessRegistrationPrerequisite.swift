@@ -16,3 +16,21 @@ enum AccessRegistrationPrerequisite {
         alert.runModal()
     }
 }
+
+@MainActor
+enum AccessResourceEntry {
+    static func dispatch(reference: SelectiveRemoteCloudAccessReference?, kind: CloudAccessKind,
+                         open: (SelectiveRemoteCloudAccessReference) -> Void,
+                         prerequisite: (CloudAccessKind) -> Void) {
+        guard let reference, reference.kind == kind else {
+            prerequisite(kind)
+            return
+        }
+        open(reference)
+    }
+
+    static func showLegacy(kind: CloudAccessKind) {
+        dispatch(reference: nil, kind: kind, open: { _ in },
+                 prerequisite: AccessRegistrationPrerequisite.show)
+    }
+}

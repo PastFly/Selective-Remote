@@ -75,4 +75,62 @@ struct AccessIntegrationTests {
         #expect(AccessMoveDecision.decide(formatState: .preparing, changesAncestry: true).explanation != nil)
         #expect(AccessMoveDecision.decide(formatState: .active, changesAncestry: true).explanation != nil)
     }
+
+    @Test("All legacy resource entry routes stop before opening an ACL sheet")
+    func legacyEntryDispatch() throws {
+        var opened = 0
+        var prerequisites: [CloudAccessKind] = []
+        for kind in [CloudAccessKind.host, .credential, .snippet, .forwarding, .folder] {
+            AccessResourceEntry.dispatch(reference: nil, kind: kind, open: { _ in opened += 1 },
+                                         prerequisite: { prerequisites.append($0) })
+        }
+        #expect(opened == 0)
+        #expect(prerequisites == [.host, .credential, .snippet, .forwarding, .folder])
+        let reference = try SelectiveRemoteCloudAccessReference(
+            teamID: user, vaultID: vault, resourceID: resource, kind: .host
+        )
+        AccessResourceEntry.dispatch(reference: reference, kind: .host,
+                                     open: { _ in opened += 1 }, prerequisite: { prerequisites.append($0) })
+        #expect(opened == 1)
+    }
+
+    @Test("Production pre-persistence boundary never calls uploader after denied ancestry")
+    func prePersistenceBoundary() async throws {
+        for denied in [AccessMoveDecision.registeredMappingRequired, .publicationRequired] {
+            var persisted = 0
+            let outcome = try await AccessMoveDecision.perform(changesAncestry: true,
+                decide: { denied }, persist: { persisted += 1; return "uploaded" })
+            #expect(outcome.result == nil)
+            #expect(persisted == 0)
+        }
+        var failedContextPersisted = 0
+        do {
+            _ = try await AccessMoveDecision.perform(changesAncestry: true,
+                decide: { throw CloudAccessError.service(503, "unavailable") },
+                persist: { failedContextPersisted += 1; return "uploaded" })
+            Issue.record("Failed context unexpectedly reached persistence")
+        } catch {
+            #expect(failedContextPersisted == 0)
+        }
+        var reorderPersisted = 0
+        let reorder = try await AccessMoveDecision.perform(changesAncestry: false,
+            decide: { Issue.record("Reorder queried access context"); return .registeredMappingRequired },
+            persist: { reorderPersisted += 1; return "uploaded" })
+        #expect(reorder.result == "uploaded")
+        #expect(reorderPersisted == 1)
+        var v1Persisted = 0
+        let legacy = try await AccessMoveDecision.perform(changesAncestry: true,
+            decide: { .persistLegacyOrReorder },
+            persist: { v1Persisted += 1; return "uploaded" })
+        #expect(legacy.result == "uploaded")
+        #expect(v1Persisted == 1)
+    }
+
+    @Test("Registry directory is offered only where the current server permits its read API")
+    func registeredDirectoryAvailability() {
+        #expect(RegisteredResourceDirectory.available(in: .preparing))
+        #expect(!RegisteredResourceDirectory.available(in: .v1Active))
+        #expect(!RegisteredResourceDirectory.available(in: .ready))
+        #expect(!RegisteredResourceDirectory.available(in: .active))
+    }
 }

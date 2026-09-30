@@ -33,7 +33,9 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             Text("Team \(model.reference.teamID.canonicalCloudString) · Vault \(model.reference.vaultID.canonicalCloudString)")
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
             if let context = model.context { CloudAccessStateView(context: context) }
-            if model.reference.kind == .vault && model.context?.formatState == .preparing {
+            if model.reference.kind == .vault,
+               let formatState = model.context?.formatState,
+               RegisteredResourceDirectory.available(in: formatState) {
                 SelectiveRemoteRegisteredResourcePicker(
                     vault: model.reference, client: model.client, session: model.session,
                     onCommitted: onCommitted

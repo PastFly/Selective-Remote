@@ -903,7 +903,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 folderDisclosureLabel(path: node.path, title: node.title, count: node.totalCount)
                     .contextMenu {
                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                            AccessRegistrationPrerequisite.show(kind: .folder)
+                            AccessResourceEntry.showLegacy(kind: .folder)
                         }
                     }
             }
@@ -934,7 +934,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     .padding(.vertical, 4)
                     .contextMenu {
                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                            AccessRegistrationPrerequisite.show(kind: .folder)
+                            AccessResourceEntry.showLegacy(kind: .folder)
                         }
                     }
             }
@@ -1223,7 +1223,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @ViewBuilder
     private func snippetActions(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessRegistrationPrerequisite.show(kind: .snippet)
+            AccessResourceEntry.showLegacy(kind: .snippet)
         }
         if SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
             Button(UpdateLocalization.text(ru: "Изменить…", en: "Edit…"), systemImage: "pencil") {
