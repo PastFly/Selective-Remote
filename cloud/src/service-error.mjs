@@ -30,6 +30,7 @@ const operationStatuses = Object.freeze({
   team_vault_key_unavailable: 403,
   team_vault_rotation_required: 409,
   team_vault_conflict: 409,
+  vault_upgrade_required: 409,
   vault_too_large: 413,
   vault_missing: 404,
   invalid_team: 400,
