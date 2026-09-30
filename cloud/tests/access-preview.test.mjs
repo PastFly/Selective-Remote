@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createPreviewToken, verifyPreviewToken, hashAccessRequest, validateAccessChangeRequest } from "../src/access-preview.mjs";
+import { createPreviewToken, verifyPreviewToken, hashAccessRequest, validateAccessChangeRequest, validateAccessGroupRequest } from "../src/access-preview.mjs";
 
 const request = { type: "GRANT_CREATE", targetID: "resource-1", permissionMask: 1 };
 const payloadBase = { actorMembershipID: "member-1", actorEpoch: 2,
@@ -53,4 +53,12 @@ test("a bounded same-Vault resource move has an explicit preview request shape",
   assert.throws(() => validateAccessChangeRequest({ changes: [
     { ...move, newParentFolderID: "other-vault" },
   ] }), /invalid_access_request/);
+});
+
+
+test("group request rejects prototype-property discriminants with typed errors", () => {
+  for (const type of ["constructor", "__proto__", "toString", "UNKNOWN"]) {
+    assert.throws(() => validateAccessGroupRequest({type}), error =>
+      error.constructor === Error && error.message === "invalid_access_request");
+  }
 });

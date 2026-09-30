@@ -491,6 +491,9 @@ export class AccessSurfaceStore extends AccessStore {
           { withMutation: async (_receipt, action) => action(client) },
           { ...input, ...input.request },
         );
+        // A delegated primitive can still wait while upgrading a subject/edge
+        // lock. Expiry after that wait must roll back its writes, audit and receipt.
+        verifyPreviewToken(input.token, input.sessionSecret);
         if (result.code) {
           const error = new Error(result.code);
           error.safeCount = result.safeCount;

@@ -88,3 +88,13 @@ test("group signed adapter uses authoritative session identity and secret", asyn
     ),
   );
 });
+
+
+test("group preview rejects prototype-property types before database access", async () => {
+  const {AccessSurfaceStore} = await import("../src/access-surface-store.mjs");
+  const store = new AccessSurfaceStore({});
+  for (const type of ["constructor", "__proto__", "toString"]) {
+    await assert.rejects(store.previewAccessGroupChange({request:{type}}),
+      error => error.constructor === Error && error.message === "invalid_access_request");
+  }
+});

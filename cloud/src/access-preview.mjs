@@ -129,13 +129,17 @@ export function validateAccessChangeRequest(request) {
 }
 
 export function validateAccessGroupRequest(request) {
-  const fields = {
+  const fieldsByType = {
     GROUP_CREATE: ['type', 'name'],
     GROUP_RENAME: ['type', 'groupID', 'expectedVersion', 'name'],
     GROUP_DELETE: ['type', 'groupID', 'expectedVersion'],
     GROUP_MEMBER_ADD: ['type', 'groupID', 'targetMembershipID'],
     GROUP_MEMBER_REMOVE: ['type', 'groupID', 'edgeID', 'expectedVersion'],
-  }[request?.type];
+  };
+  if (typeof request?.type !== "string" || !Object.hasOwn(fieldsByType, request.type)) {
+    throw new Error("invalid_access_request");
+  }
+  const fields = fieldsByType[request.type];
   if (!fields || typeof request !== 'object' || Array.isArray(request)
     || Object.keys(request).some(key => !fields.includes(key))
     || fields.some(key => !Object.hasOwn(request, key))) throw new Error('invalid_access_request');

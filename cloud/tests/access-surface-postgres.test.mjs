@@ -464,6 +464,41 @@ test(
           );
         },
       );
+      await t.test("expiry during delegated non-actor membership lock rolls back edge audit receipt", async () => {
+        const targetUser=(await fixtureQuery(`INSERT INTO users(email,username,display_name,email_verified_at)
+          VALUES($1,$2,'Synthetic target',now()) RETURNING id`,["late-"+suffix+"@example.com","late_"+suffix.slice(-12)])).rows[0].id;
+        const target=(await fixtureQuery(`INSERT INTO team_memberships(team_id,user_id,role) VALUES($1,$2,'editor') RETURNING id`,[team,targetUser])).rows[0].id;
+        const create={type:"GROUP_CREATE",name:"Delegated expiry"};
+        const group=(await commit(create,await preview(create))).group;
+        const request={type:"GROUP_MEMBER_ADD",groupID:group.id,targetMembershipID:target};
+        const p=await preview(request);
+        const {expiresAt,...binding}=verifyPreviewToken(p.token,input.sessionSecret);
+        const locker=await pool.connect();
+        await locker.query('BEGIN');
+        await locker.query('SELECT id FROM team_memberships WHERE id=$1 FOR SHARE',[target]);
+        const token=createPreviewToken(binding,input.sessionSecret,{ttlMS:2000});
+        const deadline=verifyPreviewToken(token,input.sessionSecret).expiresAt;
+        const idempotencyKey=randomUUID();
+        const pending=store.access.commitAccessGroupChange({...input,request,token,idempotencyKey})
+          .then(value=>({value}),error=>({error}));
+        let waiting=false;
+        try {
+          for(let n=0;n<100;n++) {
+            waiting=(await fixtureQuery(`SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+              AND wait_event_type='Lock' AND query LIKE '%SELECT id, user_id, role, epoch FROM team_memberships%FOR UPDATE%'`)).rowCount>0;
+            if(waiting) break;
+            await new Promise(resolve=>setTimeout(resolve,10));
+          }
+          if(waiting) await new Promise(resolve=>setTimeout(resolve,Math.max(0,deadline-Date.now()+30)));
+        } finally { await locker.query('ROLLBACK');locker.release(); }
+        const result=await pending;
+        assert.equal(waiting,true,'commit must reach delegated FOR UPDATE after outer FOR SHARE');
+        assert.match(result.error?.message ?? '',/access_preview_conflict/);
+        assert.equal(result.value,undefined,'no successful notification result');
+        assert.equal((await fixtureQuery('SELECT count(*) FROM team_access_group_members WHERE group_id=$1',[group.id])).rows[0].count,'0');
+        assert.equal((await fixtureQuery(`SELECT count(*) FROM team_audit_events WHERE team_id=$1 AND action='group.member.added' AND metadata->>'groupID'=$2`,[team,group.id])).rows[0].count,'0');
+        assert.equal((await fixtureQuery(`SELECT count(*) FROM team_access_mutation_receipts WHERE actor_user_id=$1 AND idempotency_key=$2`,[user,idempotencyKey])).rows[0].count,'0');
+      });
       await t.test(
         "group add reports effective gain and delete reports committed loss",
         async () => {
@@ -629,13 +664,22 @@ test(
           for (const [label, sql, args] of [
             [
               "members",
-              `SELECT id FROM team_access_group_members WHERE team_id=$1 AND group_id=$2 AND removed_at IS NULL AND id>$3 ORDER BY id LIMIT 51`,
-              [team, big.id, members.nextCursor],
+              `SELECT edge.id,edge.group_id AS "groupID",edge.user_id AS "userID",edge.membership_id AS "membershipID",
+        edge.membership_epoch AS "membershipEpoch",edge.version FROM team_access_group_members AS edge
+        JOIN team_memberships AS member ON member.id=edge.membership_id AND member.team_id=edge.team_id
+          AND member.user_id=edge.user_id AND member.epoch=edge.membership_epoch AND member.revoked_at IS NULL
+        WHERE edge.team_id=$1 AND edge.group_id=$2 AND edge.removed_at IS NULL
+        AND ($3::uuid IS NULL OR edge.id>$3) ORDER BY edge.id LIMIT $4`,
+              [team, big.id, members.nextCursor, 51],
             ],
             [
               "resources",
-              `SELECT id FROM vault_resource_registry WHERE team_id=$1 AND vault_id=$2 AND deleted_at IS NULL AND id>$3 ORDER BY id LIMIT 51`,
-              [team, vault, resources.nextCursor],
+              `SELECT id,team_id AS "teamID",vault_id AS "vaultID",policy_kind AS "policyKind",
+        parent_folder_id AS "parentFolderID",resource_version AS "resourceVersion"
+        FROM vault_resource_registry WHERE team_id=$1 AND vault_id=$2 AND deleted_at IS NULL
+        AND policy_kind IS NOT NULL AND ($3::uuid IS NULL OR id>$3)
+        AND ($4::text IS NULL OR policy_kind=$4) ORDER BY id LIMIT $5`,
+              [team, vault, resources.nextCursor, "HOST", 51],
             ],
           ]) {
             const plan = (
