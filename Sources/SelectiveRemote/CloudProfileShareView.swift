@@ -103,7 +103,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(UpdateLocalization.text(ru: "Поделиться Host с командой", en: "Share Host with a Team"))
+            Text(UpdateLocalization.text(ru: "Скопировать Host в Team Vault", en: "Copy Host to Team Vault"))
                 .font(.title2.bold())
             LabeledContent(UpdateLocalization.text(ru: "Host", en: "Host")) {
                 Text(profile.friendlyName).lineLimit(1)
@@ -152,7 +152,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
                 .disabled(selectedTeamID == nil)
             }
 
-            GroupBox(UpdateLocalization.text(ru: "Что передать", en: "Share Contents")) {
+            GroupBox(UpdateLocalization.text(ru: "Что скопировать", en: "Copy Contents")) {
                 VStack(alignment: .leading, spacing: 10) {
                     Toggle(
                         UpdateLocalization.text(ru: "Логин и параметры подключения", en: "Username and connection settings"),
@@ -215,6 +215,10 @@ struct SelectiveRemoteCloudProfileShareView: View {
                     )
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    Text(UpdateLocalization.text(
+                        ru: "Исходный Personal Host останется. Выбранные пароли копируются как связанные Credential. Участники V1 Team Vault могут получить доступ ко всему содержимому Vault.",
+                        en: "The original Personal Host stays. Selected passwords are copied as linked Credentials. V1 Team Vault members may access the entire Vault."
+                    )).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(4)
             }
@@ -243,7 +247,7 @@ struct SelectiveRemoteCloudProfileShareView: View {
                 Spacer()
                 Button(UpdateLocalization.text(ru: "Закрыть", en: "Close")) { dismiss() }
                     .disabled(isSharing)
-                Button(UpdateLocalization.text(ru: "Зашифровать и поделиться", en: "Encrypt and Share")) {
+                Button(UpdateLocalization.text(ru: "Зашифровать и скопировать", en: "Encrypt and Copy")) {
                     share()
                 }
                 .buttonStyle(.borderedProminent)
@@ -324,8 +328,10 @@ struct SelectiveRemoteCloudProfileShareView: View {
                     sharedProfile.gatewayUsername = ""
                 }
                 let credentials = try await credentialsForShare()
+                let copyIdentity = SelectiveRemotePersonalTeamCopyIdentity.make(sourceID: profile.id)
+                let (copiedProfile, copiedCredentials) = copyIdentity.remap(sharedProfile, credentials: credentials)
                 let sharedRecords = try SelectiveRemotePersonalVaultExporter.makeExport(
-                    profiles: [sharedProfile], credentials: credentials,
+                    profiles: [copiedProfile], credentials: copiedCredentials,
                     snippets: [], forwarding: [], deviceID: deviceID
                 ).document.records
 
@@ -366,7 +372,10 @@ struct SelectiveRemoteCloudProfileShareView: View {
                     throw SelectiveRemoteCloudProfileShareError.conflict
                 }
                 guard case .uploaded = outcome else { throw SelectiveRemoteCloudProfileShareError.conflict }
-                message = UpdateLocalization.text(ru: "Host зашифрован и добавлен в Team Vault.", en: "The Host was encrypted and added to the Team Vault.")
+                message = UpdateLocalization.text(
+                    ru: "Копия Host зашифрована и добавлена в Team Vault. Исходный Host сохранён. Для адресного доступа потребуется регистрация ресурса V2 и публикация ключей.",
+                    en: "An encrypted Host copy was added to the Team Vault. The original Host remains. Resource-specific access requires V2 registration and key publication."
+                )
                 messageIsError = false
             } catch SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper {
                 message = SelectiveRemoteTeamVaultSyncError.missingDeviceWrapper.localizedDescription

@@ -2,11 +2,11 @@ import Combine
 import Foundation
 
 enum NotificationKind: String, Codable, Hashable, Sendable {
-    case deviceApproval, invitation, syncError, conflict, failClosed, hostIdentity, wrapperIssue
+    case deviceApproval, invitation, syncError, conflict, failClosed, hostIdentity, wrapperIssue, accessGained, accessLost
 }
 
 enum NotificationGroup: Codable, Hashable, Sendable {
-    case devices, invitations, syncPersonal, syncTeam(UUID), syncTeamAggregate, hostKey
+    case devices, invitations, syncPersonal, syncTeam(UUID), syncTeamAggregate, hostKey, access(UUID)
 }
 
 struct NotificationObservation: Sendable {
@@ -182,6 +182,9 @@ final class NotificationProjectionStore: ObservableObject {
         case .hostKey:
             return observation.kind == .hostIdentity &&
                 observation.scopeID.lowercased() == recipient.uuidString.lowercased()
+        case .access(let vault):
+            return observation.scopeID.lowercased() == vault.uuidString.lowercased() &&
+                [.accessGained, .accessLost].contains(observation.kind)
         }
     }
 

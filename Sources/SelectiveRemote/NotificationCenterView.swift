@@ -10,6 +10,8 @@ extension NotificationKind {
         case .failClosed: english ? "Team Vault needs attention" : "Командному Vault требуется внимание"
         case .wrapperIssue: english ? "Team key access needs attention" : "Требуется доступ к ключу команды"
         case .hostIdentity: english ? "Host identity changed" : "Идентичность хоста изменилась"
+        case .accessGained: english ? "Team access added" : "Добавлен доступ команды"
+        case .accessLost: english ? "Team access removed" : "Доступ команды удалён"
         }
     }
 
@@ -22,6 +24,7 @@ extension NotificationKind {
         case .failClosed: english ? "Team Vaults remain safely hidden." : "Командные Vaults остаются безопасно скрытыми."
         case .wrapperIssue: english ? "Review device access in Team management." : "Проверьте доступ устройства в управлении командой."
         case .hostIdentity: english ? "The connection was stopped." : "Подключение остановлено."
+        case .accessGained, .accessLost: english ? "Review access in the Team Vault." : "Проверьте доступ в Team Vault."
         }
     }
 
@@ -33,6 +36,7 @@ extension NotificationKind {
         case .conflict: english ? "Review Conflict" : "Проверить конфликт"
         case .failClosed, .wrapperIssue: english ? "Review Team" : "Проверить команду"
         case .hostIdentity: english ? "Review Host Key" : "Проверить ключ хоста"
+        case .accessGained, .accessLost: english ? "Review Team" : "Проверить команду"
         }
     }
 }
@@ -64,7 +68,7 @@ struct NotificationCenterView: View {
             case .all: true
             case .needsAction: item.resolvedAt == nil
             case .sync: [.syncError, .conflict, .failClosed, .wrapperIssue].contains(item.kind)
-            case .security: [.deviceApproval, .failClosed, .wrapperIssue, .hostIdentity].contains(item.kind)
+            case .security: [.deviceApproval, .failClosed, .wrapperIssue, .hostIdentity, .accessGained, .accessLost].contains(item.kind)
             }
         }
     }

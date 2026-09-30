@@ -1,3 +1,4 @@
+import { createAccessClient } from "./access-client.js";
 import {
   normalizeTeamDevicePublicKey,
   normalizeTeamVaultScope,
@@ -645,6 +646,11 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         displayName: String(result.displayName ?? ""),
       };
       return structuredClone(user);
+    },
+
+    accessClient() {
+      return createAccessClient({ request: authorizedRequest, currentUserID: () => user?.id ?? null,
+        currentDeviceID: () => currentDeviceID });
     },
 
     session() {

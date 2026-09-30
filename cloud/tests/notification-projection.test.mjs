@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accessAuditActionLabel } from "../public/access-audit.js";
 import {
   createNotificationState, reconcileNotifications, markNotificationRead,
   notificationCounts, notificationItems, serializeNotificationState,
   deviceNotificationObservations, invitationNotificationObservations,
   syncNotificationDecision,
+  committedAccessObservations,
 } from "../public/notification-projection.js";
 
 const recipient = "11111111-1111-4111-8111-111111111111";
@@ -13,6 +15,30 @@ const invitation = "33333333-3333-4333-8333-333333333333";
 const team = "44444444-4444-4444-8444-444444444444";
 const at = "2026-09-28T19:00:00.000Z";
 const later = "2026-09-28T19:05:00.000Z";
+
+test("Audit action labels are localized and do not interpolate metadata", () => {
+  const secret = "decrypted-name-SECRET";
+  assert.equal(accessAuditActionLabel("grant.created", "en", { name: secret }), "created an access grant");
+  assert.equal(accessAuditActionLabel("resource.move_access_changed", "ru", { name: secret }),
+    "изменил(а) родительскую папку ресурса");
+  assert.equal(accessAuditActionLabel("unknown", "en", { name: secret }), null);
+});
+
+test("committed access candidates filter current recipient and effective deltas", () => {
+  const result = committedAccessObservations({ notificationCandidates: [
+    { userID: recipient, resourceID: device, gainedMask: 1, lostMask: 0 },
+    { userID: recipient, resourceID: device, gainedMask: 1, lostMask: 0 },
+    { userID: recipient, resourceID: invitation, gainedMask: 0, lostMask: 0 },
+    { userID: team, vaultID: team, resourceID: invitation, gainedMask: 0, lostMask: 1 },
+  ] }, { vaultID: team }, recipient);
+  assert.deepEqual(result, [{ group: `access:${team}`, complete: false,
+    observations: [{ kind: "accessGained", scopeID: team, sourceID: device }] }]);
+  const groupResult = committedAccessObservations({ notificationCandidates: [
+    { userID: recipient, vaultID: invitation, resourceID: device, gainedMask: 0, lostMask: 4 },
+  ] }, { vaultID: team }, recipient);
+  assert.equal(groupResult[0].group, `access:${invitation}`);
+  assert.equal(groupResult[0].observations[0].kind, "accessLost");
+});
 
 test("device stays active after read and resolves only after a complete fresh device list", () => {
   let state = createNotificationState(recipient);

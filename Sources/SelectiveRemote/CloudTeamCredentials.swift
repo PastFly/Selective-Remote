@@ -932,6 +932,9 @@ struct SelectiveRemoteTeamCredentialsView: View {
 
     @ViewBuilder
     private func credentialActions(_ credential: SelectiveRemoteTeamCredential) -> some View {
+        Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+            AccessResourceEntry.showLegacy(kind: .credential)
+        }
         Button(UpdateLocalization.text(ru: "Копировать логин", en: "Copy Username"), systemImage: "person.crop.circle") {
             copy(credential.username, message: UpdateLocalization.text(
                 ru: "Имя пользователя скопировано",

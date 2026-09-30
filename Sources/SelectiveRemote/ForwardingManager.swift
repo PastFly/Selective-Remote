@@ -1022,6 +1022,9 @@ struct ForwardingManagerView: View {
 
     @ViewBuilder
     private func forwardingContextMenu(_ item: ForwardingManagerItem) -> some View {
+        Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
+            AccessResourceEntry.showLegacy(kind: .forwarding)
+        }
         if item.state.canStart {
             Button("Запустить", systemImage: "play.fill") {
                 selectForAction(item)

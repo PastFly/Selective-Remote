@@ -343,60 +343,59 @@ export class CloudService {
     });
   }
 
-  async listAccessGroups(session, teamID, { limit = 50, cursor = null } = {}) {
+  async listAccessGroups(session, teamID, { limit = 50, cursor = null, search = "" } = {}) {
     return this.store.access.listAccessGroups({ actorUserID: session.user_id,
-      actorDeviceID: session.device_id, teamID, limit: Number(limit), cursor });
+      actorDeviceID: session.device_id, teamID, limit: Number(limit), cursor, search });
   }
 
-  async createAccessGroup(session, teamID, input, idempotencyKey) {
-    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
-    return this.store.access.createAccessGroup({ actorUserID: session.user_id,
-      actorDeviceID: session.device_id, teamID, vaultID: input.vaultID,
-      name: input?.name, idempotencyKey: validateIdempotencyKey(idempotencyKey) });
-  }
+  // Original public mutation routes are retired: the signed group commit is mandatory.
+  async createAccessGroup() { throw new Error("access_preview_conflict"); }
+  async renameAccessGroup() { throw new Error("access_preview_conflict"); }
+  async deleteAccessGroup() { throw new Error("access_preview_conflict"); }
+  async addAccessGroupMember() { throw new Error("access_preview_conflict"); }
+  async removeAccessGroupMember() { throw new Error("access_preview_conflict"); }
 
-  async renameAccessGroup(session, teamID, groupID, input, idempotencyKey) {
-    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
-    return this.store.access.renameAccessGroup({ actorUserID: session.user_id,
-      actorDeviceID: session.device_id, teamID, vaultID: input.vaultID,
-      groupID, expectedVersion: input?.expectedVersion, name: input?.name,
-      idempotencyKey: validateIdempotencyKey(idempotencyKey) });
+  async listAccessVaults(session, teamID, {limit = 50, cursor = null} = {}) {
+    return this.store.access.listAccessVaults({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,limit:Number(limit),cursor});
   }
-
-  async deleteAccessGroup(session, teamID, groupID, input, idempotencyKey) {
-    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
-    const result = await this.store.access.deleteAccessGroup({
-      actorUserID: session.user_id, actorDeviceID: session.device_id,
-      teamID, vaultID: input.vaultID, groupID,
-      expectedVersion: input?.expectedVersion,
-      idempotencyKey: validateIdempotencyKey(idempotencyKey),
-    });
-    if (result.code === "group_grants_must_be_revoked_first") {
-      const error = new Error(result.code);
-      error.safeCount = result.safeCount;
-      throw error;
-    }
-    return result;
+  async getAccessContext(session, teamID, vaultID) {
+    const capabilities = await this.store.getVaultFoundationCapabilities({session,teamID,vaultID});
+    const policyMutationAvailable = capabilities.resource_registry_v2;
+    const blockers = capabilities.formatState === "V1_ACTIVE" ? ["access_v2_preparing_required"]
+      : ["V2_READY","V2_ACTIVE"].includes(capabilities.formatState) ? ["crypto_publication_required"]
+        : policyMutationAvailable ? [] : ["team_permission_denied"];
+    const groupMutationAvailable = policyMutationAvailable
+      && await this.store.access.groupMutationAvailable({actorUserID:session.user_id,
+        actorDeviceID:session.device_id,teamID});
+    if (policyMutationAvailable && !groupMutationAvailable) blockers.push("crypto_publication_required");
+    return {...capabilities,policyMutationAvailable,groupMutationAvailable,blockers};
   }
-
-  async addAccessGroupMember(session, teamID, groupID, input, idempotencyKey) {
-    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
-    return this.store.access.addAccessGroupMember({
-      actorUserID: session.user_id, actorDeviceID: session.device_id,
-      teamID, vaultID: input.vaultID, groupID,
-      targetMembershipID: input?.targetMembershipID,
-      idempotencyKey: validateIdempotencyKey(idempotencyKey),
-    });
+  async listAccessResources(session, teamID, vaultID, {limit = 50,cursor = null,kind = null} = {}) {
+    return this.store.access.listAccessResources({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,limit:Number(limit),cursor,kind});
   }
-
-  async removeAccessGroupMember(session, teamID, groupID, edgeID, input, idempotencyKey) {
-    if (!isUUID(input?.vaultID)) throw new Error("invalid_access_request");
-    return this.store.access.removeAccessGroupMember({
-      actorUserID: session.user_id, actorDeviceID: session.device_id,
-      teamID, vaultID: input.vaultID, groupID, edgeID,
-      expectedVersion: input?.expectedVersion,
-      idempotencyKey: validateIdempotencyKey(idempotencyKey),
-    });
+  async getAccessResource(session, teamID, vaultID, resourceID) {
+    return this.store.access.getAccessResource({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,resourceID});
+  }
+  async listAccessDevices(session, teamID, vaultID, {subjectUserID,limit = 50,cursor = null} = {}) {
+    return this.store.access.listAccessDevices({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,subjectUserID,limit:Number(limit),cursor});
+  }
+  async listAccessGroupMembers(session, teamID, groupID, {limit = 50,cursor = null} = {}) {
+    return this.store.access.listAccessGroupMembers({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,groupID,limit:Number(limit),cursor});
+  }
+  async previewAccessGroupChange(session, teamID, vaultID, input) {
+    return this.store.access.previewAccessGroupChange({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,request:input?.request,cursor:input?.cursor,
+      sessionSecret:this.config.sessionPepper});
+  }
+  async commitAccessGroupChange(session, teamID, vaultID, input, idempotencyKey) {
+    return this.store.access.commitAccessGroupChange({actorUserID:session.user_id,
+      actorDeviceID:session.device_id,teamID,vaultID,request:input?.request,token:input?.token,
+      idempotencyKey:validateIdempotencyKey(idempotencyKey),sessionSecret:this.config.sessionPepper});
   }
 
   async listAccessGrants(session, teamID, vaultID, { limit = 50, cursor = null } = {}) {

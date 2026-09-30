@@ -1,0 +1,169 @@
+.access-manager {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.access-manager h2,
+.access-manager h3,
+.access-manager h4,
+.access-manager h5,
+.access-manager p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.access-manager p {
+  color: var(--text-secondary);
+  line-height: 1.55;
+}
+.access-manager nav,
+.access-presets,
+.access-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.access-manager button,
+.access-manager input,
+.access-manager select {
+  font: inherit;
+  min-height: 44px;
+  border: 1px solid var(--selector-border);
+  border-radius: 10px;
+  background: var(--control-surface);
+  color: var(--text-primary);
+  padding: 10px 12px;
+  max-width: 100%;
+}
+.access-manager button {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.access-manager button:hover {
+  background: var(--hover);
+}
+.access-manager button[aria-current="page"] {
+  background: var(--selected);
+  border-color: var(--accent);
+}
+.access-manager button:disabled {
+  cursor: default;
+  color: var(--text-disabled);
+  border-color: var(--border-disabled);
+  background: var(--control-surface-disabled);
+}
+.access-manager :focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 3px;
+}
+.access-manager label {
+  display: grid;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+.access-manager label.access-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  overflow-wrap: anywhere;
+}
+.access-manager input[type="checkbox"] {
+  flex: 0 0 20px;
+  width: 20px;
+  min-height: 20px;
+  accent-color: var(--accent);
+}
+.access-directory,
+.access-composer,
+.access-detail,
+.access-preview {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 16px;
+  min-width: 0;
+}
+.access-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+.access-rows li,
+.access-grant {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  min-width: 0;
+}
+.access-rows .access-check {
+  flex: 1 1 240px;
+}
+.access-grant {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.access-paths {
+  padding-left: 24px;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+}
+.access-preview article {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.access-manager [role="alert"] {
+  color: var(--text-danger);
+  padding: 12px;
+  border: 1px solid var(--text-danger);
+  border-radius: 10px;
+}
+.access-state {
+  border-inline-start: 4px solid var(--accent);
+  padding: 12px;
+  background: var(--surface-soft);
+}
+@media (min-width: 900px) {
+  .access-composer {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .access-composer h3,
+  .access-composer > p,
+  .access-composer .access-chips {
+    grid-column: 1/-1;
+  }
+}
+@media (max-width: 620px) {
+  .access-directory,
+  .access-composer,
+  .access-detail,
+  .access-preview {
+    padding: 12px;
+  }
+  .access-rows li,
+  .access-grant {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .access-manager button,
+  .access-manager select,
+  .access-manager input[type="search"] {
+    width: 100%;
+  }
+  .access-presets > button,
+  .access-chips > button {
+    width: auto;
+  }
+}

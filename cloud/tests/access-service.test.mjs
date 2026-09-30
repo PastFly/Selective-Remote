@@ -22,19 +22,6 @@ test("access preview and commit use the server session secret, never a client fi
   }
 });
 
-test("Team groups keep Vault context as a gate, not an ownership key", async () => {
-  let seen;
-  const access = { async createAccessGroup(input) { seen = input;
-    return { group: { id: "group", team_id: "team", name: input.name } }; } };
-  const service = new CloudService({ access }, { sessionPepper: "secret" });
-  const result = await service.createAccessGroup({ user_id: "actor", device_id: "device" },
-    "team", { vaultID: "22222222-2222-4222-8222-222222222222", name: "Operators" }, "request:0123456789");
-  assert.equal(result.group.id, "group");
-  assert.equal(seen.teamID, "team");
-  assert.equal(seen.vaultID, "22222222-2222-4222-8222-222222222222");
-  assert.equal(seen.actorDeviceID, "device");
-});
-
 test("Effective Access forwards only an explicit validated subject device", async () => {
   const subject = "11111111-1111-4111-8111-111111111111";
   const device = "22222222-2222-4222-8222-222222222222";

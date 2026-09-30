@@ -659,6 +659,7 @@
     "Удалить аккаунт?": "Delete account?",
     "Удалить запись?": "Delete record?",
     "Укажите email участника.": "Enter the member's email.",
+    "Доступ и общий доступ": "Access & sharing",
     "Управление командой": "Team management",
     "Управляется приложением": "Managed by the app",
     "Устройства не допущены: проверьте полномочия, отпечаток и доступность Team Vault key.": "Devices were not approved. Check permissions, the fingerprint, and Team Vault key availability.",

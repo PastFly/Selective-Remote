@@ -1,6 +1,6 @@
 // Local, allowlisted projection of current source problems. No Vault data enters this module.
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
-const kinds = new Set(["deviceApproval", "invitation", "syncError", "conflict", "failClosed", "wrapperIssue"]);
+const kinds = new Set(["deviceApproval", "invitation", "syncError", "conflict", "failClosed", "wrapperIssue", "accessGained", "accessLost"]);
 const fixedSources = new Set(["personal", "team"]);
 const maxSourceItems = 1_000;
 const maxPersistedItems = 5_000;
@@ -9,6 +9,7 @@ const resolvedLifetime = 30 * 24 * 60 * 60 * 1_000;
 
 function validGroup(group) {
   return group === "devices" || group === "invitations"
+    || (typeof group === "string" && group.startsWith("access:") && uuid.test(group.slice(7)))
     || group === "sync:personal" || (typeof group === "string" && group.startsWith("sync:team:")
       && uuid.test(group.slice("sync:team:".length)));
 }
@@ -19,11 +20,38 @@ function validObservation(group, value, recipient) {
   if (group === "devices") return value.kind === "deviceApproval"
     && value.scopeID.toLowerCase() === recipient.toLowerCase();
   if (group === "invitations") return value.kind === "invitation";
+  if (group.startsWith("access:")) return value.scopeID.toLowerCase() === group.slice(7).toLowerCase()
+    && ["accessGained", "accessLost"].includes(value.kind);
   if (group === "sync:personal") return value.scopeID.toLowerCase() === recipient.toLowerCase()
     && value.sourceID === "personal" && ["syncError", "conflict"].includes(value.kind);
   if (group.startsWith("sync:team:")) return value.scopeID.toLowerCase() === group.slice(10).toLowerCase()
     && ["syncError", "conflict", "failClosed", "wrapperIssue"].includes(value.kind);
   return false;
+}
+
+export function committedAccessObservations(commit, scope, recipient) {
+  if (!uuid.test(recipient) || !uuid.test(scope?.vaultID) ||
+    !Array.isArray(commit?.notificationCandidates)) return [];
+  const groups = new Map();
+  const seen = new Set();
+  for (const candidate of commit.notificationCandidates) {
+    if (typeof candidate?.userID !== "string" ||
+      candidate.userID.toLowerCase() !== recipient.toLowerCase() ||
+      !uuid.test(candidate.resourceID)) continue;
+    const vaultID = candidate.vaultID ?? scope.vaultID;
+    if (!uuid.test(vaultID)) continue;
+    for (const [kind, mask] of [["accessGained", candidate.gainedMask], ["accessLost", candidate.lostMask]]) {
+      if (!Number.isSafeInteger(mask) || mask <= 0 || mask > 63) continue;
+      const group = `access:${vaultID.toLowerCase()}`;
+      const key = `${group}/${candidate.resourceID.toLowerCase()}/${kind}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (!groups.has(group)) groups.set(group, { group, complete: false, observations: [] });
+      groups.get(group).observations.push({ kind, scopeID: vaultID.toLowerCase(),
+        sourceID: candidate.resourceID.toLowerCase() });
+    }
+  }
+  return [...groups.values()];
 }
 
 function validTime(value) {
