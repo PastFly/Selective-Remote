@@ -120,6 +120,8 @@
 **Interfaces:**
 - Consume actual Task2/3/4 product modules/views and injected clients; synthetic test state only, no production fixture switch or invented backend success.
 - Produce portable scenario/evidence manifest, scale timings/request bounds, screenshots outside tracked source when large, and functional/local visual status distinctly from staging acceptance.
+- Resolve the Task3 deferred rendered-copy findings: a first grant must not use equivalent-revoke wording; device status and blocker codes need RU/EN labels with safe unknown fallback. Cover first-grant and surviving-path revoke as distinct scenarios.
+- Check malformed terminal preview totals, duplicate impact rows and changed counts on both actual web and native surfaces; neither may confirm incomplete consequences. Native Task3 fixes must have equivalent web acceptance coverage.
 
 - [ ] **Step 1: Add failing acceptance scenarios** for actual Cloud/native surfaces, including navigation through the real Team workspace Access destination rather than only constructing its component: empty/loading/error, V1/preparing/ready/active fixture, direct/group/multiple paths, no key/UNKNOWN; keyboard focus/close/confirm, RU/EN Light/Graphite normal/narrow and desktop/tablet/mobile; denied-label canary and stale context. Include 5/100/1000 members and50/500/5000 resources with bounded visible rows/API requests.
 - [ ] **Step 2: Run** new smoke/scenarios to capture concrete RED gaps.
