@@ -441,9 +441,10 @@ extension CloudAccessTests {
             .frame(width: 640, height: 680))
         host.frame = CGRect(x: 0, y: 0, width: 640, height: 680)
         let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
         window.contentView = host
         window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
+        defer { window.close(); window.contentView = nil }
         try await Task.sleep(for: .milliseconds(50))
         #expect(model.context != nil)
         NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)

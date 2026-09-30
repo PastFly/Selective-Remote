@@ -38,6 +38,18 @@ enum SelectiveRemoteCloudTeamStatus: Equatable {
     }
 }
 
+@MainActor
+enum CloudManagementActionQueue {
+    static func enqueue(whileActive isActive: @escaping @MainActor () -> Bool,
+                        perform action: @escaping @MainActor () async -> Void) {
+        guard isActive() else { return }
+        Task { @MainActor in
+            guard isActive() else { return }
+            await action()
+        }
+    }
+}
+
 struct SelectiveRemoteCloudTeamManagementView: View {
     let endpoint: URL
     let client: SelectiveRemoteCloudAPIClient
@@ -634,6 +646,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             selectedTeamID = preferredID.flatMap { id in teams.contains { $0.id == id } ? id : nil }
                 ?? teams.first?.id
             await loadSelectedTeam()
+            guard sessionActive else { return }
         } catch {
             guard sessionActive else { return }
             errorMessage = error.localizedDescription
@@ -767,7 +780,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     private func createTeam() {
         let name = normalized(newTeamName)
         guard !name.isEmpty else { return }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -788,7 +801,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     private func invite(_ team: SelectiveRemoteCloudTeam) {
         let username = normalized(invitationUsername)
         guard !username.isEmpty else { return }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -803,6 +816,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 latestInvitationURL = nil
                 statusMessage = .usernameInvited
                 await loadSelectedTeam()
+                guard sessionActive else { return }
             } catch {
                 guard sessionActive else { return }
                 errorMessage = error.localizedDescription
@@ -812,7 +826,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func createInvitationLink(_ team: SelectiveRemoteCloudTeam) {
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -828,6 +842,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 latestInvitationURL = url
                 statusMessage = .linkCreated
                 await loadSelectedTeam()
+                guard sessionActive else { return }
             } catch {
                 guard sessionActive else { return }
                 errorMessage = error.localizedDescription
@@ -839,7 +854,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     private func inviteByEmail(_ team: SelectiveRemoteCloudTeam) {
         let email = normalized(invitationEmail).lowercased()
         guard !email.isEmpty else { return }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -848,13 +863,14 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 invitationEmail = ""
                 statusMessage = .emailInvited
                 await loadSelectedTeam()
+                guard sessionActive else { return }
             } catch { guard sessionActive else { return }; errorMessage = error.localizedDescription }
             isBusy = false
         }
     }
 
     private func accept(_ invitation: SelectiveRemoteCloudTeamInvitation) {
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -872,7 +888,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func cancel(_ invitation: SelectiveRemoteCloudTeamInvitation) {
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -885,6 +901,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 if invitation.type == .link { latestInvitationURL = nil }
                 statusMessage = .invitationRevoked
                 await loadSelectedTeam()
+                guard sessionActive else { return }
             } catch {
                 guard sessionActive else { return }
                 errorMessage = error.localizedDescription
@@ -894,6 +911,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func copyInvitationLink(_ value: String) {
+        guard sessionActive else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
     }
@@ -912,7 +930,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     private func createVault(_ team: SelectiveRemoteCloudTeam) {
         let name = normalized(newVaultName)
         guard !name.isEmpty else { return }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {
@@ -931,6 +949,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     }
 
     private func synchronizeVault(_ vault: SelectiveRemoteCloudSharedVault) {
+        guard sessionActive else { return }
         guard let deviceID = UUID(uuidString: storedDeviceID),
               deviceID.isSelectiveRemoteCloudUUID
         else {
@@ -940,13 +959,15 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             )
             return
         }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             synchronizingVaultID = vault.id
             errorMessage = nil
             defer {
-                synchronizingVaultID = nil
-                isBusy = false
+                if sessionActive {
+                    synchronizingVaultID = nil
+                    isBusy = false
+                }
             }
             do {
                 let report = try await SelectiveRemoteTeamVaultAutoSync.shared.synchronizeOnce(
@@ -981,7 +1002,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     ) {
         let name = normalized(vaultNameDraft)
         guard !name.isEmpty else { return }
-        Task { @MainActor in
+        CloudManagementActionQueue.enqueue(whileActive: { sessionActive }) {
             isBusy = true
             errorMessage = nil
             do {

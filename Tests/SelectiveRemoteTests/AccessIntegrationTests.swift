@@ -2,6 +2,20 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
+private actor AccessManagementRequestProbe {
+    private(set) var count = 0
+    func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        count += 1
+        let data = Data("{\"error\":\"unavailable\"}".utf8)
+        return (data, HTTPURLResponse(url: request.url!, statusCode: 503,
+            httpVersion: "HTTP/1.1", headerFields: nil)!)
+    }
+}
+
+@MainActor private final class AccessManagementSessionFlag {
+    var active = true
+}
+
 @Suite("Access integration")
 @MainActor
 struct AccessIntegrationTests {
@@ -9,6 +23,39 @@ struct AccessIntegrationTests {
     private let other = UUID(uuidString: "22222222-2222-4222-8222-222222222222")!
     private let vault = UUID(uuidString: "33333333-3333-4333-8333-333333333333")!
     private let resource = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+
+    @Test("A queued Team action cannot call the client after session invalidation")
+    func queuedManagementActionStopsBeforeClientCall() async throws {
+        let endpoint = URL(string: "https://access.example.test")!
+        let tokenStore = SelectiveRemoteCloudMemoryTokenStore()
+        tokenStore.saveToken(String(repeating: "t", count: 43), for: endpoint)
+        let probe = AccessManagementRequestProbe()
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokenStore,
+            dataLoader: { try await probe.load($0) })
+        let session = AccessManagementSessionFlag()
+
+        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+            _ = try? await client.createTeam(endpoint: endpoint, name: "Queued")
+        }
+        session.active = false
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await probe.count == 0)
+
+        session.active = true
+        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+            _ = try? await client.createTeam(endpoint: endpoint, name: "Active")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await probe.count == 1)
+
+        session.active = false
+        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+            _ = try? await client.createTeam(endpoint: endpoint, name: "Inactive")
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await probe.count == 1)
+    }
+
 
     @Test("Only committed current-account effective changes become opaque notifications")
     func committedCandidates() {
