@@ -37,7 +37,7 @@ The active reader compares the complete Team group/edge/policy-revision snapshot
 
 ## Backend additions needed by product integration
 
-1. Authenticated scoped read-only Access Vault/context directory, including lifecycle and explicit operation availability, with no ciphertext/key material.
+1. Authenticated scoped read-only Access Vault/context directory, including lifecycle and explicit operation availability, with no ciphertext/key material. Resource metadata supports both bounded pages and an exact Team/Vault/resource lookup with identical authorization, so editing an off-page grant never guesses its policy kind or scans the entire inventory.
 2. Bounded server group search, group-member list and registry resource list (opaque IDs, kind, parent and version only). Reuse existing bounded Team member search. Never send encrypted-name search text to the server; search authorized decrypted labels locally and label that scope honestly.
 3. Signed group-operation preview and commit for create/rename/delete/member add/remove. Bind actor membership/device, Team revision, Vault context, group/edge/subject versions, affected Vault policies and request. Recheck after locks within the same mutation transaction. Existing HTTP mutations must not provide an unsigned bypass.
 4. Show affected grants/resources and effective deltas for group changes within existing bounds. Overflow fails closed, including `group_grants_must_be_revoked_first` with safe count and a paged bounded revoke workflow. Team groups do not become Vault-owned.
