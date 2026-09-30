@@ -14,6 +14,11 @@ private actor AccessManagementRequestProbe {
 
 @MainActor private final class AccessManagementSessionFlag {
     var active = true
+    private(set) var checks = 0
+    func isActive() -> Bool {
+        checks += 1
+        return active
+    }
 }
 
 @Suite("Access integration")
@@ -34,25 +39,33 @@ struct AccessIntegrationTests {
             dataLoader: { try await probe.load($0) })
         let session = AccessManagementSessionFlag()
 
-        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+        CloudManagementActionQueue.enqueue(whileActive: { session.isActive() }) {
             _ = try? await client.createTeam(endpoint: endpoint, name: "Queued")
         }
+        #expect(session.checks == 1)
         session.active = false
-        try await Task.sleep(for: .milliseconds(50))
+        for _ in 0..<100 {
+            if session.checks >= 2 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(session.checks == 2)
         #expect(await probe.count == 0)
 
         session.active = true
-        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+        CloudManagementActionQueue.enqueue(whileActive: { session.isActive() }) {
             _ = try? await client.createTeam(endpoint: endpoint, name: "Active")
         }
-        try await Task.sleep(for: .milliseconds(50))
+        for _ in 0..<100 {
+            if await probe.count >= 1 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
         #expect(await probe.count == 1)
 
         session.active = false
-        CloudManagementActionQueue.enqueue(whileActive: { session.active }) {
+        CloudManagementActionQueue.enqueue(whileActive: { session.isActive() }) {
             _ = try? await client.createTeam(endpoint: endpoint, name: "Inactive")
         }
-        try await Task.sleep(for: .milliseconds(50))
+        #expect(session.checks == 5)
         #expect(await probe.count == 1)
     }
 
