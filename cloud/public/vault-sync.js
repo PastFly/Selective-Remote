@@ -686,7 +686,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         body: JSON.stringify({ currentPassword: String(currentPassword ?? ""), newPassword: normalizedPassword(newPassword) }),
       });
       const result = await responseJSON(response, "password_change_failed");
-      if (!response.ok) throw new Error(["invalid_password", "invalid_credentials"].includes(result.error) ? result.error : "password_change_failed");
+      if (!response.ok) throw new Error(["invalid_password", "invalid_credentials", "personal_vault_rewrap_required"].includes(result.error) ? result.error : "password_change_failed");
       if (result.changed !== true) throw new Error("password_change_failed");
       return { changed: true };
     },
@@ -730,6 +730,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
 
     async deviceTrustSnapshot() {
       const response = await authorizedRequest("/v1/device-trust");
+      if (response.status === 404) throw new Error("device_trust_unsupported");
       const result = await responseJSON(response, "device_trust_download_failed");
       if (!response.ok || !["UNINITIALIZED", "ROOT_PUBLISHED"].includes(result?.state)) {
         throw new Error("device_trust_download_failed");
@@ -739,6 +740,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
 
     async deviceTrustRequests() {
       const response = await authorizedRequest("/v1/device-trust/requests");
+      if (response.status === 404) throw new Error("device_trust_unsupported");
       const result = await responseJSON(response, "device_trust_download_failed");
       if (!response.ok || !Array.isArray(result?.requests) || result.requests.length > 100) {
         throw new Error("device_trust_download_failed");

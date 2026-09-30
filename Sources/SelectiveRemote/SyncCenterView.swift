@@ -65,6 +65,14 @@ struct SyncCenterView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            if snapshot.lifecycle == .unknown {
+                Text(english
+                     ? "This Mac has no confirmation of the current sync state. Retry, or open Cloud Settings to check sign-in and Vault access."
+                     : "На этом Mac нет подтверждения текущего состояния синхронизации. Повторите синхронизацию или откройте настройки Cloud, чтобы проверить вход и доступ к Vault.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if let date = snapshot.lastConfirmedAt {
                 HStack(spacing: 5) {
                     Text(english ? "Last confirmed on this Mac:" : "Последнее подтверждение на этом Mac:")

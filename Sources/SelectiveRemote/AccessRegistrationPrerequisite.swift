@@ -5,12 +5,12 @@ enum AccessRegistrationPrerequisite {
     static func show(kind: CloudAccessKind) {
         let alert = NSAlert()
         alert.messageText = CloudAccessLocalization.text(
-            "Для этого объекта нужен ресурс реестра V2",
-            "This item needs a V2 registry resource"
+            "Отдельный доступ к объекту пока недоступен",
+            "Individual access is not available for this item yet"
         )
         alert.informativeText = CloudAccessLocalization.text(
-            "Объект \(kind.rawValue) хранится в Legacy Team Vault. Локальный ID и путь не являются подтверждённым ID ресурса доступа. Откройте Доступ у Team Vault, чтобы выбрать зарегистрированный сервером ресурс. Связь с этим объектом требует отдельной миграции и публикации ключей.",
-            "This \(kind.rawValue) item is stored in a legacy Team Vault. Its local ID or path is not a verified access resource ID. Open Access on the Team Vault to select a server registered resource. Linking it to this item requires separate migration and key publication."
+            "\(CloudAccessLocalization.kind(kind.rawValue)) использует общий доступ к Team Vault. Откройте «Доступ» у Team Vault, чтобы проверить настройки Vault и список зарегистрированных ресурсов. Если нужного объекта нет в списке, попросите владельца команды подготовить его для отдельного доступа.",
+            "This \(CloudAccessLocalization.kind(kind.rawValue).lowercased()) uses whole-Vault access. Open Access on the Team Vault to check Vault settings and the registered resource list. If the item is missing, ask the team Owner to prepare it for individual access."
         )
         alert.addButton(withTitle: CloudAccessLocalization.text("Понятно", "OK"))
         alert.runModal()

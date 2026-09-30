@@ -28,8 +28,8 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
         DisclosureGroup(CloudAccessLocalization.text("Зарегистрированные ресурсы", "Registered resources")) {
             VStack(alignment: .leading, spacing: 8) {
                 Text(CloudAccessLocalization.text(
-                    "Выберите подтверждённый сервером ресурс. Записи V1 и пути папок не связываются с ним автоматически.",
-                    "Select a server registered resource. V1 records and folder paths are not linked automatically."
+                    "Выберите ресурс из списка команды. Если нужного объекта здесь нет, попросите владельца команды подготовить его для отдельного доступа.",
+                    "Select a resource from the team list. If the item is missing, ask the team Owner to prepare it for individual access."
                 )).font(.caption).foregroundStyle(.secondary)
                 Picker(CloudAccessLocalization.text("Тип ресурса", "Resource type"), selection: $kind) {
                     ForEach(CloudAccessKind.allCases.filter { $0 != .vault }, id: \.self) { value in
@@ -49,7 +49,7 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
                     .accessibilityIdentifier("access-resource-\(row.id.canonicalCloudString)")
                 }
                 if rows.isEmpty && loaded && error == nil {
-                    Text(CloudAccessLocalization.text("В реестре нет ресурсов этого типа.", "No registered resources of this type."))
+                    Text(CloudAccessLocalization.text("В списке команды нет ресурсов этого типа. Обратитесь к владельцу команды.", "The team list has no resources of this type. Contact the team Owner."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack {

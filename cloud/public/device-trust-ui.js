@@ -1,5 +1,6 @@
 import { teamDevicePublicKeyFingerprint } from "./team-vault-crypto.js";
 import { createBrowserDeviceTrustFlow } from "./device-trust-flow.js";
+import { deviceTrustFailureCopy, deviceTrustRequestStatus } from "./device-trust-copy.js";
 
 export function createBrowserDeviceTrustPanel({ container, documentValue, client,
   repository, identityRepository = null, endpoint, accountID, identity,
@@ -22,8 +23,7 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
       button.disabled = true;
       try { await run(); await refresh(); onUpdated(); }
       catch (error) {
-        const message = element("p", label("Действие не выполнено. Проверьте данные на обоих устройствах и обновите страницу.",
-          "Action failed. Check both devices and refresh."), "device-trust-error");
+        const message = element("p", deviceTrustFailureCopy(error, documentValue.documentElement?.lang ?? "ru"), "device-trust-error");
         message.setAttribute("role", "alert");
         container.prepend(message);
       } finally { button.disabled = false; }
@@ -34,6 +34,7 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
     const input = documentValue.createElement("input");
     input.type = "text";
     input.placeholder = placeholder;
+    input.setAttribute("aria-label", placeholder);
     input.autocomplete = autocomplete;
     input.spellcheck = false;
     return input;
@@ -99,7 +100,7 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
           () => flow.requestApproval()));
       }
       if (own) {
-        fragment.append(element("p", `${label("Заявка", "Request")}: ${own.status}`));
+        fragment.append(element("p", `${label("Заявка", "Request")}: ${deviceTrustRequestStatus(own.status, documentValue.documentElement?.lang ?? "ru")}`));
         if (own.keyVersion > 1) {
           fragment.append(element("p", `${label("Новый отпечаток", "New fingerprint")}: ${
             await teamDevicePublicKeyFingerprint(own.publicKey)}`, "device-trust-fingerprint"));
@@ -146,8 +147,8 @@ export function createBrowserDeviceTrustPanel({ container, documentValue, client
             }));
           } else {
             card.append(element("p", label(
-              "Проверка началась в другом окне. Дождитесь истечения challenge и начните заново.",
-              "Challenge started in another window. Wait for expiry and restart.")));
+              "Проверка началась в другом окне. Дождитесь окончания её срока и начните заново.",
+              "The check started in another window. Wait for it to expire, then start again.")));
           }
           card.append(action(label("Отклонить", "Reject"),
             () => flow.reject(request.requestID), "danger"));

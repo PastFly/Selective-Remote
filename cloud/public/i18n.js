@@ -567,6 +567,7 @@
     "Новые зарегистрированные устройства активных участников будут допускаться к текущему членству автоматически. Вход участника на новом устройстве считается достаточным сигналом доверия.": "New registered devices belonging to active members will be approved for the current membership automatically. A member signing in on a new device is treated as sufficient trust.",
     "Новые пароли не совпадают.": "The new passwords do not match.",
     "Новый пароль должен содержать не менее 12 символов.": "The new password must contain at least 12 characters.",
+    "Смена пароля временно недоступна для сохранения доступа к личным данным. Пароль не изменён.": "Password changes are temporarily unavailable to preserve access to your personal data. Your password has not changed.",
     "Новых приглашений нет.": "There are no new invitations.",
     "Обновляем…": "Updating…",
     "Одноразовая ссылка не создана. Проверьте роль и полномочия.": "The one-time link was not created. Check the role and permissions.",

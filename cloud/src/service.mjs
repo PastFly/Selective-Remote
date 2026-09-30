@@ -258,8 +258,10 @@ export class CloudService {
 
   async changePassword(session, input) {
     await this.requireAccountPassword(session, input?.currentPassword);
-    const passwordHash = await hashPassword(validatePassword(input?.newPassword));
-    return this.store.changePassword(session.user_id, session.session_id, passwordHash);
+    validatePassword(input?.newPassword);
+    // Authentication-only changes can orphan a Personal Vault, including a first
+    // upload by an existing session. Keep this closed until atomic rewrap exists.
+    throw new Error("personal_vault_rewrap_required");
   }
 
   async requireAccountPassword(session, password) {

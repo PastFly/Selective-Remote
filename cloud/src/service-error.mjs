@@ -8,6 +8,7 @@ const operationStatuses = Object.freeze({
   invalid_password_reset_token: 400,
   invalid_email: 400,
   invalid_password: 400,
+  personal_vault_rewrap_required: 409,
   invalid_device: 400,
   invalid_device_public_key: 400,
   invalid_team_device_admission_policy: 400,

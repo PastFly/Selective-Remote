@@ -159,7 +159,7 @@ test("account deletion requires password reauthentication and exact account emai
   assert.equal(store.deletedUserID, "user-1");
 });
 
-test("account settings require reauthentication and preserve only the current session after password change", async () => {
+test("account settings require reauthentication and password changes stay blocked until safe Vault rewrap", async () => {
   const store = new MemoryStore();
   store.identity = {
     id: "user-1", email: "user@example.com", username: "owner", display_name: "User",
@@ -174,10 +174,10 @@ test("account settings require reauthentication and preserve only the current se
   assert.deepEqual(await service.usernameAvailability(session, { username: "New.Name" }), { username: "new.name", available: true });
   await assert.rejects(service.updateUsername(session, { username: "new.name", password: "wrong password" }), /invalid_credentials/u);
   assert.deepEqual(await service.updateUsername(session, { username: "new.name", password: "correct horse battery" }), { username: "new.name" });
-  assert.deepEqual(await service.changePassword(session, { currentPassword: "correct horse battery", newPassword: "a completely new password" }), { changed: true });
-  assert.ok(store.lastPasswordHash?.startsWith("scrypt$"));
+  await assert.rejects(service.changePassword(session, { currentPassword: "correct horse battery", newPassword: "a completely new password" }), /personal_vault_rewrap_required/u);
+  assert.equal(store.lastPasswordHash, null);
   assert.equal(store.sessions.has("current"), true);
-  assert.equal(store.sessions.has("other"), false);
+  assert.equal(store.sessions.has("other"), true);
 });
 
 test("registration can be disabled until SMTP is configured", async () => {

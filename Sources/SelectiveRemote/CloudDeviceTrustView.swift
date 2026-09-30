@@ -129,7 +129,7 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
 
                 if let ownRequest {
                     Section(text("Заявка этого Mac", "This Mac's request")) {
-                        Text("\(ownRequest.status) · \(ownRequest.createdAt)")
+                        Text("\(CloudDeviceTrustPresentation.requestStatus(ownRequest.status, english: UpdateLocalization.usesEnglish)) · \(ownRequest.createdAt)")
                         Text(Self.fingerprint(ownRequest.publicKey))
                             .font(.system(.caption, design: .monospaced))
                             .textSelection(.enabled)
@@ -237,8 +237,8 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
                 }
                 .disabled(isBusy)
             } else {
-                Text(text("Challenge начат в другом окне. Дождитесь истечения и начните заново.",
-                          "Challenge began in another window. Wait for expiry and restart."))
+                Text(text("Проверка ключа начата в другом окне. Дождитесь истечения и начните заново.",
+                          "The key check began in another window. Wait for expiry and restart."))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button(text("Отклонить", "Reject"), role: .destructive) {
@@ -267,7 +267,7 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
             coordinator = SelectiveRemoteCloudDeviceTrustCoordinator(endpoint: endpoint,
                 client: client, accountID: user.id, deviceID: deviceID)
             await refresh()
-        } catch { errorMessage = error.localizedDescription }
+        } catch { recordFailure(error) }
     }
 
     private func refresh() async {
@@ -281,7 +281,21 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
                     "The new key is certified and saved in Keychain. Restart Team Vault sync.")
             }
             errorMessage = nil
-        } catch { errorMessage = error.localizedDescription }
+        } catch { recordFailure(error) }
+    }
+
+    private func recordFailure(_ error: Error) {
+        inspection = nil
+        requests = []
+        if let trustError = error as? SelectiveRemoteDeviceTrustError {
+            switch trustError {
+            case .untrustedRoot, .invalidSignature, .inactiveDevice:
+                challenges = [:]
+            case .invalidRecord, .staleDirectory: break
+            }
+        }
+        successMessage = nil
+        errorMessage = CloudDeviceTrustPresentation.failure(error, english: UpdateLocalization.usesEnglish)
     }
 
     private func perform(_ operation: @escaping @MainActor () async throws -> Void) {
@@ -292,7 +306,7 @@ struct SelectiveRemoteCloudDeviceTrustView: View {
             do {
                 try await operation()
                 await refresh()
-            } catch { errorMessage = error.localizedDescription }
+            } catch { recordFailure(error) }
         }
     }
 }

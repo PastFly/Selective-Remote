@@ -391,7 +391,7 @@ try {
   await root
     .getByRole("button", { name: "Confirm change", exact: true })
     .click();
-  await root.getByText("Change committed by server", { exact: true }).waitFor();
+  await root.getByText("Change saved", { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => qa.commits), 1);
   assert.equal(await page.evaluate(() => qa.callbacks), 1);
   await root
@@ -407,11 +407,11 @@ try {
     .selectOption(await page.evaluate(() => qa.ids.deviceID));
   await root.getByRole("button", { name: "Check device", exact: true }).click();
   await root
-    .getByText("Device usability: Device usability unverified", { exact: true })
+    .getByText("Device availability: Availability on this device is unverified", { exact: true })
     .waitFor();
   assert.equal(
     await root
-      .getByText("Device usability: Device usability unverified", { exact: true })
+      .getByText("Device availability: Availability on this device is unverified", { exact: true })
       .count(),
     1,
   );
@@ -531,7 +531,7 @@ try {
     );
     assert.match(
       await root.innerText(),
-      state === "V1_ACTIVE" ? /V1:/ : /READY\/ACTIVE:/,
+      state === "V1_ACTIVE" ? /Доступ применяется ко всему хранилищу/ : /Изменения доступа здесь недоступны/,
     );
   }
   const calls = await page.evaluate(() => qa.requests);
@@ -613,7 +613,7 @@ try {
       if (["direct", "group", "multiple-paths"].includes(scenario)) {
         await root.getByRole("navigation").getByRole("button", { name: "Resources", exact: true }).click();
         await root.locator(".access-directory li").first()
-          .getByRole("button", { name: "Who has policy access" }).click();
+          .getByRole("button", { name: "Who has access permission" }).click();
         await root.locator(".access-detail .access-paths li").first().waitFor();
         const expected = scenario === "multiple-paths" ? 2 : 1;
         assert.equal(await root.locator(".access-detail .access-paths li").count(), expected, scenario);
@@ -622,19 +622,19 @@ try {
         await root.getByRole("navigation").getByRole("button", { name: "Members", exact: true }).click();
         await root.locator(".access-directory li").first()
           .getByRole("button", { name: "Resources", exact: true }).click();
-        await root.getByText("Key: Not checked", { exact: true }).first().waitFor();
-        assert.match(await root.innerText(), /Key: Not checked/);
-        assert.match(await root.innerText(), /Device usability: Not checked/);
+        await root.getByText("Opening data: Not checked", { exact: true }).first().waitFor();
+        assert.match(await root.innerText(), /Opening data: Not checked/);
+        assert.match(await root.innerText(), /Device availability: Not checked/);
         await root.getByLabel("Member device")
           .selectOption(await page.evaluate(() => qa.ids.deviceID));
         await root.getByRole("button", { name: "Check device" }).click();
-        await root.getByText(scenario === "no-key" ? "Device usability: Unavailable on device" : "Device usability: Device usability unverified", { exact: true }).waitFor();
-        assert.match(await root.innerText(), scenario === "no-key" ? /Unavailable on device|Resource key is unavailable/ : /Device usability unverified/);
+        await root.getByText(scenario === "no-key" ? "Device availability: Unavailable on device" : "Device availability: Availability on this device is unverified", { exact: true }).waitFor();
+        assert.match(await root.innerText(), scenario === "no-key" ? /Unavailable on device|This device cannot open the resource data/ : /Availability on this device is unverified/);
         const effectiveText = await root.innerText();
-        assert.match(effectiveText, /User policy: allowed/);
-        assert.match(effectiveText, scenario === "no-key" ? /Key: Unavailable/ : /Key: Key present, unverified/);
-        assert.match(effectiveText, scenario === "no-key" ? /Key · Reveal secret: Unavailable/ : /Key · Reveal secret: Key present, unverified/);
-        assert.match(effectiveText, /Device usability · Reveal secret:/);
+        assert.match(effectiveText, /Access permission: allowed/);
+        assert.match(effectiveText, scenario === "no-key" ? /Opening data: Unavailable/ : /Opening data: Opening data is unverified/);
+        assert.match(effectiveText, scenario === "no-key" ? /Opening data · Reveal secret: Unavailable/ : /Opening data · Reveal secret: Opening data is unverified/);
+        assert.match(effectiveText, /Device availability · Reveal secret:/);
       }
       const rendered = await root.innerText();
       if (scenario === "empty") {
@@ -643,8 +643,8 @@ try {
         assert.equal(await page.evaluate(() => qa.manager.state().pages.grants.rows.length), 0);
       }
       if (scenario === "loading") assert.match(rendered, /Loading/);
-      if (scenario === "v1") assert.match(rendered, /V1: whole Vault/);
-      if (["ready", "active"].includes(scenario)) assert.match(rendered, /READY\/ACTIVE:/);
+      if (scenario === "v1") assert.match(rendered, /Access applies to the whole Vault/);
+      if (["ready", "active"].includes(scenario)) assert.match(rendered, /Access changes are unavailable here/);
       if (scenario === "error") assert.match(rendered, /Action failed|Cloud|synthetic_read_error/);
       for (const locale of ["ru", "en"]) for (const theme of ["light", "graphite"])
         for (const [viewport, width, height] of [["desktop", 1280, 900], ["tablet", 820, 900], ["mobile", 390, 844]]) {
