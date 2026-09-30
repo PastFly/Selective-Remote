@@ -387,8 +387,10 @@ struct CloudSettingsView: View {
             await loadCloudStateIfNeeded()
         }
         .onChange(of: accountUser?.id) { _, _ in
+            showsTeamManagement = false
             NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)
         }
+        .onChange(of: endpoint) { _, _ in showsTeamManagement = false }
         .sheet(isPresented: $showsAccountSheet) {
             accountSheet
         }

@@ -75,6 +75,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var renamingVaultID: UUID?
     @State private var vaultNameDraft = ""
     @State private var accessReference: SelectiveRemoteCloudAccessReference?
+    @State private var sessionActive = true
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
     var body: some View {
@@ -183,6 +184,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             )
         }
         .onChange(of: selectedTeamID) { _, _ in
+            guard sessionActive else { return }
             accessVaultRequestID = UUID()
             accessVaults = []
             accessVaultCursor = nil
@@ -196,6 +198,22 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             }
             Task { await loadSelectedTeam() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            invalidateAccessSession()
+            dismiss()
+        }
+        .onDisappear { invalidateAccessSession() }
+    }
+
+    private func invalidateAccessSession() {
+        sessionActive = false
+        memberRequestID = UUID(); accessVaultRequestID = UUID()
+        accessReference = nil; accessVaults = []; accessVaultCursor = nil; accessVaultError = nil; accessVaultLoading = false
+        teams = []; selectedTeamID = nil; members = []; memberNextCursor = nil; memberTotal = 0; isLoadingMembers = false
+        vaults = []; invitations = []; pendingInvitations = []
+        teamSearch = ""; memberSearch = ""; memberRoleFilter = ""
+        latestInvitationURL = nil; statusMessage = nil; errorMessage = nil
+        isBusy = false; synchronizingVaultID = nil; renamingVaultID = nil; vaultNameDraft = ""
     }
 
     private var selectedTeam: SelectiveRemoteCloudTeam? {
@@ -600,12 +618,14 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     @MainActor
     private func loadTeams(preferredID: UUID? = nil) async {
+        guard sessionActive else { return }
         isBusy = true
         errorMessage = nil
         do {
             async let loadedTeams = client.teams(endpoint: endpoint)
             async let loadedInvitations = client.pendingTeamInvitations(endpoint: endpoint)
             let (teamResult, invitationResult) = try await (loadedTeams, loadedInvitations)
+            guard sessionActive else { return }
             teams = teamResult
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
             pendingInvitations = invitationResult.sorted {
@@ -615,6 +635,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 ?? teams.first?.id
             await loadSelectedTeam()
         } catch {
+            guard sessionActive else { return }
             errorMessage = error.localizedDescription
         }
         isBusy = false
@@ -622,6 +643,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     @MainActor
     private func loadSelectedTeam() async {
+        guard sessionActive else { return }
         guard let team = selectedTeam else {
             members = []
             memberNextCursor = nil
@@ -648,9 +670,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             )
             async let loadedVaults = client.sharedVaults(endpoint: endpoint, teamID: team.id)
             let (memberPage, vaultResult) = try await (loadedMemberPage, loadedVaults)
+            guard sessionActive else { return }
             let invitationResult: [SelectiveRemoteCloudTeamInvitation]
             if team.role == .owner || team.role == .admin {
                 invitationResult = try await client.teamInvitations(endpoint: endpoint, teamID: team.id)
+                guard sessionActive else { return }
             } else {
                 invitationResult = []
             }
@@ -669,8 +693,10 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 invitations = invitationResult
             }
         } catch {
+            guard sessionActive else { return }
             if selectedTeamID == team.id { errorMessage = error.localizedDescription }
         }
+        guard sessionActive else { return }
         if selectedTeamID == team.id {
             isBusy = false
             await loadAccessVaults(teamID: team.id, reset: true)
@@ -679,7 +705,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     @MainActor
     private func loadAccessVaults(teamID: UUID, reset: Bool) async {
-        guard selectedTeamID == teamID, reset || !accessVaultLoading else { return }
+        guard sessionActive, selectedTeamID == teamID, reset || !accessVaultLoading else { return }
         let requestID = UUID()
         accessVaultRequestID = requestID
         accessVaultLoading = true
@@ -694,19 +720,19 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             let page = try await SelectiveRemoteCloudAccessClient(client: client).vaults(
                 teamID: teamID, session: .init(endpoint: endpoint), cursor: requestedCursor
             )
-            guard selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
+            guard sessionActive, selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
             accessVaults = reset ? page.rows : accessVaults + page.rows
             accessVaultCursor = page.nextCursor
             accessVaultError = nil
         } catch {
-            guard selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
+            guard sessionActive, selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
             accessVaultError = error.localizedDescription
         }
     }
 
     @MainActor
     private func loadMembers(_ team: SelectiveRemoteCloudTeam, reset: Bool) async {
-        guard selectedTeamID == team.id else { return }
+        guard sessionActive, selectedTeamID == team.id else { return }
         let requestedSearch = memberSearch
         let requestedRole = memberRoleFilter
         let requestedCursor = reset ? nil : memberNextCursor
@@ -723,6 +749,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 limit: 50,
                 cursor: requestedCursor
             )
+            guard sessionActive else { return }
             if selectedTeamID == team.id,
                memberSearch == requestedSearch,
                memberRoleFilter == requestedRole {
@@ -731,6 +758,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 memberTotal = page.total
             }
         } catch {
+            guard sessionActive else { return }
             errorMessage = error.localizedDescription
         }
         if memberRequestID == requestID { isLoadingMembers = false }
@@ -744,11 +772,13 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = nil
             do {
                 let team = try await client.createTeam(endpoint: endpoint, name: name)
+                guard sessionActive else { return }
                 newTeamName = ""
                 statusMessage = .teamCreated
                 onInventoryChanged()
                 await loadTeams(preferredID: team.id)
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
                 isBusy = false
             }
@@ -768,11 +798,13 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     username: username,
                     role: invitationRole
                 )
+                guard sessionActive else { return }
                 invitationUsername = ""
                 latestInvitationURL = nil
                 statusMessage = .usernameInvited
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
             }
             isBusy = false
@@ -789,6 +821,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     teamID: team.id,
                     role: invitationRole
                 )
+                guard sessionActive else { return }
                 guard let url = invitation.acceptanceURL else {
                     throw SelectiveRemoteCloudError.invalidResponse
                 }
@@ -796,6 +829,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 statusMessage = .linkCreated
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
             }
             isBusy = false
@@ -810,10 +844,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = nil
             do {
                 _ = try await client.inviteTeamMember(endpoint: endpoint, teamID: team.id, email: email, role: invitationRole)
+                guard sessionActive else { return }
                 invitationEmail = ""
                 statusMessage = .emailInvited
                 await loadSelectedTeam()
-            } catch { errorMessage = error.localizedDescription }
+            } catch { guard sessionActive else { return }; errorMessage = error.localizedDescription }
             isBusy = false
         }
     }
@@ -824,10 +859,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = nil
             do {
                 _ = try await client.acceptTeamInvitation(endpoint: endpoint, invitationID: invitation.id)
+                guard sessionActive else { return }
                 statusMessage = .invitationAccepted
                 onInventoryChanged()
                 await loadTeams(preferredID: invitation.teamID)
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
                 isBusy = false
             }
@@ -844,10 +881,12 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     teamID: invitation.teamID,
                     invitationID: invitation.id
                 )
+                guard sessionActive else { return }
                 if invitation.type == .link { latestInvitationURL = nil }
                 statusMessage = .invitationRevoked
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
             }
             isBusy = false
@@ -878,11 +917,13 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             errorMessage = nil
             do {
                 _ = try await client.createSharedVault(endpoint: endpoint, teamID: team.id, name: name)
+                guard sessionActive else { return }
                 newVaultName = ""
                 statusMessage = .vaultCreated
                 onInventoryChanged()
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
                 isBusy = false
             }
@@ -912,6 +953,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     endpoint: endpoint,
                     deviceID: deviceID
                 )
+                guard sessionActive else { return }
                 if report.failures > 0 || report.pendingWrappers > 0 || report.rotations > 0 {
                     let detail = report.lastFailure.map { " \($0)" } ?? ""
                     errorMessage = UpdateLocalization.text(
@@ -927,6 +969,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 }
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
             }
         }
@@ -948,12 +991,14 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                     vaultID: vault.id,
                     name: name
                 )
+                guard sessionActive else { return }
                 renamingVaultID = nil
                 vaultNameDraft = ""
                 statusMessage = .vaultRenamed
                 onInventoryChanged()
                 await loadSelectedTeam()
             } catch {
+                guard sessionActive else { return }
                 errorMessage = error.localizedDescription
                 isBusy = false
             }

@@ -507,6 +507,7 @@ struct ContentView: View {
         view
             .task(id: cloudSessionAvailable) { await refreshNotificationSources() }
             .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+                showsCloudManagement = false
                 notificationAccountID = nil
                 notificationCenter.setAccount(nil)
                 refreshCloudSessionAvailability()
@@ -516,6 +517,7 @@ struct ContentView: View {
                 if visible { Task { await refreshNotificationSources() } }
             }
             .onChange(of: cloudEndpoint) { _, _ in
+                showsCloudManagement = false
                 notificationAccountEndpoint = nil
                 notificationAccountID = nil
                 notificationCenter.setAccount(nil)

@@ -22,6 +22,7 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
     @State private var loaded = false
     @State private var pageNumber = 1
     @State private var requestGeneration = UUID()
+    @State private var sessionActive = true
 
     var body: some View {
         DisclosureGroup(CloudAccessLocalization.text("Зарегистрированные ресурсы", "Registered resources")) {
@@ -71,10 +72,15 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
                 initialSection: .who, onCommitted: onCommitted
             )
         }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            sessionActive = false
+            requestGeneration = UUID()
+            rows = []; cursor = nil; selected = nil; error = nil; loaded = false; loading = false; pageNumber = 1
+        }
     }
 
     private func load(reset: Bool) async {
-        guard reset || !loading else { return }
+        guard sessionActive, reset || !loading else { return }
         let generation = UUID()
         requestGeneration = generation
         loading = true
@@ -85,22 +91,23 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
         do {
             let page = try await client.resources(vault, session: session,
                                                   cursor: requestedCursor, kind: requestedKind)
-            guard requestGeneration == generation, kind == requestedKind else { return }
+            guard sessionActive, requestGeneration == generation, kind == requestedKind else { return }
             rows = page.rows
             cursor = page.nextCursor
             if !reset { pageNumber += 1 }
             loaded = true
         } catch {
-            guard requestGeneration == generation, kind == requestedKind else { return }
+            guard sessionActive, requestGeneration == generation, kind == requestedKind else { return }
             self.error = error.localizedDescription
         }
     }
 
     private func open(_ row: CloudAccessResource) async {
+        guard sessionActive else { return }
         let generation = requestGeneration
         do {
             let exact = try await client.getResource(vault, resourceID: row.id, session: session)
-            guard requestGeneration == generation, kind == row.policyKind else { return }
+            guard sessionActive, requestGeneration == generation, kind == row.policyKind else { return }
             guard exact.policyKind == row.policyKind else { throw CloudAccessError.scopeMismatch }
             let reference = try SelectiveRemoteCloudAccessReference(
                 teamID: vault.teamID, vaultID: vault.vaultID,
@@ -110,7 +117,7 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
                                          open: { selected = $0 },
                                          prerequisite: AccessRegistrationPrerequisite.show)
         } catch {
-            guard requestGeneration == generation, kind == row.policyKind else { return }
+            guard sessionActive, requestGeneration == generation, kind == row.policyKind else { return }
             self.error = error.localizedDescription
         }
     }

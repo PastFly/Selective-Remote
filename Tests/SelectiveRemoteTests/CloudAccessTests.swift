@@ -397,6 +397,141 @@ private actor AccessPreviewRaceTransport {
     func waitUntilHeld() async { if held != nil { return }; await withCheckedContinuation { waiter = $0 } }
     func release() { held?.resume(returning: (first, HTTPURLResponse(url: heldURL!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!)); held = nil }
 }
+
+private actor AccessHeldReplyTransport {
+    let fallback: AccessFixtureTransport
+    let heldPath: String
+    var held: CheckedContinuation<(Data, URLResponse), any Error>?
+    var waiter: CheckedContinuation<Void, Never>?
+    var heldURL: URL?
+    var requests = 0
+    var didHold = false
+
+    init(fallback: AccessFixtureTransport, heldPath: String) {
+        self.fallback = fallback; self.heldPath = heldPath
+    }
+    func load(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        requests += 1
+        guard request.url?.path == heldPath, !didHold else { return try await fallback.load(request) }
+        didHold = true
+        heldURL = request.url
+        return try await withCheckedThrowingContinuation { continuation in
+            held = continuation; waiter?.resume(); waiter = nil
+        }
+    }
+    func waitUntilHeld() async {
+        if held != nil { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func release(_ data: Data, statusCode: Int = 200) {
+        held?.resume(returning: (data, HTTPURLResponse(url: heldURL!, statusCode: statusCode,
+            httpVersion: "HTTP/1.1", headerFields: nil)!))
+        held = nil
+    }
+}
+
+extension CloudAccessTests {
+    @Test @MainActor func visibleAccessSheetInvalidatesOnAccountChange() async throws {
+        let f = try AccessFixture()
+        let transport = try AccessFixtureTransport(f.loadReplies())
+        let model = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(transport), session: f.session)
+        await model.load()
+        #expect(model.context != nil)
+        let host = NSHostingView(rootView: SelectiveRemoteCloudResourceAccessView(coordinator: model)
+            .frame(width: 640, height: 680))
+        host.frame = CGRect(x: 0, y: 0, width: 640, height: 680)
+        let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.contentView = host
+        window.makeKeyAndOrderFront(nil)
+        defer { window.orderOut(nil) }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.context != nil)
+        NotificationCenter.default.post(name: .selectiveRemoteCloudSessionChanged, object: nil)
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(model.context == nil && model.resource == nil && !model.canMutate)
+        let count = await transport.captured().count
+        await model.load()
+        #expect(await transport.captured().count == count)
+    }
+
+    @Test @MainActor func accountChangeClearsLoadedAccessAndRejectsOldReference() async throws {
+        let f = try AccessFixture(), grantID = UUID(), subject = UUID()
+        var routes = try f.loadReplies(previews: [f.preview()])
+        routes[f.base + "/access-grants"] = [(try f.data(["rows": [f.grantWire(id: grantID, version: 1)], "nextCursor": NSNull()]), 200)]
+        routes[f.base + "/who-has-access/" + f.reference.resourceID.canonicalCloudString] =
+            [(try f.data(["rows": [["userID": subject.canonicalCloudString,
+                "policyEffective": ["policyAllowed": true, "policyMask": 1, "paths": [], "blockedReasons": []]]],
+                "nextCursor": NSNull()]), 200)]
+        let transport = AccessFixtureTransport(routes)
+        let model = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(transport), session: f.session)
+        await model.load()
+        model.setSelection([.init(kind: .user, id: UUID(), name: "Account A")])
+        await model.previewSelection()
+        #expect(model.context != nil && model.resource != nil && !model.grants.isEmpty && !model.who.isEmpty)
+        #expect(model.canCommit)
+        let requestCount = await transport.captured().count
+        model.invalidateSession()
+        #expect(model.context == nil && model.resource == nil && model.grants.isEmpty && model.who.isEmpty)
+        #expect(model.members.isEmpty && model.groups.isEmpty && model.selection.isEmpty && model.preview == nil)
+        #expect(!model.canMutate && !model.canCommit && !model.canRepreview)
+        await model.load()
+        await model.previewSelection()
+        #expect(await model.commit() == nil)
+        #expect(await transport.captured().count == requestCount)
+    }
+
+    @Test @MainActor func accountChangeDiscardsDelayedAccessReplies() async throws {
+        for (pathSuffix, failure) in [("/access-resources/", false), ("/access-grants", false),
+                                      ("/who-has-access/", false), ("/access-grants", true)] {
+            let f = try AccessFixture()
+            let routes = try f.loadReplies()
+            let path = pathSuffix.hasSuffix("/") ? f.base + pathSuffix + f.reference.resourceID.canonicalCloudString : f.base + pathSuffix
+            let reply = try failure ? f.data(["error": "access_request_failed"]) : #require(routes[path]?.first?.0)
+            let fallback = AccessFixtureTransport(routes)
+            let transport = AccessHeldReplyTransport(fallback: fallback, heldPath: path)
+            let tokens = SelectiveRemoteCloudMemoryTokenStore()
+            tokens.saveToken(String(repeating: "t", count: 43), for: f.session.endpoint)
+            let client = SelectiveRemoteCloudAccessClient(client: .init(tokenStore: tokens,
+                dataLoader: { try await transport.load($0) }))
+            let model = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: client, session: f.session)
+            let oldLoad = Task { await model.load() }
+            await transport.waitUntilHeld()
+            model.invalidateSession()
+            let count = await transport.requests
+            await transport.release(reply, statusCode: failure ? 503 : 200)
+            await oldLoad.value
+            #expect(model.context == nil && model.resource == nil && model.grants.isEmpty && model.who.isEmpty)
+            #expect(model.errorMessage == nil && !model.busy && !model.canCommit)
+            await model.load()
+            #expect(await transport.requests == count)
+        }
+    }
+
+    @Test @MainActor func accountChangeRejectsDelayedCommitReceipt() async throws {
+        let f = try AccessFixture(), grantID = UUID()
+        let fallback = try AccessFixtureTransport(f.loadReplies(previews: [f.preview()]))
+        let transport = AccessHeldReplyTransport(fallback: fallback, heldPath: f.base + "/access-commit")
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(String(repeating: "t", count: 43), for: f.session.endpoint)
+        let client = SelectiveRemoteCloudAccessClient(client: .init(tokenStore: tokens,
+            dataLoader: { try await transport.load($0) }))
+        let model = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: client, session: f.session)
+        await model.load()
+        model.setSelection([.init(kind: .user, id: UUID(), name: "Account A")])
+        await model.previewSelection()
+        #expect(model.canCommit)
+        let oldCommit = Task { await model.commit() }
+        await transport.waitUntilHeld()
+        model.invalidateSession()
+        let receipt = try f.data(["applied": 1,
+            "grants": [["type": "GRANT_CREATE", "grantID": grantID.canonicalCloudString]],
+            "notificationCandidates": [],
+            "counts": ["pairs": 1, "widened": 1, "lost": 0]])
+        await transport.release(receipt)
+        #expect(await oldCommit.value == nil)
+        #expect(model.context == nil && model.preview == nil && !model.committed)
+    }
+}
 extension CloudAccessTests {
     @Test @MainActor func obsoletePreviewCannotOverwriteNewSelectionPreview() async throws {
         let f = try AccessFixture()

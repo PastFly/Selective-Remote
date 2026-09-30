@@ -26,7 +26,7 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 Label(CloudAccessLocalization.share, systemImage: "person.crop.circle.badge.checkmark").font(.title2)
                 Spacer()
                 if model.busy { ProgressView().controlSize(.small) }
-                Button(CloudAccessLocalization.text("Закрыть", "Close")) { model.invalidate(); dismiss() }
+                Button(CloudAccessLocalization.text("Закрыть", "Close")) { model.invalidateSession(); dismiss() }
                     .keyboardShortcut(.cancelAction)
             }
             Text(model.reference.title).font(.headline).textSelection(.enabled).lineLimit(2)
@@ -86,7 +86,12 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             if model.context == nil { await model.load() }
             searchFocused = true
         }
-        .onDisappear { model.invalidate() }
+        .onReceive(NotificationCenter.default.publisher(for: .selectiveRemoteCloudSessionChanged)) { _ in
+            model.invalidateSession()
+            confirmation = false
+            dismiss()
+        }
+        .onDisappear { model.invalidateSession() }
         .alert(CloudAccessLocalization.text("Применить просмотренное изменение?", "Apply the previewed change?"), isPresented: $confirmation) {
             Button(CloudAccessLocalization.text("Отмена", "Cancel"), role: .cancel) {}
             Button(CloudAccessLocalization.text("Применить", "Apply")) {
