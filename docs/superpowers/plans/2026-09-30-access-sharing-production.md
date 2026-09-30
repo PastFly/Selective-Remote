@@ -114,6 +114,7 @@
 **Files:**
 - Create: `cloud/tests/fixtures/access-manager.html`, `access-manager-fixture.js`, focused browser smoke/matrix tests following existing browser tooling; native fixture/export harness using existing runtime conventions; `docs/qa/access-sharing-production.md`.
 - Modify only changed Access files for concrete failures found, plus covering tests.
+- Modify `.github/workflows/ci.yml` to include `tests/access-surface-postgres.test.mjs` in the existing PostgreSQL16 job's explicit test list, so new authorization/concurrency regressions run with a real database in CI.
 
 **Interfaces:**
 - Consume actual Task2/3/4 product modules/views and injected clients; synthetic test state only, no production fixture switch or invented backend success.
