@@ -123,6 +123,10 @@ struct CloudAccessPrincipalResource: Codable, Identifiable, Sendable { var resou
 struct CloudAccessImpact: Codable, Identifiable, Sendable {
     var vaultID: UUID; var resourceID: UUID; var subjectUserID: UUID; var before: CloudAccessEffective; var after: CloudAccessEffective; var gainedMask: Int; var lostMask: Int
     var id: String { "\(vaultID)/\(resourceID)/\(subjectUserID)" }
+    var alternativePathRemainsAfterRemoval: Bool {
+        gainedMask == 0 && !after.policyEffective.paths.isEmpty &&
+            after.policyEffective.paths.count < before.policyEffective.paths.count
+    }
 }
 struct CloudAccessCounts: Codable, Equatable, Sendable { var pairs: Int; var widened: Int; var lost: Int; var affectedGrants: Int? }
 struct CloudAccessAffectedGrant: Codable, Identifiable, Sendable { var grantID: UUID; var vaultID: UUID; var targetKind: CloudAccessTargetKind; var targetID: UUID; var permissionMask: Int; var version: CloudAccessVersion; var id: UUID { grantID } }

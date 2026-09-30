@@ -717,7 +717,9 @@ test(
           }
           await fixtureQuery(
             `INSERT INTO vault_access_grants(team_id,vault_id,principal_kind,principal_id,target_kind,target_id,permission_mask,created_by_user_id)
-     SELECT $1,$2,'GROUP',$3,'RESOURCE',id,1,$4 FROM vault_resource_registry WHERE vault_id=$2 ORDER BY id LIMIT 1001`,
+     SELECT $1,$2,'GROUP',$3,'RESOURCE',id,1,$4 FROM vault_resource_registry
+     WHERE team_id=$1 AND vault_id=$2 AND deleted_at IS NULL
+       AND policy_kind IS NOT NULL AND policy_kind <> 'FOLDER' ORDER BY id LIMIT 1001`,
             [team, vault, big.id, user],
           );
           const request = {

@@ -27,7 +27,7 @@ enum AccessMoveDecision: Sendable {
     }
 
     @MainActor
-    static func perform<T>(changesAncestry: Bool,
+    static func perform<T: Sendable>(changesAncestry: Bool,
                            decide: () async throws -> Self,
                            persist: () async throws -> T) async throws -> (decision: Self, result: T?) {
         let decision: Self = changesAncestry ? try await decide() : .persistLegacyOrReorder

@@ -49,6 +49,28 @@ struct CloudAccessTests {
         #expect(CloudAccessLocalization.revokeGuidance(hasExistingGrants: false) == nil)
         #expect(CloudAccessLocalization.revokeGuidance(hasExistingGrants: true, english: true)?.contains("Revoking one path") == true)
     }
+    @Test func firstGrantAndEquivalentRevokeImpactCopy() {
+        let path = CloudAccessPath(id: UUID(), principalKind: .user, principalID: UUID(),
+            grantTargetKind: .resource, grantTargetID: UUID(), sourceType: .direct,
+            mask: 1, effectiveMask: 1, permissions: ["View"], permission: "View")
+        let other = CloudAccessPath(id: UUID(), principalKind: .group, principalID: UUID(),
+            grantTargetKind: .folder, grantTargetID: UUID(), sourceType: .inherited,
+            mask: 1, effectiveMask: 1, permissions: ["View"], permission: "View")
+        let empty = CloudAccessEffective(policyEffective: .init(policyAllowed: false, policyMask: 0,
+            paths: [], blockedReasons: []), deviceUsability: nil)
+        let initial = CloudAccessEffective(policyEffective: .init(policyAllowed: true, policyMask: 1,
+            paths: [path], blockedReasons: []), deviceUsability: nil)
+        let both = CloudAccessEffective(policyEffective: .init(policyAllowed: true, policyMask: 1,
+            paths: [path, other], blockedReasons: []), deviceUsability: nil)
+        let surviving = CloudAccessEffective(policyEffective: .init(policyAllowed: true, policyMask: 1,
+            paths: [other], blockedReasons: []), deviceUsability: nil)
+        let firstGrant = CloudAccessImpact(vaultID: UUID(), resourceID: UUID(), subjectUserID: UUID(),
+            before: empty, after: initial, gainedMask: 1, lostMask: 0)
+        let equivalentRevoke = CloudAccessImpact(vaultID: UUID(), resourceID: UUID(), subjectUserID: UUID(),
+            before: both, after: surviving, gainedMask: 0, lostMask: 0)
+        #expect(!firstGrant.alternativePathRemainsAfterRemoval)
+        #expect(equivalentRevoke.alternativePathRemainsAfterRemoval)
+    }
     @Test func resourcePermissionVocabularyAndReveal() throws {
         #expect(CloudAccessKind.host.allowedMask == 13)
         #expect(CloudAccessKind.credential.allowedMask == 15)

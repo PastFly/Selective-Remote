@@ -284,9 +284,9 @@ try {
           deviceUsability: {
             deviceID,
             effectiveUsable: qa.scenario === "no-key" ? "NO" : "UNKNOWN",
-            cryptoAvailable: qa.scenario === "no-key" ? "KEY_UNAVAILABLE" : "WRAP_PRESENT_UNVERIFIED",
-            cryptoAvailableByPermission: { Reveal: "WRAP_PRESENT_UNVERIFIED" },
-            effectiveUsableByPermission: { Reveal: "UNKNOWN" },
+            cryptoAvailable: qa.scenario === "no-key" ? "NO" : "WRAP_PRESENT_UNVERIFIED",
+            cryptoAvailableByPermission: { Reveal: qa.scenario === "no-key" ? "NO" : "WRAP_PRESENT_UNVERIFIED" },
+            effectiveUsableByPermission: { Reveal: qa.scenario === "no-key" ? "NO" : "UNKNOWN" },
             blockedReasons: qa.scenario === "no-key" ? ["KEY_UNAVAILABLE"] : [],
           },
         };
@@ -407,11 +407,11 @@ try {
     .selectOption(await page.evaluate(() => qa.ids.deviceID));
   await root.getByRole("button", { name: "Check device", exact: true }).click();
   await root
-    .getByText("Device usability unverified", { exact: true })
+    .getByText("Device usability: Device usability unverified", { exact: true })
     .waitFor();
   assert.equal(
     await root
-      .getByText("Device usability unverified", { exact: true })
+      .getByText("Device usability: Device usability unverified", { exact: true })
       .count(),
     1,
   );
@@ -622,11 +622,19 @@ try {
         await root.getByRole("navigation").getByRole("button", { name: "Members", exact: true }).click();
         await root.locator(".access-directory li").first()
           .getByRole("button", { name: "Resources", exact: true }).click();
+        await root.getByText("Key: Not checked", { exact: true }).first().waitFor();
+        assert.match(await root.innerText(), /Key: Not checked/);
+        assert.match(await root.innerText(), /Device usability: Not checked/);
         await root.getByLabel("Member device")
           .selectOption(await page.evaluate(() => qa.ids.deviceID));
         await root.getByRole("button", { name: "Check device" }).click();
-        await root.getByText(scenario === "no-key" ? "Unavailable on device" : "Device usability unverified", { exact: true }).waitFor();
+        await root.getByText(scenario === "no-key" ? "Device usability: Unavailable on device" : "Device usability: Device usability unverified", { exact: true }).waitFor();
         assert.match(await root.innerText(), scenario === "no-key" ? /Unavailable on device|Resource key is unavailable/ : /Device usability unverified/);
+        const effectiveText = await root.innerText();
+        assert.match(effectiveText, /User policy: allowed/);
+        assert.match(effectiveText, scenario === "no-key" ? /Key: Unavailable/ : /Key: Key present, unverified/);
+        assert.match(effectiveText, scenario === "no-key" ? /Key · Reveal secret: Unavailable/ : /Key · Reveal secret: Key present, unverified/);
+        assert.match(effectiveText, /Device usability · Reveal secret:/);
       }
       const rendered = await root.innerText();
       if (scenario === "empty") {

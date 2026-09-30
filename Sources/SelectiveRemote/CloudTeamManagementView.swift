@@ -55,6 +55,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var isLoadingMembers = false
     @State private var memberRequestID = UUID()
     @State private var vaults: [SelectiveRemoteCloudSharedVault] = []
+    @State private var accessVaults: [CloudAccessVault] = []
+    @State private var accessVaultCursor: UUID?
+    @State private var accessVaultRequestID = UUID()
+    @State private var accessVaultLoading = false
+    @State private var accessVaultError: String?
     @State private var invitations: [SelectiveRemoteCloudTeamInvitation] = []
     @State private var pendingInvitations: [SelectiveRemoteCloudTeamInvitation] = []
     @State private var newTeamName = ""
@@ -178,6 +183,11 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             )
         }
         .onChange(of: selectedTeamID) { _, _ in
+            accessVaultRequestID = UUID()
+            accessVaults = []
+            accessVaultCursor = nil
+            accessVaultError = nil
+            accessReference = nil
             latestInvitationURL = nil
             renamingVaultID = nil
             vaultNameDraft = ""
@@ -469,6 +479,36 @@ struct SelectiveRemoteCloudTeamManagementView: View {
 
     private func vaultsView(_ team: SelectiveRemoteCloudTeam) -> some View {
         Form {
+            Section(CloudAccessLocalization.text("Доступ к Vault", "Vault Access")) {
+                Text(CloudAccessLocalization.text(
+                    "Каталог доступа показывает состояние V1 и V2 отдельно от содержимого Team Vaults.",
+                    "The Access directory shows V1 and V2 states separately from Team Vault contents."
+                )).font(.caption).foregroundStyle(.secondary)
+                ForEach(accessVaults) { vault in
+                    HStack {
+                        Text(vault.name)
+                        Spacer()
+                        Text(vault.formatState.rawValue).font(.caption).foregroundStyle(.secondary)
+                        Button(CloudAccessLocalization.text("Доступ", "Access")) {
+                            accessReference = try? .init(teamID: team.id, vaultID: vault.id,
+                                                           resourceID: vault.id, kind: .vault)
+                        }
+                        .accessibilityLabel(CloudAccessLocalization.text("Доступ к Vault ", "Access to Vault ") + vault.name)
+                        .accessibilityIdentifier("access-vault-\(vault.id.canonicalCloudString)")
+                    }
+                }
+                if accessVaults.isEmpty && !accessVaultLoading && accessVaultError == nil {
+                    Text(CloudAccessLocalization.text("Vault не найдены.", "No Vaults found."))
+                        .foregroundStyle(.secondary)
+                }
+                if let accessVaultError { Text(accessVaultError).foregroundStyle(.orange) }
+                if accessVaultLoading { ProgressView().controlSize(.small) }
+                if accessVaultCursor != nil {
+                    Button(CloudAccessLocalization.text("Следующие 50", "Next 50")) {
+                        Task { await loadAccessVaults(teamID: team.id, reset: false) }
+                    }.disabled(accessVaultLoading)
+                }
+            }
             Section("Team Vaults") {
                 ForEach(vaults) { vault in
                     HStack {
@@ -482,9 +522,6 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                             Label(vault.name, systemImage: "lock.square.stack.fill")
                         }
                         Spacer()
-                        Button(CloudAccessLocalization.text("Доступ", "Access")) {
-                            accessReference = try? .init(teamID: team.id, vaultID: vault.id, resourceID: vault.id, kind: .vault)
-                        }
                         Text("r\(vault.revision) · k\(vault.keyGeneration)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
@@ -590,6 +627,8 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             memberNextCursor = nil
             memberTotal = 0
             vaults = []
+            accessVaults = []
+            accessVaultCursor = nil
             invitations = []
             return
         }
@@ -623,14 +662,46 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                 memberNextCursor = memberPage.nextCursor
                 memberTotal = memberPage.total
             }
-            vaults = vaultResult.sorted {
-                $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            if selectedTeamID == team.id {
+                vaults = vaultResult.sorted {
+                    $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+                }
+                invitations = invitationResult
             }
-            invitations = invitationResult
         } catch {
-            errorMessage = error.localizedDescription
+            if selectedTeamID == team.id { errorMessage = error.localizedDescription }
         }
-        isBusy = false
+        if selectedTeamID == team.id {
+            isBusy = false
+            await loadAccessVaults(teamID: team.id, reset: true)
+        }
+    }
+
+    @MainActor
+    private func loadAccessVaults(teamID: UUID, reset: Bool) async {
+        guard selectedTeamID == teamID, reset || !accessVaultLoading else { return }
+        let requestID = UUID()
+        accessVaultRequestID = requestID
+        accessVaultLoading = true
+        if reset {
+            accessVaults = []
+            accessVaultCursor = nil
+            accessVaultError = nil
+        }
+        let requestedCursor = reset ? nil : accessVaultCursor
+        defer { if accessVaultRequestID == requestID { accessVaultLoading = false } }
+        do {
+            let page = try await SelectiveRemoteCloudAccessClient(client: client).vaults(
+                teamID: teamID, session: .init(endpoint: endpoint), cursor: requestedCursor
+            )
+            guard selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
+            accessVaults = reset ? page.rows : accessVaults + page.rows
+            accessVaultCursor = page.nextCursor
+            accessVaultError = nil
+        } catch {
+            guard selectedTeamID == teamID, accessVaultRequestID == requestID else { return }
+            accessVaultError = error.localizedDescription
+        }
     }
 
     @MainActor

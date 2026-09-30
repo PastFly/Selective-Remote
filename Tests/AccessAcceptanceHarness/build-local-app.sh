@@ -17,7 +17,7 @@ swiftc -emit-executable Tests/AccessAcceptanceHarness/main.swift \
   -Xcc "-fmodule-map-file=$bridge_map" -Xcc -I -Xcc Sources/PTYBridge/include \
   -o /private/tmp/AccessAcceptanceHarness
 
-for mode in valid invalid; do
+for mode in valid invalid management; do
   bundle="/private/tmp/AccessAcceptance-${mode}.app"
   mkdir -p "$bundle/Contents/MacOS"
   cp /private/tmp/AccessAcceptanceHarness "$bundle/Contents/MacOS/AccessAcceptanceHarness"
@@ -33,4 +33,4 @@ for mode in valid invalid; do
 </dict></plist>
 EOF
 done
-echo 'Built test-only apps: /private/tmp/AccessAcceptance-valid.app and /private/tmp/AccessAcceptance-invalid.app'
+echo 'Built test-only apps: /private/tmp/AccessAcceptance-{valid,invalid,management}.app'

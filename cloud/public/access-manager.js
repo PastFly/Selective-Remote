@@ -497,18 +497,13 @@ export function createAccessManager({
     );
     if (value?.deviceUsability) {
       const summary = effectiveSummary(value);
+      const device = value.deviceUsability;
       parent.append(
-        node(
-          "p",
-          t(
-            summary.usable === "YES"
-              ? "yes"
-              : summary.usable === "NO"
-                ? "no"
-                : "unknown",
-          ),
-        ),
+        node("p", `${t("key")}: ${t(device.cryptoAvailable)}`),
+        node("p", `${t("usability")}: ${t(summary.usable === "YES" ? "yes" : summary.usable === "NO" ? "no" : "unknown")}`),
       );
+      for (const [permission, state] of Object.entries(device.cryptoAvailableByPermission ?? {}))
+        parent.append(node("p", `${t("key")} · ${t(permission)}: ${t(state)}`));
       for (const reason of summary.blockedReasons)
         parent.append(node("p", accessReasonCopy(reason, locale())));
       for (const [permission, state] of Object.entries(
@@ -517,10 +512,10 @@ export function createAccessManager({
         parent.append(
           node(
             "p",
-            `${t(permission)}: ${t(state === "YES" ? "yes" : state === "NO" ? "no" : "unknown")}`,
+            `${t("usability")} · ${t(permission)}: ${t(state === "YES" ? "yes" : state === "NO" ? "no" : "unknown")}`,
           ),
         );
-    }
+    } else parent.append(node("p", `${t("key")}: ${t("notChecked")}`), node("p", `${t("usability")}: ${t("notChecked")}`));
   }
   function paging(parent, key) {
     const p = pages[key];
@@ -555,7 +550,7 @@ export function createAccessManager({
           [
             ["", t("allKinds")],
             ...["HOST", "CREDENTIAL", "SNIPPET", "FORWARDING", "FOLDER"].map(
-              (kind) => [kind, kind],
+              (kind) => [kind, t(kind)],
             ),
           ],
           pages.resources.kind ?? "",

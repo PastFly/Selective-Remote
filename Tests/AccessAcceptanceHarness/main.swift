@@ -48,11 +48,13 @@ private final class AccessAcceptanceApp: NSObject, NSApplicationDelegate, NSWind
     private var window: NSWindow?
     private var transport: SyntheticAccessTransport?
     private let mode = ProcessInfo.processInfo.environment["SR_ACCESS_ACCEPTANCE_MODE"] ??
-        (Bundle.main.bundleIdentifier?.hasSuffix(".invalid") == true ? "invalid" : "valid")
+        (Bundle.main.bundleIdentifier?.hasSuffix(".management") == true ? "management" :
+            Bundle.main.bundleIdentifier?.hasSuffix(".invalid") == true ? "invalid" : "valid")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         UserDefaults.standard.set("english", forKey: "SelectiveRemote.applicationLanguage.v1")
-        let window = NSWindow(contentRect: CGRect(x: 100, y: 100, width: 640, height: 680),
+        let window = NSWindow(contentRect: CGRect(x: 100, y: 100,
+            width: mode == "management" ? 1160 : 640, height: mode == "management" ? 800 : 680),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "LOCAL_VISUAL_PREVIEW · Access acceptance · \(mode)"
         window.contentView = NSHostingView(rootView: Text("Loading local Access fixture…"))
@@ -60,7 +62,65 @@ private final class AccessAcceptanceApp: NSObject, NSApplicationDelegate, NSWind
         self.window = window
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
-        Task { await showSheet() }
+        Task { if mode == "management" { await showManagement() } else { await showSheet() } }
+    }
+
+    private func showManagement() async {
+        do {
+            let teamID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
+            let v1ID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
+            let preparingID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+            let resourceID = UUID(uuidString: "dddddddd-dddd-4ddd-8ddd-dddddddddddd")!
+            let membershipID = UUID(uuidString: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")!
+            let endpoint = URL(string: "https://access.example.test")!
+            let teamPath = "/v1/teams/" + teamID.canonicalCloudString
+            let base = teamPath + "/vaults/" + preparingID.canonicalCloudString
+            func data(_ value: Any) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
+            let team: [String: Any] = ["id": teamID.canonicalCloudString, "name": "Synthetic Access Team",
+                "membershipID": membershipID.canonicalCloudString, "role": "owner", "membershipEpoch": 1,
+                "createdAt": "2026-09-30T00:00:00Z", "updatedAt": "2026-09-30T00:00:00Z"]
+            let legacyVault: [String: Any] = ["id": v1ID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                "name": "Legacy V1", "revision": 1, "keyGeneration": 1, "rotationRequired": false,
+                "createdAt": "2026-09-30T00:00:00Z", "updatedAt": "2026-09-30T00:00:00Z"]
+            let directory: [String: Any] = ["rows": [
+                ["id": v1ID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                 "name": "Legacy V1", "formatState": "V1_ACTIVE"],
+                ["id": preparingID.canonicalCloudString, "teamID": teamID.canonicalCloudString,
+                 "name": "Preparing V2", "formatState": "V2_PREPARING"]], "nextCursor": NSNull()]
+            let context: [String: Any] = ["formatState": "V2_PREPARING", "legacyWholeVault": false,
+                "resource_registry_v2": true, "resource_acl_v2": false, "policyMutationAvailable": true,
+                "groupMutationAvailable": true, "blockers": []]
+            let row: [String: Any] = ["id": resourceID.canonicalCloudString,
+                "teamID": teamID.canonicalCloudString, "vaultID": preparingID.canonicalCloudString,
+                "policyKind": "HOST", "parentFolderID": NSNull(), "resourceVersion": 1]
+            let emptyPage: [String: Any] = ["rows": [], "nextCursor": NSNull()]
+            let routes: [String: [(Data, Int)]] = try [
+                "/v1/teams": [(data(["teams": [team]]), 200)],
+                "/v1/team-invitations": [(data(["invitations": []]), 200)],
+                teamPath + "/members": [(data(["members": [], "nextCursor": NSNull(), "total": 0]), 200)],
+                teamPath + "/invitations": [(data(["invitations": []]), 200)],
+                teamPath + "/vaults": [(data(["vaults": [legacyVault]]), 200)],
+                teamPath + "/access-vaults": [(data(directory), 200)],
+                base + "/access-context": [(data(context), 200)],
+                base + "/access-grants": [(data(emptyPage), 200)],
+                base + "/access-resources": [(data(["rows": [row], "nextCursor": NSNull()]), 200)],
+                base + "/access-resources/" + resourceID.canonicalCloudString: [(data(row), 200)],
+                base + "/who-has-access/" + resourceID.canonicalCloudString: [(data(emptyPage), 200)]
+            ]
+            let transport = SyntheticAccessTransport(routes, mode: mode)
+            self.transport = transport
+            let tokens = SelectiveRemoteCloudMemoryTokenStore()
+            tokens.saveToken(String(repeating: "t", count: 43), for: endpoint)
+            let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens,
+                dataLoader: { request in try await transport.load(request) })
+            window?.contentView = NSHostingView(rootView: SelectiveRemoteCloudTeamManagementView(
+                endpoint: endpoint, client: client, onInventoryChanged: {}
+            ))
+            print("LOCAL_ACCESS_MANAGEMENT_READY team=\(teamID.canonicalCloudString) preparing=\(preparingID.canonicalCloudString) resource=\(resourceID.canonicalCloudString)")
+        } catch {
+            fputs("Access management fixture failed: \(error)\n", stderr)
+            NSApplication.shared.terminate(nil)
+        }
     }
 
     private func showSheet() async {

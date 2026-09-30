@@ -32,7 +32,7 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
                 )).font(.caption).foregroundStyle(.secondary)
                 Picker(CloudAccessLocalization.text("Тип ресурса", "Resource type"), selection: $kind) {
                     ForEach(CloudAccessKind.allCases.filter { $0 != .vault }, id: \.self) { value in
-                        Text(value.rawValue).tag(value)
+                        Text(CloudAccessLocalization.kind(value.rawValue)).tag(value)
                     }
                 }.onChange(of: kind) { _, _ in Task { await load(reset: true) } }
                 TextField(CloudAccessLocalization.text("Найти ID на этой странице", "Find ID on this page"), text: $search)
@@ -40,11 +40,12 @@ struct SelectiveRemoteRegisteredResourcePicker: View {
                     .accessibilityLabel(CloudAccessLocalization.text("Поиск ID на текущей странице", "Search IDs on the current page"))
                 if let error { Text(error).foregroundStyle(.orange).font(.caption) }
                 ForEach(rows.filter { search.isEmpty || $0.id.canonicalCloudString.localizedCaseInsensitiveContains(search) }, id: \.id) { row in
-                    Button("\(row.policyKind.rawValue) · \(row.id.canonicalCloudString)") {
+                    Button("\(CloudAccessLocalization.kind(row.policyKind.rawValue)) · \(row.id.canonicalCloudString)") {
                         Task { await open(row) }
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel("\(row.policyKind.rawValue) \(row.id.canonicalCloudString)")
+                    .accessibilityLabel("\(CloudAccessLocalization.kind(row.policyKind.rawValue)) \(row.id.canonicalCloudString)")
+                    .accessibilityIdentifier("access-resource-\(row.id.canonicalCloudString)")
                 }
                 if rows.isEmpty && loaded && error == nil {
                     Text(CloudAccessLocalization.text("В реестре нет ресурсов этого типа.", "No registered resources of this type."))

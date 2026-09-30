@@ -235,7 +235,9 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 CloudAccessPolicyView(policy: impact.before.policyEffective)
                 Text(CloudAccessLocalization.text("После", "After")).font(.caption.bold())
                 CloudAccessPolicyView(policy: impact.after.policyEffective)
-                if impact.lostMask == 0 && !impact.after.policyEffective.paths.isEmpty { Text(CloudAccessLocalization.text("Доступ сохранён другими путями.", "Access remains through other paths.")).font(.caption) }
+                if impact.alternativePathRemainsAfterRemoval {
+                    Text(CloudAccessLocalization.text("Доступ сохранён другими путями.", "Access remains through other paths.")).font(.caption)
+                }
             }
             ForEach(model.affectedGrants) { grant in Text("\(grant.targetKind.rawValue) · \(grant.targetID.canonicalCloudString) · \(grant.permissionMask)").font(.caption) }
             if preview.nextCursor != nil { Text(CloudAccessLocalization.text("Просмотрите все страницы перед подтверждением.", "Review every page before confirmation.")).font(.caption) }
