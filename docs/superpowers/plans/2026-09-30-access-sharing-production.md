@@ -101,6 +101,7 @@
 
 **Interfaces:**
 - Consume Task3 sheet/reference and Task2 committed callback; resolve exact stored resourceID/Folder mapping, never scoped display ID/path hash or ruleID.
+- Within the existing per-Vault Mac Access entry, provide a bounded authenticated registered-resource picker. Server directory rows and exact scoped metadata GET create the real reference; use opaque kind/UUID until authorized V2 labels exist. Never associate the chosen registry row with an unmapped legacy object.
 - Produce shared `AccessMoveDecision` gate used by both sidebar/main persistence paths; ordinary V1/reorder proceeds, registered V2 ancestry mutation returns preview-required and server commit/publish gate.
 - Extend notification kinds for current-account committed effective gains/losses, opaque stable IDs and deduplication. No preview/local draft events.
 
