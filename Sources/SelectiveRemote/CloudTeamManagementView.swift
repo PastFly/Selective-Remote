@@ -69,6 +69,7 @@ struct SelectiveRemoteCloudTeamManagementView: View {
     @State private var synchronizingVaultID: UUID?
     @State private var renamingVaultID: UUID?
     @State private var vaultNameDraft = ""
+    @State private var accessReference: SelectiveRemoteCloudAccessReference?
     @AppStorage("SelectiveRemote.cloud.device-id.v1") private var storedDeviceID = ""
 
     var body: some View {
@@ -163,6 +164,14 @@ struct SelectiveRemoteCloudTeamManagementView: View {
             }
         }
         .task { await loadTeams() }
+        .sheet(item: $accessReference) { reference in
+            SelectiveRemoteCloudResourceAccessView(
+                reference: reference,
+                client: .init(client: client),
+                session: .init(endpoint: endpoint),
+                onCommitted: { _ in onInventoryChanged() }
+            )
+        }
         .onChange(of: selectedTeamID) { _, _ in
             latestInvitationURL = nil
             renamingVaultID = nil
@@ -468,6 +477,9 @@ struct SelectiveRemoteCloudTeamManagementView: View {
                             Label(vault.name, systemImage: "lock.square.stack.fill")
                         }
                         Spacer()
+                        Button(CloudAccessLocalization.text("Доступ", "Access")) {
+                            accessReference = try? .init(teamID: team.id, vaultID: vault.id, resourceID: vault.id, kind: .vault)
+                        }
                         Text("r\(vault.revision) · k\(vault.keyGeneration)")
                             .font(.caption.monospacedDigit())
                             .foregroundStyle(.secondary)
