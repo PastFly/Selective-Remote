@@ -68,7 +68,10 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             }
         }
         .padding(20).frame(minWidth: 440, idealWidth: 640, maxWidth: 760, minHeight: 460, idealHeight: 680, maxHeight: 850)
-        .task { await model.load(); searchFocused = true }
+        .task {
+            if model.context == nil { await model.load() }
+            searchFocused = true
+        }
         .onDisappear { model.invalidate() }
         .alert(CloudAccessLocalization.text("Применить просмотренное изменение?", "Apply the previewed change?"), isPresented: $confirmation) {
             Button(CloudAccessLocalization.text("Отмена", "Cancel"), role: .cancel) {}
