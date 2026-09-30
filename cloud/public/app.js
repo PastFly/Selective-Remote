@@ -1,3 +1,4 @@
+import { createAccessManager } from "./access-manager.js";
 import {
   createAccountDeviceCoordinator,
   createIndexedDBVaultRepository,
@@ -318,6 +319,7 @@ const WORKSPACE_COMMANDS = Object.freeze([
   { id: "forwarding", route: "/app/forwarding", target: "local-vault", recordFilter: "forwarding", labels: { ru: "Forwarding", en: "Forwarding" }, aliases: ["forwarding", "проброс"] },
   { id: "teams", route: "/app/teams", target: "team-vault", teamView: "teams", labels: { ru: "Команды", en: "Teams" }, aliases: ["команды", "teams", "team"] },
   { id: "team-members", route: "/app/team-members", target: "team-vault", teamView: "members", labels: { ru: "Участники команд", en: "Team members" }, aliases: ["участники", "team members", "members"] },
+  { id: "team-access", route: "/app/team-access", target: "team-vault", teamView: "access", labels: { ru: "Доступ и общий доступ", en: "Access & sharing" }, aliases: ["доступ", "sharing", "access"] },
   { id: "team-activity", route: "/app/team-activity", target: "team-vault", teamView: "activity", labels: { ru: "Журнал активности", en: "Activity log" }, aliases: ["журнал активности", "activity log", "audit"] },
   { id: "devices", route: "/app/devices", target: "workspace-devices", labels: { ru: "Устройства", en: "Devices" }, aliases: ["устройства", "devices", "device"] },
   { id: "settings", route: "/app/settings", target: "workspace-settings", labels: { ru: "Настройки", en: "Settings" }, aliases: ["настройки", "settings", "preferences"] },
@@ -1588,6 +1590,8 @@ export function initializeTeamWorkspace({
   clearIntervalValue = globalThis.clearInterval,
   backgroundSyncIntervalMilliseconds = 15_000,
   workspaceRefreshIntervalMilliseconds = 10_000,
+  accessResolveLabel = () => null,
+  onAccessCommitted = () => {},
 } = {}) {
   const section = documentValue.querySelector("#team-vault");
   if (!section || !client) return null;
@@ -1726,6 +1730,10 @@ export function initializeTeamWorkspace({
   let accountInvitations = [];
   let notificationSourceSequence = 0;
   let deviceAdmissionPolicy = null;
+  const accessView = documentValue.querySelector("#team-access-view");
+  const accessManager = accessView && typeof client.accessClient === "function"
+    ? createAccessManager({ root: accessView, client: client.accessClient(),
+      resolveLabel: accessResolveLabel, onCommitted: onAccessCommitted }) : null;
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
@@ -3030,7 +3038,7 @@ export function initializeTeamWorkspace({
       resetRecordEditor();
       selectedRecordIDs.clear();
     }
-    activeView = ["teams", "members", "vaults", "hosts", "activity", "management"].includes(view) ? view : "teams";
+    activeView = ["teams", "members", "vaults", "hosts", "activity", "management", "access"].includes(view) ? view : "teams";
     if (activeView === "hosts") {
       activeRecordFilter = ["all", "host", "credential", "snippet", "forwarding"].includes(recordFilter)
         ? recordFilter
@@ -3048,11 +3056,20 @@ export function initializeTeamWorkspace({
     const resourceTitles = { all: "Командный Vault", host: "Хосты команд", credential: "Учётные данные команд", snippet: "Сниппеты команд", forwarding: "Forwarding команд" };
     setText(sectionTitle, {
       teams: "Команды", members: "Участники команд", vaults: "Папки команд",
-      hosts: resourceTitles[activeRecordFilter], activity: "Журнал активности", management: "Управление командой",
+      hosts: resourceTitles[activeRecordFilter], access: "Доступ и общий доступ", activity: "Журнал активности", management: "Управление командой",
     }[activeView]);
     onboarding.hidden = activeView !== "teams";
     membersView.hidden = activeView !== "members";
     if (activityView) activityView.hidden = activeView !== "activity";
+    if (accessView) accessView.hidden = activeView !== "access";
+    if (activeView === "access" && accessManager) {
+      const current = accessManager.state().context;
+      if (current.teamID !== selectedTeam?.id || current.role !== selectedTeam?.role) {
+        accessManager.setContext({ teamID: selectedTeam?.id, role: selectedTeam?.role,
+          vaultID: selectedVault?.id ?? null, deviceID: client.deviceID?.() });
+      }
+      void accessManager.refresh().catch(() => {});
+    }
     vaultDirectoryView.hidden = !["vaults", "hosts"].includes(activeView);
     deviceAdmissionPolicyPanel.hidden = activeView !== "members" || !selectedTeam;
     lifecyclePanel.hidden = activeView !== "management" || selectedTeam?.role !== "owner";
@@ -3128,6 +3145,8 @@ export function initializeTeamWorkspace({
   async function loadSelectedTeam() {
     const memberGeneration = ++memberRequestGeneration;
     selectedTeam = teams.find((team) => team.id === teamSelect.value) ?? null;
+    accessManager?.setContext({ teamID: selectedTeam?.id, role: selectedTeam?.role, deviceID: client.deviceID?.() });
+    if (activeView === "access") void accessManager?.refresh().catch(() => {});
     lockCurrentVault();
     if (!selectedTeam) {
       teamMembers = [];
@@ -3840,6 +3859,7 @@ export function initializeTeamWorkspace({
     void refreshWorkspaceActivity().catch(() => {});
   });
   return {
+    accessManager,
     setView,
     async refreshNotificationSources() {
       if (!identity) return;
@@ -3890,6 +3910,7 @@ export function initializeTeamWorkspace({
       teamInvitations = [];
       accountInvitations = [];
       selectedTeam = null;
+      accessManager?.setContext({});
       workspaceRefreshOperation = null;
       lockCurrentVault();
       teamSelect.replaceChildren();
