@@ -1,5 +1,4 @@
 // Deliberate operator entry point; never registered by server.mjs.
-import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import pg from "pg";
@@ -93,8 +92,13 @@ if (
       process.env.MIGRATION_SYNTHETIC_ENABLED !== "YES"
     )
       throw Error("migration_staging_only");
-    const bytes = await readFile(0);
-    if (bytes.length > 64 * 1024 * 1024) throw Error("migration_input_limit");
+    const chunks = []; let length = 0;
+    for await (const chunk of process.stdin) {
+      length += chunk.length;
+      if (length > 96 * 1024 * 1024) throw Error("migration_input_limit");
+      chunks.push(chunk);
+    }
+    const bytes = Buffer.concat(chunks);
     const result = await runStagingMigration(
       {
         environment: "staging",

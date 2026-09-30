@@ -6,6 +6,7 @@ import {
   defaultMigrationPolicy,
   migrationRecipients,
   verifyMigrationManifest,
+  previewMigrationPolicy,
 } from "./migration-policy.mjs";
 import { validateSignedDeviceBundle } from "./device-trust-policy.mjs";
 import {
@@ -27,6 +28,7 @@ const lockTables = [
   "team_access_groups",
   "team_membership_device_admissions",
   "team_memberships",
+  "team_invitation_vault_wrappers",
   "team_policy_revisions",
   "teams",
   "users",
@@ -38,6 +40,7 @@ const lockTables = [
   "vault_resource_key_wrappers_v2",
   "vault_resource_manifest_pointers_v2",
   "vault_resource_registry",
+  "vault_resource_identity_reservations",
 ];
 export class VaultMigrationStore {
   constructor(
@@ -163,6 +166,10 @@ export class VaultMigrationStore {
       ],
       registry: [
         "SELECT to_jsonb(r) AS data FROM vault_resource_registry r WHERE vault_id=$1 ORDER BY id",
+        [vaultID],
+      ],
+      pointers: [
+        "SELECT to_jsonb(p) AS data FROM vault_resource_manifest_pointers_v2 p WHERE vault_id=$1 ORDER BY resource_id,part",
         [vaultID],
       ],
       rotation: [
@@ -321,6 +328,7 @@ export class VaultMigrationStore {
         return {
           snapshot,
           snapshotHash,
+          candidate: input.resources ? previewMigrationPolicy({resources:input.resources,policy:input.policy,snapshot}) : null,
           sourceRevision: snapshot.sourceRevision,
           sourceHash: snapshot.sourceHash,
           policyVersion: snapshot.policyVersion,

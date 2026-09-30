@@ -76,16 +76,49 @@ BEGIN
 END $$;
 CREATE TRIGGER guard_migration_resource BEFORE INSERT OR UPDATE OR DELETE ON vault_migration_resources FOR EACH ROW EXECUTE FUNCTION guard_migration_object();
 CREATE TRIGGER guard_migration_part BEFORE INSERT OR UPDATE OR DELETE ON vault_migration_parts FOR EACH ROW EXECUTE FUNCTION guard_migration_object();
--- Serialize identity reservation across both generations, including direct SQL.
+-- One physical unique index arbitrates both generations, including stale RR snapshots.
+CREATE TABLE vault_resource_identity_reservations (
+ id uuid PRIMARY KEY,
+ team_id uuid NOT NULL,
+ vault_id uuid NOT NULL,
+ generation text NOT NULL CHECK(generation IN ('REGISTRY','MIGRATION')),
+ attempt_id uuid,
+ UNIQUE(id,team_id,vault_id,generation),
+ UNIQUE(id,team_id,vault_id,attempt_id),
+ FOREIGN KEY(attempt_id,team_id,vault_id) REFERENCES vault_migration_attempts(id,team_id,vault_id),
+ CHECK((generation='MIGRATION')=(attempt_id IS NOT NULL))
+);
+INSERT INTO vault_resource_identity_reservations(id,team_id,vault_id,generation)
+ SELECT id,team_id,vault_id,'REGISTRY' FROM vault_resource_registry;
+ALTER TABLE vault_resource_registry ADD COLUMN identity_generation text NOT NULL DEFAULT 'REGISTRY' CHECK(identity_generation='REGISTRY');
+ALTER TABLE vault_resource_registry ADD CONSTRAINT registry_identity_reservation
+ FOREIGN KEY(id,team_id,vault_id,identity_generation) REFERENCES vault_resource_identity_reservations(id,team_id,vault_id,generation);
+ALTER TABLE vault_migration_resources ADD CONSTRAINT migration_identity_reservation
+ FOREIGN KEY(id,team_id,vault_id,attempt_id) REFERENCES vault_resource_identity_reservations(id,team_id,vault_id,attempt_id);
 CREATE FUNCTION migration_resource_identity_gate() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
- PERFORM pg_advisory_xact_lock(hashtextextended(NEW.id::text,19));
- IF TG_TABLE_NAME='vault_migration_resources' AND EXISTS(SELECT 1 FROM vault_resource_registry WHERE id=NEW.id)
- OR TG_TABLE_NAME='vault_resource_registry' AND EXISTS(SELECT 1 FROM vault_migration_resources WHERE id=NEW.id) THEN RAISE EXCEPTION 'resource_id_collision'; END IF;
+ INSERT INTO vault_resource_identity_reservations(id,team_id,vault_id,generation,attempt_id)
+ VALUES(NEW.id,NEW.team_id,NEW.vault_id,
+   CASE WHEN TG_TABLE_NAME='vault_migration_resources' THEN 'MIGRATION' ELSE 'REGISTRY' END,
+   CASE WHEN TG_TABLE_NAME='vault_migration_resources' THEN (to_jsonb(NEW)->>'attempt_id')::uuid ELSE NULL END);
  RETURN NEW;
 END $$;
 CREATE TRIGGER migration_resource_identity_gate BEFORE INSERT ON vault_migration_resources FOR EACH ROW EXECUTE FUNCTION migration_resource_identity_gate();
 CREATE TRIGGER registry_migration_identity_gate BEFORE INSERT ON vault_resource_registry FOR EACH ROW EXECUTE FUNCTION migration_resource_identity_gate();
+CREATE FUNCTION guard_resource_identity_reservation() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP='UPDATE' OR OLD.generation='REGISTRY' OR NOT EXISTS(
+   SELECT 1 FROM vault_migration_attempts WHERE id=OLD.attempt_id AND state='DISCARDED'
+ ) THEN RAISE EXCEPTION 'immutable_resource_identity_reservation'; END IF;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER guard_resource_identity_reservation BEFORE UPDATE OR DELETE ON vault_resource_identity_reservations FOR EACH ROW EXECUTE FUNCTION guard_resource_identity_reservation();
+CREATE FUNCTION release_discarded_migration_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ DELETE FROM vault_resource_identity_reservations WHERE id=OLD.id AND attempt_id=OLD.attempt_id;
+ RETURN OLD;
+END $$;
+CREATE TRIGGER release_discarded_migration_identity AFTER DELETE ON vault_migration_resources FOR EACH ROW EXECUTE FUNCTION release_discarded_migration_identity();
 CREATE FUNCTION guard_active_migration_publication() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF OLD.active_publication_attempt_id IS NOT NULL AND (NEW.active_publication_attempt_id IS DISTINCT FROM OLD.active_publication_attempt_id OR NEW.format_state<>'V2_ACTIVE' OR NEW.format_schema_version<>2 OR NEW.revision<>OLD.revision OR NEW.key_generation<>OLD.key_generation OR NEW.ciphertext IS NOT NULL) THEN RAISE EXCEPTION 'irreversible_v2_publication'; END IF;

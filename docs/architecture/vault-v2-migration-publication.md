@@ -5,7 +5,7 @@ This foundation is **OFF by default**. It has no production HTTP migration route
 ## Operator/client sequence
 
 1. Operator config explicitly selects staging environment, synthetic enablement, Vault UUID allowlist, test database URL and an absolute external fence path. Production/default config fails before connecting or reading stdin.
-2. `preview` captures source revision and a canonical public-policy/device snapshot. Client `previewLegacyMigration` inventories the decrypted schema-1 document locally. Unsupported records (`sshKey` included), duplicate/colliding IDs, invalid folders, embedded secrets or opaque encoded profiles block conversion. Credential unknown fields remain secret.
+2. `preview` captures source revision and a canonical public-policy/device snapshot. When opaque proposed resources/policy are supplied, read-only preview evaluates effective access changes, typed readiness blockers and exact wrapper fanout without reserving IDs or emitting audit/notifications. Client `previewLegacyMigration` inventories the decrypted schema-1 document locally. Unsupported records (`sshKey` included), duplicate/colliding IDs, invalid folders, embedded secrets or opaque encoded profiles block conversion. Credential unknown fields remain secret.
 3. Client `prepareMigrationInventory` persists an AES-GCM checkpoint under its locally held legacy key **before** submitting opaque graph descriptors to `start`. Scope binds Team/Vault/attempt/source revision/encrypted-source hash/snapshot hash/policy version. Valid unique UUIDs are reused; missing IDs and folder IDs remain stable on resume. Server sees no names, paths, plaintext document fingerprint or CEKs.
 4. `start` stores the desired policy, immutable read snapshot and reserved resource IDs. Default direct grants preserve legacy read/reveal access for all current members; Owner/Admin authority and Admin target ceiling use existing Team policy. Group policy uses only existing Team groups. Every entitled principal needs eligible admitted devices.
 5. Client prepares independent GENERAL or Credential METADATA/SECRET CEKs, verifies root pins and signed recipient directory high-water, wraps to every exact eligible device, locally opens its own wrapper/part, and root-signs the manifest. If the preparing custodian lacks a needed part permission/self-wrapper, preparation blocks. This bounded engine does not implement third-party delegated encryption.
@@ -40,9 +40,17 @@ PostgreSQL 16.15; three existing Team groups, three admitted signed devices:
 
 | Resources | Wrappers | Prepare | Upload + validation | Activation | Activation queries | Ciphertext/wrappers bytes | Commitment EXPLAIN |
 |---:|---:|---:|---:|---:|---:|---:|---|
-| 100 | 300 | 681 ms | 1080 ms | 15.2 ms | 33 | 289401 | Index Scan, 0.041 ms |
-| 1000 | 3000 | 56494 ms | 7010 ms | 23.2 ms | 33 | 2894001 | Index Scan, 0.344 ms |
+| 100 | 300 | 567 ms | 505 ms | 14.4 ms | 34 | 289401 | Index Scan, 0.040 ms |
+| 1000 | 3000 | 38489 ms | 7964 ms | 27.8 ms | 34 | 2894001 | Index Scan, 0.364 ms |
 
 Client checkpoint resealing dominates the 1000-resource preparation time and is quadratic in total prepared checkpoint bytes; optimize its storage format before larger production batches while preserving fresh-CEK/crash invariants. Activation query count is fixed and does not fetch ciphertext JSON; graph/recipient/snapshot validation still scales with resource, grant and device counts. Numbers describe this local synthetic run, not a production latency guarantee.
 
 Audit records only committed started/prepared/failed/activated/discarded transitions, opaque IDs/counts/hashes and safe blockers. Preview has no audit/notification side effect. CI repeats fresh migrations, concurrency/failure matrix and both scale sizes on PostgreSQL 16.
+
+### Final review corrections
+
+Identity reservation uses a single UUID primary key shared by registry and migration generations, with scope-bound foreign keys. This remains safe under REPEATABLE READ snapshots in either ordering; discarded preparation releases its own reservation, registry/tombstone reservations remain retained. Invitation-wrapper writes participate in the same deterministic activation table locks. Frozen snapshots include existing crypto pointers.
+
+Fence exact replays always reconfirm file and directory fsync, and writes loop until complete. Failed sync cannot be treated as proof of durability on retry. The operator reads stdin incrementally with a 96 MiB transport cap; checkpoint ciphertext remains capped at 64 MiB. Preview/preparation conservatively budget original document, folder descriptors, ciphertext encoding and wrapper fanout before encryption; a source within the 24 MiB parsing limit may receive `checkpoint_size_limit`. Runtime sealing enforces the same limit. Boundary resume, short-write/fsync failures, enabled stdin, stale pointers and read-only effective-policy preview have regressions.
+
+Local final evidence: Cloud 550 tests, 528 pass, 21 PostgreSQL skips (covered separately), one existing password-rewrap TODO; PostgreSQL 16 matrix 25/25 pass without skips; Swift 659 tests/54 suites pass; Release build pass. Formal exact-head Security, hosted CI and Test DMG are separate readiness gates.

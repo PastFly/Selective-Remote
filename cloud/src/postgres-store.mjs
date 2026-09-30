@@ -2277,7 +2277,10 @@ export class PostgresStore {
          AND membership.revoked_at IS NULL`,
       [teamID, vaultID, actorUserID, actorDeviceID],
     );
-    if (!access.rows[0]) throw new Error("team_not_found");
+    if (!access.rows[0]) {
+      await this.requireLegacyPublication(teamID, vaultID, actorUserID);
+      throw new Error("team_not_found");
+    }
     if (!access.rows[0].actor_key_authorized) throw new Error("device_approval_required");
     if (!access.rows[0].actor_has_wrapper) {
       try {

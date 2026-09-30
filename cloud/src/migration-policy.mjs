@@ -1,4 +1,4 @@
-import { webcrypto, randomUUID } from "node:crypto";
+import { webcrypto, createHash } from "node:crypto";
 import {
   canonicalMigrationJSON,
   migrationBytes,
@@ -66,7 +66,10 @@ export function defaultMigrationPolicy({ resources, snapshot }) {
   };
   return snapshot.memberships.flatMap((m) =>
     resources.map((r) => ({
-      id: randomUUID(),
+      id: (() => {
+        const h=createHash("sha256").update(`migration-policy:${snapshot.teamID}:${snapshot.vaultID}:${m.id}:${m.epoch}:${r.id}`).digest("hex");
+        return `${h.slice(0,8)}-${h.slice(8,12)}-5${h.slice(13,16)}-a${h.slice(17,20)}-${h.slice(20,32)}`;
+      })(),
       teamID: snapshot.teamID,
       vaultID: snapshot.vaultID,
       principalKind: "USER",
@@ -95,6 +98,8 @@ export function migrationRecipients({
   snapshot,
   actorRole = "owner",
   resourceIDs = null,
+  effectiveMasks = null,
+  requireDevices = true,
 }) {
   const ids = validateMigrationResources(resources);
   requireAccessMutation(actorRole);
@@ -197,6 +202,7 @@ export function migrationRecipients({
         groupIDs,
         grants: policy,
       });
+      if (effectiveMasks) effectiveMasks[`${m.id}:${r.id}`] = access.policyMask;
       if (actorRole === "admin" && ["owner", "admin"].includes(m.role)) {
         const allowed = {
           HOST: 13,
@@ -220,7 +226,7 @@ export function migrationRecipients({
       const devices = snapshot.devices.filter(
         (d) => d.membershipID === m.id && d.membershipEpoch === m.epoch,
       );
-      if (!devices.length) throw Error("eligible_device_required");
+      if (requireDevices && !devices.length) throw Error("eligible_device_required");
       for (const part of needed) result[r.id][part].push(...devices);
     }
   }
@@ -262,4 +268,31 @@ export async function verifyMigrationManifest({
   )
     throw Error("invalid_migration_manifest");
   return true;
+}
+
+// Pure proposal evaluation: no resource reservation, database mutation or notification.
+export function previewMigrationPolicy({resources, policy, snapshot}) {
+ const baseline = defaultMigrationPolicy({resources,snapshot});
+ const before={}, after={};
+ migrationRecipients({resources,policy:baseline,snapshot,effectiveMasks:before,requireDevices:false});
+ const selected=policy??baseline;
+ try {
+  const recipients=migrationRecipients({resources,policy:selected,snapshot,actorRole:snapshot.actorRole,effectiveMasks:after});
+  let wrapperCount=0,partCount=0;
+  const blockers=[];
+  for (const parts of Object.values(recipients)) for (const targets of Object.values(parts)) {
+   partCount++;wrapperCount+=targets.length;
+   if (!targets.length) blockers.push("migration_part_without_recipient");
+   if (targets.length>100) blockers.push("recipient_limit");
+  }
+  const effectiveChanges=[];
+  for (const m of snapshot.memberships) for (const r of resources) {
+   const key=`${m.id}:${r.id}`, oldMask=before[key]??0,newMask=after[key]??0;
+   if (oldMask!==newMask) effectiveChanges.push({userID:m.userID,membershipID:m.id,resourceID:r.id,beforeMask:oldMask,afterMask:newMask,removedMask:oldMask&~newMask,addedMask:newMask&~oldMask});
+  }
+  return {policy:selected,recipients,resourceCount:resources.length,partCount,wrapperCount,effectiveChanges,blockers:[...new Set(blockers)]};
+ } catch(e) {
+  if (!["invalid_migration_policy","invalid_grant_permission","invalid_permission_mask","team_access_denied","eligible_device_required"].includes(e.message)) throw e;
+  return {blockers:[e.message],effectiveChanges:null,wrapperCount:null};
+ }
 }

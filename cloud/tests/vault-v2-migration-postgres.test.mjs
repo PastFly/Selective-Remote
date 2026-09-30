@@ -61,6 +61,7 @@ export async function readyCandidate(
       parentFolderID: null,
       sourceOrdinal: n,
     }));
+  await extra.beforeStart?.(f);
   const started = await store.start({ ...f.input, resources });
   const out = await prepareLegacyMigration({
     ...f,
@@ -233,6 +234,8 @@ test(
         ),
         /vault_upgrade_required/,
       );
+      await assert.rejects(p.listTeamKeyDevices(f.input.teamID,f.input.vaultID,f.input.actorUserID,f.input.actorDeviceID),/vault_upgrade_required/);
+      await assert.rejects(p.listTeamKeyDevices(f.input.teamID,f.input.vaultID,crypto.randomUUID(),crypto.randomUUID()),/team_not_found/);
       await assert.rejects(
         p.getSharedVault(
           f.input.teamID,
@@ -599,3 +602,93 @@ test(
     }
   },
 );
+
+test("RR snapshots cannot reuse cross-generation identities in either order", {skip:!process.env.TEST_DATABASE_URL}, async () => {
+  const pool = new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
+  try {
+    await applyMigrations(pool, migrationDirectory, {info(){}});
+    for (const registryFirst of [false,true]) {
+      const f = await seedMigration(pool), g = await seedMigration(pool), id = record("host").id;
+      await pool.query("UPDATE shared_vaults SET format_state='V2_PREPARING',format_schema_version=2 WHERE id=$1",[g.input.vaultID]);
+      const old = await pool.connect();
+      try {
+        await old.query("BEGIN ISOLATION LEVEL REPEATABLE READ");
+        await old.query("SELECT count(*) FROM vault_migration_resources");
+        const resources = [{id,kind:"HOST",parentFolderID:null,sourceOrdinal:0}], store = new VaultMigrationStore(pool,f.config);
+        const registry = c => c.query("INSERT INTO vault_resource_registry(id,team_id,vault_id,policy_class,policy_kind) VALUES($1,$2,$3,'general','HOST')",[id,g.input.teamID,g.input.vaultID]);
+        if (!registryFirst) {
+          await store.start({...f.input,resources});
+          await assert.rejects(registry(old), /resource_id_collision|duplicate key|serialization/);
+        } else {
+          await registry(pool);
+          // The competing migration INSERT uses the old snapshot too.
+          await old.query("INSERT INTO vault_migration_attempts(id,team_id,vault_id,actor_user_id,actor_device_id,source_revision,source_hash,snapshot_hash,snapshot,policy,resources,scope) VALUES($1,$2,$3,$4,$5,1,'source',$6,'{}','[]',$7,'{}')",[f.input.attemptID,f.input.teamID,f.input.vaultID,f.accountID,f.deviceID,"a".repeat(64),JSON.stringify(resources)]);
+          await assert.rejects(old.query("INSERT INTO vault_migration_resources(id,attempt_id,team_id,vault_id,kind,source_ordinal) VALUES($1,$2,$3,$4,'HOST',0)",[id,f.input.attemptID,f.input.teamID,f.input.vaultID]), /resource_id_collision|duplicate key|serialization/);
+        }
+      } finally {await old.query("ROLLBACK");old.release();}
+      const counts = (await pool.query("SELECT (SELECT count(*) FROM vault_resource_registry WHERE id=$1)::int+(SELECT count(*) FROM vault_migration_resources WHERE id=$1)::int AS total",[id])).rows[0];
+      assert.equal(counts.total,1);
+    }
+  } finally {await pool.end();}
+});
+test("invitation SQL writer blocks cutover and invalidates READY snapshot", {skip:!process.env.TEST_DATABASE_URL}, async () => {
+  const pool = new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,max:5});
+  let writer;
+  try {
+    await applyMigrations(pool,migrationDirectory,{info(){}});
+    const f = await readyCandidate(pool), invitation = record("host").id;
+    await pool.query("INSERT INTO team_invitations(id,team_id,email,role,token_hash,invited_by_user_id,expires_at,invitation_type) VALUES($1,$2,'race@example.test','viewer',$3,$4,now()+interval '1 day','email')",[invitation,f.input.teamID,invitation.replaceAll('-','').repeat(2),f.accountID]);
+    await pool.query("INSERT INTO team_invitation_wrapper_devices VALUES($1,$2)",[invitation,f.deviceID]);
+    await pool.query("INSERT INTO team_invitation_wrapper_vaults VALUES($1,$2,1)",[invitation,f.input.vaultID]);
+    writer = await pool.connect(); await writer.query("BEGIN");
+    await writer.query("INSERT INTO team_invitation_vault_wrappers(invitation_id,vault_id,key_generation,membership_id,membership_epoch,device_id,wrapper_version,ephemeral_public_key,ciphertext,nonce,auth_tag,context_hash,created_by_device_id) VALUES($1,$2,1,$3,1,$4,1,$5,$6,$7,$8,$9,$4)",[invitation,f.input.vaultID,f.recipient.membershipID,f.deviceID,f.identity.publicKey,"A".repeat(43),"A".repeat(16),"A".repeat(22),"A".repeat(43)]);
+    let finished=false;
+    const activation=f.store.activate(f.input,await f.store.manifestHash(f.input)).then(()=>{finished=true;return null},e=>{finished=true;return e});
+    await new Promise(r=>setTimeout(r,75)); assert.equal(finished,false);
+    await writer.query("COMMIT");
+    assert.match((await activation).message,/migration_snapshot_stale/);
+    assert.equal((await pool.query("SELECT format_state FROM shared_vaults WHERE id=$1",[f.input.vaultID])).rows[0].format_state,"V1_ACTIVE");
+  } finally {await writer?.query("ROLLBACK").catch(()=>{});writer?.release();await pool.end();}
+});
+
+test("read-only preview evaluates candidate effective deltas and wrapper readiness without persistence", {skip:!process.env.TEST_DATABASE_URL}, async () => {
+ const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
+ try {
+  const f=await seedMigration(pool), store=new VaultMigrationStore(pool,f.config), resources=[{id:record("host").id,kind:"HOST",parentFolderID:null,sourceOrdinal:0}];
+  const before=(await pool.query("SELECT (SELECT count(*) FROM vault_migration_attempts)::int AS attempts,(SELECT count(*) FROM team_audit_events)::int AS audits")).rows[0];
+  const defaultPreview=await store.preview({...f.input,resources});
+  assert.deepEqual(defaultPreview.candidate.blockers,[]);
+  assert.equal(defaultPreview.candidate.wrapperCount,1);
+  const policy=defaultPreview.candidate.policy.map(g=>({...g,mask:1}));
+  const restricted=await store.preview({...f.input,resources,policy});
+  assert.equal(restricted.candidate.effectiveChanges.length,1);
+  assert.equal(restricted.candidate.effectiveChanges[0].removedMask,12);
+  const invalid=await store.preview({...f.input,resources,policy:[{...policy[0],mask:64}]});
+  assert.ok(invalid.candidate.blockers.length);
+  const after=(await pool.query("SELECT (SELECT count(*) FROM vault_migration_attempts)::int AS attempts,(SELECT count(*) FROM team_audit_events)::int AS audits")).rows[0];
+  assert.deepEqual(after,before);
+  assert.equal((await pool.query("SELECT count(*)::int AS n FROM vault_resource_identity_reservations WHERE id=$1",[resources[0].id])).rows[0].n,0);
+ } finally {await pool.end();}
+});
+
+test("pointer-only change after READY invalidates the frozen snapshot", {skip:!process.env.TEST_DATABASE_URL}, async () => {
+ const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL});
+ try {
+  const f=await readyCandidate(pool,undefined,{beforeStart:async f=>{
+   const id=record("host").id, args=[f.input.teamID,f.input.vaultID,id];
+   await pool.query("UPDATE shared_vaults SET format_state='V2_PREPARING',format_schema_version=2 WHERE id=$1",[f.input.vaultID]);
+   await pool.query("INSERT INTO vault_resource_registry(team_id,vault_id,id,policy_class,policy_kind) VALUES($1,$2,$3,'general','HOST')",args);
+   await pool.query("INSERT INTO vault_resource_ciphertext_versions(team_id,vault_id,resource_id,part,key_version,policy_version,registry_version,resource_version,manifest_version,nonce,ciphertext,auth_tag,lifecycle) VALUES($1,$2,$3,'GENERAL',1,1,1,1,1,$4,$5,$6,'PUBLISHED')",[...args,"A".repeat(16),"A".repeat(43),"A".repeat(22)]);
+   await pool.query("INSERT INTO vault_resource_key_wrappers_v2(team_id,vault_id,resource_id,part,key_version,membership_id,membership_epoch,device_id,ephemeral_public_key,nonce,ciphertext,auth_tag) VALUES($1,$2,$3,'GENERAL',1,$4,1,$5,$6,$7,$8,$9)",[...args,f.recipient.membershipID,f.deviceID,f.identity.publicKey,"A".repeat(16),"A".repeat(43),"A".repeat(22)]);
+   await pool.query("INSERT INTO vault_resource_manifest_pointers_v2(team_id,vault_id,resource_id,part,key_version,manifest_version) VALUES($1,$2,$3,'GENERAL',1,1)",args);
+   await pool.query("UPDATE shared_vaults SET format_state='V1_ACTIVE',format_schema_version=1 WHERE id=$1",[f.input.vaultID]);
+  }});
+  await pool.query("DELETE FROM vault_resource_manifest_pointers_v2 WHERE vault_id=$1",[f.input.vaultID]);
+  await assert.rejects(f.store.activate(f.input,await f.store.manifestHash(f.input)),/migration_snapshot_stale/);
+ } finally {await pool.end();}
+});
+test("enabled operator consumes bounded stdin and reaches typed validation", () => {
+ const p=spawnSync(process.execPath,[new URL("../scripts/vault-v2-migration-staging.mjs",import.meta.url).pathname],{input:JSON.stringify({operation:"invalid"}),env:{...process.env,MIGRATION_ENVIRONMENT:"staging",MIGRATION_SYNTHETIC_ENABLED:"YES",MIGRATION_SYNTHETIC_VAULT_IDS:record("host").id,MIGRATION_STAGING_DATABASE_URL:"postgres://invalid",MIGRATION_FENCE_PATH:"/tmp/not-connected-fence"},encoding:"utf8"});
+ assert.equal(p.stderr.trim(),"invalid_migration_operation");
+});
+import {spawnSync} from "node:child_process";

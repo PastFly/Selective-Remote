@@ -35,11 +35,18 @@ export const migrationBytes = (value) =>
   enc.encode(
     "selective-remote/vault-migration/v2\0" + canonicalMigrationJSON(value),
   );
-export const toBase64 = (value) =>
-  btoa(Array.from(value, (b) => String.fromCharCode(b)).join(""))
-    .replaceAll("+", "-")
-    .replaceAll("/", "_")
-    .replace(/=+$/u, "");
+export const toBase64 = (value) => {
+  let binary = "";
+  for (let offset = 0; offset < value.length; offset += 32768)
+    binary += String.fromCharCode(...value.subarray(offset, offset + 32768));
+  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
+};
+export const MIGRATION_CHECKPOINT_LIMIT = 64 * 1024 * 1024;
+export function migrationCheckpointBudget(document, partCount, wrapperCount = 0, folders = []) {
+  // Conservative allowance for source + duplicated payload JSON + two base64 layers,
+  // bounded descriptors and complete device wrappers. Checked before encryption.
+  return 4 * (enc.encode(canonicalMigrationJSON(document)).length + enc.encode(canonicalMigrationJSON(folders)).length) + partCount * 8192 + wrapperCount * 4096;
+}
 export const fromBase64 = (value) =>
   Uint8Array.from(atob(value.replaceAll("-", "+").replaceAll("_", "/")), (c) =>
     c.charCodeAt(0),
@@ -149,6 +156,8 @@ function inventory(document, existingIDs = []) {
     });
   }
   if (items.length + folders.size > 1000) blockers.push("resource_limit");
+  const parts = items.reduce((n,r) => n + (r.kind === "CREDENTIAL" ? 2 : 1), folders.size);
+  if (migrationCheckpointBudget(document, parts, 0, [...folders.values()]) > MIGRATION_CHECKPOINT_LIMIT) blockers.push("checkpoint_size_limit");
   return {
     items,
     folders: [...folders.values()],
@@ -196,6 +205,7 @@ async function seal(state, key, scope, crypto) {
     imported,
     enc.encode(canonicalMigrationJSON(state)),
   );
+  if (Math.ceil(ciphertext.byteLength * 4 / 3) > MIGRATION_CHECKPOINT_LIMIT) throw Error("checkpoint_size_limit");
   return {
     version: 1,
     nonce: toBase64(nonce),
@@ -212,7 +222,7 @@ export async function openMigrationCheckpoint({
   if (
     checkpoint?.version !== 1 ||
     typeof checkpoint.ciphertext !== "string" ||
-    checkpoint.ciphertext.length > 64 * 1024 * 1024
+    checkpoint.ciphertext.length > MIGRATION_CHECKPOINT_LIMIT
   )
     throw Error("invalid_migration_checkpoint");
   const imported = await cryptoValue.subtle.importKey(
@@ -341,6 +351,15 @@ export async function prepareLegacyMigration({
       cryptoValue,
     );
   }
+  const targetCache = new Map();
+  let wrapperCount = 0, partCount = 0;
+  for (const r of state.resources) for (const part of (r.kind === "CREDENTIAL" ? ["METADATA","SECRET"] : ["GENERAL"])) {
+    const targets = await recipientTargets(r, part);
+    if (!Array.isArray(targets) || !targets.length || targets.length > 100) throw Error("recipient_missing");
+    targetCache.set(r.id + ":" + part, targets);
+    wrapperCount += targets.length; partCount++;
+  }
+  if (migrationCheckpointBudget(document, partCount, wrapperCount, i.folders) > MIGRATION_CHECKPOINT_LIMIT) throw Error("checkpoint_size_limit");
   state.policyHash = policyHash;
   let saved;
   const persist = async () => {
@@ -375,7 +394,7 @@ export async function prepareLegacyMigration({
         )
       )
         continue;
-      const targets = await recipientTargets(resource, part);
+      const targets = targetCache.get(resource.id + ":" + part);
       if (!Array.isArray(targets) || !targets.length || targets.length > 100)
         throw Error("recipient_missing");
       const context = {

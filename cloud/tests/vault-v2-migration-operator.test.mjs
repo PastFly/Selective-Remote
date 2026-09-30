@@ -89,3 +89,28 @@ test("operator default and production are refused before connection or plaintext
   assert.equal(p.stderr.trim(), "migration_staging_only");
   assert.equal(p.stdout, "");
 });
+
+import { open as realOpen } from "node:fs/promises";
+for (const failure of ["file", "directory"]) test(`fence retries durability after ${failure} fsync failure and handles short writes`, async () => {
+  const dir = await mkdtemp(join(tmpdir(), "migration-sync-")), path = join(dir, "fence");
+  let injected = false, fileSyncs = 0, dirSyncs = 0;
+  const openFile = async (...args) => {
+    const handle = await realOpen(...args), directory = args[0] === dir;
+    return new Proxy(handle, { get(target, name) {
+      if (name === "sync") return async () => {
+        if (directory) dirSyncs++; else fileSyncs++;
+        if (!injected && directory === (failure === "directory")) { injected = true; throw Object.assign(Error("fsync"), { code: "EIO" }); }
+        return target.sync();
+      };
+      if (name === "write") return (buffer, offset, length, position) => target.write(buffer, offset, Math.min(length, 13), position);
+      const value = target[name]; return typeof value === "function" ? value.bind(target) : value;
+    }});
+  };
+  const f = new MigrationFence(path, { openFile }), intent = {teamID:uuid(),vaultID:uuid(),attemptID:uuid(),manifestHash:"a".repeat(64),schemaFloor:19};
+  await assert.rejects(f.intent(intent), /fsync/);
+  const previous = fileSyncs;
+  await f.intent(intent);
+  assert.ok(fileSyncs > previous);
+  assert.ok(dirSyncs >= 1);
+  assert.equal(await f.verify({schemaVersion:19,publications:[intent]}), true);
+});

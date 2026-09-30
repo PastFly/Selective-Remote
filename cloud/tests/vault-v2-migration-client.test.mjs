@@ -257,3 +257,12 @@ test("opaque Host/Forwarding encoded profiles cannot hide a password inside a Vi
     );
   }
 });
+
+test("checkpoint budget blocks an oversized source before preparation and supports bounded resume", async () => {
+  const tooLarge = legacy([record("snippet", {body:"x".repeat(21*1024*1024)})]);
+  assert.ok(previewLegacyMigration({document:tooLarge}).blockers.includes("checkpoint_size_limit"));
+  const f = await migrationFixture(), document = legacy([record("snippet", {body:"x".repeat(4*1024*1024)})]);
+  const out = await prepare(f, document);
+  const resumed = await prepare(f, document, {checkpoint:out.checkpoint});
+  assert.deepEqual(resumed.objects, out.objects);
+});

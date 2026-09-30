@@ -16,9 +16,10 @@ function validate(record) {
   return record;
 }
 export class MigrationFence {
-  constructor(path) {
+  constructor(path, { openFile = open } = {}) {
     if (!isAbsolute(path)) throw Error("invalid_deployment_fence_path");
     this.path = path;
+    this.openFile = openFile;
   }
   async records(file) {
     const text = await file.readFile("utf8");
@@ -59,7 +60,7 @@ export class MigrationFence {
     if (!acquired) throw Error("deployment_fence_locked");
     let file;
     try {
-      file = await open(
+      file = await this.openFile(
         this.path,
         constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW,
         0o600,
@@ -69,13 +70,18 @@ export class MigrationFence {
       if (old) {
         if (JSON.stringify(old) !== JSON.stringify(record))
           throw Error("deployment_fence_conflict");
-        return;
+      } else {
+        const line = Buffer.from(JSON.stringify(record) + "\n"), size = (await file.stat()).size;
+        for (let offset = 0; offset < line.length;) {
+          const { bytesWritten } = await file.write(line, offset, line.length - offset, size + offset);
+          if (bytesWritten <= 0) throw Error("deployment_fence_short_write");
+          offset += bytesWritten;
+        }
       }
-      const line = Buffer.from(JSON.stringify(record) + "\n");
-      const size = (await file.stat()).size;
-      await file.write(line, 0, line.length, size);
+      // Visible bytes after an earlier failure do not prove durability.
+      // Exact replays must confirm both barriers before allowing DB cutover.
       await file.sync();
-      const dir = await open(directory, constants.O_RDONLY);
+      const dir = await this.openFile(directory, constants.O_RDONLY);
       try {
         await dir.sync();
       } finally {
@@ -90,7 +96,7 @@ export class MigrationFence {
     }
   }
   async verify({ schemaVersion, publications }) {
-    const file = await open(
+    const file = await this.openFile(
       this.path,
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
