@@ -68,8 +68,8 @@ private struct AccessFixture {
     var row: [String: Any] { ["id": reference.resourceID.canonicalCloudString, "teamID": reference.teamID.canonicalCloudString, "vaultID": reference.vaultID.canonicalCloudString, "policyKind": reference.kind.rawValue, "parentFolderID": NSNull(), "resourceVersion": 1] }
     var emptyPage: [String: Any] { ["rows": [], "nextCursor": NSNull()] }
     var emptyMembers: [String: Any] { ["members": [], "nextCursor": NSNull(), "total": 0] }
-    func preview(snapshot: String = String(repeating: "a", count: 64), cursor: String? = nil, details: [[String: Any]] = []) -> [String: Any] {
-        ["token": "synthetic-preview", "snapshotID": snapshot, "details": details, "counts": ["pairs": details.count, "widened": 0, "lost": 0], "nextCursor": cursor.map { $0 as Any } ?? NSNull()]
+    func preview(snapshot: String = String(repeating: "a", count: 64), cursor: String? = nil, details: [[String: Any]] = [], pairs: Int? = nil) -> [String: Any] {
+        ["token": "synthetic-preview", "snapshotID": snapshot, "details": details, "counts": ["pairs": pairs ?? details.count, "widened": 0, "lost": 0], "nextCursor": cursor.map { $0 as Any } ?? NSNull()]
     }
     func loadReplies(previews: [[String: Any]] = []) throws -> [String: [(Data, Int)]] {
         var routes = [base + "/access-context": [(try data(context), 200)], base + "/access-resources/" + reference.resourceID.canonicalCloudString: [(try data(row), 200)], base + "/access-grants": [(try data(emptyPage), 200)], base + "/who-has-access/" + reference.resourceID.canonicalCloudString: [(try data(emptyPage), 200)], "/v1/teams/" + reference.teamID.canonicalCloudString + "/members": [(try data(emptyMembers), 200)]]
@@ -136,11 +136,12 @@ extension CloudAccessTests {
     }
     @Test @MainActor func completePreviewSelectionInvalidationRestartAndCommitCallbackData() async throws {
         let f = try AccessFixture()
-        var routes = try f.loadReplies(previews: [f.preview(cursor: "50"), f.preview(), f.preview()])
+        let details = (0..<51).map { _ in f.impact(resource: f.reference.resourceID) }
+        var routes = try f.loadReplies(previews: [f.preview(cursor: "50", details: Array(details.prefix(50)), pairs: 51), f.preview(details: Array(details.suffix(1)), pairs: 51), f.preview()])
         let candidate = ["userID": UUID().canonicalCloudString, "resourceID": f.reference.resourceID.canonicalCloudString, "gainedMask": 1, "lostMask": 0] as [String: Any]
         routes[f.base + "/access-commit"] = [(try f.data(["applied": 1, "grants": [["type": "GRANT_CREATE", "grantID": UUID().canonicalCloudString]], "notificationCandidates": [candidate], "counts": ["pairs": 1, "widened": 1, "lost": 0]]), 200)]
         let t = AccessFixtureTransport(routes); let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
-        await m.load(); m.setSelection([.init(kind: .user, id: UUID(), name: "User")]); await m.previewSelection()
+        await m.load(); m.setSelection([.init(kind: .group, id: UUID(), name: "Group with 51 members")]); await m.previewSelection()
         #expect(!m.canCommit)
         await m.nextPreviewPage(); #expect(m.canCommit)
         m.setMask(5); #expect(!m.canCommit); #expect(m.preview == nil)
@@ -157,7 +158,7 @@ extension CloudAccessTests {
         #expect(body["token"] as? String == "synthetic-preview")
     }
     @Test @MainActor func changedSnapshotFailsClosedAndStaleCommitClears() async throws {
-        let f = try AccessFixture(); var routes = try f.loadReplies(previews: [f.preview(cursor: "50"), f.preview(snapshot: String(repeating: "b", count: 64)), f.preview()])
+        let f = try AccessFixture(); let details = (0..<51).map { _ in f.impact(resource: f.reference.resourceID) }; var routes = try f.loadReplies(previews: [f.preview(cursor: "50", details: Array(details.prefix(50)), pairs: 51), f.preview(snapshot: String(repeating: "b", count: 64), details: Array(details.suffix(1)), pairs: 51), f.preview()])
         routes[f.base + "/access-commit"] = [(try f.data(["error": "access_preview_conflict"]), 409)]
         let t = AccessFixtureTransport(routes); let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
         await m.load(); m.setSelection([.init(kind: .group, id: UUID(), name: "Group")]); await m.previewSelection(); await m.nextPreviewPage()
@@ -231,9 +232,11 @@ extension CloudAccessTests {
         var row = f.row; row["id"] = credential.canonicalCloudString; row["policyKind"] = "CREDENTIAL"
         var routes = try f.loadReplies()
         routes[f.base + "/access-resources/" + credential.canonicalCloudString] = [(try f.data(row), 200)]
+        let grant = CloudAccessGrant(id: UUID(), principal_kind: .user, principal_id: UUID(), target_kind: .resource, target_id: credential, permission_mask: 1, version: try .init(7))
+        var grantRow = f.grantWire(id: grant.id, version: 7); grantRow["target_id"] = credential.canonicalCloudString; grantRow["principal_id"] = grant.principal_id.canonicalCloudString
+        routes[f.base + "/access-grants"] = [(try f.data(["rows": [grantRow], "nextCursor": NSNull()]), 200)]
         let t = AccessFixtureTransport(routes); let model = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
         await model.load()
-        let grant = CloudAccessGrant(id: UUID(), principal_kind: .user, principal_id: UUID(), target_kind: .resource, target_id: credential, permission_mask: 1, version: try .init(7))
         await model.edit(grant); #expect(model.currentKind == .credential)
         model.setMask(5); #expect(model.mask == 7)
         let metadataRequests = await t.captured().filter { $0.url!.path.hasSuffix(credential.canonicalCloudString) }
@@ -286,7 +289,10 @@ extension CloudAccessTests {
         let before: [String: Any] = ["policyEffective": ["policyAllowed": true, "policyMask": 1, "paths": [first, second], "blockedReasons": []]]
         let after: [String: Any] = ["policyEffective": ["policyAllowed": true, "policyMask": 1, "paths": [second], "blockedReasons": []]]
         let detail: [String: Any] = ["vaultID": f.reference.vaultID.canonicalCloudString, "resourceID": f.reference.resourceID.canonicalCloudString, "subjectUserID": subject.canonicalCloudString, "before": before, "after": after, "gainedMask": 0, "lostMask": 0]
-        let t = try AccessFixtureTransport(f.loadReplies(previews: [f.preview(details: [detail])]))
+        var routes = try f.loadReplies(previews: [f.preview(details: [detail])])
+        var grantRow = f.grantWire(id: grant, version: 1); grantRow["principal_id"] = subject.canonicalCloudString
+        routes[f.base + "/access-grants"] = [(try f.data(["rows": [grantRow], "nextCursor": NSNull()]), 200)]
+        let t = AccessFixtureTransport(routes)
         let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
         await m.load()
         await m.revoke([.init(id: grant, principal_kind: .user, principal_id: subject, target_kind: .resource, target_id: f.reference.resourceID, permission_mask: 1, version: try .init(1))])
@@ -302,5 +308,94 @@ extension CloudAccessTests {
         let t = try AccessFixtureTransport([path: [(f.data(["rows": [row], "nextCursor": NSNull()]), 200), (f.data(["rows": [invalid], "nextCursor": NSNull()]), 200)]])
         await #expect(throws: CloudAccessError.scopeMismatch) { try await f.client(t).groups(teamID: f.reference.teamID, session: f.session) }
         await #expect(throws: CloudAccessError.invalidResponse) { try await f.client(t).groups(teamID: f.reference.teamID, session: f.session) }
+    }
+}
+
+private extension AccessFixture {
+    func impact(subject: UUID = UUID(), resource: UUID = UUID()) -> [String: Any] {
+        let effective: [String: Any] = ["policyEffective": ["policyAllowed": false, "policyMask": 0, "paths": [], "blockedReasons": ["POLICY_DENIED"]]]
+        return ["vaultID": reference.vaultID.canonicalCloudString, "resourceID": resource.canonicalCloudString, "subjectUserID": subject.canonicalCloudString, "before": effective, "after": effective, "gainedMask": 0, "lostMask": 0]
+    }
+    func grantWire(id: UUID, version: Int, mask: Int = 1) -> [String: Any] {
+        ["id": id.canonicalCloudString, "principal_kind": "USER", "principal_id": UUID().canonicalCloudString, "target_kind": "RESOURCE", "target_id": reference.resourceID.canonicalCloudString, "permission_mask": mask, "version": String(version)]
+    }
+}
+extension CloudAccessTests {
+    @Test @MainActor func incompleteDuplicateAndChangedCountsCannotCommit() async throws {
+        let f = try AccessFixture(), one = f.impact(), two = f.impact()
+        let cases: [[[String: Any]]] = [
+            [f.preview(pairs: 100)],
+            [f.preview(details: [one, one], pairs: 2)],
+            [f.preview(cursor: "1", details: [one], pairs: 2), f.preview(details: [one], pairs: 2)],
+            [f.preview(cursor: "1", details: [one], pairs: 2), f.preview(details: [two], pairs: 3)],
+            [f.preview(cursor: "1", details: [one], pairs: 2), f.preview(pairs: 2)]
+        ]
+        for pages in cases {
+            let t = try AccessFixtureTransport(f.loadReplies(previews: pages))
+            let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
+            await m.load(); m.setSelection([.init(kind: .user, id: UUID(), name: "Member")]); await m.previewSelection()
+            if m.preview?.nextCursor != nil { await m.nextPreviewPage() }
+            #expect(!m.canCommit); #expect(m.preview == nil)
+        }
+    }
+    @Test @MainActor func zeroPairGroupGrantsStillPageAndValidateExactTerminalTotal() async throws {
+        let f = try AccessFixture()
+        let grants: [[String: Any]] = (0..<51).map { _ in ["grantID": UUID().canonicalCloudString, "vaultID": f.reference.vaultID.canonicalCloudString, "targetKind": "RESOURCE", "targetID": UUID().canonicalCloudString, "permissionMask": 1, "version": 1] }
+        func page(_ rows: [[String: Any]], cursor: String?) -> [String: Any] {
+            ["token": "synthetic-preview", "snapshotID": String(repeating: "a", count: 64), "details": [], "affectedGrants": rows, "counts": ["pairs": 0, "widened": 0, "lost": 0, "affectedGrants": 51], "nextCursor": cursor.map { $0 as Any } ?? NSNull()]
+        }
+        for terminal in [Array(grants.suffix(1)), [], Array(grants.prefix(1))] {
+            var routes = try f.loadReplies()
+            routes[f.base + "/access-group-preview"] = [(try f.data(page(Array(grants.prefix(50)), cursor: "50")), 200), (try f.data(page(terminal, cursor: nil)), 200)]
+            let t = AccessFixtureTransport(routes); let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
+            await m.load(); await m.prepare(.init(group: .init(type: "GROUP_DELETE", fields: ["groupID": .id(UUID()), "expectedVersion": .number(1)])))
+            #expect(!m.canCommit); #expect(m.impacts.isEmpty); #expect(m.affectedGrants.count == 50)
+            await m.nextPreviewPage()
+            if terminal.first?["grantID"] as? String == grants.last?["grantID"] as? String { #expect(m.canCommit); #expect(m.affectedGrants.count == 51) }
+            else { #expect(!m.canCommit); #expect(m.preview == nil) }
+        }
+    }
+    @Test @MainActor func committedChangeAndRevokeRefreshPolicyAndRejectOldGrantVersion() async throws {
+        for revoke in [false, true] {
+            let f = try AccessFixture(), grantID = UUID(), subject = UUID(), device = UUID()
+            let old = f.grantWire(id: grantID, version: 1)
+            let updated = f.grantWire(id: grantID, version: 2, mask: 5)
+            var routes = try f.loadReplies(previews: [f.preview()])
+            routes[f.base + "/access-grants"] = [(try f.data(["rows": [old], "nextCursor": NSNull()]), 200), (try f.data(["rows": revoke ? [] : [updated], "nextCursor": NSNull()]), 200)]
+            let policyBefore: [String: Any] = ["policyAllowed": true, "policyMask": 1, "paths": [], "blockedReasons": []]
+            let policyAfter: [String: Any] = ["policyAllowed": !revoke, "policyMask": revoke ? 0 : 5, "paths": [], "blockedReasons": []]
+            routes[f.base + "/who-has-access/" + f.reference.resourceID.canonicalCloudString] = [(try f.data(["rows": [["userID": subject.canonicalCloudString, "policyEffective": policyBefore]], "nextCursor": NSNull()]), 200), (try f.data(["rows": revoke ? [] : [["userID": subject.canonicalCloudString, "policyEffective": policyAfter]], "nextCursor": NSNull()]), 200)]
+            routes[f.base + "/access-devices"] = [(try f.data(["rows": [["id": device.canonicalCloudString, "name": "Synthetic", "platform": "mac", "admitted": true]], "nextCursor": NSNull()]), 200)]
+            let usability: [String: Any] = ["deviceID": device.canonicalCloudString, "effectiveUsable": "NO", "cryptoAvailable": "NO", "cryptoAvailableByPermission": [:], "effectiveUsableByPermission": [:], "blockedReasons": ["KEY_UNAVAILABLE"]]
+            routes[f.base + "/effective-access/" + f.reference.resourceID.canonicalCloudString] = [(try f.data(["policyEffective": policyBefore, "deviceUsability": usability]), 200)]
+            routes[f.base + "/access-commit"] = [(try f.data(["applied": 1, "grants": [["type": revoke ? "GRANT_REVOKE" : "GRANT_CHANGE", "grantID": grantID.canonicalCloudString]], "notificationCandidates": [], "counts": ["pairs": 0, "widened": 0, "lost": 0]]), 200)]
+            let t = AccessFixtureTransport(routes); let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
+            await m.load(); let oldGrant = m.grants[0]
+            await m.selectSubject(subject); await m.selectDevice(device); #expect(m.effective != nil)
+            if revoke { await m.revoke([oldGrant]) } else { await m.edit(oldGrant); m.setMask(5); await m.previewSelection() }
+            #expect(await m.commit() != nil); #expect(m.committed); #expect(m.editingGrant == nil); #expect(m.selection.isEmpty)
+            #expect(m.effective == nil); #expect(m.subjectUserID == nil); #expect(m.subjectDeviceID == nil)
+            #expect(m.who.first?.policyEffective.policyMask == (revoke ? nil : 5))
+            #expect(m.grants.first?.version.value == (revoke ? nil : 2))
+            await m.edit(oldGrant); #expect(m.editingGrant == nil)
+            let beforeStaleRevoke = await t.captured().filter { $0.url!.path.hasSuffix("access-preview") }.count
+            await m.revoke([oldGrant]); #expect(m.preview == nil)
+            #expect(await t.captured().filter { $0.url!.path.hasSuffix("access-preview") }.count == beforeStaleRevoke)
+            if !revoke { await m.edit(m.grants[0]); #expect(m.editingGrant?.version.value == 2) }
+        }
+    }
+    @Test @MainActor func successfulReceiptSurvivesRefreshFailureAndFurtherWritesWait() async throws {
+        let f = try AccessFixture(), grantID = UUID()
+        var routes = try f.loadReplies(previews: [f.preview()])
+        routes[f.base + "/access-context"] = [(try f.data(f.context), 200), (try f.data(["error": "access_request_failed"]), 503)]
+        routes[f.base + "/access-commit"] = [(try f.data(["applied": 1, "grants": [["type": "GRANT_CREATE", "grantID": grantID.canonicalCloudString]], "notificationCandidates": [["userID": UUID().canonicalCloudString, "resourceID": f.reference.resourceID.canonicalCloudString, "gainedMask": 1, "lostMask": 0]], "counts": ["pairs": 1, "widened": 1, "lost": 0]]), 200)]
+        let t = AccessFixtureTransport(routes); let m = SelectiveRemoteCloudAccessCoordinator(reference: f.reference, client: f.client(t), session: f.session)
+        await m.load(); m.setSelection([.init(kind: .user, id: UUID(), name: "Member")]); await m.previewSelection()
+        let receipt = await m.commit()
+        #expect(receipt?.notificationCandidates.count == 1); #expect(m.committed)
+        #expect(!m.canMutate); #expect(!m.canCommit); #expect(m.preview == nil); #expect(m.errorMessage != nil)
+        #expect(m.grants.isEmpty); #expect(m.who.isEmpty); #expect(m.effective == nil)
+        #expect(await m.commit() == nil)
+        #expect(await t.captured().filter { $0.url!.path.hasSuffix("access-commit") }.count == 1)
     }
 }

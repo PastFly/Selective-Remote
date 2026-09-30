@@ -124,7 +124,7 @@ struct CloudAccessImpact: Codable, Identifiable, Sendable {
     var vaultID: UUID; var resourceID: UUID; var subjectUserID: UUID; var before: CloudAccessEffective; var after: CloudAccessEffective; var gainedMask: Int; var lostMask: Int
     var id: String { "\(vaultID)/\(resourceID)/\(subjectUserID)" }
 }
-struct CloudAccessCounts: Codable, Sendable { var pairs: Int; var widened: Int; var lost: Int; var affectedGrants: Int? }
+struct CloudAccessCounts: Codable, Equatable, Sendable { var pairs: Int; var widened: Int; var lost: Int; var affectedGrants: Int? }
 struct CloudAccessAffectedGrant: Codable, Identifiable, Sendable { var grantID: UUID; var vaultID: UUID; var targetKind: CloudAccessTargetKind; var targetID: UUID; var permissionMask: Int; var version: CloudAccessVersion; var id: UUID { grantID } }
 struct CloudAccessPreview: Codable, Sendable { var token: String; var snapshotID: String; var details: [CloudAccessImpact]; var counts: CloudAccessCounts; var nextCursor: String?; var affectedGrants: [CloudAccessAffectedGrant]? }
 struct CloudAccessNotificationCandidate: Codable, Sendable { var userID: UUID; var vaultID: UUID?; var resourceID: UUID; var gainedMask: Int; var lostMask: Int }

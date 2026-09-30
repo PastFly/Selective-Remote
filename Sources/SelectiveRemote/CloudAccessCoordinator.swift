@@ -43,8 +43,13 @@ final class SelectiveRemoteCloudAccessCoordinator {
     private var seenMemberCursors = Set<UUID>()
     private var seenGroupCursors = Set<UUID>()
     private var seenPreviewCursors = Set<String>()
-    var canMutate: Bool { context?.canMutate == true && (reference.kind == .vault || resource != nil) }
-    var canCommit: Bool { canMutate && !busy && preview != nil && preview?.nextCursor == nil && request != nil && preparedAt.map { Date().timeIntervalSince($0) < 60 } == true }
+    private var previewCounts: CloudAccessCounts?
+    private var impactIDs = Set<String>()
+    private var affectedGrantIDs = Set<UUID>()
+    private var completePreview = false
+    private var authoritativePolicyLoaded = false
+    var canMutate: Bool { authoritativePolicyLoaded && context?.canMutate == true && (reference.kind == .vault || resource != nil) }
+    var canCommit: Bool { canMutate && !busy && completePreview && preview != nil && preview?.nextCursor == nil && request != nil && preparedAt.map { Date().timeIntervalSince($0) < 60 } == true }
     var currentKind: CloudAccessKind { editingKind ?? reference.kind }
 
     init(reference: SelectiveRemoteCloudAccessReference, client: SelectiveRemoteCloudAccessClient, session: CloudAccessSession) {
@@ -56,6 +61,7 @@ final class SelectiveRemoteCloudAccessCoordinator {
     }
     private func clearPreview() {
         preview = nil; impacts = []; affectedGrants = []; request = nil; preparedAt = nil; idempotencyKey = nil; seenPreviewCursors = []
+        previewCounts = nil; impactIDs = []; affectedGrantIDs = []; completePreview = false
     }
     private func invalidateDraft() { previewGeneration = UUID(); clearPreview(); busy = false; committed = false; errorMessage = nil }
     func setSelection(_ value: [CloudAccessRecipient]) {
@@ -80,7 +86,9 @@ final class SelectiveRemoteCloudAccessCoordinator {
     }
     func load() async {
         invalidate(); let stamp = generation; busy = true; errorMessage = nil
+        authoritativePolicyLoaded = false; editingGrant = nil; editingKind = nil; selection = []; mask = 1
         context = nil; resource = nil; grants = []; who = []; devices = []; effective = nil; subjectUserID = nil; subjectDeviceID = nil
+        grantCursor = nil; whoCursor = nil; deviceCursor = nil
         do {
             let loaded = try await client.context(reference, session: session)
             guard stamp == generation else { return }; context = loaded
@@ -96,9 +104,9 @@ final class SelectiveRemoteCloudAccessCoordinator {
                 let page = try await client.whoHas(reference, session: session)
                 guard stamp == generation else { return }; who = page.rows; whoCursor = page.nextCursor
             }
-            busy = false
+            authoritativePolicyLoaded = true; busy = false
             await loadRecipients(groups: false, search: "")
-        } catch { guard stamp == generation else { return }; busy = false; errorMessage = error.localizedDescription }
+        } catch { guard stamp == generation else { return }; busy = false; authoritativePolicyLoaded = false; grants = []; who = []; effective = nil; grantCursor = nil; whoCursor = nil; errorMessage = error.localizedDescription }
     }
     func loadRecipients(groups useGroups: Bool, search: String, next: Bool = false) async {
         guard search.count <= 120 else { return }
@@ -149,6 +157,7 @@ final class SelectiveRemoteCloudAccessCoordinator {
         catch { guard stamp == effectiveGeneration, scope == generation else { return }; errorMessage = error.localizedDescription }
     }
     func edit(_ grant: CloudAccessGrant) async {
+        guard canMutate, !busy, grants.contains(where: { $0.id == grant.id && $0.version == grant.version }) else { errorMessage = CloudAccessError.previewRequired.localizedDescription; return }
         invalidateDraft(); let stamp = previewGeneration; let scope = generation
         editingGrant = nil; editingKind = nil
         do {
@@ -173,7 +182,30 @@ final class SelectiveRemoteCloudAccessCoordinator {
             await prepare(.init(changes: selection.map { .create(principalKind: $0.kind, principalID: $0.id, targetKind: target, targetID: reference.resourceID, permissionMask: mask) }))
         } catch { errorMessage = error.localizedDescription }
     }
-    func revoke(_ grants: [CloudAccessGrant]) async { await prepare(.init(changes: grants.map { .revoke(grantID: $0.id, expectedVersion: $0.version.value) })) }
+    func revoke(_ grants: [CloudAccessGrant]) async {
+        guard canMutate, !busy, grants.allSatisfy({ candidate in self.grants.contains(where: { $0.id == candidate.id && $0.version == candidate.version }) }) else { errorMessage = CloudAccessError.previewRequired.localizedDescription; return }
+        await prepare(.init(changes: grants.map { .revoke(grantID: $0.id, expectedVersion: $0.version.value) }))
+    }
+    private func acceptPreviewPage(_ page: CloudAccessPreview, group: Bool) throws {
+        let counts = page.counts
+        guard (0...1000).contains(counts.pairs), (0...counts.pairs).contains(counts.widened), (0...counts.pairs).contains(counts.lost),
+              !group || counts.affectedGrants.map({ (0...1000).contains($0) }) == true,
+              group || counts.affectedGrants == nil else { throw CloudAccessError.invalidResponse }
+        if let previewCounts { guard counts == previewCounts else { throw CloudAccessError.previewRequired } }
+        else { previewCounts = counts }
+        let grants = page.affectedGrants ?? []
+        guard group || grants.isEmpty else { throw CloudAccessError.invalidResponse }
+        for detail in page.details { guard impactIDs.insert(detail.id).inserted else { throw CloudAccessError.invalidResponse } }
+        for grant in grants { guard affectedGrantIDs.insert(grant.id).inserted else { throw CloudAccessError.invalidResponse } }
+        guard impactIDs.count <= counts.pairs, affectedGrantIDs.count <= (counts.affectedGrants ?? 0) else { throw CloudAccessError.invalidResponse }
+        if page.nextCursor == nil {
+            guard impactIDs.count == counts.pairs, affectedGrantIDs.count == (counts.affectedGrants ?? 0) else { throw CloudAccessError.invalidResponse }
+            completePreview = true
+        } else {
+            guard !page.details.isEmpty || !grants.isEmpty else { throw CloudAccessError.invalidResponse }
+            completePreview = false
+        }
+    }
     func prepare(_ value: CloudAccessRequest) async {
         invalidateDraft(); guard canMutate else { errorMessage = CloudAccessError.previewRequired.localizedDescription; return }
         if value.group != nil && context?.groupMutationAvailable != true { errorMessage = CloudAccessError.service(409, "crypto_publication_required").localizedDescription; return }
@@ -181,6 +213,7 @@ final class SelectiveRemoteCloudAccessCoordinator {
         do {
             let page = try await client.preview(reference, request: value, session: session)
             guard stamp == previewGeneration, scope == generation else { return }
+            try acceptPreviewPage(page, group: value.group != nil)
             preview = page; impacts = page.details; affectedGrants = page.affectedGrants ?? []; request = value; preparedAt = Date(); idempotencyKey = UUID().canonicalCloudString; busy = false
         } catch { guard stamp == previewGeneration, scope == generation else { return }; busy = false; clearPreview(); errorMessage = error.localizedDescription }
     }
@@ -192,6 +225,7 @@ final class SelectiveRemoteCloudAccessCoordinator {
             let page = try await client.preview(reference, request: request, session: session, cursor: cursor)
             guard stamp == previewGeneration, scope == generation else { return }
             guard page.snapshotID == previous.snapshotID else { throw CloudAccessError.previewRequired }
+            try acceptPreviewPage(page, group: request.group != nil)
             preview = page; impacts += page.details; affectedGrants += page.affectedGrants ?? []; busy = false
         } catch { guard stamp == previewGeneration, scope == generation else { return }; busy = false; clearPreview(); errorMessage = error.localizedDescription }
     }
@@ -201,7 +235,14 @@ final class SelectiveRemoteCloudAccessCoordinator {
         do {
             let result = try await client.commit(reference, request: request, token: preview.token, idempotencyKey: key, session: session)
             guard stamp == previewGeneration, scope == generation else { return nil }
-            busy = false; clearPreview(); committed = true
+            // A validated receipt is final even if the subsequent read fails.
+            // load clears draft/version/device state and gates writes until all policy reads succeed.
+            await load()
+            committed = true
+            if let refreshError = errorMessage {
+                authoritativePolicyLoaded = false
+                errorMessage = CloudAccessLocalization.text("Изменение применено. Не удалось обновить доступ; обновите данные перед следующим изменением.", "Change committed. Access could not be refreshed; refresh before another change.") + " " + refreshError
+            }
             return result
         } catch { guard stamp == previewGeneration, scope == generation else { return nil }; busy = false; clearPreview(); errorMessage = error.localizedDescription; return nil }
     }
