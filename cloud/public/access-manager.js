@@ -1325,6 +1325,16 @@ export function createAccessManager({
   render();
   return {
     setContext,
+    async openResource(reference, action = "who") {
+      if (!reference?.teamID || !reference.vaultID || !reference.resourceID || !["HOST","CREDENTIAL","SNIPPET","FORWARDING","FOLDER"].includes(reference.kind)) throw new Error("invalid_access_resource");
+      setContext({teamID:reference.teamID,vaultID:reference.vaultID,role:reference.role,deviceID:reference.deviceID});
+      await refresh();
+      if (scope.teamID !== reference.teamID || scope.vaultID !== reference.vaultID) return;
+      selectedResource={id:reference.resourceID,policyKind:reference.kind === "FOLDER" ? "FOLDER" : reference.kind === "CREDENTIAL" ? "SECRET" : "GENERAL"};
+      if(action === "share") status="publication";
+      render();
+      await loadPage("who");
+    },
     refresh,
     destroy() {
       destroyed = true;

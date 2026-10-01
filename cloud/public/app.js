@@ -1,3 +1,4 @@
+import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy } from "./vault-publication-client.js";
 import { createAccessManager } from "./access-manager.js";
 import { accessAuditActionLabel } from "./access-audit.js";
 import {
@@ -1449,6 +1450,12 @@ export async function initializeLocalVault({
   };
 }
 
+export async function resolveTeamVaultFormat(client, scope) {
+  const context = await client.accessClient().getContext(scope);
+  if (!["V1_ACTIVE","V2_PREPARING","V2_READY","V2_ACTIVE"].includes(context?.formatState)) throw new Error("publication_format_unknown");
+  return context.formatState;
+}
+
 export async function maintainAccessibleTeamVaultWrappers({
   client,
   identity,
@@ -1468,6 +1475,10 @@ export async function maintainAccessibleTeamVaultWrappers({
     if (!vault?.id) continue;
     outcome.attempted += 1;
     const scope = { type: "team", teamID: team.id, vaultID: vault.id };
+    let format;
+    try { format = await resolveTeamVaultFormat(client, scope); }
+    catch { outcome.failed += 1; continue; }
+    if (format !== "V1_ACTIVE") { outcome.unavailable += 1; continue; }
     const maintenanceController = controllerFactory({
       repository: repositoryFactory(scope),
       identity,
@@ -1739,7 +1750,10 @@ export function initializeTeamWorkspace({
   const accessView = documentValue.querySelector("#team-access-view");
   const accessManager = accessView && typeof client.accessClient === "function"
     ? createAccessManager({ root: accessView, client: client.accessClient(),
-      resolveLabel: accessResolveLabel, onCommitted: (result, scope) => {
+      resolveLabel: reference => {
+        const model=publicationClient?.view()?.models.find(value=>value.resourceID===(reference.id??reference.resourceID)&&value.teamID===reference.teamID&&value.vaultID===reference.vaultID);
+        return model ? (model.record?.data?.title??model.metadata?.title??model.folder?.path??null) : accessResolveLabel(reference);
+      }, onCommitted: (result, scope) => {
         onAccessCommitted(result, scope);
         if (activeView === "activity" && selectedTeam?.id === scope.teamID) {
           void loadActivity().catch(() => setText(message, "Не удалось обновить журнал активности."));
@@ -1748,6 +1762,8 @@ export function initializeTeamWorkspace({
   let selectedTeam = null;
   let selectedVault = null;
   let controller = null;
+  let publicationClient = null;
+  let publicationSelection = 0;
   let activeConflicts = null;
   let activeView = "teams";
   let activeRecordFilter = "all";
@@ -1834,7 +1850,7 @@ export function initializeTeamWorkspace({
   }
 
   function canEdit() {
-    return ["owner", "admin", "editor"].includes(selectedTeam?.role);
+    return !publicationClient && ["owner", "admin", "editor"].includes(selectedTeam?.role);
   }
 
   function renderDeviceAdmissionPolicy() {
@@ -2099,6 +2115,14 @@ export function initializeTeamWorkspace({
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
     records.replaceChildren();
     if (!controller) return;
+    if (publicationClient) {
+      renderPublishedVault({documentValue,container:records,client:publicationClient,filter:activeRecordFilter,
+        onStatus:value=>setText(workspaceStatus,value),onAccess:async(reference,action)=>{
+          setView("access");
+          await accessManager?.openResource({...reference,role:selectedTeam?.role,deviceID:client.deviceID?.()},action);
+        }});
+      return;
+    }
     const current = controller.document();
     const hosts = current.records.filter((value) => value.type === "host");
     const snippets = current.records.filter((value) => value.type === "snippet");
@@ -2912,6 +2936,8 @@ export function initializeTeamWorkspace({
     activeVault = selectedVault,
   ) {
     if (!activeController || !activeTeam || !activeVault) return null;
+    if (publicationClient) throw new Error("publication_required");
+    if (await resolveTeamVaultFormat(client,{teamID:activeTeam.id,vaultID:activeVault.id}) !== "V1_ACTIVE") throw new Error("publication_required");
     const recipient = client.session()?.id;
     const target = { controller: activeController, teamID: activeTeam.id, vaultID: activeVault.id };
     const currentTarget = () => ({ controller, teamID: selectedTeam?.id, vaultID: selectedVault?.id });
@@ -2997,6 +3023,12 @@ export function initializeTeamWorkspace({
 
   async function runBackgroundTeamVaultSync() {
     if (activeConflicts || vaultOperation || !identity || !selectedTeam) return;
+    if (publicationClient) {
+      const active = publicationClient;
+      try { const view = await active.load(); if (publicationClient === active) { renderRecords(); setText(workspaceStatus,publicationCopy(documentValue,view.stale ? "stale" : "readonly")); } }
+      catch(error) { if(publicationClient === active) { records.replaceChildren(); setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); } }
+      return;
+    }
     const recipient = client.session()?.id;
     if (controller && selectedVault && !selectedVault.rotationRequired) {
       const target = { controller, teamID: selectedTeam.id, vaultID: selectedVault.id };
@@ -3032,6 +3064,9 @@ export function initializeTeamWorkspace({
     stopBackgroundSync();
     resetRecordEditor();
     resetSnippetBrowser({ lock: true });
+    publicationSelection++;
+    publicationClient?.dispose();
+    publicationClient = null;
     publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id,
       recipient: client.session()?.id });
     controller?.lock();
@@ -3117,6 +3152,42 @@ export function initializeTeamWorkspace({
     lockCurrentVault();
     selectedVault = vault;
     const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
+    const selection = publicationSelection;
+    let format;
+    try { format = await resolveTeamVaultFormat(client,scope); }
+    catch { setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); return; }
+    if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
+    if (format !== "V1_ACTIVE") {
+      workspace.hidden = activeView !== "hosts";
+      recordCreate.hidden = true;
+      if (format !== "V2_ACTIVE") { setText(workspaceStatus,publicationCopy(documentValue,"preparing")); return; }
+      let deviceKeyVersion;
+      try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:client.publicationIdentity()}); }
+      catch { setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); return; }
+      if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
+      const repository = createIndexedDBPublicationRepository();
+      const active = createVaultPublicationClient({transport:client.publicationTransport(),identity:()=>client.publicationIdentity(),scope,
+        privateKey:identity.privateKey,deviceKeyVersion,ownTrustRepository:deviceTrustRepository,
+        publisherTrustRepository:repository,repository,subscribeIdentityChange:listener=>client.subscribePublicationIdentity(listener),
+        onInvalidate:()=>{records.replaceChildren();documentValue.querySelectorAll("dialog[data-publication-dialog]").forEach(dialog=>{dialog.close?.();dialog.remove();});}});
+      publicationClient = active;
+      controller = {lock:()=>active.lock(),document:()=>({records:[]})};
+      workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
+      try {
+        try { await active.load(); }
+        catch(error) {
+          if(error.message !== "publisher_verification_required") throw error;
+          const fingerprint = await requestPublisherVerification(documentValue,error.verification);
+          if(fingerprint === null) throw new Error("publisher_verification_required");
+          await active.confirmPublisher(fingerprint); await active.load();
+        }
+        if (publicationClient !== active) return;
+        renderRecords();setWorkspaceControls(false);
+        setText(workspaceStatus,publicationCopy(documentValue,active.view()?.stale ? "stale" : "readonly"));
+        startBackgroundSync();
+      } catch(error) { if(publicationClient === active) { records.replaceChildren();setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); } }
+      return;
+    }
     controller = createTeamVaultController({
       repository: createIndexedDBTeamVaultRepository(scope),
       identity,

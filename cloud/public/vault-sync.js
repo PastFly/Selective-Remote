@@ -502,6 +502,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   let token = null;
   let user = null;
   let currentDeviceID = null;
+  let sessionEpoch = 0;
+  const identityListeners = new Set();
+  function invalidateIdentity() { sessionEpoch++; for (const listener of identityListeners) listener(); }
 
   async function authorizedRequest(path, options = {}, { reauthenticationErrors = [] } = {}) {
     const response = await fetchValue(path, {
@@ -519,6 +522,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     if (response.status === 401) {
       const result = await response.clone().json().catch(() => null);
       if (reauthenticationErrors.includes(result?.error)) return response;
+      invalidateIdentity();
       token = null;
       user = null;
       currentDeviceID = null;
@@ -586,6 +590,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
 
     async login({ email, password, deviceID, publicKey = null }) {
+      invalidateIdentity();
       const normalizedDeviceID = String(deviceID ?? "").toLowerCase();
       if (!uuidPattern.test(normalizedDeviceID)) throw new Error("invalid_device");
       const normalizedPublicKey = publicKey === null ? null : normalizeTeamDevicePublicKey(publicKey);
@@ -632,6 +637,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
 
     async restoreSession() {
+      invalidateIdentity();
       const response = await authorizedRequest("/v1/me");
       if (!response.ok) throw new Error("authentication_required");
       const result = await responseJSON(response, "authentication_required");
@@ -648,6 +654,28 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       return structuredClone(user);
     },
 
+    publicationIdentity(endpoint = globalThis.location?.origin) {
+      return user ? {endpoint, accountID:user.id, deviceID:currentDeviceID, sessionEpoch:String(sessionEpoch)} : null;
+    },
+    subscribePublicationIdentity(listener) { identityListeners.add(listener); return () => identityListeners.delete(listener); },
+    publicationTransport() {
+      async function json(scope, route, query = null) {
+        const teamID=normalizedUUID(scope.teamID,'invalid_team'),vaultID=normalizedUUID(scope.vaultID,'invalid_vault');
+        const parameters=new URLSearchParams();
+        for(const [key,value] of Object.entries(query ?? {})) if(value!==null && value!==undefined && key!=='header' && key!=='inventory') parameters.set(key,String(value));
+        let response;
+        try { response=await authorizedRequest(`/v1/teams/${teamID}/vaults/${vaultID}/publication/${route}${parameters.size?'?'+parameters:''}`); }
+        catch(error) { if(error instanceof TypeError) throw new Error('publication_network_unavailable'); throw error; }
+        const result=await responseJSON(response,'publication_response_invalid');
+        if(!response.ok) { const error=new Error(typeof result.error==='string'?result.error:'publication_request_failed');error.status=response.status;throw error; }
+        return result;
+      }
+      return {header:scope=>json(scope,'header'),publisher:(scope,q)=>json(scope,'publisher',q),directory:(scope,q)=>json(scope,'directory',q),part:(scope,q)=>{
+        const {resourceID,part,...pin}=q;
+        if(!['GENERAL','METADATA','SECRET'].includes(part))throw new Error('invalid_resource_part');
+        return json(scope,`resources/${normalizedUUID(resourceID,'invalid_resource')}/parts/${part}`,pin);
+      }};
+    },
     accessClient() {
       return createAccessClient({ request: authorizedRequest, currentUserID: () => user?.id ?? null,
         currentDeviceID: () => currentDeviceID });
@@ -692,6 +720,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
 
     async logout() {
+      invalidateIdentity();
       try {
         await authorizedRequest("/v1/auth/logout", { method: "POST" });
       } finally {
@@ -713,6 +742,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         throw new Error(code);
       }
       if (result.deleted !== true || Object.keys(result).length !== 1) throw new Error("account_delete_failed");
+      invalidateIdentity();
       token = null;
       user = null;
       currentDeviceID = null;

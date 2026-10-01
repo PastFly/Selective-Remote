@@ -708,7 +708,7 @@ test("trusted browser automatically rotates and maintains accessible Team Vaults
   const scopes = [];
   const locked = [];
   const result = await maintainAccessibleTeamVaultWrappers({
-    client: {},
+    client: { accessClient: () => ({getContext: async () => ({formatState:"V1_ACTIVE"})}) },
     identity: { deviceID: "trusted-browser" },
     team: { id: "team-1", role: "owner" },
     vaults: [
