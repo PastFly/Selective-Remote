@@ -178,7 +178,7 @@ enum SelectiveRemoteVaultPublicationV1 {
         guard ["accountID", "deviceID", "membershipID", "membershipEpoch"].allSatisfy({ p[$0] == s[$0] }) else { throw SelectiveRemotePublicationError.subject }
         guard p["headerHash"] == .string(try hash("header", header)) else { throw SelectiveRemotePublicationError.scope }
         _ = try signed(inventory, purpose: "inventory", root: rootPublicKey)
-        let count = try p["count"]!.publicationInteger(max: 2000)
+        let count = try p["count"]!.publicationInteger(min: 0, max: 2000)
         guard descriptors.count == count else { throw SelectiveRemotePublicationError.incomplete }
         var items: [(String, SelectiveRemoteJSONValue)] = []
         for descriptor in descriptors {

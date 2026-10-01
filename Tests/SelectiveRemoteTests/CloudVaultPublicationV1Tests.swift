@@ -74,6 +74,27 @@ struct CloudVaultPublicationV1Tests {
         let proof: SelectiveRemoteJSONValue
         let subject: SelectiveRemoteJSONValue
     }
+    @Test("signed browser empty inventory is complete without a fake resource or wrapper")
+    func emptyGeneration() throws {
+        struct Empty: Decodable {
+            let testOnly: Bool
+            let rootPublicKey, teamID, vaultID: String
+            let header, inventory, subject: SelectiveRemoteJSONValue
+        }
+        let url = try #require(Bundle.module.url(forResource: "vault-publication-empty-v1", withExtension: "json", subdirectory: "Fixtures"))
+        let f = try JSONDecoder().decode(Empty.self, from: Data(contentsOf: url))
+        #expect(f.testOnly)
+        _ = try SelectiveRemoteVaultPublicationV1.verifyHeader(f.header, rootPublicKey: f.rootPublicKey,
+            teamID: f.teamID, vaultID: f.vaultID, highWater: nil)
+        try SelectiveRemoteVaultPublicationV1.verifyInventory(f.inventory, descriptors: [],
+            header: f.header, rootPublicKey: f.rootPublicKey, subject: f.subject)
+        var altered = try f.inventory.publicationObject(), payload = try altered["payload"]!.publicationObject()
+        payload["count"] = .number(1); altered["payload"] = .object(payload)
+        #expect(throws: Error.self) {
+            try SelectiveRemoteVaultPublicationV1.verifyInventory(.object(altered), descriptors: [],
+                header: f.header, rootPublicKey: f.rootPublicKey, subject: f.subject)
+        }
+    }
     private func fixture() throws -> Fixture {
         let url = try #require(Bundle.module.url(forResource: "vault-publication-v1", withExtension: "json", subdirectory: "Fixtures"))
         let f = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: url)); #expect(f.testOnly)
