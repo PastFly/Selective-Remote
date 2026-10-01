@@ -14,7 +14,6 @@ const uuid =
 export function validateMigrationResources(resources) {
   if (
     !Array.isArray(resources) ||
-    resources.length < 1 ||
     resources.length > 1000
   )
     throw Error("invalid_migration_resources");
@@ -243,6 +242,7 @@ export async function verifyMigrationManifest({
     policyHash: await migrationHash(expected.policy),
     resources: expected.resources,
     parts: expected.parts,
+    ...(expected.reader ? {reader:expected.reader} : {}),
   };
   if (
     canonicalMigrationJSON(manifest?.payload) !==

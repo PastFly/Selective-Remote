@@ -415,7 +415,8 @@ export async function prepareLegacyMigration({
   }
   if (readerPublication) {
     const targets = new Map();
-    for (const list of targetCache.values()) for (const target of list) {
+    for (const list of [...targetCache.values(), readerPublication.custodianTargets ?? []]) for (const target of list) {
+      requireRecipientAccount(target);
       const key = target.membershipID + "/" + target.deviceID;
       if (targets.has(key) && canonicalMigrationJSON(targets.get(key)) !== canonicalMigrationJSON(target))
         throw Error("migration_recipient_changed");

@@ -101,12 +101,23 @@ export function loadConfig(env = process.env) {
   if (env.NODE_ENV === "production" && origin.protocol !== "https:") {
     throw new Error("CLOUD_PUBLIC_ORIGIN must use HTTPS in production");
   }
+  const publicationEnabled=boolean(env,"PUBLICATION_READER_ENABLED",false);
+  const publicationEnvironment=env.PUBLICATION_ENVIRONMENT??null;
+  const publicationVaultIDs=(env.PUBLICATION_ALLOWED_VAULT_IDS??"").split(",").map(v=>v.trim()).filter(Boolean);
+  if(publicationVaultIDs.length>100||new Set(publicationVaultIDs).size!==publicationVaultIDs.length
+    ||publicationVaultIDs.some(v=>!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(v)))throw Error("PUBLICATION_ALLOWED_VAULT_IDS must contain bounded distinct UUIDs");
+  const publicationCursorSecret=validateSecret("PUBLICATION_CURSOR_SECRET",env.PUBLICATION_CURSOR_SECRET,publicationEnabled);
+  if(publicationEnabled&&(publicationEnvironment!=="staging"||!publicationVaultIDs.length))throw Error("PUBLICATION_READER_ENABLED requires staging and an explicit Vault allowlist");
+  if(publicationCursorSecret&&[sessionPepper,emailVerificationPepper,passwordResetTokenPepper,teamInvitationTokenPepper,
+    teamOutboxEncryptionKey,abuseTokenPepper,proxySharedSecret].includes(publicationCursorSecret))throw Error("PUBLICATION_CURSOR_SECRET must be independent");
 
   return Object.freeze({
     host: env.CLOUD_HOST ?? "0.0.0.0",
     port: integer(env, "CLOUD_PORT", 8080, 1, 65535),
     publicOrigin: origin.origin,
     databaseURL,
+    publication:Object.freeze({environment:publicationEnvironment,enabled:publicationEnabled,
+      allowedVaultIDs:Object.freeze(publicationVaultIDs),cursorSecret:publicationCursorSecret}),
     sessionPepper,
     abuseTokenPepper,
     proxySharedSecret,

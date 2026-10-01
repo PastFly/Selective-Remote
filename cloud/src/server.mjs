@@ -108,6 +108,16 @@ async function route(request, response) {
       if (cookie) clearBrowserSessionCookie(response);
       return sendError(response, 401, "unauthorized");
     }
+    const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|resources\/([^/]+)\/parts\/([^/]+))$/u);
+    if(publicationRoute&&method==="GET")return handleOperation(response,async()=>{
+      const operation=publicationRoute[3].startsWith("resources/")?"part":publicationRoute[3];
+      const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:[])]);
+      const input={};
+      for(const [key,value]of url.searchParams){if(!permitted.has(key)||Object.hasOwn(input,key))throw Error("invalid_access_request");input[key]=value;}
+      if(input.limit!==undefined){if(!/^[1-9][0-9]{0,2}$/.test(input.limit))throw Error("invalid_access_page");input.limit=Number(input.limit);}
+      if(operation==="part"){input.resourceID=publicationRoute[4];input.part=publicationRoute[5];}
+      return service.getPublication(session,publicationRoute[1],publicationRoute[2],operation,input);
+    });
     if (method === "POST" && url.pathname === "/v1/auth/logout") {
       await store.revokeSession(session.session_id);
       clearBrowserSessionCookie(response);

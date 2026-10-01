@@ -132,7 +132,7 @@ export async function verifyReaderInventory({inventory,descriptors,header,rootPu
   exact(inventory,['payload','signature']);const p=inventory.payload;
   exact(p,['headerHash','accountID','deviceID','membershipID','membershipEpoch','count','digest']);
   ['accountID','deviceID','membershipID'].forEach(k=>id(p[k]));positive(p.membershipEpoch);hash(p.headerHash);hash(p.digest);
-  if(!Number.isSafeInteger(p.count)||p.count<1||p.count>2000)fail();
+  if(!Number.isSafeInteger(p.count)||p.count<0||p.count>2000)fail();
   if(['accountID','deviceID','membershipID','membershipEpoch'].some(k=>p[k]!==subject[k]))fail('publication_subject_mismatch');
   if(p.headerHash!==await publicationHash('header',header,cryptoValue))fail('publication_scope_mismatch');
   await verify('inventory',inventory,rootPublicKey,cryptoValue);
@@ -141,11 +141,12 @@ export async function verifyReaderInventory({inventory,descriptors,header,rootPu
 }
 export async function prepareReaderProjection({scope,resources,objects,recipients,root,publisherAccountID,
   publisherDeviceID,publisherKeyVersion,sequence=1,previousHash=null,cryptoValue=globalThis.crypto}) {
-  if(!Array.isArray(resources)||resources.length<1||resources.length>1000||!Array.isArray(objects)
-    ||objects.length<1||objects.length>2000||!Array.isArray(recipients)||recipients.length>10000)fail('publication_limit');
+  if(!Array.isArray(resources)||resources.length>1000||!Array.isArray(objects)
+    ||objects.length>2000||!Array.isArray(recipients)||recipients.length>10000)fail('publication_limit');
   const resourceMap=new Map(resources.map(r=>[r.id,r]));if(resourceMap.size!==resources.length)fail('duplicate_resource');
   const targets=new Map();for(const r of recipients){validateRecipient(r);const key=recipientKey(r);
     if(targets.has(key)&&canonicalMigrationJSON(targets.get(key))!==canonicalMigrationJSON(r))fail('duplicate_recipient');targets.set(key,r);}
+  if(resources.length===0&&targets.size===0)fail('publication_recipient_missing');
   const suppliedParts=new Set(objects.map(identity));
   const requiredParts=resources.flatMap(r=>(r.kind==='CREDENTIAL'?['METADATA','SECRET']:['GENERAL']).map(part=>r.id+'/'+part));
   if(suppliedParts.size!==objects.length||suppliedParts.size!==requiredParts.length||requiredParts.some(key=>!suppliedParts.has(key)))fail('publication_incomplete');
@@ -172,6 +173,7 @@ export async function prepareReaderProjection({scope,resources,objects,recipient
     publisherAccountID,publisherDeviceID,publisherKeyVersion};headerPayload(payload);
   const header=await sign('header',payload,root,cryptoValue),headerHash=await publicationHash('header',header,cryptoValue);
   const descriptors=[],byRecipient=new Map();
+  if(resources.length===0) for(const [key,target] of targets) byRecipient.set(key,{target,descriptors:[],proofs:[]});
   for(const i of order){const descriptor=await sign('descriptor',{headerHash,...cores[i]},root,cryptoValue);descriptors.push(descriptor);
     for(const item of commitments[i].items){const key=recipientKey(item.entry.wrapper.context);
       if(!byRecipient.has(key))byRecipient.set(key,{target:targets.get(key),descriptors:[],proofs:[]});
@@ -205,7 +207,7 @@ export async function validateReaderProjection({projection,scope,resources,objec
   if(projection.header.payload.descriptorCommitment!==await publicationHash('descriptors',cores,cryptoValue))fail('publication_descriptor_mismatch');
   const seenRecipients=new Set();
   for(const row of projection.recipients){exact(row,['inventory','proofs']);const p=row.inventory.payload,key=recipientKey(p),t=targets.get(key);
-    if(!t||seenRecipients.has(key)||!Array.isArray(row.proofs)||row.proofs.length<1||row.proofs.length>2000)fail();seenRecipients.add(key);
+    if(!t||seenRecipients.has(key)||!Array.isArray(row.proofs)||(objects.length>0&&row.proofs.length<1)||row.proofs.length>2000)fail();seenRecipients.add(key);
     const ds=[];for(const item of row.proofs){exact(item,['resourceID','part','entry','proof']);
       const d=projection.descriptors.find(d=>identity(d.payload)===identity(item));if(!d)fail();
       if(item.entry.accountID!==t.accountID||item.entry.deviceKeyVersion!==t.deviceKeyVersion
@@ -213,6 +215,7 @@ export async function validateReaderProjection({projection,scope,resources,objec
       await verifyReaderDescriptor({descriptor:d,header:projection.header,rootPublicKey,...item,cryptoValue});
       const coverage=identity(item)+'/'+key;if(wrapperCoverage.has(coverage))fail();wrapperCoverage.add(coverage);ds.push(d);}
     await verifyReaderInventory({inventory:row.inventory,descriptors:ds,header:projection.header,rootPublicKey,subject:t,cryptoValue});}
+  if(objects.length===0&&(resources.length!==0||targets.size===0||seenRecipients.size!==targets.size))fail('publication_incomplete');
   const expectedCoverage=objects.reduce((n,o)=>n+o.wrappers.length,0);
   if(wrapperCoverage.size!==expectedCoverage)fail('publication_incomplete');return {headerHash};
 }

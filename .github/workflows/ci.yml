@@ -77,6 +77,8 @@ jobs:
           node --test tests/access-scale-postgres.test.mjs
           node --test tests/access-surface-postgres.test.mjs
           node --test tests/vault-v2-migration-postgres.test.mjs
+          node --test tests/vault-publication-identities-postgres.test.mjs
+          node --test tests/vault-publication-store.test.mjs
           node scripts/benchmark-vault-v2-migration.mjs 100 1000
 
   test:
