@@ -51,6 +51,15 @@ materialization. HTTP response totals were 376,133 and 3,725,108 bytes. Client p
 RSS including fixture preparation was 227.48 MB and 407.18 MB. All models passed
 actual cryptographic verification/decryption and linkage assertions.
 
+A repeat after the cached reader-key binding change passed the same 1000-resource
+workload: preparation 130.800 s, materialization 175.303 s, 1013 requests,
+HTTP p95/p99 176.28/178.62 ms and server peak RSS 408.83 MB. Client peak RSS,
+including preparation, was 709.77 MB. Response and projection byte totals matched
+the first run. These local measurements show variation; they do not establish an
+acceptable runtime or memory envelope. The immutable measured source snapshot was
+`be4238a19ee67d6700fb167142dd10093c201bce`; subsequent lifecycle/UI fixes require
+their own targeted regressions and final complete suite.
+
 The current PostgreSQL reader reloads the full immutable projection and computes
 recipient policy for each request. Multiplying projection JSON bytes by request
 count estimates 117.49 MB and 11.40 GB of repeated projection transfer from the DB;
