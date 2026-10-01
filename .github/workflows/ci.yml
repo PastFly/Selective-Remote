@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -21,6 +22,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: 6de88d78b5de934aba95383cf853f0771bf6e15d
+
+      - name: Verify approved post-merge source SHA
+        run: test "$(git rev-parse HEAD)" = "6de88d78b5de934aba95383cf853f0771bf6e15d"
 
       - name: Check localized Pages and assets
         run: python3 -m unittest Tests/PagesTests/test_site.py -v
@@ -54,6 +60,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: 6de88d78b5de934aba95383cf853f0771bf6e15d
+
+      - name: Verify approved post-merge source SHA
+        run: test "$(git rev-parse HEAD)" = "6de88d78b5de934aba95383cf853f0771bf6e15d"
 
       - name: Select Node 22
         uses: actions/setup-node@v6
@@ -88,6 +99,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: 6de88d78b5de934aba95383cf853f0771bf6e15d
+
+      - name: Verify approved post-merge source SHA
+        run: test "$(git rev-parse HEAD)" = "6de88d78b5de934aba95383cf853f0771bf6e15d"
 
       - name: Environment
         run: |
@@ -139,6 +155,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: 6de88d78b5de934aba95383cf853f0771bf6e15d
+
+      - name: Verify approved post-merge source SHA
+        run: test "$(git rev-parse HEAD)" = "6de88d78b5de934aba95383cf853f0771bf6e15d"
 
       - name: Environment
         run: |
