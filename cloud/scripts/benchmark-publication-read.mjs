@@ -146,6 +146,7 @@ export async function runPublicationBenchmark(options) {
           // redirected to loopback HTTP. This benchmark makes no TLS/deployment claim.
           identity: () => ({ endpoint: fixture.endpoint, accountID: fixture.accountID, deviceID: fixture.deviceID,
             sessionEpoch: 'synthetic-benchmark-session' }), scope: fixture.scope, privateKey: fixture.identity.privateKey,
+          publicKey: fixture.identity.publicKey,
           ownTrustRepository: fixture.pinnedTrust, publisherTrustRepository: fixture.pinnedTrust,
           repository, cryptoValue: webcrypto,
         });
