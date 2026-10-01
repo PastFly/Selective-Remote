@@ -1,3 +1,4 @@
+import { normalizeTeamDevicePublicKey } from "./team-vault-crypto.js";
 import {
   verifyReaderHeader,
   verifyReaderDescriptor,
@@ -47,6 +48,18 @@ function recordTimestamp(v) {
     (Number.isFinite(v) && v > 0) ||
     (typeof v === "string" && Number.isFinite(Date.parse(v)))
   );
+}
+export function isPublicationOfflineError(error) {
+  return (
+    error instanceof TypeError ||
+    ["network_unavailable", "publication_network_unavailable"].includes(
+      error?.message,
+    ) ||
+    (error?.status >= 500 && error?.status <= 599)
+  );
+}
+export function isPublicationAccessLoss(error) {
+  return lost.has(error?.message);
 }
 const kinds = {
   HOST: "host",
@@ -137,11 +150,75 @@ function resourceModel(payload, descriptor, header) {
     fail("publication_payload_schema_invalid");
   return { ...model, record: r };
 }
+async function verifyLocalReaderKey(
+  readerDevice,
+  privateKey,
+  expectedPublicKey,
+  cryptoValue,
+) {
+  if (
+    !readerDevice ||
+    !Number.isSafeInteger(readerDevice.keyVersion) ||
+    readerDevice.keyVersion < 1
+  )
+    fail("publication_cache_reader_invalid");
+  const publicKey = normalizeTeamDevicePublicKey(readerDevice.publicKey);
+  if (
+    expectedPublicKey &&
+    !equal(publicKey, normalizeTeamDevicePublicKey(expectedPublicKey))
+  )
+    fail("publication_local_key_mismatch");
+  if (
+    privateKey?.type !== "private" ||
+    privateKey.algorithm?.name !== "ECDH" ||
+    privateKey.algorithm?.namedCurve !== "P-256" ||
+    privateKey.extractable !== false
+  )
+    fail("publication_local_key_mismatch");
+  const imported = await cryptoValue.subtle.importKey(
+      "jwk",
+      publicKey,
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      [],
+    ),
+    challenge = await cryptoValue.subtle.generateKey(
+      { name: "ECDH", namedCurve: "P-256" },
+      false,
+      ["deriveBits"],
+    );
+  let actual, expected;
+  try {
+    actual = new Uint8Array(
+      await cryptoValue.subtle.deriveBits(
+        { name: "ECDH", public: challenge.publicKey },
+        privateKey,
+        256,
+      ),
+    );
+    expected = new Uint8Array(
+      await cryptoValue.subtle.deriveBits(
+        { name: "ECDH", public: imported },
+        challenge.privateKey,
+        256,
+      ),
+    );
+    let difference = 0;
+    for (let n = 0; n < actual.length; n++)
+      difference |= actual[n] ^ expected[n];
+    if (difference !== 0) fail("publication_local_key_mismatch");
+  } finally {
+    actual?.fill(0);
+    expected?.fill(0);
+  }
+  return publicKey;
+}
 export function createVaultPublicationClient({
   transport,
   identity,
   scope,
   privateKey,
+  publicKey = null,
   deviceKeyVersion = 1,
   ownTrustRepository,
   publisherTrustRepository,
@@ -373,6 +450,122 @@ export function createVaultPublicationClient({
       guard(v.start, v.op);
       pendingVerification = null;
     },
+    async loadStaleCache() {
+      const start = captured(),
+        op = ++epoch;
+      try {
+        const stored = await repository.load(cacheScope(start, scopeValue));
+        guard(start, op);
+        const view = stored?.payload;
+        if (!view || !stored.highWater || view.stale !== false)
+          fail("publication_cache_unavailable");
+        if (
+          view.subject?.accountID !== start.accountID ||
+          view.subject?.deviceID !== start.deviceID
+        )
+          fail("publication_subject_mismatch");
+        await verifyLocalReaderKey(
+          view.readerDevice,
+          privateKey,
+          publicKey,
+          cryptoValue,
+        );
+        if (
+          deviceKeyVersion !== null &&
+          deviceKeyVersion !== view.readerDevice.keyVersion
+        )
+          fail("publication_local_key_mismatch");
+        deviceKeyVersion = view.readerDevice.keyVersion;
+        guard(start, op);
+        const root = await publisherTrust(
+          view.publisher,
+          view.header,
+          start,
+          op,
+        );
+        const headerHash = await verifyReaderHeader({
+          header: view.header,
+          rootPublicKey: root,
+          ...scopeValue,
+          highWater: stored.highWater,
+          cryptoValue,
+        });
+        if (
+          headerHash !== view.headerHash ||
+          headerHash !== stored.highWater.hash ||
+          view.header.payload.sequence !== stored.highWater.sequence
+        )
+          fail("publication_cache_invalid");
+        await verifyReaderInventory({
+          inventory: view.inventory,
+          descriptors: view.descriptors,
+          header: view.header,
+          rootPublicKey: root,
+          subject: view.subject,
+          cryptoValue,
+        });
+        const descriptors = view.descriptors.filter(
+          (d) => d.payload.part !== "SECRET",
+        );
+        if (
+          !Array.isArray(view.models) ||
+          view.models.length !== descriptors.length
+        )
+          fail("publication_cache_invalid");
+        const models = [];
+        for (const descriptor of descriptors) {
+          await verifyReaderDescriptor({
+            descriptor,
+            header: view.header,
+            rootPublicKey: root,
+            cryptoValue,
+          });
+          const d = descriptor.payload,
+            model = view.models.find(
+              (m) => m.resourceID === d.resourceID && m.part === d.part,
+            );
+          if (!model) fail("publication_cache_invalid");
+          const link = {
+            teamID: scopeValue.teamID,
+            vaultID: scopeValue.vaultID,
+            generationID: view.header.payload.generationID,
+            resourceID: d.resourceID,
+            kind: d.kind,
+            part: d.part,
+          };
+          const verified = resourceModel(
+            {
+              link,
+              ...(d.part === "METADATA"
+                ? { metadata: model.metadata }
+                : d.kind === "FOLDER"
+                  ? { folder: model.folder }
+                  : { record: model.record }),
+            },
+            descriptor,
+            view.header,
+          );
+          if (
+            !equal(model.reference, verified.reference) ||
+            !equal(
+              model.link ??
+                Object.fromEntries(Object.keys(link).map((k) => [k, model[k]])),
+              link,
+            )
+          )
+            fail("publication_cache_invalid");
+          models.push(verified);
+        }
+        guard(start, op);
+        currentIdentity = start;
+        current = { ...view, models, stale: true };
+        return structuredClone(current);
+      } catch (error) {
+        current = null;
+        onInvalidate();
+        throw error;
+      }
+    },
     async load() {
       const start = captured(),
         op = ++epoch,
@@ -427,8 +620,7 @@ export function createVaultPublicationClient({
             fail("publication_changed");
           if (
             !Array.isArray(page.descriptors) ||
-            new Set(page.descriptors.map((d) => d.payload.resourceID)).size >
-              100 ||
+            page.descriptors.length > 100 ||
             descriptors.length + page.descriptors.length > 2000 ||
             (page.descriptors.length === 0 && page.nextCursor !== null)
           )
@@ -462,7 +654,26 @@ export function createVaultPublicationClient({
           if (d.payload.part !== "SECRET")
             models.push(await part(d, base, root, start, op, wire.subject));
         await pointer(base, wire.subject, start, op);
+        const readerPublicKey =
+          publicKey ??
+          (bundle.accountID === start.accountID &&
+          bundle.deviceID === start.deviceID
+            ? bundle.certificate.payload.publicKey
+            : null);
+        if (!readerPublicKey) fail("publication_cache_reader_invalid");
+        const readerDevice = {
+          publicKey: normalizeTeamDevicePublicKey(readerPublicKey),
+          keyVersion: deviceKeyVersion,
+        };
+        await verifyLocalReaderKey(
+          readerDevice,
+          privateKey,
+          publicKey,
+          cryptoValue,
+        );
+        guard(start, op);
         const view = {
+          readerDevice,
           header: wire.header,
           headerHash: wire.headerHash,
           subject: wire.subject,
@@ -502,9 +713,7 @@ export function createVaultPublicationClient({
           error.message === "publication_network_unavailable" &&
           stored?.payload
         ) {
-          currentIdentity = start;
-          current = { ...stored.payload, stale: true };
-          return structuredClone(current);
+          return this.loadStaleCache();
         }
         current = null;
         onInvalidate();

@@ -56,7 +56,8 @@ try {
       renderPublishedVault,
       requestPublisherVerification,
     } = await import("/vault-publication-client.js");
-    const { initializeTeamWorkspace } = await import("/app.js");
+    const { initializeTeamWorkspace, completeBrowserSessionLogout } =
+      await import("/app.js");
     const uuid = () => crypto.randomUUID(),
       endpoint = "https://staging.example.test",
       accountID = uuid(),
@@ -229,6 +230,7 @@ try {
         identity: () => session,
         scope,
         privateKey: identity.privateKey,
+        publicKey: identity.publicKey,
         ownTrustRepository,
         publisherTrustRepository: repository,
         repository,
@@ -380,14 +382,20 @@ try {
     if ((await pending) !== root.fingerprint)
       throw Error("independent input confirmation");
     // Actual app workspace uses the publication coordinator and blocks legacy writes.
-    let appWho = null;
+    let appWho = null,
+      contextOffline = false,
+      contextDenial = null,
+      snapshotOffline = false;
     const listeners = new Set();
     const appClient = {
-      deviceTrustSnapshot: async () => ({
-        rootPublicKey: root.publicKey,
-        checkpoint,
-        certificates: [certificate],
-      }),
+      deviceTrustSnapshot: async () => {
+        if (snapshotOffline) throw new TypeError("fetch failed");
+        return {
+          rootPublicKey: root.publicKey,
+          checkpoint,
+          certificates: [certificate],
+        };
+      },
       session: () => ({ id: accountID }),
       deviceID: () => deviceID,
       publicationIdentity: () => ({ ...session, endpoint }),
@@ -401,12 +409,16 @@ try {
           appWho = { scope: s, id };
           return { rows: [], nextCursor: null };
         },
-        getContext: async () => ({
-          formatState: "V2_ACTIVE",
-          policyMutationAvailable: false,
-          groupMutationAvailable: false,
-          blockers: ["crypto_publication_required"],
-        }),
+        getContext: async () => {
+          if (contextDenial) throw Error(contextDenial);
+          if (contextOffline) throw new TypeError("fetch failed");
+          return {
+            formatState: "V2_ACTIVE",
+            policyMutationAvailable: false,
+            groupMutationAvailable: false,
+            blockers: ["crypto_publication_required"],
+          };
+        },
         listVaults: async () => ({ rows: [], nextCursor: null }),
         listGroups: async () => ({ rows: [], nextCursor: null }),
         listMembers: async () => ({ rows: [], nextCursor: null }),
@@ -480,6 +492,192 @@ try {
       appWho?.scope.vaultID !== scope.vaultID
     )
       throw Error("actual app contextual Access reference failed");
+    workspace.setView("hosts");
+    document.querySelector("#team-vault-lock").click();
+    contextOffline = true;
+    network = true;
+    document.querySelector("#team-vault-open").click();
+    for (
+      let n = 0;
+      n < 100 && !appRecords.querySelector('[data-publication-state="stale"]');
+      n++
+    )
+      await new Promise((r) => setTimeout(r, 10));
+    if (
+      !appRecords.textContent.includes("Actual browser host") ||
+      !appRecords.querySelector('[data-publication-state="stale"]')
+    )
+      throw Error(
+        "actual workspace cannot reopen protected prior V2 cache offline",
+      );
+    if ([...appRecords.querySelectorAll("button")].some((b) => !b.disabled))
+      throw Error("stale SECRET/context Access enabled");
+    // A separate online format probe with offline trust-snapshot preflight also uses only the prior protected publication.
+    contextOffline = false;
+    snapshotOffline = true;
+    document.querySelector("#team-vault-open").click();
+    for (
+      let n = 0;
+      n < 100 && !appRecords.querySelector('[data-publication-state="stale"]');
+      n++
+    )
+      await new Promise((r) => setTimeout(r, 10));
+    if (!appRecords.querySelector('[data-publication-state="stale"]'))
+      throw Error("offline device snapshot prevented protected cache reopen");
+    // An authoritative preflight loss must erase the prior payload; a later offline attempt cannot reuse it.
+    snapshotOffline = false;
+    contextDenial = "publication_access_denied";
+    document.querySelector("#team-vault-open").click();
+    await new Promise((r) => setTimeout(r, 100));
+    if (
+      appRecords.querySelector("article") ||
+      (await repository.load(cs)).payload !== null
+    )
+      throw Error(
+        "authoritative context denial retained managed cached payload",
+      );
+    contextDenial = null;
+    contextOffline = true;
+    document.querySelector("#team-vault-open").click();
+    await new Promise((r) => setTimeout(r, 100));
+    if (appRecords.querySelector("article"))
+      throw Error("offline missing-cache guessed active/V1 mode");
+    workspace.deactivate();
+    contextOffline = false;
+    snapshotOffline = false;
+    network = false;
+    contextDenial = null;
+    const { createAuthenticatedVaultClient } = await import("/vault-sync.js");
+    let finishLogout,
+      protectedReads = 0;
+    const authenticated = createAuthenticatedVaultClient({
+      fetchValue: async (path, options) => {
+        if (path === "/v1/auth/login")
+          return new Response(
+            JSON.stringify({
+              user: { id: accountID },
+              deviceID,
+              token: "t".repeat(43),
+            }),
+            { status: 200 },
+          );
+        if (path === "/v1/auth/logout")
+          return new Promise((resolve) => {
+            finishLogout = () => resolve(new Response("{}", { status: 200 }));
+          });
+        protectedReads++;
+        const url = new URL(path, endpoint),
+          query = Object.fromEntries(url.searchParams);
+        let value;
+        if (url.pathname.endsWith("/access-context"))
+          value = {
+            formatState: "V2_ACTIVE",
+            policyMutationAvailable: false,
+            groupMutationAvailable: false,
+            blockers: ["crypto_publication_required"],
+          };
+        else if (url.pathname.endsWith("/publication/header"))
+          value = await transport.header(scope);
+        else if (url.pathname.endsWith("/publication/publisher"))
+          value = await transport.publisher(scope, query);
+        else if (url.pathname.endsWith("/publication/directory"))
+          value = await transport.directory(scope, query);
+        else {
+          const match = url.pathname.match(
+            /\/publication\/resources\/([^/]+)\/parts\/([^/]+)$/,
+          );
+          if (!match) throw Error("unexpected lifecycle request");
+          value = await transport.part(scope, {
+            ...query,
+            resourceID: match[1],
+            part: match[2],
+          });
+        }
+        return new Response(JSON.stringify(value), { status: 200 });
+      },
+    });
+    await authenticated.login({ deviceID });
+    const priorAccess = appClient.accessClient;
+    appClient.session = () => authenticated.session();
+    appClient.deviceID = () => authenticated.deviceID();
+    appClient.publicationIdentity = () =>
+      authenticated.publicationIdentity(endpoint);
+    appClient.subscribePublicationIdentity = (listener) =>
+      authenticated.subscribePublicationIdentity(listener);
+    appClient.publicationTransport = () => authenticated.publicationTransport();
+    appClient.accessClient = () => ({
+      ...priorAccess(),
+      getContext: (scope) => authenticated.accessClient().getContext(scope),
+    });
+    await workspace.activate(identity);
+    workspace.setView("hosts");
+    for (let n = 0; n < 100 && !appRecords.querySelector("article"); n++)
+      await new Promise((r) => setTimeout(r, 10));
+    if (!appRecords.querySelector("article"))
+      throw Error(
+        "authenticated lifecycle fixture did not materialize actual workspace",
+      );
+    let pendingLogout,
+      restoredAfterLogout = 0,
+      personalLocked = false;
+    document.querySelector("#cloud-logout").addEventListener("click", () => {
+      pendingLogout = completeBrowserSessionLogout({
+        client: authenticated,
+        documentValue: document,
+        vault: {
+          lock() {
+            personalLocked = true;
+          },
+          async forgetRememberedSession() {},
+        },
+        clearView() {
+          workspace.deactivate();
+        },
+        restoreView() {
+          restoredAfterLogout++;
+          workspace.deactivate();
+        },
+      });
+    });
+    document.querySelector("#resource-detail-dialog").showModal();
+    document.querySelector("#cloud-logout").click();
+    if (document.querySelector("#resource-detail-dialog").open)
+      throw Error("main logout left a Vault detail dialog open");
+    const readsAtLogout = protectedReads;
+    if (!personalLocked)
+      throw Error("main logout did not lock local controller synchronously");
+    if (
+      authenticated.publicationIdentity(endpoint) !== null ||
+      appRecords.querySelector("article")
+    )
+      throw Error(
+        "actual logout kept identity or managed display while response pending",
+      );
+    document.querySelector("#team-vault-open").click();
+    workspace.setView("hosts");
+    await new Promise((r) => setTimeout(r, 100));
+    if (protectedReads !== readsAtLogout || appRecords.querySelector("article"))
+      throw Error(
+        "actual workspace started new reads or redisplayed during pending logout",
+      );
+    // A new authenticated identity may be installed before the older logout response completes.
+    await authenticated.login({ deviceID });
+    await workspace.activate(identity);
+    workspace.setView("hosts");
+    for (let n = 0; n < 100 && !appRecords.querySelector("article"); n++)
+      await new Promise((r) => setTimeout(r, 10));
+    if (!appRecords.querySelector("article"))
+      throw Error(
+        "new session did not materialize before old logout completed",
+      );
+    finishLogout();
+    await pendingLogout;
+    if (
+      restoredAfterLogout !== 0 ||
+      !authenticated.publicationIdentity(endpoint) ||
+      !appRecords.querySelector("article")
+    )
+      throw Error("delayed main logout affected newer workspace identity");
     workspace.deactivate();
     return {
       models: view.models.length,
@@ -487,6 +685,9 @@ try {
       highWaterTamperDenied,
       actualApp: true,
       actualContextReference: true,
+      actualOfflineReopen: true,
+      actualPendingLogoutBlocked: true,
+      offlineDenialAndMissingCache: true,
     };
   });
   assert.equal(result.models, 3);

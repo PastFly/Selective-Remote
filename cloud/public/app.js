@@ -1,4 +1,4 @@
-import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy } from "./vault-publication-client.js";
+import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy, isPublicationOfflineError, isPublicationAccessLoss } from "./vault-publication-client.js";
 import { createAccessManager } from "./access-manager.js";
 import { accessAuditActionLabel } from "./access-audit.js";
 import {
@@ -3149,34 +3149,31 @@ export function initializeTeamWorkspace({
     const vault = vaults.find((value) => value.id === vaultSelect.value);
     if (!vault || !identity) return;
     const recipient = client.session()?.id;
+    if (!recipient) return;
+    const priorIdentity = client.publicationIdentity?.();
     lockCurrentVault();
     selectedVault = vault;
     const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
     const selection = publicationSelection;
-    let format;
-    try { format = await resolveTeamVaultFormat(client,scope); }
-    catch { setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); return; }
-    if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
-    if (format !== "V1_ACTIVE") {
+    async function clearLostPublication(error) {
+      if (priorIdentity && isPublicationAccessLoss(error)) await createIndexedDBPublicationRepository().clearPayload({endpoint:priorIdentity.endpoint,accountID:priorIdentity.accountID,deviceID:priorIdentity.deviceID,teamID:scope.teamID,vaultID:scope.vaultID});
+    }
+    async function openPublication({staleOnly=false,deviceKeyVersion=null}={}) {
+      if (selection !== publicationSelection || selectedVault?.id !== vault.id || !client.publicationIdentity?.()) return;
       workspace.hidden = activeView !== "hosts";
       recordCreate.hidden = true;
-      if (format !== "V2_ACTIVE") { setText(workspaceStatus,publicationCopy(documentValue,"preparing")); return; }
-      let deviceKeyVersion;
-      try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:client.publicationIdentity()}); }
-      catch { setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); return; }
-      if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
       const repository = createIndexedDBPublicationRepository();
       const active = createVaultPublicationClient({transport:client.publicationTransport(),identity:()=>client.publicationIdentity(),scope,
-        privateKey:identity.privateKey,deviceKeyVersion,ownTrustRepository:deviceTrustRepository,
+        privateKey:identity.privateKey,publicKey:identity.publicKey,deviceKeyVersion,ownTrustRepository:deviceTrustRepository,
         publisherTrustRepository:repository,repository,subscribeIdentityChange:listener=>client.subscribePublicationIdentity(listener),
         onInvalidate:()=>{records.replaceChildren();documentValue.querySelectorAll("dialog[data-publication-dialog]").forEach(dialog=>{dialog.close?.();dialog.remove();});}});
       publicationClient = active;
       controller = {lock:()=>active.lock(),document:()=>({records:[]})};
       workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
       try {
-        try { await active.load(); }
+        try { if(staleOnly)await active.loadStaleCache();else await active.load(); }
         catch(error) {
-          if(error.message !== "publisher_verification_required") throw error;
+          if(staleOnly || error.message !== "publisher_verification_required") throw error;
           const fingerprint = await requestPublisherVerification(documentValue,error.verification);
           if(fingerprint === null) throw new Error("publisher_verification_required");
           await active.confirmPublisher(fingerprint); await active.load();
@@ -3184,8 +3181,29 @@ export function initializeTeamWorkspace({
         if (publicationClient !== active) return;
         renderRecords();setWorkspaceControls(false);
         setText(workspaceStatus,publicationCopy(documentValue,active.view()?.stale ? "stale" : "readonly"));
-        startBackgroundSync();
+        if(!staleOnly)startBackgroundSync();
       } catch(error) { if(publicationClient === active) { records.replaceChildren();setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); } }
+    }
+    let format;
+    try { format = await resolveTeamVaultFormat(client,scope); }
+    catch(error) {
+      if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
+      else { await clearLostPublication(error);setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); }
+      return;
+    }
+    if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
+    if (format !== "V1_ACTIVE") {
+      workspace.hidden = activeView !== "hosts";
+      recordCreate.hidden = true;
+      if (format !== "V2_ACTIVE") { setText(workspaceStatus,publicationCopy(documentValue,"preparing")); return; }
+      let deviceKeyVersion;
+      try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:client.publicationIdentity()}); }
+      catch(error) {
+        if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
+        else { await clearLostPublication(error);setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); }
+        return;
+      }
+      await openPublication({deviceKeyVersion});
       return;
     }
     controller = createTeamVaultController({
@@ -4115,6 +4133,21 @@ export function registrationAcceptedMessage() {
   return "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.";
 }
 
+// Capture the old controller before any asynchronous logout response can switch accounts.
+export async function completeBrowserSessionLogout({ client, vault, clearView, restoreView, documentValue = null,
+  isCurrent = () => client.session() === null }) {
+  const pending = client.logout();
+  vault.lock();
+  documentValue?.querySelectorAll("#host-detail-dialog, #resource-detail-dialog").forEach(dialog => dialog.close?.());
+  clearView();
+  const forgotten = Promise.resolve(vault.forgetRememberedSession()).catch(() => {});
+  try { await pending; }
+  finally {
+    await forgotten;
+    if (isCurrent()) await restoreView();
+  }
+}
+
 export async function initializeCloudAccount({
   documentValue = document,
   vaultUI,
@@ -4393,7 +4426,9 @@ export async function initializeCloudAccount({
     ));
   }
 
+  let sessionPresentationEpoch = 0;
   function showSession(user) {
+    sessionPresentationEpoch += 1;
     tabs.hidden = Boolean(user);
     form.hidden = Boolean(user);
     registrationForm.hidden = true;
@@ -4608,18 +4643,26 @@ export async function initializeCloudAccount({
 
   logoutButton.addEventListener("click", async () => {
     logoutButton.disabled = true;
+    const logoutVault = vault;
+    let presentationEpoch;
+    const isCurrent = () => client.session() === null && sessionPresentationEpoch === presentationEpoch;
     try {
-      await client.logout();
-    } finally {
-      try { await vault.forgetRememberedSession(); } catch {}
-      vault.lock();
-      showSession(null);
-      teamWorkspace?.deactivate();
-      hideConflicts();
-      await vaultUI.restoreModeFromLocalStatus();
-      logoutButton.disabled = false;
-      setText(message, "Сессия завершена; cookie и ключ доверенного браузера удалены.");
-    }
+      await completeBrowserSessionLogout({ client, vault: logoutVault, isCurrent, documentValue,
+        clearView() {
+          showSession(null);
+          presentationEpoch = sessionPresentationEpoch;
+          teamWorkspace?.deactivate();
+          hideConflicts();
+          vaultUI.mode("waiting");
+        },
+        async restoreView() {
+          const status = await logoutVault.status();
+          if (!isCurrent()) return;
+          vaultUI.mode(status === "unlocked" ? "unlocked" : "waiting");
+          setText(message, "Сессия завершена; cookie и ключ доверенного браузера удалены.");
+        },
+      });
+    } finally { logoutButton.disabled = false; }
   });
 
   usernameForm.addEventListener("input", async () => {

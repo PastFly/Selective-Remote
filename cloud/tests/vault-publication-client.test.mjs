@@ -228,6 +228,7 @@ export async function browserFixture({
       identity: () => current,
       scope,
       privateKey: reader.identity.privateKey,
+      publicKey: reader.identity.publicKey,
       deviceKeyVersion: 1,
       ownTrustRepository: reader.pinnedTrust,
       publisherTrustRepository,
@@ -757,4 +758,293 @@ test("display boundary clears a prior coherent view after identity changes even 
     ),
     /publication_current_required/,
   );
+});
+test("explicit protected prior-publication cache opens stale without header/directory/key-snapshot requests", async () => {
+  const f = await browserFixture(),
+    client = api.createVaultPublicationClient(f.options);
+  await client.load();
+  client.lock();
+  f.requests.length = 0;
+  assert.equal(typeof client.loadStaleCache, "function");
+  const view = await client.loadStaleCache();
+  assert.equal(view.stale, true);
+  assert.equal(view.models.length, 3);
+  assert.deepEqual(f.requests, []);
+  await assert.rejects(
+    client.revealSecret(
+      view.models.find((m) => m.kind === "CREDENTIAL").resourceID,
+    ),
+    /publication_current_required/,
+  );
+});
+for (const [name, change, pattern] of [
+  [
+    "missing cache",
+    async (f) => f.repository.clearPayload(),
+    /publication_cache_unavailable/,
+  ],
+  [
+    "wrong account",
+    async (f) => f.switchIdentity({ accountID: uuid() }),
+    /publication_subject_mismatch/,
+  ],
+  [
+    "wrong device",
+    async (f) => f.switchIdentity({ deviceID: uuid() }),
+    /publication_subject_mismatch/,
+  ],
+  [
+    "fork high-water",
+    async (f) => {
+      const load = f.repository.load;
+      f.repository.load = async () => ({
+        ...(await load()),
+        highWater: { sequence: 1, hash: "f".repeat(64) },
+      });
+    },
+    /publication_fork/,
+  ],
+  [
+    "rollback high-water",
+    async (f) => {
+      const load = f.repository.load;
+      f.repository.load = async () => ({
+        ...(await load()),
+        highWater: { sequence: 2, hash: "f".repeat(64) },
+      });
+    },
+    /publication_rollback/,
+  ],
+])
+  test("explicit protected stale path rejects " + name, async () => {
+    const f = await browserFixture(),
+      client = api.createVaultPublicationClient(f.options);
+    await client.load();
+    client.lock();
+    await change(f);
+    await assert.rejects(client.loadStaleCache(), pattern);
+    assert.equal(client.view(), null);
+  });
+test("logout synchronously removes identity before subscribers and keeps only the captured authenticated logout request while response is pending", async () => {
+  const accountID = uuid(),
+    deviceID = uuid(),
+    scope = { teamID: uuid(), vaultID: uuid() };
+  let finishLogout,
+    protectedReads = 0,
+    logoutHeaders;
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path, options) => {
+      if (path === "/v1/auth/login")
+        return new Response(
+          JSON.stringify({
+            user: { id: accountID },
+            deviceID,
+            token: "t".repeat(43),
+          }),
+          { status: 200 },
+        );
+      if (path === "/v1/auth/logout") {
+        logoutHeaders = options.headers;
+        return new Promise((resolve) => {
+          finishLogout = () => resolve(new Response("{}", { status: 200 }));
+        });
+      }
+      protectedReads++;
+      return new Response("{}", { status: 200 });
+    },
+  });
+  await client.login({ deviceID });
+  let seenDuringEvent = "not-called";
+  client.subscribePublicationIdentity(() => {
+    seenDuringEvent = client.publicationIdentity(
+      "https://staging.example.test",
+    );
+  });
+  const pending = client.logout();
+  assert.equal(
+    client.publicationIdentity("https://staging.example.test"),
+    null,
+  );
+  assert.equal(client.session(), null);
+  assert.equal(seenDuringEvent, null);
+  assert.equal(logoutHeaders.Authorization, "Bearer " + "t".repeat(43));
+  await assert.rejects(
+    client.publicationTransport().header(scope),
+    /authentication_required/,
+  );
+  assert.equal(protectedReads, 0);
+  finishLogout();
+  await pending;
+});
+test("real authenticated 401 clears identity before subscribers and invalidates published live state", async () => {
+  const f = await browserFixture();
+  let deny = false;
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path) => {
+      if (path === "/v1/auth/login")
+        return new Response(
+          JSON.stringify({
+            user: { id: f.reader.accountID },
+            deviceID: f.reader.deviceID,
+            token: "t".repeat(43),
+          }),
+          { status: 200 },
+        );
+      return new Response(
+        JSON.stringify(
+          deny ? { error: "session_revoked" } : await f.transport.header(),
+        ),
+        { status: deny ? 401 : 200 },
+      );
+    },
+  });
+  await client.login({ deviceID: f.reader.deviceID });
+  const publication = api.createVaultPublicationClient({
+    ...f.options,
+    identity: () => client.publicationIdentity(f.reader.endpoint),
+    subscribeIdentityChange: (cb) => client.subscribePublicationIdentity(cb),
+  });
+  await publication.load();
+  let eventIdentity = "not-called";
+  client.subscribePublicationIdentity(() => {
+    eventIdentity = client.publicationIdentity(f.reader.endpoint);
+  });
+  deny = true;
+  await assert.rejects(
+    client.publicationTransport().header(f.scope),
+    /authentication_required/,
+  );
+  assert.equal(eventIdentity, null);
+  assert.equal(client.publicationIdentity(f.reader.endpoint), null);
+  assert.equal(publication.view(), null);
+});
+test("a delayed old-session 401 cannot erase a newly authenticated identity", async () => {
+  const accountID = uuid(),
+    deviceID = uuid(),
+    scope = { teamID: uuid(), vaultID: uuid() };
+  let finishRequest;
+  const client = createAuthenticatedVaultClient({
+    fetchValue: async (path) => {
+      if (path === "/v1/auth/login")
+        return new Response(
+          JSON.stringify({
+            user: { id: accountID },
+            deviceID,
+            token: "t".repeat(43),
+          }),
+          { status: 200 },
+        );
+      return new Promise((resolve) => {
+        finishRequest = () =>
+          resolve(
+            new Response(JSON.stringify({ error: "session_revoked" }), {
+              status: 401,
+            }),
+          );
+      });
+    },
+  });
+  await client.login({ deviceID });
+  const request = client.publicationTransport().header(scope);
+  await client.login({ deviceID });
+  const newIdentity = client.publicationIdentity(
+    "https://staging.example.test",
+  );
+  finishRequest();
+  await assert.rejects(request, /authentication_required/);
+  assert.deepEqual(
+    client.publicationIdentity("https://staging.example.test"),
+    newIdentity,
+  );
+});
+test("offline cache retains verified reader public key and epoch and rejects a different nonextractable private key at the same account/device", async () => {
+  const f = await browserFixture(),
+    client = api.createVaultPublicationClient(f.options),
+    view = await client.load();
+  assert.equal(view.readerDevice?.keyVersion, 1);
+  assert.deepEqual(view.readerDevice?.publicKey, f.reader.identity.publicKey);
+  client.lock();
+  const changedKey = (await browserFixture()).reader.identity.privateKey,
+    other = api.createVaultPublicationClient({
+      ...f.options,
+      privateKey: changedKey,
+    });
+  await assert.rejects(
+    other.loadStaleCache(),
+    /publication_local_key_mismatch/,
+  );
+  assert.equal(other.view(), null);
+  f.transport.header = async () => {
+    throw Error("publication_network_unavailable");
+  };
+  await assert.rejects(other.load(), /publication_local_key_mismatch/);
+  assert.equal(other.view(), null);
+});
+
+test("reader rejects more than 100 descriptors before fetching any encrypted part", async () => {
+  const f = await browserFixture(),
+    directory = f.transport.directory,
+    ids = Array.from({ length: 51 }, () => uuid());
+  f.transport.directory = async (...args) => {
+    const page = await directory(...args);
+    return {
+      ...page,
+      descriptors: Array.from({ length: 101 }, (_, i) => ({
+        ...page.descriptors[0],
+        payload: {
+          ...page.descriptors[0].payload,
+          resourceID: ids[Math.floor(i / 2)],
+          part: i % 2 ? "SECRET" : "METADATA",
+        },
+      })),
+    };
+  };
+  const client = api.createVaultPublicationClient(f.options);
+  await assert.rejects(client.load(), /publication_incomplete/);
+  assert.equal(f.requests.includes("GENERAL"), false);
+});
+test("main browser logout clears views synchronously and cannot finish over a newer session", async () => {
+  const { completeBrowserSessionLogout } = await import("../public/app.js");
+  let user = { id: "old" },
+    finishLogout,
+    restored = 0;
+  const calls = [];
+  const client = {
+    session: () => user,
+    logout() {
+      user = null;
+      calls.push("identity-cleared");
+      return new Promise((r) => {
+        finishLogout = r;
+      });
+    },
+  };
+  const vault = {
+    lock() {
+      calls.push("locked");
+    },
+    async forgetRememberedSession() {
+      calls.push("forgot-old-vault");
+    },
+  };
+  const pending = completeBrowserSessionLogout({
+    client,
+    vault,
+    clearView() {
+      calls.push("views-cleared");
+    },
+    restoreView() {
+      restored++;
+    },
+  });
+  assert.deepEqual(calls, [
+    "identity-cleared",
+    "locked",
+    "views-cleared",
+    "forgot-old-vault",
+  ]);
+  user = { id: "new" };
+  finishLogout();
+  await pending;
+  assert.equal(restored, 0);
 });

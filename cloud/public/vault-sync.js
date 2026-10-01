@@ -507,6 +507,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
   function invalidateIdentity() { sessionEpoch++; for (const listener of identityListeners) listener(); }
 
   async function authorizedRequest(path, options = {}, { reauthenticationErrors = [] } = {}) {
+    const requestEpoch = sessionEpoch;
     const response = await fetchValue(path, {
       ...options,
       headers: {
@@ -522,10 +523,12 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     if (response.status === 401) {
       const result = await response.clone().json().catch(() => null);
       if (reauthenticationErrors.includes(result?.error)) return response;
-      invalidateIdentity();
-      token = null;
-      user = null;
-      currentDeviceID = null;
+      if (requestEpoch === sessionEpoch) {
+        token = null;
+        user = null;
+        currentDeviceID = null;
+        invalidateIdentity();
+      }
       throw new Error("authentication_required");
     }
     return response;
@@ -660,6 +663,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     subscribePublicationIdentity(listener) { identityListeners.add(listener); return () => identityListeners.delete(listener); },
     publicationTransport() {
       async function json(scope, route, query = null) {
+        if (!user || !currentDeviceID) throw new Error("authentication_required");
         const teamID=normalizedUUID(scope.teamID,'invalid_team'),vaultID=normalizedUUID(scope.vaultID,'invalid_vault');
         const parameters=new URLSearchParams();
         for(const [key,value] of Object.entries(query ?? {})) if(value!==null && value!==undefined && key!=='header' && key!=='inventory') parameters.set(key,String(value));
@@ -720,14 +724,13 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
 
     async logout() {
+      const logoutToken = token;
+      token = null;
+      user = null;
+      currentDeviceID = null;
       invalidateIdentity();
-      try {
-        await authorizedRequest("/v1/auth/logout", { method: "POST" });
-      } finally {
-        token = null;
-        user = null;
-        currentDeviceID = null;
-      }
+      await authorizedRequest("/v1/auth/logout", { method: "POST",
+        ...(logoutToken ? {headers:{Authorization:`Bearer ${logoutToken}`}} : {}) });
     },
 
     async deleteAccount({ email, password }) {
