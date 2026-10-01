@@ -11,6 +11,8 @@ struct SelectiveRemoteTeamVaultMaterializedSnapshot: Equatable, Sendable {
     let revision: Int
     let keyGeneration: Int
     let payload: Data
+    var publication: SelectiveRemotePublicationCache? = nil
+    var publicationSession: SelectiveRemotePublicationSession? = nil
 }
 
 struct SelectiveRemoteTeamHost: Identifiable, Equatable {
@@ -27,6 +29,7 @@ struct SelectiveRemoteTeamHost: Identifiable, Equatable {
     let address: String
     let profile: ConnectionProfile
     let credentials: SelectiveRemoteTeamHostCredentials
+    var publication: SelectiveRemotePublishedModelReference? = nil
 }
 
 struct SelectiveRemoteTeamHostCredentials: Equatable, Sendable {
@@ -143,7 +146,8 @@ enum SelectiveRemoteTeamHostMaterializer {
                         recordID: record.id
                     )
                 ),
-                credentials: credentials[record.id] ?? .empty
+                credentials: credentials[record.id] ?? .empty,
+                publication: try snapshot.publication?.reference(recordID: record.id, kind: .host)
             )
         }
     }
@@ -645,6 +649,10 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     ) {
         snapshots[scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID)] = snapshot
         rebuild(now: now)
+    }
+
+    func removeVault(teamID: UUID, vaultID: UUID) {
+        snapshots.removeValue(forKey: scopeKey(teamID: teamID, vaultID: vaultID)); rebuild(now: Date())
     }
 
     func clear() {
@@ -1190,7 +1198,7 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private var writableVaults: [SelectiveRemoteTeamHostVaultContext] {
         store.vaults.filter {
-            SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
+            !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: $0.teamID, vaultID: $0.vaultID) && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
         }
     }
 
@@ -1460,6 +1468,9 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
           }
+        }
+        .safeAreaInset(edge: .bottom) {
+            SelectiveRemotePublishedFolderStrip(type: "host", selectedVaultKeys: SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: selectedVaultsRaw, available: store.vaults))
         }
         .onAppear {
             normalizeSelection()
@@ -1768,7 +1779,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
                                     .contextMenu {
                                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                                            AccessResourceEntry.showLegacy(kind: .folder)
+                                            AccessResourceEntry.showPublishedFolder(teamID: teamID, path: path, type: "host")
                                         }
                                     }
                                     .draggable(teamFolderDragValue(teamID: teamID, path: path))
@@ -1943,7 +1954,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
             if let host = selectedHost,
-               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+               host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
                     newFolderName = ""
                     showsFolderCreator = true
@@ -2023,7 +2034,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 editorRequest = .newDraft(in: host.profile.group, context: context)
             }
         case .createFolder:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 newFolderName = ""
                 showsFolderCreator = true
             }
@@ -2033,12 +2044,12 @@ struct SelectiveRemoteTeamHostsView: View {
                 editorRequest = .duplicateDraft(profile: host.profile, context: context)
             }
         case .edit:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
                let context = context(for: host) {
                 editorRequest = .init(context: context, host: host)
             }
         case .delete:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 hostPendingDeletion = host
             }
         case .personalSettings:
@@ -2087,7 +2098,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ViewBuilder
     private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessResourceEntry.showLegacy(kind: .host)
+            AccessResourceEntry.showPublished(host.publication, title: host.profile.friendlyName, kind: .host)
         }
         Button(
             UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
@@ -2126,7 +2137,7 @@ struct SelectiveRemoteTeamHostsView: View {
             revealTeamHost(host)
             personalSettingsHost = host
         }
-        if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+        if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
             Button(
                 UpdateLocalization.text(ru: "Изменить", en: "Edit"),
                 systemImage: "pencil"
@@ -2161,7 +2172,26 @@ struct SelectiveRemoteTeamHostsView: View {
         return preferred.isEmpty ? host.profile.username : preferred
     }
 
+    private func connectPublished(_ host: SelectiveRemoteTeamHost, sftp: Bool = false) {
+        Task { @MainActor in
+            do {
+                let credentials = try await SelectiveRemotePublicationPresentation.shared.hostCredentials(host)
+                guard let reference = host.publication, SelectiveRemotePublicationPresentation.shared.valid(reference) else { return }
+                let user = contextMenuUsername(for: host)
+                if sftp { onOpenSFTP(host, user, credentials.password) }
+                else if host.profile.connectionType == .rdp {
+                    var profile = personalSettingsStore.appliedProfile(for: host, endpoint: endpoint); profile.username = user
+                    model.connectTeamHost(profile, password: credentials.password!, gatewayPassword: credentials.gatewayPassword ?? "")
+                } else { onOpenTerminal(host, user, credentials.password) }
+            } catch {
+                let alert = NSAlert(); alert.messageText = CloudAccessLocalization.text("Подключение требует доступной части SECRET", "Connecting requires an available SECRET part")
+                alert.informativeText = CloudAccessLocalization.text("Обновите публикацию и проверьте право раскрытия учётных данных для этого Mac.", "Refresh the publication and verify this Mac's permission to reveal the required credentials."); alert.runModal()
+            }
+        }
+    }
+
     private func connectFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host); return }
         let resolvedUsername = contextMenuUsername(for: host)
         if host.profile.connectionType == .rdp {
             var profile = personalSettingsStore.appliedProfile(
@@ -2180,6 +2210,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func openSFTPFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host, sftp: true); return }
         onOpenSFTP(
             host,
             contextMenuUsername(for: host),
@@ -2259,7 +2290,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     ) {
                         personalSettingsHost = host
                     }
-                    if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                    if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                         Button(
                             UpdateLocalization.text(ru: "Изменить", en: "Edit"),
                             systemImage: "pencil"
@@ -2391,11 +2422,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                     UpdateLocalization.text(ru: "Открыть SFTP", en: "Open SFTP"),
                                     systemImage: "folder.badge.gearshape"
                                 ) {
-                                    onOpenSFTP(
-                                        host,
-                                        username,
-                                        password.isEmpty ? nil : password
-                                    )
+                                    if host.publication != nil { connectPublished(host, sftp: true) }
+                                    else { onOpenSFTP(host, username, password.isEmpty ? nil : password) }
                                     password = host.credentials.password ?? ""
                                     gatewayPassword = host.credentials.gatewayPassword ?? ""
                                 }
@@ -2435,6 +2463,7 @@ struct SelectiveRemoteTeamHostsView: View {
         selectedRecordID: UUID?,
         changesAncestry: Bool = false
     ) {
+        guard !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: context.teamID, vaultID: context.vaultID) else { SelectiveRemotePublicationPresentation.shared.showReadOnly(); return }
         guard !isMutating else { return }
         isMutating = true
         Task { @MainActor in
@@ -2635,6 +2664,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host); return }
         var profile = personalSettingsStore.appliedProfile(
             for: host,
             endpoint: endpoint

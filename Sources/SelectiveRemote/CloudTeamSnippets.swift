@@ -48,6 +48,7 @@ struct SelectiveRemoteTeamSnippet: Identifiable, Equatable, Sendable {
     let title: String
     let body: String
     let folder: String
+    var publication: SelectiveRemotePublishedModelReference? = nil
 }
 
 struct SelectiveRemoteTeamSnippetVaultContext: Identifiable, Equatable, Sendable {
@@ -146,7 +147,8 @@ enum SelectiveRemoteTeamSnippetMaterializer {
                 modifiedDate: modifiedDate,
                 title: title,
                 body: body,
-                folder: folder
+                folder: folder ,
+                publication: try snapshot.publication?.reference(recordID: record.id, kind: .snippet)
             )
         }
     }
@@ -241,6 +243,10 @@ final class SelectiveRemoteTeamSnippetStore: ObservableObject {
     ) {
         snapshots[scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID)] = snapshot
         rebuild(now: now)
+    }
+
+    func removeVault(teamID: UUID, vaultID: UUID) {
+        snapshots.removeValue(forKey: scopeKey(teamID: teamID, vaultID: vaultID)); rebuild(now: Date())
     }
 
     func clear() {
@@ -351,7 +357,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     private var writableVaults: [SelectiveRemoteTeamSnippetVaultContext] {
         let selected = selectedVaultKeys
         return store.vaults.filter {
-            SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: $0.role)
+            !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: $0.teamID, vaultID: $0.vaultID) && SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: $0.role)
                 && (selected.isEmpty || selected.contains($0.selectionKey))
         }
     }
@@ -540,6 +546,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 )
             }
         }
+        .safeAreaInset(edge: .bottom) { SelectiveRemotePublishedFolderStrip(type: "snippet", selectedVaultKeys: selectedVaultKeys) }
         .onAppear { normalizeSelection() }
         .onChange(of: store.snippets.map(\.id)) { _, _ in normalizeSelection() }
         .onChange(of: selectedVaultsRaw) { _, _ in normalizeSelection() }
@@ -903,7 +910,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                 folderDisclosureLabel(path: node.path, title: node.title, count: node.totalCount)
                     .contextMenu {
                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                            AccessResourceEntry.showLegacy(kind: .folder)
+                            AccessResourceEntry.showPublishedFolder(teamID: nil, path: node.path, type: "snippet")
                         }
                     }
             }
@@ -934,7 +941,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     .padding(.vertical, 4)
                     .contextMenu {
                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                            AccessResourceEntry.showLegacy(kind: .folder)
+                            AccessResourceEntry.showPublishedFolder(teamID: nil, path: node.path, type: "snippet")
                         }
                     }
             }
@@ -1012,7 +1019,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
+                if snippet.publication == nil && SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
                     Button {
                         if let context = context(for: snippet) {
                             editorRequest = .init(context: context, snippet: snippet)
@@ -1223,9 +1230,9 @@ struct SelectiveRemoteTeamSnippetsView: View {
     @ViewBuilder
     private func snippetActions(_ snippet: SelectiveRemoteTeamSnippet) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessResourceEntry.showLegacy(kind: .snippet)
+            AccessResourceEntry.showPublished(snippet.publication, title: snippet.title, kind: .snippet)
         }
-        if SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
+        if snippet.publication == nil && SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
             Button(UpdateLocalization.text(ru: "Изменить…", en: "Edit…"), systemImage: "pencil") {
                 if let context = context(for: snippet) {
                     editorRequest = .init(context: context, snippet: snippet)
@@ -1304,6 +1311,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
         context: SelectiveRemoteTeamSnippetVaultContext,
         selectedRecordID: UUID?
     ) {
+        guard !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: context.teamID, vaultID: context.vaultID) else { SelectiveRemotePublicationPresentation.shared.showReadOnly(); return }
         guard !isMutating else { return }
         isMutating = true
         Task { @MainActor in
@@ -1376,6 +1384,7 @@ struct SelectiveRemoteTeamSnippetsView: View {
     }
 
     private func run(_ snippet: SelectiveRemoteTeamSnippet) {
+        if let reference = snippet.publication, !SelectiveRemotePublicationPresentation.shared.valid(reference) { actionMessage = CloudAccessLocalization.text("Обновите публикацию перед запуском.", "Refresh the publication before running."); return }
         let profiles = targetProfiles(for: snippet)
         guard let first = profiles.first else {
             actionMessage = UpdateLocalization.text(

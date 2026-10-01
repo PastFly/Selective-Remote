@@ -338,7 +338,7 @@ enum SelectiveRemoteCloudPortalURL {
 
 actor SelectiveRemoteCloudAPIClient {
     private let dataLoader: SelectiveRemoteCloudDataLoader
-    private let tokenStore: any SelectiveRemoteCloudTokenStore
+    let tokenStore: any SelectiveRemoteCloudTokenStore
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -426,7 +426,9 @@ actor SelectiveRemoteCloudAPIClient {
               result.deviceID == device.id,
               Self.validUser(result.user)
         else { throw SelectiveRemoteCloudError.invalidResponse }
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
         try tokenStore.saveToken(result.token, for: endpoint)
+        try rememberPublicationAccount(result.user.id, endpoint: endpoint, token: result.token)
         return result.user
     }
 
@@ -521,6 +523,9 @@ actor SelectiveRemoteCloudAPIClient {
               Self.validUser(user)
         else {
             throw SelectiveRemoteCloudError.invalidResponse
+        }
+        if let token = try storedToken(for: endpoint) {
+            try rememberPublicationAccount(user.id, endpoint: endpoint, token: token)
         }
         return user
     }
@@ -1029,6 +1034,9 @@ actor SelectiveRemoteCloudAPIClient {
 
     func logout(endpoint: URL) async throws {
         guard let token = try storedToken(for: endpoint) else { return }
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+        try tokenStore.removeToken(for: endpoint)
+        await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
         var request = JSONRequest(
             url: endpoint.appending(path: "v1/auth/logout"),
             method: "POST",
@@ -1042,10 +1050,8 @@ actor SelectiveRemoteCloudAPIClient {
                 throw serviceError(status: http.statusCode, data: data)
             }
         } catch {
-            try? tokenStore.removeToken(for: endpoint)
             throw error
         }
-        try tokenStore.removeToken(for: endpoint)
     }
 
     private func authorizedData(
@@ -1087,10 +1093,14 @@ actor SelectiveRemoteCloudAPIClient {
         for (name, value) in headers {
             request.setValue(value, forHTTPHeaderField: name)
         }
+        let requestEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
         let (data, response) = try await dataLoader(request)
         let http = try httpResponse(response)
+        guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch, try storedToken(for: endpoint) == token else { throw CancellationError() }
         if http.statusCode == 401 {
+            SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
             try? tokenStore.removeToken(for: endpoint)
+            await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
             throw SelectiveRemoteCloudError.authenticationRequired
         }
         return (data, http)
