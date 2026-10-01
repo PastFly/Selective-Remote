@@ -220,26 +220,46 @@ extension CloudAccessTests {
                 routes[fixture.base + "/effective-access/" + fixture.reference.resourceID.canonicalCloudString] =
                     [(try fixture.data(["policyEffective": policy, "deviceUsability": deviceState]), 200)]
             }
-            let transport = AccessFixtureTransport(routes)
-            let coordinator = SelectiveRemoteCloudAccessCoordinator(reference: fixture.reference,
-                client: fixture.client(transport), session: fixture.session)
-            if scenario != "loading" { await coordinator.load() }
-            if scenario != "loading" && scenario != "error" { #expect(coordinator.errorMessage == nil, "\(scenario): \(coordinator.errorMessage ?? "unknown")") }
-            if ["no-key", "unknown"].contains(scenario) {
-                await coordinator.selectSubject(subject)
-                await coordinator.selectDevice(device)
-                #expect(coordinator.effective?.deviceUsability?.effectiveUsable.rawValue == (scenario == "no-key" ? "NO" : "UNKNOWN"))
+            @MainActor func freshCoordinator() async -> SelectiveRemoteCloudAccessCoordinator {
+                let transport = AccessFixtureTransport(routes)
+                let session = CloudAccessSession(endpoint: fixture.session.endpoint)
+                let client: SelectiveRemoteCloudAccessClient
+                if scenario == "loading" {
+                    let tokens = SelectiveRemoteCloudMemoryTokenStore()
+                    tokens.saveToken(String(repeating: "t", count: 43), for: session.endpoint)
+                    client = .init(client: .init(tokenStore: tokens, dataLoader: { request in
+                        try await Task.sleep(for: .seconds(1))
+                        return try await transport.load(request)
+                    }))
+                } else {
+                    client = fixture.client(transport)
+                }
+                let coordinator = SelectiveRemoteCloudAccessCoordinator(reference: fixture.reference,
+                    client: client, session: session)
+                if scenario != "loading" { await coordinator.load() }
+                if scenario != "loading" && scenario != "error" {
+                    #expect(coordinator.errorMessage == nil, "\(scenario): \(coordinator.errorMessage ?? "unknown")")
+                }
+                if ["no-key", "unknown"].contains(scenario) {
+                    await coordinator.selectSubject(subject)
+                    await coordinator.selectDevice(device)
+                    #expect(coordinator.effective?.deviceUsability?.effectiveUsable.rawValue == (scenario == "no-key" ? "NO" : "UNKNOWN"))
+                }
+                if ["direct", "group", "multiple-paths"].contains(scenario) {
+                    #expect(coordinator.who.first?.policyEffective.paths.count == (scenario == "multiple-paths" ? 2 : 1))
+                }
+                return coordinator
             }
-            if ["direct", "group", "multiple-paths"].contains(scenario) {
-                #expect(coordinator.who.first?.policyEffective.paths.count == (scenario == "multiple-paths" ? 2 : 1))
-            }
-            guard let output else { continue }
+            guard let output else { _ = await freshCoordinator(); continue }
             let section: CloudAccessSection = ["direct", "group", "multiple-paths"].contains(scenario) ? .who :
                 (["no-key", "unknown"].contains(scenario) ? .effective : .share)
             for english in [false, true] {
                 UserDefaults.standard.set(english ? "english" : "russian", forKey: "SelectiveRemote.applicationLanguage.v1")
                 for dark in [false, true] {
                     for width in [480, 820] {
+                        // Closing the real view invalidates its session. Every window
+                        // needs an independently loaded coordinator/client/session.
+                        let coordinator = await freshCoordinator()
                         let view = SelectiveRemoteCloudResourceAccessView(coordinator: coordinator, initialSection: section)
                             .frame(width: CGFloat(width), height: 680)
                             .preferredColorScheme(dark ? .dark : .light)
@@ -253,6 +273,7 @@ extension CloudAccessTests {
                         try await Task.sleep(for: .milliseconds(50))
                         window.layoutIfNeeded()
                         hosting.layoutSubtreeIfNeeded()
+                        if scenario == "loading" { #expect(coordinator.busy && coordinator.context == nil) }
                         let image = try #require(CGWindowListCreateImage(.null, .optionIncludingWindow,
                             CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
                         let bitmap = NSBitmapImageRep(cgImage: image)
@@ -261,6 +282,46 @@ extension CloudAccessTests {
                         let name = "\(scenario)-\(english ? "en" : "ru")-\(dark ? "graphite" : "light")-\(width).png"
                         try #require(bitmap.representation(using: .png, properties: [:]))
                             .write(to: URL(fileURLWithPath: output).appending(path: name))
+                        let recognition = VNRecognizeTextRequest()
+                        recognition.recognitionLevel = .accurate
+                        recognition.recognitionLanguages = [english ? "en-US" : "ru-RU"]
+                        try VNImageRequestHandler(cgImage: image).perform([recognition])
+                        let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+                            .joined(separator: " ")
+                        try text.write(to: URL(fileURLWithPath: output).appending(path: name + ".ocr.txt"),
+                            atomically: true, encoding: .utf8)
+                        #expect(text.contains(english ? "Share" : "Поделиться"), "\(name): \(text)")
+                        switch scenario {
+                        case "loading": break // The pending request/spinner is asserted above.
+                        case "error":
+                            #expect(text.contains(english ? "Cloud could not complete the access request" : "Cloud не выполнил запрос доступа"), "\(name): \(text)")
+                            #expect(text.contains(english ? "Retry" : "Повторить"), "\(name): \(text)")
+                        case "v1":
+                            #expect(text.contains(english ? "Whole-Vault access" : "Общий доступ к Vault"), "\(name): \(text)")
+                        case "ready", "active":
+                            #expect(text.contains(english ? "Access is read-only" : "Доступ только для просмотра"), "\(name): \(text)")
+                            #expect(text.contains(english ? "Contact the team Owner" : "Обратитесь к владельцу команды"), "\(name): \(text)")
+                        case "empty", "preparing":
+                            #expect(text.contains(english ? "Individual resource access" : "Доступ к отдельным ресурсам"), "\(name): \(text)")
+                            #expect(text.contains(english ? "Permissions" : "Разрешения"), "\(name): \(text)")
+                            #expect(text.contains(english ? "Search recipients" : "Найти получателя"), "\(name): \(text)")
+                        case "direct", "group", "multiple-paths":
+                            #expect(text.contains(english ? "Member permissions: granted" : "Разрешения участника: предоставлены"), "\(name): \(text)")
+                            if scenario != "group" {
+                                #expect(text.contains(english ? "Granted on this resource" : "Прямой доступ к этому ресурсу"), "\(name): \(text)")
+                            }
+                            if scenario != "direct" {
+                                #expect(text.contains(english ? "Inherited from a parent folder" : "Наследуется от родительской папки"), "\(name): \(text)")
+                            }
+                        default: break // Device content is asserted below.
+                        }
+                        if ["no-key", "unknown"].contains(scenario) {
+                            let state = scenario == "no-key"
+                                ? (english ? "Unavailable" : "Недоступно")
+                                : (english ? "Unverified" : "Не подтверждено")
+                            #expect(text.contains((english ? "Device usability: " : "Доступность на устройстве: ") + state), "\(name): \(text)")
+                            #expect(text.contains((english ? "View: " : "Просмотр: ") + state), "\(name): \(text)")
+                        }
                     }
                 }
             }

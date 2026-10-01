@@ -1,8 +1,21 @@
 import SwiftUI
 
 extension NotificationKind {
-    func title(english: Bool) -> String {
-        switch self {
+    func title(english: Bool, resolved: Bool = false) -> String {
+        if resolved {
+            let topic: String = switch self {
+            case .deviceApproval: english ? "Device approval" : "Проверка устройства"
+            case .invitation: english ? "Team invitation" : "Приглашение в команду"
+            case .syncError: english ? "Sync issue" : "Сбой синхронизации"
+            case .conflict: english ? "Sync conflict" : "Конфликт синхронизации"
+            case .failClosed: english ? "Team Vault issue" : "Состояние командного Vault"
+            case .wrapperIssue: english ? "Team key access" : "Доступ к ключу команды"
+            case .hostIdentity: english ? "Host identity check" : "Проверка идентичности хоста"
+            case .accessGained, .accessLost: english ? "Team access change" : "Изменение доступа команды"
+            }
+            return english ? "Resolved · \(topic)" : "Закрыто · \(topic)"
+        }
+        return switch self {
         case .deviceApproval: english ? "Device waiting for approval" : "Устройство ожидает одобрения"
         case .invitation: english ? "Team invitation" : "Приглашение в команду"
         case .syncError: english ? "Sync needs attention" : "Синхронизация требует внимания"
@@ -15,8 +28,12 @@ extension NotificationKind {
         }
     }
 
-    func detail(english: Bool) -> String {
-        switch self {
+    func detail(english: Bool, resolved: Bool = false) -> String {
+        if resolved {
+            return english ? "This notification no longer requires action."
+                : "Это уведомление больше не требует действия."
+        }
+        return switch self {
         case .deviceApproval: english ? "Review its key before approving." : "Проверьте ключ перед одобрением."
         case .invitation: english ? "An invitation awaits your decision." : "Приглашение ожидает вашего решения."
         case .syncError: english ? "Changes are not confirmed on this Mac." : "Изменения не подтверждены на этом Mac."
@@ -119,14 +136,14 @@ struct NotificationCenterView: View {
     private func card(_ item: NotificationItem) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .firstTextBaseline) {
-                Text(item.kind.title(english: english)).font(.subheadline.bold())
+                Text(item.kind.title(english: english, resolved: item.resolvedAt != nil)).font(.subheadline.bold())
                 Spacer(minLength: 4)
                 if item.readAt == nil && item.resolvedAt == nil {
                     Circle().fill(Color.accentColor).frame(width: 7, height: 7)
                         .accessibilityLabel(english ? "Unread" : "Не прочитано")
                 }
             }
-            Text(item.kind.detail(english: english))
+            Text(item.kind.detail(english: english, resolved: item.resolvedAt != nil))
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

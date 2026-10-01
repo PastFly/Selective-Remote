@@ -40,6 +40,23 @@ const copy = {
 
 export function notificationCopy(item, locale = "ru") {
   const [title, detail, action] = (copy[item.kind] ?? copy.syncError)[locale === "en" ? "en" : "ru"];
+  if (item.resolvedAt != null) {
+    const topics = {
+      deviceApproval: ["Device approval", "Проверка устройства"],
+      invitation: ["Team invitation", "Приглашение в команду"],
+      syncError: ["Sync issue", "Сбой синхронизации"],
+      conflict: ["Sync conflict", "Конфликт синхронизации"],
+      failClosed: ["Team Vault issue", "Состояние командного Vault"],
+      wrapperIssue: ["Team key access", "Доступ к ключу команды"],
+      accessGained: ["Team access change", "Изменение доступа команды"],
+      accessLost: ["Team access change", "Изменение доступа команды"],
+    };
+    const english = locale === "en";
+    const topic = (topics[item.kind] ?? topics.syncError)[english ? 0 : 1];
+    return { title: `${english ? "Resolved" : "Закрыто"} · ${topic}`,
+      detail: english ? "This notification no longer requires action."
+        : "Это уведомление больше не требует действия.", action };
+  }
   return { title, detail, action };
 }
 

@@ -24,11 +24,14 @@ export function createAccessManager({
     throw new Error("invalid_access_manager");
   const documentValue = root.ownerDocument;
   root.setAttribute("translate", "no");
+  if (!root.hasAttribute?.("tabindex")) root.setAttribute("tabindex", "-1");
   let focusIndex = 0,
     previewSequence = 0,
     focusPreview = false,
     groupNameDraft = "",
-    editSequence = 0;
+    editSequence = 0,
+    draftFocus = null,
+    restoreDraftFocus = false;
   let scope = { ...context },
     generation = 0,
     draftGeneration = 0,
@@ -84,6 +87,7 @@ export function createAccessManager({
   };
   const button = (key, fn, disabled = false) => {
     const n = node("button", t(key), { type: "button" });
+    n.dataset.accessAction = key;
     n.disabled = disabled;
     n.addEventListener("click", () => {
       void run(fn);
@@ -167,6 +171,7 @@ export function createAccessManager({
   }
   function setDraft(value) {
     if (committing) throw new Error("access_commit_in_progress");
+    if (!draft) draftFocus = documentValue.activeElement?.dataset?.accessFocus ?? null;
     editSequence++;
     details = null;
     draft = value === null ? null : normalizeMutation(value);
@@ -784,7 +789,7 @@ export function createAccessManager({
     if (selectedPrincipal) {
       const section = node("section", null, { class: "access-detail" });
       section.append(
-        node("h3", `${selectedPrincipal.kind} · ${selectedPrincipal.id}`),
+        node("h3", `${t(selectedPrincipal.kind)} · ${selectedPrincipal.id}`),
       );
       for (const r of pages.principalResources.rows) {
         const item = node("div");
@@ -1112,17 +1117,18 @@ export function createAccessManager({
       section.append(
         node(
           "p",
-          `${t("gained")}: ${impact.counts.widened ?? 0} · ${t("lost")}: ${impact.counts.lost ?? 0} · ${t("affected")}: ${impact.counts.affectedGrants ?? 0}`,
+          `${t("gainedPairs")}: ${impact.counts.widened ?? 0} · ${t("lostPairs")}: ${impact.counts.lost ?? 0} · ${t("affected")}: ${impact.counts.affectedGrants ?? 0}`,
         ),
       );
       for (const detail of impact.details) {
         const item = node("article");
+        const kind = pages.resources.rows.find((r) => r.id === detail.resourceID)?.policyKind;
         item.append(
           node(
             "h4",
             `${detail.subjectUserID} · ${accessLabel({ teamID: scope.teamID, vaultID: detail.vaultID, resourceID: detail.resourceID, policyKind: "RESOURCE" }, resolveLabel, t)}`,
           ),
-          node("p", accessConsequence(detail, locale())),
+          node("p", accessConsequence(detail, locale(), kind)),
           node("h5", t("before")),
         );
         showPolicy(item, detail.before);
@@ -1150,6 +1156,7 @@ export function createAccessManager({
       button(
         "cancel",
         () => {
+          restoreDraftFocus = true;
           clearDraft();
           render();
         },
@@ -1161,6 +1168,8 @@ export function createAccessManager({
   function render() {
     if (destroyed) return;
     const focused = documentValue.activeElement?.dataset?.accessFocus;
+    const previewFocused = documentValue.activeElement?.closest?.(".access-preview");
+    const previewAction = previewFocused && documentValue.activeElement?.dataset?.accessAction;
     focusIndex = 0;
     const fragment = node("div", null, { class: "access-manager" });
     fragment.append(
@@ -1184,7 +1193,7 @@ export function createAccessManager({
             : []),
           ...pages.vaults.rows.map((v) => [
             v.id,
-            `${v.name} · ${v.formatState}`,
+            `${v.name} · ${t(["V1_ACTIVE", "V2_PREPARING", "V2_READY", "V2_ACTIVE"].includes(v.formatState) ? v.formatState : "stateUnknown")}`,
           ]),
         ],
         scope.vaultID ?? "",
@@ -1280,16 +1289,29 @@ export function createAccessManager({
     if (focusPreview) {
       root.querySelector?.(".access-preview")?.focus();
       focusPreview = false;
+    } else if (restoreDraftFocus) {
+      const control = draftFocus !== null && root.querySelector?.(`[data-access-focus="${draftFocus}"]`);
+      if (control && !control.disabled) control.focus();
+      else root.focus?.();
+      restoreDraftFocus = false;
+    } else if (previewFocused) {
+      const preview = root.querySelector?.(".access-preview");
+      const control = previewAction && preview?.querySelector?.(`[data-access-action="${previewAction}"]`);
+      if (control && !control.disabled) control.focus();
+      else preview?.focus();
     } else if (focused !== undefined)
       root.querySelector?.(`[data-access-focus="${focused}"]`)?.focus();
   }
   function escape(event) {
     if (event.key === "Escape" && !committing) {
+      event.preventDefault?.();
+      const hadDraft = !!draft;
+      restoreDraftFocus = hadDraft;
       clearDraft();
       details = null;
       editSequence++;
       render();
-      root.focus?.();
+      if (!hadDraft) root.focus?.();
     }
   }
   function localeChanged() {

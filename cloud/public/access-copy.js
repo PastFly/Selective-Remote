@@ -5,8 +5,8 @@ const copy = {
   resourceKind: ["Тип ресурсов", "Resource kind"],
   allKinds: ["Все типы", "All kinds"],
   resources: ["Ресурсы", "Resources"],
-  vault: ["Vault", "Vault"],
-  chooseVault: ["Выберите Vault", "Choose a Vault"],
+  vault: ["Хранилище", "Vault"],
+  chooseVault: ["Выберите хранилище", "Choose a Vault"],
   chooseTeam: ["Выберите команду", "Choose a Team"],
   search: ["Поиск", "Search"],
   pageSearch: ["Поиск названия на этой странице", "Search labels on this page"],
@@ -17,7 +17,7 @@ const copy = {
   preview: ["Проверить последствия", "Preview consequences"],
   confirm: ["Подтвердить изменение", "Confirm change"],
   cancel: ["Отмена", "Cancel"],
-  committed: ["Изменение сохранено сервером", "Change committed by server"],
+  committed: ["Изменение сохранено", "Change saved"],
   createGroup: ["Создать группу", "Create group"],
   rename: ["Переименовать", "Rename"],
   delete: ["Удалить группу", "Delete group"],
@@ -34,23 +34,23 @@ const copy = {
   scope: ["Область изменения", "Change scope"],
   resourceScope: ["Выбранные ресурсы", "Selected resources"],
   folderScope: ["Выбранные папки", "Selected folders"],
-  vaultScope: ["Весь Vault", "Whole Vault"],
+  vaultScope: ["Всё хранилище", "Whole Vault"],
   grant: ["Добавить доступ", "Grant access"],
   move: ["Переместить ресурс", "Move resource"],
   change: ["Изменить права", "Change permissions"],
   revoke: ["Отозвать эту выдачу", "Revoke this grant"],
   bulkRevoke: ["Отозвать выбранные выдачи", "Revoke selected grants"],
   grants: ["Прямые выдачи", "Direct grants"],
-  who: ["Кому доступно", "Who has policy access"],
+  who: ["Кому доступно", "Who has access permission"],
   paths: ["Все пути доступа", "All access paths"],
   direct: ["Прямой", "Direct"],
   inherited: ["Унаследован от контейнера", "Inherited from container"],
-  policy: ["Права пользователя", "User policy"],
-  key: ["Ключ", "Key"],
-  usability: ["Доступность на устройстве", "Device usability"],
+  policy: ["Разрешение на доступ", "Access permission"],
+  key: ["Открытие данных", "Opening data"],
+  usability: ["Доступность на устройстве", "Device availability"],
   notChecked: ["Не проверено", "Not checked"],
-  WRAP_PRESENT_UNVERIFIED: ["Ключ есть, не проверен", "Key present, unverified"],
-  KEY_UNAVAILABLE: ["Ключ недоступен", "Key unavailable"],
+  WRAP_PRESENT_UNVERIFIED: ["Открытие данных ещё не проверено", "Opening data is unverified"],
+  KEY_UNAVAILABLE: ["Данные нельзя открыть на этом устройстве", "Data cannot be opened on this device"],
   NO: ["Недоступно", "Unavailable"],
   NOT_REQUIRED: ["Не требуется", "Not required"],
   allowed: ["разрешён", "allowed"],
@@ -59,7 +59,7 @@ const copy = {
   GROUP: ["Группа", "Group"],
   RESOURCE: ["Ресурс", "Resource"],
   FOLDER: ["Папка", "Folder"],
-  VAULT: ["Vault", "Vault"],
+  VAULT: ["Хранилище", "Vault"],
   HOST: ["Хост", "Host"],
   CREDENTIAL: ["Учётные данные", "Credential"],
   SNIPPET: ["Сниппет", "Snippet"],
@@ -69,15 +69,23 @@ const copy = {
   checkDevice: ["Проверить устройство", "Check device"],
   unknown: [
     "Доступ на устройстве не подтверждён",
-    "Device usability unverified",
+    "Availability on this device is unverified",
   ],
-  yes: ["Доступ на устройстве подтверждён", "Device usability confirmed"],
+  yes: ["Доступ на устройстве подтверждён", "Available on this device"],
   no: ["На устройстве недоступно", "Unavailable on device"],
   before: ["До", "Before"],
   after: ["После", "After"],
   gained: ["Добавленные права", "Gained permissions"],
   lost: ["Утраченные права", "Lost permissions"],
   affected: ["Затронутые выдачи", "Affected grants"],
+  gainedPairs: ["Участник и ресурс: права расширены", "Member/resource pairs with more permissions"],
+  lostPairs: ["Участник и ресурс: права сокращены", "Member/resource pairs with fewer permissions"],
+  none: ["Нет", "None"],
+  V1_ACTIVE: ["Общее хранилище", "Whole Vault access"],
+  V2_PREPARING: ["Настройка доступа", "Access setup"],
+  V2_READY: ["Доступ подготовлен", "Access prepared"],
+  V2_ACTIVE: ["Используется", "In use"],
+  stateUnknown: ["Состояние неизвестно", "Status unknown"],
   previewMore: ["Загрузить последствия дальше", "Load more consequences"],
   previewIncomplete: [
     "Сначала загрузите все последствия",
@@ -85,27 +93,27 @@ const copy = {
   ],
   limits: [
     "До 50 изменений, 20 получателей, 1000 пар участник/ресурс. Пакет применяется целиком.",
-    "Up to 50 changes, 20 recipients, 1000 member/resource pairs. The batch applies atomically.",
+    "Up to 50 changes, 20 recipients, 1000 member/resource pairs. All changes are saved together.",
   ],
   opaque: [
-    "Названия видны только после разрешённой локальной расшифровки V2. Иначе показаны тип и ID.",
-    "Labels appear only after authorized local V2 decryption. Otherwise type and ID are shown.",
+    "Названия видны, когда это устройство может безопасно открыть данные с вашим разрешением на доступ. Иначе показаны тип и идентификатор.",
+    "Names appear when this device can securely open data with your access permission. Otherwise the type and identifier are shown.",
   ],
   preparing: [
-    "Подготовка V2: изменения политики не подтверждают доставку ключей или доступ на устройстве.",
-    "V2 preparation: policy changes do not confirm key delivery or device usability.",
+    "Хранилище готовится к использованию. Изменение прав доступа не подтверждает, что участник сможет открыть данные на своём устройстве.",
+    "The Vault is being prepared for use. Changing access permissions does not confirm that a member can open data on their device.",
   ],
   legacy: [
-    "V1: действует доступ ко всему Vault. Для отдельных ресурсов нужна подготовка V2.",
-    "V1: whole Vault access applies. Resource access requires V2 preparation.",
+    "Доступ применяется ко всему хранилищу. Настройка доступа к отдельным ресурсам здесь недоступна: сначала нужно подготовить хранилище.",
+    "Access applies to the whole Vault. Access to individual resources is unavailable here until the Vault is prepared.",
   ],
   publication: [
-    "READY/ACTIVE: опубликованное поколение неизменно. Изменения требуют нового криптографического опубликования.",
-    "READY/ACTIVE: the published generation is immutable. Changes require a new cryptographic publication.",
+    "Изменения доступа здесь недоступны. Для этого хранилища сначала нужно подготовить и применить новое защищённое обновление доступа.",
+    "Access changes are unavailable here. This Vault first needs a new secure access update to be prepared and applied.",
   ],
   groupPublication: [
-    "Изменения групп заблокированы текущим опубликованием в этой команде.",
-    "Group changes are blocked by a current publication in this Team.",
+    "Изменения групп недоступны: защищённые данные команды используют текущий состав групп.",
+    "Group changes are unavailable because the Team’s secure data uses the current group membership.",
   ],
   permissionDenied: ["Нет разрешения на изменение", "No permission to modify"],
   View: ["Просмотр", "View"],
@@ -117,11 +125,11 @@ const copy = {
   Manage: ["Управление папкой", "Manage folder"],
   folderConsequence: [
     "От папки наследуется только просмотр; управление папкой не передаёт управление доступом.",
-    "Only View is inherited from a folder; folder management does not grant access management.",
+    "Only viewing is inherited from a folder; managing a folder does not grant permission to manage access.",
   ],
   vaultConsequence: [
-    "Выдача на весь Vault расширяет просмотр на вложенные ресурсы.",
-    "A whole Vault grant extends View to contained resources.",
+    "Выдача на всё хранилище расширяет просмотр на вложенные ресурсы.",
+    "A whole Vault grant extends viewing to contained resources.",
   ],
   preserved: [
     "Другие пути сохраняются: отзыв одной выдачи может оставить эффективный доступ.",
@@ -155,8 +163,8 @@ const errors = {
     "Permissions do not match the selected resource kind.",
   ],
   credential_edit_requires_reveal: [
-    "Credential Edit требует Reveal.",
-    "Credential Edit requires Reveal.",
+    "Для редактирования учётных данных нужно разрешение на раскрытие секрета.",
+    "Editing a credential requires permission to reveal its secret.",
   ],
   team_not_found: [
     "Команда недоступна. Обновите список команд.",
@@ -193,8 +201,8 @@ const errors = {
     "Server response failed validation. Refresh.",
   ],
   invalid_access_permissions: [
-    "Выберите допустимые права. Credential Edit требует Reveal.",
-    "Choose valid permissions. Credential Edit requires Reveal.",
+    "Выберите допустимые права. Для редактирования учётных данных нужно разрешение на раскрытие секрета.",
+    "Choose valid permissions. Editing a credential requires permission to reveal its secret.",
   ],
   access_preview_incomplete: copy.previewIncomplete,
   invalid_access_request: [
@@ -229,22 +237,34 @@ export function accessErrorCopy(error, locale = "ru") {
     "Action failed. Refresh and try again.",
   ])[locale === "en" ? 1 : 0];
 }
-export function accessConsequence(detail, locale = "ru") {
+export function accessConsequence(detail, locale = "ru", kind = detail.policyKind) {
   const suffix = detail.lostMask && detail.after?.policyEffective?.paths?.length
     ? accessCopy("preserved", locale)
     : detail.gainedMask && !detail.lostMask
       ? accessCopy("firstGrant", locale)
       : "";
-  return `${accessCopy("gained", locale)}: ${detail.gainedMask}; ${accessCopy("lost", locale)}: ${detail.lostMask}.${suffix ? ` ${suffix}` : ""}`;
+  const metadataView = kind === "CREDENTIAL" || (!kind && [
+    ...(detail.before?.policyEffective?.paths ?? []),
+    ...(detail.after?.policyEffective?.paths ?? []),
+  ].some((path) => path.permissions?.includes("ViewMetadata")));
+  const permissions = (mask) => {
+    const names = [
+      [1, metadataView ? "ViewMetadata" : "View"],
+      [2, "Reveal"], [4, "Edit"], [8, "ManageAccess"],
+      [16, "Create"], [32, "Manage"],
+    ].filter(([bit]) => mask & bit).map(([, name]) => accessCopy(name, locale));
+    return names.length ? names.join(", ") : accessCopy("none", locale);
+  };
+  return `${accessCopy("gained", locale)}: ${permissions(detail.gainedMask)}; ${accessCopy("lost", locale)}: ${permissions(detail.lostMask)}.${suffix ? ` ${suffix}` : ""}`;
 }
 
 const reasons = {
   POLICY_DENIED: [
-    "Политика не предоставляет доступ",
-    "Policy does not grant access",
+    "У участника нет разрешения на доступ",
+    "The member does not have access permission",
   ],
   DEVICE_NOT_ADMITTED: ["Устройство не допущено", "Device is not admitted"],
-  KEY_UNAVAILABLE: ["Ключ ресурса недоступен", "Resource key is unavailable"],
+  KEY_UNAVAILABLE: ["Это устройство не может открыть данные ресурса", "This device cannot open the resource data"],
   NO_DEVICE_CONTENT_PERMISSION: [
     "Нет прав на содержимое для устройства",
     "No device content permission",

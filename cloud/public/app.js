@@ -37,6 +37,7 @@ import {
 import { createNotificationCenter } from "./notification-center.js";
 import { createIndexedDBDeviceTrustRepository } from "./device-trust-v1.js";
 import { createBrowserDeviceTrustPanel } from "./device-trust-ui.js";
+import { deviceTrustFailureCopy } from "./device-trust-copy.js";
 
 const syncObservationEvent = "selective-remote:sync-observation";
 const notificationSourceEvent = "selective-remote:notification-source";
@@ -153,8 +154,11 @@ export function syncPresentationLabels(summary, locale = "ru") {
   const note = summary.status === "offline"
     ? (english ? "Connection appears offline. Changes may be waiting to sync."
       : "Похоже, нет сети. Изменения могут ожидать синхронизации.")
-    : (english ? "Other Team Vaults: not checked in this tab."
-      : "Другие Team Vaults: не проверены в этой вкладке.");
+    : summary.status === "unknown"
+      ? (english ? "The current sync state is not confirmed in this tab. Open the Vault to check sign-in and access, or retry. Other Team Vaults are not checked here."
+        : "Текущее состояние синхронизации не подтверждено в этой вкладке. Откройте Vault, чтобы проверить вход и доступ, или повторите синхронизацию. Другие Team Vaults здесь не проверены.")
+      : (english ? "Other Team Vaults: not checked in this tab."
+        : "Другие Team Vaults: не проверены в этой вкладке.");
   const detail = (scope) => {
     const item = summary[scope];
     if (item.status !== "current" || !Number.isSafeInteger(item.revision)) return labels[item.status];
@@ -2347,10 +2351,11 @@ export function initializeTeamWorkspace({
           onUpdated: () => { void loadDevices().catch(() => {}); },
           onRekeyCommitted: () => globalThis.location.reload() });
         await trustPanel.refresh();
-      } catch {
-        deviceTrustContainer.textContent = activeInterfaceLocale(documentValue.documentElement?.lang) === "en"
-          ? "Device trust is unavailable. Verify local browser storage and refresh."
-          : "Доверие устройств недоступно. Проверьте локальное хранилище браузера и обновите страницу.";
+      } catch (error) {
+        const failure = documentValue.createElement("p");
+        failure.setAttribute("role", "alert");
+        failure.textContent = deviceTrustFailureCopy(error, activeInterfaceLocale(documentValue.documentElement?.lang));
+        deviceTrustContainer.replaceChildren(failure);
       }
     }
     const english = activeInterfaceLocale(documentValue.documentElement?.lang) === "en";
@@ -4595,7 +4600,7 @@ export async function initializeCloudAccount({
       passwordForm.reset();
       setSettingsMessage(passwordMessage, "Пароль изменён. Остальные сессии завершены.", "success");
     } catch (error) {
-      const messages = { invalid_password: "Новый пароль должен содержать не менее 12 символов.", invalid_credentials: "Текущий пароль неверен." };
+      const messages = { invalid_password: "Новый пароль должен содержать не менее 12 символов.", invalid_credentials: "Текущий пароль неверен.", personal_vault_rewrap_required: "Смена пароля временно недоступна для сохранения доступа к личным данным. Пароль не изменён." };
       setSettingsMessage(passwordMessage, messages[String(error?.message ?? "")] ?? "Не удалось изменить пароль.", "error");
     } finally {
       passwordForm.elements.currentPassword.value = "";

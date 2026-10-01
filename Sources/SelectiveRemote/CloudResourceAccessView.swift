@@ -30,7 +30,7 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                     .keyboardShortcut(.cancelAction)
             }
             Text(model.reference.title).font(.headline).textSelection(.enabled).lineLimit(2)
-            Text("Team \(model.reference.teamID.canonicalCloudString) · Vault \(model.reference.vaultID.canonicalCloudString)")
+            Text("\(CloudAccessLocalization.text("Команда", "Team")) \(model.reference.teamID.canonicalCloudString) · Vault \(model.reference.vaultID.canonicalCloudString)")
                 .font(.caption).foregroundStyle(.secondary).textSelection(.enabled).lineLimit(2)
             if let context = model.context { CloudAccessStateView(context: context) }
             if model.reference.kind == .vault,
@@ -98,14 +98,14 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 Task { if let result = await model.commit() { onCommitted(result) } }
             }.disabled(!model.canCommit)
         } message: {
-            Text(CloudAccessLocalization.text("Сервер повторно проверит политику, членство и срок просмотра. Доступ по политике не подтверждает наличие ключа на устройстве.", "The server rechecks policy, membership and preview expiry. Policy access does not confirm a usable device key."))
+            Text(CloudAccessLocalization.text("Сервер повторно проверит разрешения, состав команды и срок просмотра. Возможность открыть ресурс проверяется отдельно для выбранного устройства.", "The server rechecks permissions, team membership and preview expiry. Whether the resource can be opened is checked separately for the selected device."))
         }
     }
     private var shareBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             if let grant = model.editingGrant {
                 Text(CloudAccessLocalization.text("Изменение разрешения", "Change grant")).font(.headline)
-                Text("\(grant.target_kind.rawValue) · \(grant.target_id.canonicalCloudString)").font(.caption).textSelection(.enabled)
+                Text("\(CloudAccessLocalization.kind(grant.target_kind.rawValue)) · \(grant.target_id.canonicalCloudString)").font(.caption).textSelection(.enabled)
                 Button(CloudAccessLocalization.text("Новый доступ", "New access")) { model.setSelection([]) }
             } else {
                 Picker(CloudAccessLocalization.text("Получатели", "Recipients"), selection: $recipientGroups) {
@@ -177,13 +177,13 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             ForEach(model.currentKind.permissions, id: \.bit) { permission in
                 Toggle(CloudAccessLocalization.permission(permission.name), isOn: Binding(get: { model.mask & permission.bit != 0 }, set: { model.togglePermission(permission.bit, enabled: $0) }))
             }
-            if model.currentKind == .credential { Text(CloudAccessLocalization.text("Редактирование включает раскрытие секрета.", "Edit includes Reveal.")).font(.caption).foregroundStyle(.secondary) }
+            if model.currentKind == .credential { Text(CloudAccessLocalization.text("Редактирование включает раскрытие секрета.", "Editing also allows revealing the secret.")).font(.caption).foregroundStyle(.secondary) }
         }.disabled(!model.canMutate || model.busy)
     }
     private var whoBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.reference.kind == .vault {
-                Text(CloudAccessLocalization.text("Для списка путей выберите зарегистрированный ресурс. Разрешения Vault показаны во вкладке «Поделиться».", "Select a registered resource to inspect its access paths. Vault grants appear in Share."))
+                Text(CloudAccessLocalization.text("Выберите зарегистрированный ресурс, чтобы увидеть прямой доступ и доступ через папку или Vault. Разрешения Vault показаны во вкладке «Поделиться».", "Select a registered resource to see access granted directly or through a folder or Vault. Vault permissions appear in Share."))
             } else {
                 ForEach(model.who) { entry in
                     Text(entry.userID.canonicalCloudString).font(.headline).textSelection(.enabled)
@@ -197,7 +197,7 @@ struct SelectiveRemoteCloudResourceAccessView: View {
     private var effectiveBody: some View {
         VStack(alignment: .leading, spacing: 12) {
             if model.reference.kind == .vault {
-                Text(CloudAccessLocalization.text("Эффективный доступ устройства проверяется для зарегистрированного ресурса.", "Device effective access is checked for a registered resource."))
+                Text(CloudAccessLocalization.text("Выберите зарегистрированный ресурс, затем участника и его устройство, чтобы проверить возможность открыть ресурс.", "Select a registered resource, then a member and their device to check whether the resource can be opened."))
             } else {
                 Picker(CloudAccessLocalization.text("Участник", "Member"), selection: Binding(get: { model.subjectUserID }, set: { value in Task { await model.selectSubject(value) } })) {
                     Text(CloudAccessLocalization.text("Выберите участника", "Choose member")).tag(UUID?.none)
@@ -209,21 +209,20 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 }
                 Picker(CloudAccessLocalization.text("Устройство участника", "Member's device"), selection: Binding(get: { model.subjectDeviceID }, set: { value in Task { await model.selectDevice(value) } })) {
                     Text(CloudAccessLocalization.text("Выберите устройство", "Choose device")).tag(UUID?.none)
-                    ForEach(model.devices) { device in Text("\(device.name) · \(device.platform)\(device.admitted ? "" : " · " + CloudAccessLocalization.text("не допущено", "not admitted"))").tag(Optional(device.id)) }
+                    ForEach(model.devices) { device in Text("\(device.name) · \(device.platform)\(device.admitted ? "" : " · " + CloudAccessLocalization.text("не разрешено для команды", "not approved for the team"))").tag(Optional(device.id)) }
                 }.disabled(model.subjectUserID == nil)
                 if model.deviceCursor != nil { Button(CloudAccessLocalization.text("Следующая страница устройств", "Next devices page")) { Task { await model.loadMoreDevices() } } }
                 if let effective = model.effective {
                     CloudAccessPolicyView(policy: effective.policyEffective)
                     if let device = effective.deviceUsability {
                         Text(CloudAccessLocalization.text("Доступность на устройстве", "Device usability") + ": " + CloudAccessLocalization.deviceStatus(device.effectiveUsable.rawValue)).font(.headline)
-                        Text(CloudAccessLocalization.text("Ключ", "Key") + ": " + CloudAccessLocalization.deviceStatus(device.cryptoAvailable)).font(.caption)
-                        ForEach(device.cryptoAvailableByPermission.keys.sorted(), id: \.self) { key in
-                            Text("\(CloudAccessLocalization.permission(key)): \(CloudAccessLocalization.deviceStatus(device.cryptoAvailableByPermission[key] ?? "UNKNOWN")) · \(CloudAccessLocalization.deviceStatus(device.effectiveUsableByPermission[key] ?? "UNKNOWN"))").font(.caption)
+                        ForEach(CloudAccessLocalization.devicePermissionRows(device, kind: model.reference.kind), id: \.permission) { row in
+                            Text("\(CloudAccessLocalization.permission(row.permission)): \(CloudAccessLocalization.deviceStatus(row.usability.rawValue))").font(.caption)
                         }
-                        ForEach(device.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceReason($0)).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(device.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceGuidance($0)).font(.caption).foregroundStyle(.secondary) }
                     }
                 }
-                Text(CloudAccessLocalization.text("UNKNOWN означает: наличие обёртки не подтверждает расшифровку. Устройство выбирается явно для участника.", "UNKNOWN means a present wrapper does not prove decryption. Choose the member's device explicitly."))
+                Text(CloudAccessLocalization.text("Разрешения участника и доступность на устройстве проверяются отдельно. «Не подтверждено» означает, что возможность открыть ресурс пока не проверена.", "Member permissions and device availability are checked separately. Unverified means the ability to open the resource has not been confirmed."))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -235,7 +234,6 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             Text(CloudAccessLocalization.text("Пар", "Pairs") + ": \(preview.counts.pairs) · " + CloudAccessLocalization.text("Расширен", "Widened") + ": \(preview.counts.widened) · " + CloudAccessLocalization.text("Потерян", "Lost") + ": \(preview.counts.lost)")
             ForEach(model.impacts) { impact in
                 Text("\(impact.subjectUserID.canonicalCloudString) · \(impact.resourceID.canonicalCloudString)").font(.caption).textSelection(.enabled)
-                Text("+\(impact.gainedMask) / −\(impact.lostMask)").font(.caption.monospacedDigit())
                 Text(CloudAccessLocalization.text("До", "Before")).font(.caption.bold())
                 CloudAccessPolicyView(policy: impact.before.policyEffective)
                 Text(CloudAccessLocalization.text("После", "After")).font(.caption.bold())
@@ -244,7 +242,7 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                     Text(CloudAccessLocalization.text("Доступ сохранён другими путями.", "Access remains through other paths.")).font(.caption)
                 }
             }
-            ForEach(model.affectedGrants) { grant in Text("\(grant.targetKind.rawValue) · \(grant.targetID.canonicalCloudString) · \(grant.permissionMask)").font(.caption) }
+            ForEach(model.affectedGrants) { grant in Text("\(CloudAccessLocalization.kind(grant.targetKind.rawValue)) · \(grant.targetID.canonicalCloudString)").font(.caption) }
             if preview.nextCursor != nil { Text(CloudAccessLocalization.text("Просмотрите все страницы перед подтверждением.", "Review every page before confirmation.")).font(.caption) }
         }
     }
@@ -266,15 +264,16 @@ struct CloudAccessStateView: View {
     let context: CloudAccessContext
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(context.formatState.rawValue).font(.caption.bold())
+            Text(CloudAccessLocalization.state(context.formatState)).font(.caption.bold())
             if context.formatState == .v1Active { Text(CloudAccessLocalization.error(.service(409, "access_v2_preparing_required"))) }
             if context.formatState == .ready || context.formatState == .active { Text(CloudAccessLocalization.error(.service(409, "crypto_publication_required"))) }
             ForEach(context.blockers, id: \.self) { blocker in
                 if blocker == "crypto_publication_required" && context.canMutate {
-                    Text(CloudAccessLocalization.text("Изменения групп требуют публикации зашифрованного поколения.", "Group changes require an encrypted generation publication."))
-                } else { Text(CloudAccessLocalization.error(.service(409, blocker))) }
+                    Text(CloudAccessLocalization.text("Изменение состава групп для этого Vault пока недоступно. Обратитесь к владельцу команды.", "Group membership changes for this Vault are currently unavailable. Contact the team Owner."))
+                } else if !(blocker == "access_v2_preparing_required" && context.formatState == .v1Active) && !(blocker == "crypto_publication_required" && (context.formatState == .ready || context.formatState == .active)) {
+                    Text(CloudAccessLocalization.error(.service(409, blocker)))
+                }
             }
-            if context.formatState == .preparing { Text(CloudAccessLocalization.text("Политика в подготовке V2. Это не подтверждает публикацию или расшифровку.", "Policy in V2 preparation. This does not confirm publication or decryption.")) }
         }.font(.caption).foregroundStyle(.secondary)
     }
 }
@@ -287,15 +286,17 @@ struct CloudAccessPolicyView: View {
     let policy: CloudAccessPolicy
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(CloudAccessLocalization.text("Политика", "Policy") + ": " + (policy.policyAllowed ? CloudAccessLocalization.text("разрешено", "allowed") : CloudAccessLocalization.text("запрещено", "denied"))).font(.caption)
+            Text(CloudAccessLocalization.text("Разрешения участника", "Member permissions") + ": " + (policy.policyAllowed ? CloudAccessLocalization.text("предоставлены", "granted") : CloudAccessLocalization.text("не предоставлены", "not granted"))).font(.caption)
             ForEach(policy.paths) { path in
                 VStack(alignment: .leading, spacing: 2) {
                     Text("\(CloudAccessLocalization.kind(path.principalKind.rawValue)) · \(path.principalID.canonicalCloudString)")
                     Text("\(CloudAccessLocalization.kind(path.grantTargetKind.rawValue)) · \(path.grantTargetID.canonicalCloudString)")
-                    Text((path.sourceType == .direct ? CloudAccessLocalization.text("Прямой", "Direct") : CloudAccessLocalization.text("Наследуемый", "Inherited")) + " · " + path.permissions.map(CloudAccessLocalization.permission).joined(separator: ", "))
+                    Text(CloudAccessLocalization.pathSource(path))
+                    Text(path.permissions.map(CloudAccessLocalization.permission).joined(separator: ", "))
                 }.font(.caption).textSelection(.enabled).padding(6).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 5))
+                    .accessibilityElement(children: .combine)
             }
-            ForEach(policy.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceReason($0)).font(.caption).foregroundStyle(.secondary) }
+            ForEach(policy.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceGuidance($0)).font(.caption).foregroundStyle(.secondary) }
         }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

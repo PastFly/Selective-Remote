@@ -39,6 +39,10 @@ extension SelectiveRemoteCloudAPIClient {
         let (data, response) = try await authorizedResponse(endpoint: endpoint,
             path: path, method: method, body: body, headers: headers)
         guard (200..<300).contains(response.statusCode) else {
+            if method == "GET", response.statusCode == 404,
+               ["v1/device-trust", "v1/device-trust/requests"].contains(path) {
+                throw SelectiveRemoteCloudError.serviceError(404, "device_trust_unsupported")
+            }
             let object = try? JSONSerialization.jsonObject(with: data) as? [String: String]
             throw SelectiveRemoteCloudError.serviceError(response.statusCode, object?["error"])
         }

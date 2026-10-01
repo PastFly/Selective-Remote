@@ -17,12 +17,16 @@ rotation completion. The macOS client now has its first transport/security
 foundation: typed account/Team reads, device-only Keychain session and P-256
 identity storage, canonical fingerprints/context hashing, and ECDH/HKDF/
 AES-GCM Team Vault-key wrapping. One deterministic synthetic fixture requires
-Swift to emit the exact wrapper that browser code decrypts. Full macOS payload
-encryption, Vault synchronization and UI remain required milestones within the
-final 0.32 scope.
+Swift to emit the exact wrapper that browser code decrypts. The macOS client now
+includes encrypted payloads, Personal/Team synchronization and management UI.
+Device trust, resource-access policy and Access Manager foundations are merged;
+legacy resource mapping, migration conversion, active resource-key publication
+and recipient materialization remain release-scope and acceptance gates. Merged
+code and local fixtures do not establish authenticated staging or release readiness.
 FIDO2 remains outside the initial 0.32 release scope.
 
-The first production deployment targets:
+The existing test staging uses the following topology; no production environment
+has been deployed as of the Owner clarification on 2026-10-01:
 
 - Ubuntu 24.04;
 - `cloud.pastfly.ru`;
