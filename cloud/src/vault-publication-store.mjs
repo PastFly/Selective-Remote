@@ -97,9 +97,19 @@ export class VaultPublicationStore extends VaultMigrationStore {
       const after=input.cursor?this.openCursor(input.cursor,binding):null;
       const ids=[...new Set([...allowed].map(k=>k.split('/')[0]))].sort();
       if(after&&!ids.includes(after))throw Error('invalid_access_page');
-      const remaining=ids.filter(id=>!after||id>after),page=remaining.slice(0,limit),selected=new Set(page);
+      const remaining=ids.filter(id=>!after||id>after),counts=new Map();
+      for(const key of allowed){const id=key.split('/')[0];counts.set(id,(counts.get(id)??0)+1);}
+      // Keep each resource's parts together while enforcing the signed-descriptor
+      // budget. The resource-ID cursor remains unchanged for Credential pairs.
+      const page=[];let descriptorCount=0;
+      for(const id of remaining){
+        const count=counts.get(id);
+        if(page.length>=limit||descriptorCount+count>100)break;
+        page.push(id);descriptorCount+=count;
+      }
+      const selected=new Set(page);
       const descriptors=a.projection.descriptors.filter(d=>selected.has(d.payload.resourceID)&&allowed.has(identity(d.payload)));
-      const nextCursor=remaining.length>limit?this.signCursor({...binding,after:page.at(-1),expires:this.clock()+300000}):null;
+      const nextCursor=remaining.length>page.length?this.signCursor({...binding,after:page.at(-1),expires:this.clock()+300000}):null;
       return {headerHash:a.header_hash,generationID:a.id,inventory:row.inventory,descriptors,nextCursor};
     });
   }

@@ -16,7 +16,7 @@
 - PR A only: no ACTIVE mutations, activation route, real migration, Cloud deploy, feed/tag/release/signing/notarization. Existing V1 behavior stays intact.
 - Preserve the single evaluator, existing Team role ceiling and complete ACTIVE snapshot guard. Membership/device/root/epoch changes deny new delivery.
 - No TOFU, unsigned projection, legacy-wrapper fallback, unprotected CEK/plaintext cache, actor IDs from request bodies, or Owner/Admin decrypt override.
-- Limits: 1000 resources, 10,000 wrappers, 100 resources/page, 1 MiB encoded part/descriptor, 64 MiB checkpoint, 128 MiB aggregate. Typed fail-closed errors.
+- Limits: 1000 resources, 10,000 wrappers, 100 signed descriptors/page, 1 MiB encoded part/descriptor, 64 MiB checkpoint, 128 MiB aggregate. Typed fail-closed errors. Credential parts stay together within the descriptor budget; the existing resource-ID cursor is retained.
 - PR B retains successor generation writes/repair; PR C retains controller deployment and actual synthetic staging E2E. Fixture success cannot close RC.
 - Each task follows RED → minimal implementation → GREEN, then related regression and a scoped commit. Final full gates precede fresh exact-head Owner merge approval.
 
@@ -66,7 +66,7 @@ All signed/hash inputs use UTF-8 `selective-remote/publication/v1\0` + purpose +
 - [ ] Reconcile old reservations into permanent identities with scoped generation associations; discarded identities remain retained, mutable attributes never alter identity scope, live tombstones cannot resurrect.
 - [ ] Store/freeze projection in PREPARING, cross-validate before READY; existing unprojected foundation remains inaccessible. Keep ACTIVE pointer freeze unchanged.
 - [ ] Implement repeatable-read requests with fresh membership/admission/root/certificate and ACTIVE snapshot/evaluator checks. Bound publisher bundle to current generation and member Team. Filter wrapper and inventory to exact subject.
-- [ ] Implement directory page ≤100, exact off-page lookup, signed cursors, generation_changed denial, non-enumerating outsiders and no shared cache.
+- [ ] Implement directory page ≤100 signed descriptors, exact off-page lookup, signed cursors, generation_changed denial, non-enumerating outsiders and no shared cache.
 - [ ] Run migration/direct-SQL concurrency/scale/EXPLAIN and HTTP permission matrix; commit.
 
 ## Task 4: Browser verified materialization and publisher identity UI
@@ -75,7 +75,7 @@ All signed/hash inputs use UTF-8 `selective-remote/publication/v1\0` + purpose +
 
 **Interfaces — consumes:** Task 3 transport, Task 1 verifier, Task 2 linked payloads. **Produces:** coherent scoped models, exact contextual resource references and separately gated secret retrieval.
 
-- [ ] Test real crypto two-account/device fixtures, missing publisher pin, same-sequence hash fork, incomplete pagination, pointer switch, logout/account/endpoint switch, storage failure and authoritative revocation; observe RED.
+- [ ] Test real crypto two-account/device fixtures, missing publisher pin, same-sequence hash fork, incomplete or over-100-descriptor pagination, pointer switch, logout/account/endpoint switch, storage failure and authoritative revocation; observe RED.
 - [ ] Reuse verified own-account pin; require explicit independent fingerprint confirmation for another publisher, scoped endpoint/Team/account pin, never silent replacement.
 - [ ] Verify header/trust/high-water, descriptors/Merkle/ciphertext, decrypt exact key/AAD/linkage, collect full signed inventory, recheck pointer and protected persistence before atomic display.
 - [ ] Route actual published Vault rendering through scoped models; context-menu Share/Who-has consumes verified resource IDs. Credential metadata cannot fetch SECRET, editing/move/grants remains publication-required/read-only.

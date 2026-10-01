@@ -209,6 +209,24 @@ test('101-resource signed directory caps pages, supports off-page part and binds
   assert.ok(plan.Plan['Actual Rows']===1);console.log('PUBLICATION_EXPLAIN '+JSON.stringify(plan));
  }finally{await pool.end();}
 });
+test('descriptor budget keeps Credential pairs together across complete signed directory pages',{skip:!database},async()=>{
+ const pool=new pg.Pool({connectionString:database});
+ try{
+  const f=await publishedFixture(pool,legacy(Array.from({length:101},(_,i)=>record('credential',{title:'synthetic '+i,secret:'synthetic secret'}))));
+  const h=await f.reader.header(f.input),pin={...f.input,generationID:h.header.payload.generationID,headerHash:h.headerHash};
+  const seen=new Set(),sizes=[];let cursor=null;
+  do{
+   const page=await f.reader.directory({...pin,cursor});
+   assert.ok(page.descriptors.length<=100,'signed descriptors, not resources, determine the page budget');
+   assert.equal(page.inventory.payload.count,202);
+   const ids=[...new Set(page.descriptors.map(d=>d.payload.resourceID))];
+   for(const id of ids){assert.equal(seen.has(id),false);seen.add(id);
+    assert.deepEqual(page.descriptors.filter(d=>d.payload.resourceID===id).map(d=>d.payload.part).sort(),['METADATA','SECRET']);}
+   sizes.push(page.descriptors.length);cursor=page.nextCursor;
+  }while(cursor!==null);
+  assert.equal(seen.size,101);assert.deepEqual(sizes,[100,100,2]);
+ }finally{await pool.end();}
+});
 test('direct physical identity tombstone immediately blocks ACTIVE reads',{skip:!database},async()=>{
  const pool=new pg.Pool({connectionString:database});
  try{
