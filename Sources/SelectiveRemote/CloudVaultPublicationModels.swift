@@ -29,6 +29,12 @@ struct SelectiveRemotePublicationCache: Codable, Equatable, Sendable {
 }
 
 enum SelectiveRemotePublicationPartDecoder {
+    /// Only the authenticated descriptor supplies runtime identity. Source JSON stays byte-for-byte in plaintext.
+    static func runtimeRecord(_ original: SelectiveRemoteJSONValue, resourceID: UUID) throws -> SelectiveRemoteVaultRecord {
+        var projected = try original.publicationObject()
+        projected["id"] = .string(resourceID.canonicalCloudString)
+        return try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(SelectiveRemoteJSONValue.object(projected)))
+    }
     static func decode(_ plaintext: Data, descriptor: SelectiveRemoteJSONValue, header: SelectiveRemoteJSONValue) throws -> SelectiveRemotePublishedPart {
         guard plaintext.count <= 1024 * 1024 else { throw SelectiveRemotePublicationError.invalid }
         let object = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: plaintext).publicationObject()
@@ -50,13 +56,12 @@ enum SelectiveRemotePublicationPartDecoder {
             guard Set(object.keys) == ["link", "folder"], let folder = object["folder"] else { throw SelectiveRemotePublicationError.invalid }
             let values = try folder.publicationObject(["type", "path", "component"])
             let type = try values["type"]!.publicationString(), path = try values["path"]!.publicationString(), component = try values["component"]!.publicationString()
-            guard ["host", "snippet"].contains(type), !component.isEmpty, component.count <= 120,
-                  component == component.trimmingCharacters(in: .whitespacesAndNewlines), !component.contains("/"),
-                  !component.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) }),
-                  !path.hasPrefix("/"), !path.hasSuffix("/"), !path.contains("//"), path.split(separator: "/").last.map({ Data($0.utf8) }) == Data(component.utf8) else { throw SelectiveRemotePublicationError.invalid }
+            let components = try SelectiveRemoteLegacyResourceMapper.folderComponents(path)
+            guard ["host", "snippet"].contains(type), !component.contains("/"),
+                  components.last.map({ Data($0.utf8) }) == Data(component.utf8) else { throw SelectiveRemotePublicationError.invalid }
         } else {
             guard Set(object.keys) == ["link", "record"], let value = object["record"] else { throw SelectiveRemotePublicationError.invalid }
-            let record = try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(value))
+            let record = try runtimeRecord(value, resourceID: UUID(uuidString: d["resourceID"]!.publicationString())!)
             let expected: [CloudAccessKind: SelectiveRemoteVaultRecordType] = [.host: .host, .credential: .credential, .snippet: .snippet, .forwarding: .forwarding]
             guard record.type == expected[kind], case let .object(data) = record.data else { throw SelectiveRemotePublicationError.invalid }
             if kind == .credential { guard let secret = data["secret"], try !secret.publicationString().isEmpty else { throw SelectiveRemotePublicationError.invalid } }
@@ -125,26 +130,53 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
               let cache = caches.first(where: { $0.scope == reference.scope }),
               let hostPart = cache.parts.first(where: { $0.resourceID == reference.resourceID && $0.kind == .host }),
               let original = try cache.payload(hostPart)["record"] else { throw SelectiveRemotePublicationError.subject }
-        let sourceID = try original.publicationObject()["id"]!.publicationString()
+        // Telnet and serial transports have no password input and must not read unrelated SECRET parts.
+        guard [.rdp, .ssh].contains(host.profile.connectionType) else { return .empty }
+        guard let sourceID = try original.publicationObject()["id"]?.publicationString() else { throw SelectiveRemotePublicationError.subject }
+        let matches = try cache.parts.filter { part in
+            guard part.kind == .host, let record = try cache.payload(part)["record"]?.publicationObject(),
+                  let id = try record["id"]?.publicationString() else { return false }
+            return Data(id.utf8) == Data(sourceID.utf8)
+        }
+        guard matches.count == 1 else { throw SelectiveRemotePublicationError.scope }
         var result = SelectiveRemoteTeamHostCredentials.empty
         for part in cache.parts where part.kind == .credential && part.part == .metadata {
             let metadata = try cache.payload(part)["metadata"]!.publicationObject()
-            guard let kind = try metadata["kind"]?.publicationString(), ["rdp", "ssh", "gateway"].contains(kind) else { continue }
+            let requiredKind = host.profile.connectionType == .rdp ? "rdp" : "ssh"
+            guard let kind = try metadata["kind"]?.publicationString(), kind == requiredKind || (kind == "gateway" && host.profile.connectionType == .rdp && !host.profile.gatewayHost.isEmpty) else { continue }
             let credentialReference = try cache.reference(part)
             guard canReveal(credentialReference) else { continue }
             let record = try await reader.secretRecord(resourceID: part.resourceID)
             guard valid(reference) else { throw CancellationError() }
             let data = try record.data.publicationObject()
-            guard data["sourceID"] == .string(sourceID) else { continue }
+            guard let credentialSource = try data["sourceID"]?.publicationString(), Data(credentialSource.utf8) == Data(sourceID.utf8) else { continue }
             guard data["kind"] == .string(kind) else { throw SelectiveRemotePublicationError.scope }
             let secret = try data["secret"]!.publicationString()
             if kind == "gateway" { guard result.gatewayPassword == nil else { throw SelectiveRemotePublicationError.invalid }; result.gatewayPassword = secret }
             else { guard result.password == nil else { throw SelectiveRemotePublicationError.invalid }; result.password = secret }
         }
-        let passwordRequired = [.rdp, .telnet, .ssh].contains(host.profile.connectionType)
+        let passwordRequired = [.rdp, .ssh].contains(host.profile.connectionType)
         guard !passwordRequired || result.password != nil else { throw SelectiveRemotePublicationError.subject }
         guard valid(reference) else { throw CancellationError() }
         return result
+    }
+    func connectionEnabled(_ host: SelectiveRemoteTeamHost, temporaryPassword: String) -> Bool {
+        guard let reference = host.publication else { return host.profile.connectionType != .rdp || !temporaryPassword.isEmpty }
+        guard valid(reference) else { return false }
+        guard [.rdp, .ssh].contains(host.profile.connectionType) else { return true }
+        let required = host.profile.connectionType == .rdp ? "rdp" : "ssh"
+        return caches.first(where: { $0.scope == reference.scope })?.parts.contains { part in
+            guard part.kind == .credential, part.part == .metadata,
+                  let cache = caches.first(where: { $0.scope == reference.scope }),
+                  let metadata = try? cache.payload(part)["metadata"]?.publicationObject(),
+                  metadata["kind"] == .string(required), let credential = try? cache.reference(part) else { return false }
+            return canReveal(credential)
+        } == true
+    }
+    func performHostConnection(_ host: SelectiveRemoteTeamHost, action: (SelectiveRemoteTeamHostCredentials) -> Void) async throws {
+        let credentials = try await hostCredentials(host)
+        guard let reference = host.publication, valid(reference) else { throw CancellationError() }
+        action(credentials)
     }
     func folders(type: String? = nil) -> [SelectiveRemotePublishedFolder] {
         caches.flatMap { cache in (try? cache.folders().filter { type == nil || $0.type == type }) ?? [] }
@@ -197,8 +229,7 @@ extension SelectiveRemotePublicationCache {
     }
     func reference(recordID: UUID, kind: CloudAccessKind) throws -> SelectiveRemotePublishedModelReference? {
         for part in parts where part.kind == kind {
-            if let value = try payload(part)["record"],
-               try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(value)).id == recordID {
+            if part.resourceID == recordID {
                 return try reference(part)
             }
         }
@@ -212,7 +243,7 @@ extension SelectiveRemotePublicationCache {
             let f = try payload(folder)["folder"]!.publicationObject()
             guard f["type"] == .string(type) else { throw SelectiveRemotePublicationError.scope }
             let component = try f["component"]!.publicationString()
-            guard !component.contains("/"), !component.isEmpty, component.count <= 120 else { throw SelectiveRemotePublicationError.invalid }
+            guard visited.count <= 32, try SelectiveRemoteLegacyResourceMapper.folderComponents(component).count == 1 else { throw SelectiveRemotePublicationError.invalid }
             components.insert(component, at: 0); current = folder.parentFolderID
         }
         return components.joined(separator: "/")
@@ -221,14 +252,16 @@ extension SelectiveRemotePublicationCache {
         var records: [SelectiveRemoteVaultRecord] = []
         for part in parts where part.kind == .host || part.kind == .snippet {
             guard let value = try payload(part)["record"] else { throw SelectiveRemotePublicationError.invalid }
-            let record = try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(value))
+            let record = try SelectiveRemotePublicationPartDecoder.runtimeRecord(value, resourceID: part.resourceID)
             var data = try record.data.publicationObject()
             let folder = try folderPath(parent: part.parentFolderID, type: part.kind == .host ? "host" : "snippet")
             data["folder"] = .string(folder)
             if part.kind == .host, let encoded = data["profile"], let bytes = Data(selectiveRemoteBase64URL: try encoded.publicationString()) {
                 let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
                 var profile = try decoder.decode(ConnectionProfile.self, from: bytes)
-                profile.group = folder
+                let source = try value.publicationObject()["id"]?.publicationString()
+                guard source.flatMap(UUID.init(uuidString:)) == profile.id else { throw SelectiveRemotePublicationError.scope }
+                profile.group = folder; profile.id = part.resourceID
                 let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
                 data["profile"] = .string(try encoder.encode(profile).selectiveRemoteBase64URL)
             }
@@ -259,7 +292,7 @@ extension SelectiveRemotePublicationCache {
     }
     func forwardings() throws -> [SelectiveRemotePublishedForwarding] {
         try parts.filter { $0.kind == .forwarding }.map { part in
-            let record = try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(payload(part)["record"]!))
+            let record = try SelectiveRemotePublicationPartDecoder.runtimeRecord(payload(part)["record"]!, resourceID: part.resourceID)
             let data = try record.data.publicationObject()
             guard let title = data["title"], try !title.publicationString().isEmpty else { throw SelectiveRemotePublicationError.invalid }
             return .init(reference: try reference(part), record: record, title: try title.publicationString())

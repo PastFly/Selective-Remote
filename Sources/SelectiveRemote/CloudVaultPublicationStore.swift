@@ -18,7 +18,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
         self.protected = protected
         try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
-    private struct Receipt: Codable { var scope: SelectiveRemotePublicationScope; var key: Data; var highWater: SelectiveRemotePublicationHighWater?; var file: String?; var owner: UUID?; var generation: String? }
+    private struct Receipt: Codable { var scope: SelectiveRemotePublicationScope; var key: Data; var highWater: SelectiveRemotePublicationHighWater?; var file: String?; var owner: UUID?; var generation: String?; var authorization: String? }
     private func digest(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
     private func receiptKey(_ scope: SelectiveRemotePublicationScope) -> String { "receipt/" + digest(scope.key) }
     private func receipt(_ scope: SelectiveRemotePublicationScope) throws -> Receipt? {
@@ -33,7 +33,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     func commit(_ cache: SelectiveRemotePublicationCache, expected: SelectiveRemotePublicationHighWater?, session: SelectiveRemotePublicationSession) throws {
         try Self.lock.withLock {
             try checkScope(cache.scope, session: session)
-            var state = try receipt(cache.scope) ?? Receipt(scope: cache.scope, key: SelectiveRemoteResourceCryptoV2.generateCEK(), highWater: nil, file: nil, owner: nil, generation: nil)
+            var state = try receipt(cache.scope) ?? Receipt(scope: cache.scope, key: SelectiveRemoteResourceCryptoV2.generateCEK(), highWater: nil, file: nil, owner: nil, generation: nil, authorization: nil)
             guard state.highWater == expected else { throw SelectiveRemotePublicationError.fork }
             let header = try SelectiveRemoteVaultPublicationV1.headerPayload(cache.header)
             let next = SelectiveRemotePublicationHighWater(sequence: try header["sequence"]!.publicationInteger(), hash: cache.headerHash)
@@ -56,7 +56,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
                 try box.combined!.write(to: path, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
                 try session.check()
-                state.highWater = next; state.file = filename; state.owner = session.id; state.generation = generation
+                state.highWater = next; state.file = filename; state.owner = session.id; state.generation = generation; state.authorization = session.authorizationStamp
                 try protected.save(JSONEncoder().encode(state), key: receiptKey(cache.scope))
                 receiptCommitted = true
                 let catalogKey = catalogKey(session)
@@ -101,9 +101,47 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
             guard var state = try receipt(scope) else { return }
             if let expectedStamp { guard state.owner == expectedStamp.owner else { return } }
             else if let session, (try? session.check()) == nil, state.owner != session.id { return }
-            let file = state.file; state.file = nil
-            try protected.save(JSONEncoder().encode(state), key: receiptKey(scope))
-            if let file { try? FileManager.default.removeItem(at: directory.appending(path: file)) }
+            try retirePayload(scope: scope, state: &state)
+            let key = catalogKey(scope)
+            if let data = try protected.read(key) {
+                let scopes = try JSONDecoder().decode([SelectiveRemotePublicationScope].self, from: data)
+                try protected.save(JSONEncoder().encode(scopes.filter { $0 != scope }), key: key)
+            }
+        }
+    }
+    private func retirePayload(scope: SelectiveRemotePublicationScope, state: inout Receipt) throws {
+        if let file = state.file {
+            guard !file.contains("/"), !file.contains("..") else { throw SelectiveRemotePublicationError.invalid }
+            let path = directory.appending(path: file)
+            // Delete payload before updating its receipt: a rejected protected write must not resurrect known-revoked data.
+            if FileManager.default.fileExists(atPath: path.path) { try FileManager.default.removeItem(at: path) }
+        }
+        state.file = nil
+        try protected.save(JSONEncoder().encode(state), key: receiptKey(scope))
+    }
+    func retireScopes(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) throws -> [SelectiveRemotePublicationScope] {
+        try Self.lock.withLock {
+            try session.checkRetirement()
+            let key = catalogKey(session)
+            let scopes = try protected.read(key).map { try JSONDecoder().decode([SelectiveRemotePublicationScope].self, from: $0) } ?? []
+            for scope in scopes {
+                guard scope.endpoint == session.endpoint, scope.accountID == session.accountID, scope.deviceID == session.deviceID else { throw SelectiveRemotePublicationError.scope }
+            }
+            var retired: [SelectiveRemotePublicationScope] = []
+            for scope in scopes where selection.matches(scope) {
+                try session.checkRetirement()
+                if var state = try receipt(scope) {
+                    // A current 401 can retire previous cycles of this authorization, never a newer login's receipt.
+                    if session.retiringAuthenticationLoss, let authorization = state.authorization, authorization != session.authorizationStamp { continue }
+                    try retirePayload(scope: scope, state: &state)
+                }
+                retired.append(scope)
+            }
+            guard !retired.isEmpty else { return [] }
+            try session.checkRetirement()
+            try protected.save(JSONEncoder().encode(scopes.filter { !retired.contains($0) }), key: key)
+            try session.checkRetirement()
+            return retired
         }
     }
     func payloadStamp(scope: SelectiveRemotePublicationScope) throws -> SelectiveRemotePublicationPayloadStamp {
@@ -111,6 +149,9 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     }
     private func catalogKey(_ session: SelectiveRemotePublicationSession) -> String {
         "catalog/" + digest(session.endpoint.absoluteString + "\n" + session.accountID.canonicalCloudString + "\n" + session.deviceID.canonicalCloudString)
+    }
+    private func catalogKey(_ scope: SelectiveRemotePublicationScope) -> String {
+        "catalog/" + digest(scope.endpoint.absoluteString + "\n" + scope.accountID.canonicalCloudString + "\n" + scope.deviceID.canonicalCloudString)
     }
     func cachedScopes(session: SelectiveRemotePublicationSession) throws -> [SelectiveRemotePublicationScope] {
         try Self.lock.withLock {

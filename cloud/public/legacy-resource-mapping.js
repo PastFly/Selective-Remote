@@ -14,7 +14,7 @@ export function canonicalFolderComponents(path) {
 function embeddedSecret(value) {
   if(!value||typeof value!=='object')return false;
   return Object.entries(value).some(([key,item])=>
-    (/password|secret|privatekey|passphrase|token/iu.test(key)&&item!==null&&item!==''&&item!==false)
+    (/password|secret|private.?key|passphrase|token/iu.test(key)&&item!==null&&item!==''&&item!==false)
     ||embeddedSecret(item));
 }
 export function inspectLegacyResources(document,existingIDs=[]) {

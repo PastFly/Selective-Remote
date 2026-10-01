@@ -125,7 +125,7 @@ enum SelectiveRemoteTeamSnippetMaterializer {
             } else {
                 folder = ""
             }
-            guard validFolder(folder) else {
+            guard snapshot.publication != nil ? (folder.isEmpty || (try? SelectiveRemoteLegacyResourceMapper.folderComponents(folder)) != nil) : validFolder(folder) else {
                 throw SelectiveRemoteTeamSnippetMaterializationError.invalidSnippetRecord
             }
 

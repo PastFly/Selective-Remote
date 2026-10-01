@@ -23,11 +23,28 @@ final class SelectiveRemotePublicationSession: @unchecked Sendable, Equatable {
     private let checkConfiguration: Bool
     private let lock = NSLock()
     private var active = true
+    private var authenticationLossEpoch: UUID?
     init(endpoint: URL, accountID: UUID, deviceID: UUID, token: String, tokenStore: any SelectiveRemoteCloudTokenStore, checkConfiguration: Bool = false) {
         self.endpoint = endpoint; self.accountID = accountID; self.deviceID = deviceID
         self.token = token; self.tokenStore = tokenStore; self.checkConfiguration = checkConfiguration; epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
     }
     func invalidate() { lock.withLock { active = false } }
+    /// Protected receipt identity, never exposed in models, UI or logs.
+    var authorizationStamp: String {
+        SHA256.hash(data: Data((endpoint.absoluteString + "\n" + accountID.canonicalCloudString + "\n" + deviceID.canonicalCloudString + "\n" + epoch.uuidString + "\n" + token).utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+    func prepareAuthenticationLossRetirement() throws {
+        guard lock.withLock({ active }), try tokenStore.token(for: endpoint) == nil else { throw CancellationError() }
+        lock.withLock { authenticationLossEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) }
+    }
+    var retiringAuthenticationLoss: Bool { lock.withLock { authenticationLossEpoch != nil } }
+    func checkRetirement() throws {
+        if let lost = lock.withLock({ authenticationLossEpoch }) {
+            guard lock.withLock({ active }), SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == lost,
+                  try tokenStore.token(for: endpoint) == nil else { throw CancellationError() }
+            try Task.checkCancellation()
+        } else { try check() }
+    }
     func sameAuthorization(as other: SelectiveRemotePublicationSession) -> Bool { endpoint == other.endpoint && accountID == other.accountID && deviceID == other.deviceID && epoch == other.epoch && token == other.token }
     func check() throws {
         guard lock.withLock({ active }), SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == epoch,
@@ -47,6 +64,21 @@ struct SelectiveRemotePublicationScope: Codable, Equatable, Sendable {
     let teamID: UUID
     let vaultID: UUID
     var key: String { [endpoint.absoluteString, accountID.canonicalCloudString, deviceID.canonicalCloudString, teamID.canonicalCloudString, vaultID.canonicalCloudString].joined(separator: "\n") }
+}
+
+enum SelectiveRemotePublicationRetirement: Sendable {
+    case all
+    case teamsExcept(Set<UUID>)
+    case team(UUID, keepingVaults: Set<UUID>?)
+    case vault(teamID: UUID, vaultID: UUID)
+    func matches(_ scope: SelectiveRemotePublicationScope) -> Bool {
+        switch self {
+        case .all: true
+        case let .teamsExcept(ids): !ids.contains(scope.teamID)
+        case let .team(id, keeping): scope.teamID == id && !(keeping?.contains(scope.vaultID) ?? false)
+        case let .vault(teamID, vaultID): scope.teamID == teamID && scope.vaultID == vaultID
+        }
+    }
 }
 
 protocol SelectiveRemoteVaultPublicationRemote: Sendable {
@@ -99,6 +131,25 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
 }
 
 extension SelectiveRemoteCloudAPIClient {
+    func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {
+        do {
+            _ = try SelectiveRemoteVaultPublicationStore().retireScopes(session: session, selection: selection)
+            try session.checkRetirement()
+        } catch {
+            await detachRetiredPublications(session: session, selection: selection)
+            throw error
+        }
+        await detachRetiredPublications(session: session, selection: selection)
+    }
+    private func detachRetiredPublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async {
+        await MainActor.run {
+            let presentation = SelectiveRemotePublicationPresentation.shared
+            let scopes = presentation.caches.map(\.scope).filter {
+                $0.endpoint == session.endpoint && $0.accountID == session.accountID && $0.deviceID == session.deviceID && selection.matches($0)
+            }
+            scopes.forEach { presentation.detach(scope: $0, expectedSession: session) }
+        }
+    }
     func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState {
         let reference = try SelectiveRemoteCloudAccessReference(teamID: teamID, vaultID: vaultID, resourceID: vaultID, kind: .vault)
         return try await SelectiveRemoteCloudAccessClient(client: self).context(reference, session: .init(endpoint: endpoint)).formatState

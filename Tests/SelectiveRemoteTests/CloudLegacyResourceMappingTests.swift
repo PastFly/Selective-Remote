@@ -54,4 +54,17 @@ struct CloudLegacyResourceMappingTests {
             try SelectiveRemoteLegacyResourceMapper.map(d, teamID: UUID(), vaultID: vault, previous: firstMap)
         }
     }
+    @Test("separator-aware private key fields reject whole Host and Forwarding conversion", arguments: ["private_key", "private-key", "PRIVATE_KEY"])
+    func privateKeyBlockers(_ name: String) throws {
+        for type in ["host", "forwarding"] {
+            let nested: SelectiveRemoteJSONValue = .object(["nested": .array([.object([name: .string("SYNTHETIC-NOT-A-KEY")])])])
+            let encoded = String(decoding: try JSONEncoder().encode(nested), as: UTF8.self)
+            for data in [nested, .object(["profile": .string(encoded)]), .object(["configuration": .string(encoded)])] {
+                var d = try document([("opaque", type, "")]).publicationObject()
+                var r = try d["records"]!.publicationArray()[0].publicationObject(); r["data"] = data
+                d["records"] = .array([.object(r)])
+                #expect(throws: SelectiveRemoteLegacyMappingError.embeddedSecret) { try SelectiveRemoteLegacyResourceMapper.map(.object(d), teamID: team, vaultID: vault) }
+            }
+        }
+    }
 }

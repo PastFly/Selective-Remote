@@ -4,6 +4,7 @@ protocol SelectiveRemoteTeamVaultAutoSyncRemote: SelectiveRemoteTeamVaultRemote 
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession?
     func materializePublication(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity, team: SelectiveRemoteCloudTeam, vault: SelectiveRemoteCloudSharedVault, offline: Bool) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot
     func reopenPublications(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity) async throws -> [SelectiveRemoteTeamVaultMaterializedSnapshot]
+    func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws
     func hasStoredSession(endpoint: URL) async -> Bool
     func teams(endpoint: URL) async throws -> [SelectiveRemoteCloudTeam]
     func sharedVaults(endpoint: URL, teamID: UUID) async throws -> [SelectiveRemoteCloudSharedVault]
@@ -13,6 +14,7 @@ extension SelectiveRemoteTeamVaultAutoSyncRemote {
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? { nil }
     func materializePublication(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity, team: SelectiveRemoteCloudTeam, vault: SelectiveRemoteCloudSharedVault, offline: Bool) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot { throw SelectiveRemotePublicationError.invalid }
     func reopenPublications(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity) async throws -> [SelectiveRemoteTeamVaultMaterializedSnapshot] { [] }
+    func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {}
 }
 extension SelectiveRemoteCloudAPIClient: SelectiveRemoteTeamVaultAutoSyncRemote {}
 
@@ -162,17 +164,21 @@ actor SelectiveRemoteTeamVaultAutoSync {
         let teams: [SelectiveRemoteCloudTeam]
         do { teams = try await remote.teams(endpoint: endpoint) }
         catch {
-            try session?.check(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
+            if case SelectiveRemoteCloudError.authenticationRequired = error { try session?.prepareAuthenticationLossRetirement() }
+            try session?.checkRetirement(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
             if SelectiveRemoteVaultPublicationCoordinator.transient(error), let session {
                 var cached = try await remote.reopenPublications(session: session, identity: identity)
                 try session.check(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
                 for i in cached.indices { cached[i].publicationSession = session }
                 await snapshotConsumer(cached); report.synchronizedVaults = cached.count; return report
             }
-            if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session { await MainActor.run { SelectiveRemotePublicationPresentation.shared.caches.filter { $0.scope.endpoint == endpoint && $0.scope.accountID == session.accountID }.forEach { SelectiveRemotePublicationPresentation.shared.detach(scope: $0.scope, expectedSession: session) } } }
+            if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session {
+                try await remote.retirePublications(session: session, selection: .all)
+            }
             throw error
         }
         try session?.check()
+        if let session { try await remote.retirePublications(session: session, selection: .teamsExcept(Set(teams.map(\.id)))) }
         var materialized: [SelectiveRemoteTeamVaultMaterializedSnapshot] = []
         for team in teams {
             try Task.checkCancellation(); try session?.check()
@@ -183,17 +189,21 @@ actor SelectiveRemoteTeamVaultAutoSync {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                try session?.check(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
+                if case SelectiveRemoteCloudError.authenticationRequired = error { try session?.prepareAuthenticationLossRetirement() }
+                try session?.checkRetirement(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
                 if SelectiveRemoteVaultPublicationCoordinator.transient(error), let session {
                     let cached = try await remote.reopenPublications(session: session, identity: identity)
                     materialized += cached.filter { $0.teamID == team.id }
                 }
-                if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session { await MainActor.run { SelectiveRemotePublicationPresentation.shared.caches.filter { $0.scope.teamID == team.id }.forEach { SelectiveRemotePublicationPresentation.shared.detach(scope: $0.scope, expectedSession: session) } } }
+                if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session {
+                    try await remote.retirePublications(session: session, selection: .team(team.id, keepingVaults: nil))
+                }
                 report.failures += 1
                 report.lastFailure = error.localizedDescription
                 continue
             }
 
+            if let session { try await remote.retirePublications(session: session, selection: .team(team.id, keepingVaults: Set(vaults.map(\.id)))) }
             for vault in vaults {
                 try Task.checkCancellation(); try session?.check()
                 guard eligible, generation == cycleGeneration else { throw CancellationError() }
@@ -211,9 +221,8 @@ actor SelectiveRemoteTeamVaultAutoSync {
                             continue
                         }
                         if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session {
-                            let scope = SelectiveRemotePublicationScope(endpoint: endpoint, accountID: session.accountID, deviceID: deviceID, teamID: team.id, vaultID: vault.id)
-                            try? SelectiveRemoteVaultPublicationStore().removePayload(scope: scope, session: session)
-                            await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
+                            if case SelectiveRemoteCloudError.authenticationRequired = error { try session.prepareAuthenticationLossRetirement() }
+                            try await remote.retirePublications(session: session, selection: .vault(teamID: team.id, vaultID: vault.id))
                         }
                         throw error
                     }

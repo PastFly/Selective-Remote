@@ -36,7 +36,8 @@ enum SelectiveRemoteLegacyResourceMapper {
     private static func secret(_ value: SelectiveRemoteJSONValue) -> Bool {
         switch value {
         case let .object(o): return o.contains { name, item in
-            let k = name.lowercased(), named = ["password", "secret", "privatekey", "passphrase", "token"].contains { k.contains($0) }
+            let k = name.lowercased(), named = ["password", "secret", "passphrase", "token"].contains { k.contains($0) }
+                || k.range(of: "private.?key", options: .regularExpression) != nil
             return (named && item != .null && item != .string("") && item != .boolean(false)) || secret(item)
         }
         case let .array(a): return a.contains(where: secret)

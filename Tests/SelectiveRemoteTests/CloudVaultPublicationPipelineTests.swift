@@ -76,6 +76,75 @@ final class PublicationProtectedMemory: SelectiveRemotePublicationProtectedStora
 
 @Suite("protected publication durability")
 struct CloudVaultPublicationDurabilityTests {
+    @Test("current 401 cleanup uses protected authorization receipt and cannot erase a later login even after its logout")
+    func authenticationLossOwnership() async throws {
+        let fixture = try PublicationFixture(), (reader, _, _, _, sourceDirectory) = try CloudVaultPublicationCoordinatorTests().setup(fixture)
+        defer { try? FileManager.default.removeItem(at: sourceDirectory) }
+        let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner), directory = FileManager.default.temporaryDirectory.appending(path: "task5-auth-owner-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let tokens = SelectiveRemoteCloudMemoryTokenStore(), token = String(repeating: "o", count: 40)
+        tokens.saveToken(token, for: fixture.scope.endpoint)
+        let old = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
+        let store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: PublicationProtectedMemory())
+        try store.commit(cache, expected: nil, session: old)
+        let highWater = try store.highWater(scope: fixture.scope)
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint); tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
+        let newer = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)
+        try store.commit(cache, expected: highWater, session: newer)
+        #expect(throws: CancellationError.self) { try old.prepareAuthenticationLossRetirement() }
+        try tokens.removeToken(for: fixture.scope.endpoint); SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint)
+        try old.prepareAuthenticationLossRetirement()
+        #expect(try store.retireScopes(session: old, selection: .all).isEmpty)
+        tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
+        let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)
+        #expect(try store.load(scope: fixture.scope, session: checking) == cache)
+        #expect(try store.cachedScopes(session: checking) == [fixture.scope]); #expect(try store.highWater(scope: fixture.scope) == highWater)
+        #expect(throws: CancellationError.self) { try store.retireScopes(session: old, selection: .all) }
+    }
+    @MainActor
+    @Test("list retirement is exact, protected-write failure cannot reopen revoked data, and old login cannot retire newer ownership")
+    func listRetirementOwnership() async throws {
+        let fixture = try PublicationFixture(allKinds: true), (reader, _, _, old, sourceDirectory) = try CloudVaultPublicationCoordinatorTests().setup(fixture)
+        defer { try? FileManager.default.removeItem(at: sourceDirectory) }
+        let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "task5-retirement-cas-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let memory = PublicationProtectedMemory(), store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: memory)
+        try store.commit(cache, expected: nil, session: old)
+        let highWater = try store.highWater(scope: fixture.scope)
+        #expect(try store.retireScopes(session: old, selection: .vault(teamID: UUID(), vaultID: UUID())).isEmpty)
+        #expect(try store.retireScopes(session: old, selection: .teamsExcept([fixture.scope.teamID])).isEmpty)
+        #expect(try store.load(scope: fixture.scope, session: old) == cache)
+        memory.fail = true
+        #expect(throws: Error.self) { try store.retireScopes(session: old, selection: .all) }
+        #expect(try store.load(scope: fixture.scope, session: old) == nil)
+        #expect(try store.highWater(scope: fixture.scope) == highWater)
+        memory.fail = false
+        try store.commit(cache, expected: highWater, session: old)
+        memory.saveHook = { key in if key.hasPrefix("receipt/") { old.invalidate() } }
+        #expect(throws: CancellationError.self) { try store.retireScopes(session: old, selection: .all) }
+        memory.saveHook = nil
+        let tokens = SelectiveRemoteCloudMemoryTokenStore(); tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
+        let newer = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)
+        try store.commit(cache, expected: highWater, session: newer)
+        let presentation = SelectiveRemotePublicationPresentation(), snapshot = try cache.materializedSnapshot()
+        defer { presentation.detach(scope: fixture.scope, expectedSession: newer) }
+        try presentation.bind(reader: reader, session: newer, scope: fixture.scope); presentation.replace(with: [snapshot])
+        SelectiveRemoteTeamHostStore.shared.replaceVault(with: snapshot); SelectiveRemoteTeamSnippetStore.shared.replaceVault(with: snapshot); SelectiveRemoteTeamCredentialStore.shared.replaceVault(with: snapshot)
+        #expect(throws: CancellationError.self) { try store.retireScopes(session: old, selection: .all) }
+        presentation.detach(scope: fixture.scope, expectedSession: old)
+        #expect(try store.load(scope: fixture.scope, session: newer) == cache)
+        #expect(presentation.caches.contains { $0.scope == fixture.scope })
+        #expect(SelectiveRemoteTeamHostStore.shared.hosts.contains { $0.vaultID == fixture.scope.vaultID })
+        #expect(try store.highWater(scope: fixture.scope) == highWater)
+        _ = try store.retireScopes(session: newer, selection: .vault(teamID: fixture.scope.teamID, vaultID: fixture.scope.vaultID))
+        presentation.detach(scope: fixture.scope, expectedSession: newer)
+        #expect(try store.cachedScopes(session: newer).isEmpty)
+        #expect(!presentation.caches.contains { $0.scope == fixture.scope })
+        #expect(!SelectiveRemoteTeamHostStore.shared.hosts.contains { $0.vaultID == fixture.scope.vaultID })
+        #expect(!SelectiveRemoteTeamSnippetStore.shared.snippets.contains { $0.vaultID == fixture.scope.vaultID })
+        #expect(!SelectiveRemoteTeamCredentialStore.shared.credentials.contains { $0.vaultID == fixture.scope.vaultID })
+    }
     @Test("session change during protected receipt prevents display, preserves HWM and old cleanup cannot remove newer login payload")
     func persistenceSession() async throws {
         let fixture = try PublicationFixture()

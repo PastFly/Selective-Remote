@@ -119,7 +119,7 @@ enum SelectiveRemoteTeamHostMaterializer {
             } else {
                 throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
             }
-            input = try applyingOrganization(data, to: input)
+            input = try applyingOrganization(data, to: input, published: snapshot.publication != nil)
 
             return SelectiveRemoteTeamHost(
                 id: scopedID(
@@ -144,7 +144,8 @@ enum SelectiveRemoteTeamHostMaterializer {
                         teamID: snapshot.teamID,
                         vaultID: snapshot.vaultID,
                         recordID: record.id
-                    )
+                    ),
+                    published: snapshot.publication != nil
                 ),
                 credentials: credentials[record.id] ?? .empty,
                 publication: try snapshot.publication?.reference(recordID: record.id, kind: .host)
@@ -268,7 +269,8 @@ enum SelectiveRemoteTeamHostMaterializer {
     private static func sanitized(
         _ input: ConnectionProfile,
         title: String,
-        runtimeID: UUID
+        runtimeID: UUID,
+        published: Bool = false
     ) throws -> ConnectionProfile {
         guard input.id.isSelectiveRemoteCloudUUID,
               input.username.count <= 256,
@@ -277,7 +279,7 @@ enum SelectiveRemoteTeamHostMaterializer {
               input.gatewayUsername.utf8.count <= 256,
               !input.gatewayHost.contains(where: { $0.isNewline }),
               !input.gatewayUsername.contains(where: { $0.isNewline }),
-              validOptionalName(input.group),
+              validFolder(input.group, published: published),
               input.folderOrderPath.count <= SelectiveRemoteHostFolderPath.maximumDepth,
               input.folderOrderPath.allSatisfy({ (0 ... 10_000).contains($0) }),
               input.tags.count <= 64,
@@ -395,11 +397,12 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func applyingOrganization(
         _ data: [String: SelectiveRemoteJSONValue],
-        to input: ConnectionProfile
+        to input: ConnectionProfile,
+        published: Bool = false
     ) throws -> ConnectionProfile {
         var result = input
         if let value = data["folder"] {
-            guard let folder = string(value), validOptionalName(folder) else {
+            guard let folder = string(value), validFolder(folder, published: published) else {
                 throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
             }
             result.group = folder
@@ -437,6 +440,9 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func validOptionalName(_ value: String) -> Bool {
         value.isEmpty || validName(value)
+    }
+    private static func validFolder(_ value: String, published: Bool) -> Bool {
+        value.isEmpty || (published ? (try? SelectiveRemoteLegacyResourceMapper.folderComponents(value)) != nil : validOptionalName(value))
     }
 
     private static func validTag(_ value: String) -> Bool {
@@ -1123,6 +1129,7 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
 }
 
 struct SelectiveRemoteTeamHostsView: View {
+    @ObservedObject private var publication = SelectiveRemotePublicationPresentation.shared
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
     @ObservedObject private var language = AppLanguageStore.shared
@@ -2175,14 +2182,14 @@ struct SelectiveRemoteTeamHostsView: View {
     private func connectPublished(_ host: SelectiveRemoteTeamHost, sftp: Bool = false) {
         Task { @MainActor in
             do {
-                let credentials = try await SelectiveRemotePublicationPresentation.shared.hostCredentials(host)
-                guard let reference = host.publication, SelectiveRemotePublicationPresentation.shared.valid(reference) else { return }
-                let user = contextMenuUsername(for: host)
-                if sftp { onOpenSFTP(host, user, credentials.password) }
-                else if host.profile.connectionType == .rdp {
-                    var profile = personalSettingsStore.appliedProfile(for: host, endpoint: endpoint); profile.username = user
-                    model.connectTeamHost(profile, password: credentials.password!, gatewayPassword: credentials.gatewayPassword ?? "")
-                } else { onOpenTerminal(host, user, credentials.password) }
+                try await publication.performHostConnection(host) { credentials in
+                    let user = contextMenuUsername(for: host)
+                    if sftp { onOpenSFTP(host, user, credentials.password) }
+                    else if host.profile.connectionType == .rdp {
+                        var profile = personalSettingsStore.appliedProfile(for: host, endpoint: endpoint); profile.username = user
+                        model.connectTeamHost(profile, password: credentials.password!, gatewayPassword: credentials.gatewayPassword ?? "")
+                    } else { onOpenTerminal(host, user, credentials.password) }
+                }
             } catch {
                 let alert = NSAlert(); alert.messageText = CloudAccessLocalization.text("Подключение требует доступной части SECRET", "Connecting requires an available SECRET part")
                 alert.informativeText = CloudAccessLocalization.text("Обновите публикацию и проверьте право раскрытия учётных данных для этого Mac.", "Refresh the publication and verify this Mac's permission to reveal the required credentials."); alert.runModal()
@@ -2357,6 +2364,13 @@ struct SelectiveRemoteTeamHostsView: View {
                                 value: "\(host.profile.sshPort)"
                             )
                         }
+                        if host.publication != nil {
+                            if host.profile.connectionType == .rdp || host.profile.connectionType == .ssh {
+                                LabeledContent(UpdateLocalization.text(ru: "Пользователь", en: "Username"), value: contextMenuUsername(for: host))
+                                Text(UpdateLocalization.text(ru: "При подключении Mac проверит текущее право и расшифрует требуемую часть SECRET.", en: "On connect, this Mac checks current authorization and decrypts the required SECRET part."))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else {
                         if host.profile.connectionType == .rdp
                             || host.profile.connectionType == .ssh {
                             TextField(
@@ -2392,6 +2406,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             )
                             .textFieldStyle(.roundedBorder)
                         }
+                        }
 
                         HStack {
                             if host.profile.connectionType == .rdp,
@@ -2413,8 +2428,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(
-                                    host.profile.connectionType == .rdp
-                                        && password.isEmpty
+                                    !publication.connectionEnabled(host, temporaryPassword: password)
                                 )
                             }
                             if host.profile.connectionType == .ssh {
@@ -2431,7 +2445,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             Spacer()
                         }
 
-                        Label(
+                        if host.publication == nil { Label(
                             UpdateLocalization.text(
                                 ru: "Общие пароли приходят из зашифрованного Team Vault. Изменить или удалить их могут Owner, Admin и Editor через карточку Host; временно введённое значение не сохраняется.",
                                 en: "Shared passwords come from the encrypted Team Vault. Owners, Admins, and Editors can change or remove them in the Host editor; a temporary override is not saved."
@@ -2440,6 +2454,7 @@ struct SelectiveRemoteTeamHostsView: View {
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(6)
                 }

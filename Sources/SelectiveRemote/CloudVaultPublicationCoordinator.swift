@@ -216,7 +216,7 @@ actor SelectiveRemoteVaultPublicationCoordinator {
             let payload = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: part.plaintext).publicationObject()
             let record = try payload["record"]!.publicationObject(), data = try record["data"]!.publicationObject()
             _ = try data["secret"]!.publicationString()
-            let decodedRecord = try JSONDecoder().decode(SelectiveRemoteVaultRecord.self, from: JSONEncoder().encode(payload["record"]!))
+            let decodedRecord = try SelectiveRemotePublicationPartDecoder.runtimeRecord(payload["record"]!, resourceID: resourceID)
             try await pointer(cache); try session.check()
             return decodedRecord
         } catch {

@@ -3,6 +3,22 @@ import assert from 'node:assert/strict';
 import { webcrypto as c } from 'node:crypto';
 import { mapLegacyResources, legacyAdministrativeMetadata } from '../public/legacy-resource-mapping.js';
 import { legacy, record, uuid } from './vault-v2-migration-fixtures.mjs';
+import {readFile} from 'node:fs/promises';
+
+test('actual converter native fixture preserves source ordinals and exact Folder identities',async()=>{
+  const f=JSON.parse(await readFile(new URL('../../Tests/SelectiveRemoteTests/Fixtures/native-converter-mapped-v1.json',import.meta.url)));
+  const mapped=mapLegacyResources({document:f.document,scope:f.scope,cryptoValue:c});
+  assert.equal(mapped.resources.length,f.resources.length);
+  for(const resource of f.resources.filter(r=>r.kind!=='FOLDER')){
+    const parts=f.parts.filter(p=>p.resourceID===resource.id);
+    for(const part of parts.filter(p=>p.part!=='METADATA'))assert.deepEqual(part.payload.record,f.document.records[resource.sourceOrdinal]);
+    assert.match(resource.id,/^[a-f0-9-]{36}$/u);
+  }
+  const folders=f.parts.filter(p=>p.kind==='FOLDER');
+  assert.equal(new Set(folders.map(p=>p.resourceID)).size,4);
+  assert.equal(new Set(folders.map(p=>Buffer.from(p.payload.folder.component).toString('hex'))).size,4);
+  assert.deepEqual(new Set(folders.map(p=>p.payload.folder.component)),new Set([' A ','x'.repeat(121),'é','e\u0301']));
+});
 
 test('canonical original UUID mapping survives record reorder; exact case and Unicode folder paths remain distinct',()=>{
   const a=record('host',{folder:'A/é'}),b=record('host',{folder:'a/e\u0301'}),scope={teamID:uuid(),vaultID:uuid()};
