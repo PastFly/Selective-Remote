@@ -1,0 +1,121 @@
+{
+  "testOnly": true,
+  "rootPublicKey": "BH77EUwXUf0HbIraWaiX2m0aPhefKKGtPdNn3ZoT8oqHysGI_MPIo_jJ5PgXlAhkg-UpjpinJ6woWGVqls07yb0",
+  "teamID": "676b532e-4809-49e2-b2bd-bca08e79cf15",
+  "vaultID": "9d87308e-fff3-4ba9-b035-be15e32a7620",
+  "recipientPrivateScalar": "A71WX7skLuaz3ANUI3uiV3IBDPylYBTlvh14Bn8zVzA",
+  "plaintext": "browser-to-Mac authenticated publication",
+  "header": {
+    "payload": {
+      "version": 1,
+      "teamID": "676b532e-4809-49e2-b2bd-bca08e79cf15",
+      "vaultID": "9d87308e-fff3-4ba9-b035-be15e32a7620",
+      "generationID": "617f2630-ec1e-424c-99e0-c7854417b8fe",
+      "sequence": 1,
+      "previousHash": null,
+      "descriptorCommitment": "faf743eb218a62cfa24c004277d9cea9ab84791f3d1933ac81d0046d4b030b9d",
+      "publisherAccountID": "01c0ce0b-b957-4f81-aeae-05e43f7c947e",
+      "publisherDeviceID": "41b1f6fd-ead8-4ffa-913d-69be90412d6a",
+      "publisherKeyVersion": 1
+    },
+    "signature": "E7Yxxg_Tvsg51VPCEKyoNUj6q2SvW-TsYEjxaholaquCr2kxzZwAttqD1FTy8n2ULLrrz9zmELpPgLwclD9CGA"
+  },
+  "descriptor": {
+    "payload": {
+      "headerHash": "b76e13834cb3e553e8795454c05aa66c8d9faf21b9a0ffcd738a5b4547e1c6b4",
+      "resourceID": "3770113a-73f2-4443-a8fa-ac7a1eebdd35",
+      "kind": "HOST",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "context": {
+        "teamID": "676b532e-4809-49e2-b2bd-bca08e79cf15",
+        "vaultID": "9d87308e-fff3-4ba9-b035-be15e32a7620",
+        "resourceID": "3770113a-73f2-4443-a8fa-ac7a1eebdd35",
+        "part": "GENERAL",
+        "keyVersion": 1,
+        "policyVersion": 1,
+        "registryVersion": 1,
+        "resourceVersion": 1,
+        "manifestVersion": 1
+      },
+      "ciphertextHash": "a5ec46c414d3ca168b2f8051af11b80c1e60ec3475b35fc376833f1de9525684",
+      "wrapperRoot": "19ec74f0f6cf1c0d37c67a7d0cc85da5280bed5d9d431b8decebb28d51c81da9"
+    },
+    "signature": "KGnfWNjNOdgMOt7g9a1qJ7kTV7YukdaScylvv67DXukvhThapuIbw2GqI12GDIxnIi509AxMn5faV6hBypLEOw"
+  },
+  "inventory": {
+    "payload": {
+      "headerHash": "b76e13834cb3e553e8795454c05aa66c8d9faf21b9a0ffcd738a5b4547e1c6b4",
+      "accountID": "01c0ce0b-b957-4f81-aeae-05e43f7c947e",
+      "deviceID": "41b1f6fd-ead8-4ffa-913d-69be90412d6a",
+      "membershipID": "e59bbb0b-3a6c-496e-8962-880e2b7187fb",
+      "membershipEpoch": 1,
+      "count": 1,
+      "digest": "ceb25c0130d0935da9305b82fbe96d738e8c6101b0a841761d0df26fe8d5d16b"
+    },
+    "signature": "1kdWNl-t0q3BrfpTwKJfW4HajnGt5aB8gzw9q9Acfz2-7rC0mYGPoacw7pmGWMV8YD5fxtbOZbZGbF5ywcP-iQ"
+  },
+  "envelope": {
+    "formatVersion": 2,
+    "algorithm": "AES-256-GCM",
+    "aadVersion": 2,
+    "context": {
+      "teamID": "676b532e-4809-49e2-b2bd-bca08e79cf15",
+      "vaultID": "9d87308e-fff3-4ba9-b035-be15e32a7620",
+      "resourceID": "3770113a-73f2-4443-a8fa-ac7a1eebdd35",
+      "part": "GENERAL",
+      "keyVersion": 1,
+      "policyVersion": 1,
+      "registryVersion": 1,
+      "resourceVersion": 1,
+      "manifestVersion": 1
+    },
+    "nonce": "vhHZ5Mg35BUZjduo",
+    "ciphertext": "iZcerdsxB3IF3164X1H6l1gF2L1VCXXb9IXQ8TQPXveiaUEQVlBbgA",
+    "authTag": "wHo-iSlIoUuMDhID1VgIRQ"
+  },
+  "entry": {
+    "accountID": "01c0ce0b-b957-4f81-aeae-05e43f7c947e",
+    "deviceKeyVersion": 1,
+    "wrapper": {
+      "wrapperVersion": 2,
+      "algorithm": "P256-ECDH-HKDF-SHA256-AES-256-GCM",
+      "aadVersion": 2,
+      "context": {
+        "teamID": "676b532e-4809-49e2-b2bd-bca08e79cf15",
+        "vaultID": "9d87308e-fff3-4ba9-b035-be15e32a7620",
+        "resourceID": "3770113a-73f2-4443-a8fa-ac7a1eebdd35",
+        "part": "GENERAL",
+        "keyVersion": 1,
+        "membershipID": "e59bbb0b-3a6c-496e-8962-880e2b7187fb",
+        "membershipEpoch": 1,
+        "deviceID": "41b1f6fd-ead8-4ffa-913d-69be90412d6a"
+      },
+      "ephemeralPublicKey": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "xXD3qC3uCkYxZtUwzGWzRybTRhyAH_pnm242z6ppLsc",
+        "y": "JOaRpgKaey5eYnfF__pP_hO2ovvxiwOwnVOj0kcM_fc",
+        "ext": true,
+        "key_ops": []
+      },
+      "nonce": "NW9uMUniJYwCpHw7",
+      "ciphertext": "W4QXDOkB8NvFgtpeK6uEe7SEoVQkBCisfKmlFebWx1k",
+      "authTag": "iIBmzq2W4WDHqevqEe4ZKA"
+    }
+  },
+  "proof": {
+    "index": 2,
+    "total": 3,
+    "siblings": [
+      "1e7d0f01aafb36311f639fd09652016da77d6940595abd69720e4e5ff7e8cf9c",
+      "97857c56282a63dcf3af48706852db791849454fb8433c6b5e4e387d0b895093"
+    ]
+  },
+  "subject": {
+    "accountID": "01c0ce0b-b957-4f81-aeae-05e43f7c947e",
+    "deviceID": "41b1f6fd-ead8-4ffa-913d-69be90412d6a",
+    "membershipID": "e59bbb0b-3a6c-496e-8962-880e2b7187fb",
+    "membershipEpoch": 1
+  }
+}
