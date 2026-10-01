@@ -1,6 +1,7 @@
 import Foundation
 
 protocol SelectiveRemoteTeamVaultAutoSyncRemote: SelectiveRemoteTeamVaultRemote {
+    func preparePublicationRetirement(session: SelectiveRemotePublicationSession) async throws
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession?
     func materializePublication(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity, team: SelectiveRemoteCloudTeam, vault: SelectiveRemoteCloudSharedVault, offline: Bool) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot
     func reopenPublications(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity) async throws -> [SelectiveRemoteTeamVaultMaterializedSnapshot]
@@ -11,6 +12,7 @@ protocol SelectiveRemoteTeamVaultAutoSyncRemote: SelectiveRemoteTeamVaultRemote 
 }
 
 extension SelectiveRemoteTeamVaultAutoSyncRemote {
+    func preparePublicationRetirement(session: SelectiveRemotePublicationSession) async throws {}
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? { nil }
     func materializePublication(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity, team: SelectiveRemoteCloudTeam, vault: SelectiveRemoteCloudSharedVault, offline: Bool) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot { throw SelectiveRemotePublicationError.invalid }
     func reopenPublications(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity) async throws -> [SelectiveRemoteTeamVaultMaterializedSnapshot] { [] }
@@ -157,6 +159,8 @@ actor SelectiveRemoteTeamVaultAutoSync {
 
         let session = try await remote.publicationSession(endpoint: endpoint, deviceID: deviceID)
         synchronizationSession = session
+        try session?.check()
+        if let session { try await remote.preparePublicationRetirement(session: session) }
         try session?.check()
         guard eligible, generation == cycleGeneration else { throw CancellationError() }
         let identity = try await identityManager.identity(endpoint: endpoint, deviceID: deviceID)

@@ -68,14 +68,55 @@ struct CloudVaultPublicationLinkedPartTests {
 final class PublicationProtectedMemory: SelectiveRemotePublicationProtectedStorage, @unchecked Sendable {
     private let lock = NSLock()
     private var data: [String: Data] = [:]
+    private var failingKey: String?
     var fail = false
     var saveHook: (@Sendable (String) -> Void)?
     func read(_ key: String) -> Data? { lock.withLock { data[key] } }
-    func save(_ value: Data, key: String) throws { try lock.withLock { if fail { throw CocoaError(.fileWriteUnknown) }; saveHook?(key); data[key] = value } }
+    func failOnce(_ key: String) { lock.withLock { failingKey = key } }
+    func save(_ value: Data, key: String) throws { try lock.withLock { if fail || key == failingKey { failingKey = nil; throw CocoaError(.fileWriteUnknown) }; saveHook?(key); data[key] = value } }
 }
 
 @Suite("protected publication durability")
 struct CloudVaultPublicationDurabilityTests {
+    @Test("bulk authoritative retirement attempts every owned selected payload after first protected write failure and preserves newer or unrelated scopes")
+    func bulkRetirementFailure() async throws {
+        let a = try PublicationFixture(), b = try PublicationFixture(sameAccountAs: a), unrelated = try PublicationFixture(sameAccountAs: a, sameTeam: false), newerFixture = try PublicationFixture(sameAccountAs: a)
+        let directory = FileManager.default.temporaryDirectory.appending(path: "task5-bulk-retire-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let memory = PublicationProtectedMemory(), store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: memory)
+        let tokens = SelectiveRemoteCloudMemoryTokenStore(), token = String(repeating: "a", count: 40); tokens.saveToken(token, for: a.scope.endpoint)
+        let session = SelectiveRemotePublicationSession(endpoint: a.scope.endpoint, accountID: a.scope.accountID, deviceID: a.scope.deviceID, token: token, tokenStore: tokens)
+        var caches: [SelectiveRemotePublicationCache] = [], waters: [SelectiveRemotePublicationHighWater?] = []
+        for fixture in [a, b, unrelated, newerFixture] {
+            let pin = fixture.ownPin
+            let reader = SelectiveRemoteVaultPublicationCoordinator(scope: fixture.scope, session: session, remote: PublicationFixtureRemote(fixture), identity: a.identity, store: store, ownPin: { _, _ in pin }, advanceOwnPin: { _, _, _ in })
+            caches.append(try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner)); waters.append(try store.highWater(scope: fixture.scope))
+        }
+        try store.captureRetirementOwners(session: session)
+        let nextTokens = SelectiveRemoteCloudMemoryTokenStore(); nextTokens.saveToken(token, for: a.scope.endpoint)
+        let newer = SelectiveRemotePublicationSession(endpoint: a.scope.endpoint, accountID: a.scope.accountID, deviceID: a.scope.deviceID, token: token, tokenStore: nextTokens)
+        try store.commit(caches[3], expected: waters[3], session: newer)
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            (Data(#"{"error":"authentication_required"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        })
+        await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) { try await client.teams(endpoint: a.scope.endpoint) }
+        try session.prepareAuthenticationLossRetirement()
+        let firstReceipt = "receipt/" + SHA256.hash(data: Data(a.scope.key.utf8)).map { String(format: "%02x", $0) }.joined()
+        memory.failOnce(firstReceipt)
+        #expect(throws: CocoaError.self) { try store.retireScopes(session: session, selection: .team(a.scope.teamID, keepingVaults: nil)) }
+        tokens.saveToken(token, for: a.scope.endpoint)
+        let checking = SelectiveRemotePublicationSession(endpoint: a.scope.endpoint, accountID: a.scope.accountID, deviceID: a.scope.deviceID, token: token, tokenStore: tokens)
+        for (index, fixture) in [a, b, unrelated, newerFixture].enumerated() {
+            #expect(try store.highWater(scope: fixture.scope) == waters[index])
+            let pin = fixture.ownPin
+            let offline = SelectiveRemoteVaultPublicationCoordinator(scope: fixture.scope, session: checking, remote: PublicationFixtureRemote(fixture), identity: a.identity, store: store, ownPin: { _, _ in pin }, advanceOwnPin: { _, _, _ in })
+            if index < 2 {
+                #expect(try store.load(scope: fixture.scope, session: checking) == nil)
+                #expect(try !store.cachedScopes(session: checking).contains(fixture.scope))
+                await #expect(throws: Error.self) { try await offline.offline() }
+            } else { #expect(try store.load(scope: fixture.scope, session: checking) == caches[index]); #expect(try await offline.offline().stale) }
+        }
+    }
     @Test("current 401 cleanup uses protected authorization receipt and cannot erase a later login even after its logout")
     func authenticationLossOwnership() async throws {
         let fixture = try PublicationFixture(), (reader, _, _, _, sourceDirectory) = try CloudVaultPublicationCoordinatorTests().setup(fixture)
@@ -87,6 +128,7 @@ struct CloudVaultPublicationDurabilityTests {
         let old = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: token, tokenStore: tokens)
         let store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: PublicationProtectedMemory())
         try store.commit(cache, expected: nil, session: old)
+        try store.captureRetirementOwners(session: old)
         let highWater = try store.highWater(scope: fixture.scope)
         SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint); tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
         let newer = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)

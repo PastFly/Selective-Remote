@@ -24,6 +24,7 @@ final class SelectiveRemotePublicationSession: @unchecked Sendable, Equatable {
     private let lock = NSLock()
     private var active = true
     private var authenticationLossEpoch: UUID?
+    private var retirementOwners: [String: SelectiveRemotePublicationPayloadStamp] = [:]
     init(endpoint: URL, accountID: UUID, deviceID: UUID, token: String, tokenStore: any SelectiveRemoteCloudTokenStore, checkConfiguration: Bool = false) {
         self.endpoint = endpoint; self.accountID = accountID; self.deviceID = deviceID
         self.token = token; self.tokenStore = tokenStore; self.checkConfiguration = checkConfiguration; epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
@@ -31,13 +32,17 @@ final class SelectiveRemotePublicationSession: @unchecked Sendable, Equatable {
     func invalidate() { lock.withLock { active = false } }
     /// Protected receipt identity, never exposed in models, UI or logs.
     var authorizationStamp: String {
-        SHA256.hash(data: Data((endpoint.absoluteString + "\n" + accountID.canonicalCloudString + "\n" + deviceID.canonicalCloudString + "\n" + epoch.uuidString + "\n" + token).utf8)).map { String(format: "%02x", $0) }.joined()
+        SHA256.hash(data: Data((endpoint.absoluteString + "\n" + accountID.canonicalCloudString + "\n" + deviceID.canonicalCloudString + "\n" + token).utf8)).map { String(format: "%02x", $0) }.joined()
     }
     func prepareAuthenticationLossRetirement() throws {
         guard lock.withLock({ active }), try tokenStore.token(for: endpoint) == nil else { throw CancellationError() }
         lock.withLock { authenticationLossEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) }
     }
     var retiringAuthenticationLoss: Bool { lock.withLock { authenticationLossEpoch != nil } }
+    func captureRetirementOwners(_ owners: [String: SelectiveRemotePublicationPayloadStamp]) throws {
+        try check(); lock.withLock { retirementOwners = owners }; try check()
+    }
+    func capturedRetirementOwner(scope: SelectiveRemotePublicationScope) -> SelectiveRemotePublicationPayloadStamp? { lock.withLock { retirementOwners[scope.key] } }
     func checkRetirement() throws {
         if let lost = lock.withLock({ authenticationLossEpoch }) {
             guard lock.withLock({ active }), SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == lost,
@@ -131,6 +136,9 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
 }
 
 extension SelectiveRemoteCloudAPIClient {
+    func preparePublicationRetirement(session: SelectiveRemotePublicationSession) async throws {
+        try SelectiveRemoteVaultPublicationStore().captureRetirementOwners(session: session)
+    }
     func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {
         do {
             _ = try SelectiveRemoteVaultPublicationStore().retireScopes(session: session, selection: selection)

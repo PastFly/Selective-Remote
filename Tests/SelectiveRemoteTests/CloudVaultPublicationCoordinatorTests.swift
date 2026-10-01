@@ -50,13 +50,14 @@ struct PublicationFixture: @unchecked Sendable {
     let descriptors: [SelectiveRemoteJSONValue]
     let parts: [String: SelectiveRemoteJSONValue]
     let resourceID: UUID
-    init(crossPublisher: Bool = false, empty: Bool = false, allKinds: Bool = false, credentialCount: Int = 1, includeSecret: Bool = true, transport: String = "ssh", sourceID: String? = nil, omitSourceID: Bool = false, folderName: String? = nil, converterProduced: Bool = false, credentialKind: String? = nil, nativeProfileMismatch: Bool = false) throws {
-        let endpoint = URL(string: "https://fixture-\(UUID().uuidString.lowercased()).example.test")!, accountID = UUID(), deviceID = UUID(), teamID = UUID(), vaultID = UUID(), membershipID = UUID(), generationID = UUID()
+    let trustRoot: P256.Signing.PrivateKey
+    init(crossPublisher: Bool = false, empty: Bool = false, allKinds: Bool = false, credentialCount: Int = 1, includeSecret: Bool = true, transport: String = "ssh", sourceID: String? = nil, omitSourceID: Bool = false, folderName: String? = nil, converterProduced: Bool = false, credentialKind: String? = nil, nativeProfileMismatch: Bool = false, sameAccountAs prior: PublicationFixture? = nil, sameTeam: Bool = true) throws {
+        let endpoint = prior?.scope.endpoint ?? URL(string: "https://fixture-\(UUID().uuidString.lowercased()).example.test")!, accountID = prior?.scope.accountID ?? UUID(), deviceID = prior?.scope.deviceID ?? UUID(), teamID = sameTeam ? prior?.scope.teamID ?? UUID() : UUID(), vaultID = UUID(), membershipID = UUID(), generationID = UUID()
         scope = .init(endpoint: endpoint, accountID: accountID, deviceID: deviceID, teamID: teamID, vaultID: vaultID)
-        identity = try .init(deviceID: deviceID, privateKeyRepresentation: P256.KeyAgreement.PrivateKey().rawRepresentation)
-        let root = P256.Signing.PrivateKey()
-        let cert = try SelectiveRemoteDeviceTrustV1.issueCertificate(root: root, accountID: accountID, deviceID: deviceID, publicKey: identity.publicKey, keyVersion: 3, issuedAt: 1, serial: UUID())
-        let checkpoint = try SelectiveRemoteDeviceTrustV1.signDirectory(root: root, accountID: accountID, version: 2, certificates: [cert])
+        identity = try prior?.identity ?? .init(deviceID: deviceID, privateKeyRepresentation: P256.KeyAgreement.PrivateKey().rawRepresentation)
+        let root = prior?.trustRoot ?? P256.Signing.PrivateKey(); trustRoot = root
+        let cert = try prior?.ownTrust.certificates?.first ?? SelectiveRemoteDeviceTrustV1.issueCertificate(root: root, accountID: accountID, deviceID: deviceID, publicKey: identity.publicKey, keyVersion: 3, issuedAt: 1, serial: UUID())
+        let checkpoint = try prior?.ownTrust.checkpoint ?? SelectiveRemoteDeviceTrustV1.signDirectory(root: root, accountID: accountID, version: 2, certificates: [cert])
         ownPin = .init(accountID: accountID, rootFingerprint: SelectiveRemoteDeviceTrustV1.fingerprint(root.publicKey), highWater: 2, checkpointDigest: try SelectiveRemoteDeviceTrustV1.directoryDigest(checkpoint))
         ownTrust = .init(state: "ROOT_PUBLISHED", rootPublicKey: root.publicKey.x963Representation.selectiveRemoteBase64URL, rootFingerprint: ownPin.rootFingerprint, custodianDeviceID: deviceID, checkpoint: checkpoint, certificates: [cert])
         let publisherRoot = crossPublisher ? P256.Signing.PrivateKey() : root
@@ -266,9 +267,13 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     func setMode(_ value: CloudAccessFormatState) { mode = value }
     func setProbeFailure() { probeFailure = true }
     func setListFault(_ value: String?) { listFault = value }
+    func resetProcessEpoch() { SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint) }
     func restoreAuthentication() { tokens.saveToken(String(repeating: "a", count: 40), for: fixture.scope.endpoint) }
     func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {
         _ = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: protected).retireScopes(session: session, selection: selection)
+    }
+    func preparePublicationRetirement(session: SelectiveRemotePublicationSession) async throws {
+        try SelectiveRemoteVaultPublicationStore(directory: directory, protected: protected).captureRetirementOwners(session: session)
     }
     func hasStoredSession(endpoint: URL) async -> Bool { true }
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? {
@@ -276,7 +281,7 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     }
     func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState { if probeFailure { throw URLError(.notConnectedToInternet) }; return mode }
     func teams(endpoint: URL) async throws -> [SelectiveRemoteCloudTeam] {
-        if listFault == "team-auth" {
+        if listFault?.hasPrefix("team-auth") == true {
             let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
                 (Data(#"{"error":"authentication_required"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
             })
@@ -320,7 +325,7 @@ actor PublicationSnapshotSink {
 }
 @Suite("actual publication autosync lifecycle")
 struct CloudVaultPublicationAutoSyncTests {
-    @Test("authoritative list loss cannot reopen revoked durable scope during next offline preflight", arguments: ["team-denied", "team-omitted", "vault-denied", "vault-omitted", "team-auth"])
+    @Test("authoritative list loss cannot reopen revoked durable scope during next offline preflight", arguments: ["team-denied", "team-omitted", "vault-denied", "vault-omitted", "team-auth", "team-auth-restart", "team-auth-legacy-receipt"])
     func listRetirement(_ fault: String) async throws {
         let fixture = try PublicationFixture(), directory = FileManager.default.temporaryDirectory.appending(path: "task5-retire-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -331,8 +336,17 @@ struct CloudVaultPublicationAutoSyncTests {
         let store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: remote.protected)
         let highWater = try #require(try store.highWater(scope: fixture.scope))
         #expect(try store.load(scope: fixture.scope, session: session) != nil)
+        if fault == "team-auth-restart" || fault == "team-auth-legacy-receipt" {
+            if fault == "team-auth-legacy-receipt" {
+                let key = "receipt/" + SHA256.hash(data: Data(fixture.scope.key.utf8)).map { String(format: "%02x", $0) }.joined()
+                var receipt = try JSONSerialization.jsonObject(with: #require(remote.protected.read(key))) as! [String: Any]
+                receipt.removeValue(forKey: "authorizationVersion"); receipt["authorization"] = String(repeating: "1", count: 64)
+                try remote.protected.save(JSONSerialization.data(withJSONObject: receipt), key: key)
+            }
+            await remote.resetProcessEpoch()
+        }
         await remote.setListFault(fault)
-        if fault == "team-denied" || fault == "team-auth" { await #expect(throws: Error.self) { try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) } }
+        if fault == "team-denied" || fault.hasPrefix("team-auth") { await #expect(throws: Error.self) { try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) } }
         else { _ = try await auto.synchronizeOnce(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID) }
         await remote.restoreAuthentication()
         let checking = try #require(try await remote.publicationSession(endpoint: fixture.scope.endpoint, deviceID: fixture.scope.deviceID))

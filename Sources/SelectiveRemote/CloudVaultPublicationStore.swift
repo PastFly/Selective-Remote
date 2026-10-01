@@ -18,7 +18,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
         self.protected = protected
         try FileManager.default.createDirectory(at: self.directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
     }
-    private struct Receipt: Codable { var scope: SelectiveRemotePublicationScope; var key: Data; var highWater: SelectiveRemotePublicationHighWater?; var file: String?; var owner: UUID?; var generation: String?; var authorization: String? }
+    private struct Receipt: Codable { var scope: SelectiveRemotePublicationScope; var key: Data; var highWater: SelectiveRemotePublicationHighWater?; var file: String?; var owner: UUID?; var generation: String?; var authorization: String?; var authorizationVersion: Int? }
     private func digest(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
     private func receiptKey(_ scope: SelectiveRemotePublicationScope) -> String { "receipt/" + digest(scope.key) }
     private func receipt(_ scope: SelectiveRemotePublicationScope) throws -> Receipt? {
@@ -33,7 +33,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     func commit(_ cache: SelectiveRemotePublicationCache, expected: SelectiveRemotePublicationHighWater?, session: SelectiveRemotePublicationSession) throws {
         try Self.lock.withLock {
             try checkScope(cache.scope, session: session)
-            var state = try receipt(cache.scope) ?? Receipt(scope: cache.scope, key: SelectiveRemoteResourceCryptoV2.generateCEK(), highWater: nil, file: nil, owner: nil, generation: nil, authorization: nil)
+            var state = try receipt(cache.scope) ?? Receipt(scope: cache.scope, key: SelectiveRemoteResourceCryptoV2.generateCEK(), highWater: nil, file: nil, owner: nil, generation: nil, authorization: nil, authorizationVersion: nil)
             guard state.highWater == expected else { throw SelectiveRemotePublicationError.fork }
             let header = try SelectiveRemoteVaultPublicationV1.headerPayload(cache.header)
             let next = SelectiveRemotePublicationHighWater(sequence: try header["sequence"]!.publicationInteger(), hash: cache.headerHash)
@@ -56,7 +56,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
                 try box.combined!.write(to: path, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
                 try session.check()
-                state.highWater = next; state.file = filename; state.owner = session.id; state.generation = generation; state.authorization = session.authorizationStamp
+                state.highWater = next; state.file = filename; state.owner = session.id; state.generation = generation; state.authorization = session.authorizationStamp; state.authorizationVersion = 2
                 try protected.save(JSONEncoder().encode(state), key: receiptKey(cache.scope))
                 receiptCommitted = true
                 let catalogKey = catalogKey(session)
@@ -128,24 +128,44 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
                 guard scope.endpoint == session.endpoint, scope.accountID == session.accountID, scope.deviceID == session.deviceID else { throw SelectiveRemotePublicationError.scope }
             }
             var retired: [SelectiveRemotePublicationScope] = []
+            var firstFailure: Error?
             for scope in scopes where selection.matches(scope) {
                 try session.checkRetirement()
-                if var state = try receipt(scope) {
-                    // A current 401 can retire previous cycles of this authorization, never a newer login's receipt.
-                    if session.retiringAuthenticationLoss, let authorization = state.authorization, authorization != session.authorizationStamp { continue }
-                    try retirePayload(scope: scope, state: &state)
+                do {
+                    if var state = try receipt(scope) {
+                        if session.retiringAuthenticationLoss {
+                            // Fence the protected owner captured before the request, including receipts from a prior process/schema.
+                            guard let captured = session.capturedRetirementOwner(scope: scope), captured.owner == state.owner else { continue }
+                            if state.authorizationVersion == 2 && state.authorization != session.authorizationStamp { continue }
+                        }
+                        retired.append(scope)
+                        try retirePayload(scope: scope, state: &state)
+                    } else { retired.append(scope) }
+                } catch {
+                    // A receipt write failure must not leave later known-revoked files readable.
+                    if firstFailure == nil { firstFailure = error }
                 }
-                retired.append(scope)
             }
-            guard !retired.isEmpty else { return [] }
+            guard !retired.isEmpty else { if let firstFailure { throw firstFailure }; return [] }
             try session.checkRetirement()
-            try protected.save(JSONEncoder().encode(scopes.filter { !retired.contains($0) }), key: key)
+            do { try protected.save(JSONEncoder().encode(scopes.filter { !retired.contains($0) }), key: key) }
+            catch { if firstFailure == nil { firstFailure = error } }
             try session.checkRetirement()
+            if let firstFailure { throw firstFailure }
             return retired
         }
     }
     func payloadStamp(scope: SelectiveRemotePublicationScope) throws -> SelectiveRemotePublicationPayloadStamp {
         try Self.lock.withLock { .init(owner: try receipt(scope)?.owner) }
+    }
+    func captureRetirementOwners(session: SelectiveRemotePublicationSession) throws {
+        try Self.lock.withLock {
+            try session.check()
+            let scopes = try protected.read(catalogKey(session)).map { try JSONDecoder().decode([SelectiveRemotePublicationScope].self, from: $0) } ?? []
+            var owners: [String: SelectiveRemotePublicationPayloadStamp] = [:]
+            for scope in scopes { try checkScope(scope, session: session); owners[scope.key] = .init(owner: try receipt(scope)?.owner) }
+            try session.captureRetirementOwners(owners)
+        }
     }
     private func catalogKey(_ session: SelectiveRemotePublicationSession) -> String {
         "catalog/" + digest(session.endpoint.absoluteString + "\n" + session.accountID.canonicalCloudString + "\n" + session.deviceID.canonicalCloudString)
