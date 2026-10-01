@@ -230,6 +230,8 @@ export function createVaultPublicationClient({
   let current = null,
     currentIdentity = null,
     pendingVerification = null,
+    payloadReceipt = null,
+    authenticationInvalidatedOperation = null,
     epoch = 0;
   const scopeValue = { teamID: scope.teamID, vaultID: scope.vaultID };
   const captured = () => {
@@ -248,6 +250,7 @@ export function createVaultPublicationClient({
       fail("publication_session_changed");
   }
   function lock() {
+    authenticationInvalidatedOperation = null;
     epoch++;
     current = null;
     currentIdentity = null;
@@ -266,7 +269,29 @@ export function createVaultPublicationClient({
     }
     return current === null ? null : structuredClone(current);
   }
-  const unsubscribe = subscribeIdentityChange(lock);
+  const unsubscribe = subscribeIdentityChange(() => {
+    const retiredOperation = epoch;
+    lock();
+    authenticationInvalidatedOperation = identity() === null ? retiredOperation : null;
+  });
+  function ownsOperation(start, op, error = null) {
+    const now = identity();
+    if (op === epoch && now && identityFields.every(k => now[k] === start[k])) return true;
+    // A genuine current 401 synchronously invalidates identity before the reader catch.
+    return now === null && error?.invalidatedSessionEpoch === start.sessionEpoch &&
+      (epoch === op || (authenticationInvalidatedOperation === op && epoch === op + 1));
+  }
+  async function retireDenied(start, op, error, receipt) {
+    if (!ownsOperation(start, op, error)) return false;
+    current = null;
+    currentIdentity = null;
+    pendingVerification = null;
+    onInvalidate();
+    await repository.clearPayload(cacheScope(start, scopeValue), receipt, () => {
+      if (!ownsOperation(start, op, error)) fail("publication_session_changed");
+    });
+    return true;
+  }
   async function publisherTrust(bundle, header, start, op) {
     const p = header.payload;
     if (
@@ -557,10 +582,13 @@ export function createVaultPublicationClient({
           models.push(verified);
         }
         guard(start, op);
+        if (current && (!current.stale || current.headerHash !== view.headerHash)) onInvalidate();
+        payloadReceipt = stored.payloadReceipt;
         currentIdentity = start;
         current = { ...view, models, stale: true };
         return structuredClone(current);
       } catch (error) {
+        guard(start, op);
         current = null;
         onInvalidate();
         throw error;
@@ -684,7 +712,7 @@ export function createVaultPublicationClient({
           publisher: bundle,
         };
         guard(start, op);
-        await repository.persist(
+        const persistedReceipt = await repository.persist(
           cs,
           {
             highWater: {
@@ -696,16 +724,14 @@ export function createVaultPublicationClient({
           () => guard(start, op),
         );
         guard(start, op);
-        if (current && current.headerHash !== view.headerHash) onInvalidate();
+        if (current && (current.headerHash !== view.headerHash || current.stale !== view.stale)) onInvalidate();
+        payloadReceipt = persistedReceipt;
         currentIdentity = start;
         current = view;
         return structuredClone(view);
       } catch (error) {
         if (lost.has(error.message)) {
-          current = null;
-          pendingVerification = null;
-          onInvalidate();
-          await repository.clearPayload(cs);
+          await retireDenied(start, op, error, stored?.payloadReceipt ?? payloadReceipt);
           throw error;
         }
         guard(start, op);
@@ -724,7 +750,8 @@ export function createVaultPublicationClient({
       displayView();
       const start = captured(),
         op = epoch,
-        view = current;
+        view = current,
+        receipt = payloadReceipt;
       if (!view || view.stale) fail("publication_current_required");
       const descriptor = view.descriptors.find(
         (d) =>
@@ -750,10 +777,13 @@ export function createVaultPublicationClient({
         guard(start, op);
         return model;
       } catch (error) {
+        if (lost.has(error.message)) {
+          await retireDenied(start, op, error, receipt);
+          throw error;
+        }
+        guard(start, op);
         current = null;
         onInvalidate();
-        if (lost.has(error.message))
-          await repository.clearPayload(cacheScope(start, scopeValue));
         throw error;
       }
     },
@@ -923,6 +953,7 @@ export function createIndexedDBPublicationRepository(
       return {
         highWater: stored.highWater,
         payload: JSON.parse(decode.decode(bytes)),
+        payloadReceipt: { nonce: stored.nonce, sealed: stored.sealed },
       };
     },
     async persist(scope, { highWater, payload }, guard) {
@@ -987,7 +1018,7 @@ export function createIndexedDBPublicationRepository(
               },
               id,
             );
-            done(true);
+            done({ nonce, sealed });
           } catch (error) {
             tx.publicationFailure = error;
             tx.abort();
@@ -995,20 +1026,24 @@ export function createIndexedDBPublicationRepository(
         };
       });
     },
-    async clearPayload(scope) {
-      return transaction("readwrite", (store, _done) => {
-        const id = "cache:" + scopeKey(scope),
-          r = store.get(id);
+    async clearPayload(scope, receipt, guard = () => {}) {
+      if (!receipt) return false;
+      return transaction("readwrite", (store, done, tx) => {
+        const id = "cache:" + scopeKey(scope), r = store.get(id);
         r.onsuccess = () => {
-          if (r.result)
-            store.put(
-              {
-                highWater: r.result.highWater,
-                highWaterSeal: r.result.highWaterSeal,
-                highWaterNonce: r.result.highWaterNonce,
-              },
-              id,
-            );
+          try {
+            guard();
+            if (!r.result?.sealed || !sameSealed(r.result, receipt)) return done(false);
+            store.put({
+              highWater: r.result.highWater,
+              highWaterSeal: r.result.highWaterSeal,
+              highWaterNonce: r.result.highWaterNonce,
+            }, id);
+            done(true);
+          } catch (error) {
+            tx.publicationFailure = error;
+            tx.abort();
+          }
         };
       });
     },
@@ -1099,6 +1134,10 @@ const uiCopy = {
   share: ["Общий доступ", "Share"],
   who: ["У кого есть доступ", "Who has access"],
   reveal: ["Показать секрет", "Reveal secret"],
+  detail: ["Просмотреть", "View content"],
+  copy: ["Копировать", "Copy"],
+  copied: ["Скопировано.", "Copied."],
+  copyFailed: ["Не удалось скопировать.", "Could not copy."],
   accessFailed: ["Не удалось подтвердить доступ.", "Could not verify access."],
   secretFailed: [
     "Секрет недоступен или текущая публикация не подтверждена.",
@@ -1139,12 +1178,35 @@ export function publicationCopy(documentValue, key) {
     ] ?? key
   );
 }
+const publicationDialogs = new WeakMap();
+function ownPublicationDialog(client, dialog) {
+  if (!client) return;
+  let dialogs = publicationDialogs.get(client);
+  if (!dialogs) publicationDialogs.set(client, dialogs = new Set());
+  dialogs.add(dialog);
+  dialog.addEventListener("close", () => dialogs.delete(dialog), { once: true });
+}
+export function closePublicationDialogs(client) {
+  const dialogs = publicationDialogs.get(client);
+  if (!dialogs) return;
+  for (const dialog of [...dialogs]) {
+    dialog.querySelectorAll("pre,input").forEach(element => {
+      element.textContent = "";
+      if ("value" in element) element.value = "";
+    });
+    dialog.close?.();
+    dialog.remove();
+  }
+  dialogs.clear();
+}
 export async function requestPublisherVerification(
   documentValue,
   verification,
+  client = null,
 ) {
   const dialog = documentValue.createElement("dialog");
   dialog.dataset.publicationDialog = "publisher";
+  ownPublicationDialog(client, dialog);
   const heading = documentValue.createElement("h3");
   heading.textContent = publicationCopy(documentValue, "verifyTitle");
   const explanation = documentValue.createElement("p");
@@ -1287,6 +1349,74 @@ export function renderPublishedVault({
           onStatus(publicationCopy(documentValue, "accessFailed")),
         );
     });
+    if (["SNIPPET", "FORWARDING"].includes(model.kind)) {
+      const detail = documentValue.createElement("button");
+      detail.type = "button";
+      detail.dataset.publicationAction = "detail";
+      detail.textContent = publicationCopy(documentValue, "detail");
+      detail.addEventListener("click", () => {
+        const now = client.view();
+        if (!now || now.headerHash !== view.headerHash || container.contains(card) === false) return;
+        const verified = now.models.find(m => m.resourceID === model.reference.resourceID &&
+          m.teamID === model.reference.teamID && m.vaultID === model.reference.vaultID && m.part === model.part);
+        if (!verified) return;
+        const data = verified.record.data;
+        const value = model.kind === "SNIPPET" ? data.body ?? "" : data.configuration ?? "";
+        const contentValue = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+        const dialog = documentValue.createElement("dialog");
+        dialog.dataset.publicationDialog = "detail";
+        dialog.setAttribute("aria-label", String(data.title ?? labels[model.kind]));
+        dialog.dataset.resourceId = verified.reference.resourceID;
+        dialog.dataset.teamId = verified.reference.teamID;
+        dialog.dataset.vaultId = verified.reference.vaultID;
+        dialog.dataset.generationId = verified.generationID;
+        dialog.dataset.part = verified.part;
+        ownPublicationDialog(client, dialog);
+        const heading = documentValue.createElement("h3");
+        heading.textContent = String(data.title ?? labels[model.kind]);
+        const state = documentValue.createElement("p");
+        state.dataset.publicationState = now.stale ? "stale" : "verified";
+        state.textContent = publicationCopy(documentValue, now.stale ? "stale" : "readonly");
+        const content = documentValue.createElement("pre");
+        content.textContent = contentValue;
+        const target = documentValue.createElement("p");
+        target.textContent = model.kind === "FORWARDING" ? String(data.destination ?? "") : "";
+        const feedback = documentValue.createElement("p");
+        feedback.setAttribute("role", "status");
+        const copy = documentValue.createElement("button");
+        copy.type = "button";
+        copy.dataset.publicationAction = "copy";
+        copy.textContent = publicationCopy(documentValue, "copy");
+        copy.addEventListener("click", async () => {
+          const currentView = client.view();
+          if (!dialog.isConnected || !currentView || currentView.headerHash !== now.headerHash) return;
+          try {
+            await documentValue.defaultView.navigator.clipboard.writeText(contentValue);
+            if (dialog.isConnected && client.view()?.headerHash === now.headerHash)
+              feedback.textContent = publicationCopy(documentValue, "copied");
+          } catch {
+            if (dialog.isConnected && client.view()?.headerHash === now.headerHash)
+              feedback.textContent = publicationCopy(documentValue, "copyFailed");
+          }
+        });
+        const close = documentValue.createElement("button");
+        close.type = "button";
+        close.dataset.publicationAction = "close";
+        close.textContent = publicationCopy(documentValue, "close");
+        const remove = () => {
+          content.textContent = "";
+          dialog.close?.();
+          dialog.remove();
+        };
+        close.addEventListener("click", remove);
+        dialog.addEventListener("cancel", event => { event.preventDefault(); remove(); });
+        dialog.addEventListener("close", () => { content.textContent = ""; dialog.remove(); });
+        dialog.append(heading, state, target, content, copy, close, feedback);
+        documentValue.body.append(dialog);
+        dialog.showModal();
+      });
+      actions.append(detail);
+    }
     if (model.kind === "CREDENTIAL") {
       const reveal = documentValue.createElement("button");
       reveal.type = "button";
@@ -1306,6 +1436,7 @@ export function renderPublishedVault({
             return;
           const dialog = documentValue.createElement("dialog");
           dialog.dataset.publicationDialog = "secret";
+          ownPublicationDialog(client, dialog);
           const content = documentValue.createElement("pre");
           content.textContent = String(secret.record.data.secret ?? "");
           const close = documentValue.createElement("button");

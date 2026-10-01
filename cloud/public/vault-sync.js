@@ -523,13 +523,16 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     if (response.status === 401) {
       const result = await response.clone().json().catch(() => null);
       if (reauthenticationErrors.includes(result?.error)) return response;
+      const error = new Error("authentication_required");
       if (requestEpoch === sessionEpoch) {
+        // Local receipt identifies the request that actually retired authentication.
+        error.invalidatedSessionEpoch = String(requestEpoch);
         token = null;
         user = null;
         currentDeviceID = null;
         invalidateIdentity();
       }
-      throw new Error("authentication_required");
+      throw error;
     }
     return response;
   }

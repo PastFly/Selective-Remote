@@ -1,4 +1,4 @@
-import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy, isPublicationOfflineError, isPublicationAccessLoss } from "./vault-publication-client.js";
+import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy, closePublicationDialogs, isPublicationOfflineError, isPublicationAccessLoss } from "./vault-publication-client.js";
 import { createAccessManager } from "./access-manager.js";
 import { accessAuditActionLabel } from "./access-audit.js";
 import {
@@ -1919,7 +1919,7 @@ export function initializeTeamWorkspace({
       control.disabled = disabled || !canEdit();
     }
     // Folder disclosure is read-only navigation and must remain usable by Viewers.
-    for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
+    if (!publicationClient) for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
     for (const button of [snippetCreate, snippetGroupCreate]) if (button) button.disabled = disabled || !canEdit() || !controller || Boolean(selectedVault?.rotationRequired);
     recordType.disabled = disabled || !canEdit() || (activeView === "hosts" && activeRecordFilter !== "all");
   }
@@ -2116,8 +2116,10 @@ export function initializeTeamWorkspace({
     records.replaceChildren();
     if (!controller) return;
     if (publicationClient) {
-      renderPublishedVault({documentValue,container:records,client:publicationClient,filter:activeRecordFilter,
-        onStatus:value=>setText(workspaceStatus,value),onAccess:async(reference,action)=>{
+      const renderingClient = publicationClient;
+      renderPublishedVault({documentValue,container:records,client:renderingClient,filter:activeRecordFilter,
+        onStatus:value=>{if(publicationClient === renderingClient) setText(workspaceStatus,value);},onAccess:async(reference,action)=>{
+          if(publicationClient !== renderingClient || !renderingClient.view()) return;
           setView("access");
           await accessManager?.openResource({...reference,role:selectedTeam?.role,deviceID:client.deviceID?.()},action);
         }});
@@ -3155,18 +3157,39 @@ export function initializeTeamWorkspace({
     selectedVault = vault;
     const scope = { type: "team", teamID: selectedTeam.id, vaultID: vault.id };
     const selection = publicationSelection;
+    const repository = createIndexedDBPublicationRepository();
+    const priorCacheScope = priorIdentity ? {endpoint:priorIdentity.endpoint,accountID:priorIdentity.accountID,
+      deviceID:priorIdentity.deviceID,teamID:scope.teamID,vaultID:scope.vaultID} : null;
+    function ownsSelection(error = null) {
+      if (selection !== publicationSelection || selectedVault?.id !== vault.id || selectedTeam?.id !== scope.teamID || !priorIdentity) return false;
+      const now = client.publicationIdentity?.();
+      return now ? ["endpoint","accountID","deviceID","sessionEpoch"].every(key=>now[key] === priorIdentity[key]) :
+        error?.invalidatedSessionEpoch === priorIdentity.sessionEpoch;
+    }
+    let priorPayloadReceipt = null;
+    if (priorCacheScope) {
+      try { priorPayloadReceipt = (await repository.load(priorCacheScope)).payloadReceipt; }
+      catch { /* An unreadable protected cache never authorizes an unconditional delete. */ }
+    }
+    if (!ownsSelection()) return;
     async function clearLostPublication(error) {
-      if (priorIdentity && isPublicationAccessLoss(error)) await createIndexedDBPublicationRepository().clearPayload({endpoint:priorIdentity.endpoint,accountID:priorIdentity.accountID,deviceID:priorIdentity.deviceID,teamID:scope.teamID,vaultID:scope.vaultID});
+      if (!isPublicationAccessLoss(error) || !ownsSelection(error)) return;
+      try {
+        await repository.clearPayload(priorCacheScope, priorPayloadReceipt, () => {
+          if (!ownsSelection(error)) throw new Error("publication_session_changed");
+        });
+      } catch (cleanupError) {
+        if (ownsSelection(error)) throw cleanupError;
+      }
     }
     async function openPublication({staleOnly=false,deviceKeyVersion=null}={}) {
-      if (selection !== publicationSelection || selectedVault?.id !== vault.id || !client.publicationIdentity?.()) return;
+      if (!ownsSelection()) return;
       workspace.hidden = activeView !== "hosts";
       recordCreate.hidden = true;
-      const repository = createIndexedDBPublicationRepository();
       const active = createVaultPublicationClient({transport:client.publicationTransport(),identity:()=>client.publicationIdentity(),scope,
         privateKey:identity.privateKey,publicKey:identity.publicKey,deviceKeyVersion,ownTrustRepository:deviceTrustRepository,
         publisherTrustRepository:repository,repository,subscribeIdentityChange:listener=>client.subscribePublicationIdentity(listener),
-        onInvalidate:()=>{records.replaceChildren();documentValue.querySelectorAll("dialog[data-publication-dialog]").forEach(dialog=>{dialog.close?.();dialog.remove();});}});
+        onInvalidate:()=>{if(publicationClient !== active) return;records.replaceChildren();closePublicationDialogs(active);}});
       publicationClient = active;
       controller = {lock:()=>active.lock(),document:()=>({records:[]})};
       workspaceTitle.textContent = `${selectedTeam.name} / ${vault.name}`;
@@ -3174,7 +3197,7 @@ export function initializeTeamWorkspace({
         try { if(staleOnly)await active.loadStaleCache();else await active.load(); }
         catch(error) {
           if(staleOnly || error.message !== "publisher_verification_required") throw error;
-          const fingerprint = await requestPublisherVerification(documentValue,error.verification);
+          const fingerprint = await requestPublisherVerification(documentValue,error.verification,active);
           if(fingerprint === null) throw new Error("publisher_verification_required");
           await active.confirmPublisher(fingerprint); await active.load();
         }
@@ -3188,19 +3211,19 @@ export function initializeTeamWorkspace({
     try { format = await resolveTeamVaultFormat(client,scope); }
     catch(error) {
       if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
-      else { await clearLostPublication(error);setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); }
+      else { await clearLostPublication(error);if(ownsSelection(error))setText(workspaceStatus,publicationCopy(documentValue,"formatFailed")); }
       return;
     }
-    if (selection !== publicationSelection || selectedVault?.id !== vault.id) return;
+    if (!ownsSelection()) return;
     if (format !== "V1_ACTIVE") {
       workspace.hidden = activeView !== "hosts";
       recordCreate.hidden = true;
       if (format !== "V2_ACTIVE") { setText(workspaceStatus,publicationCopy(documentValue,"preparing")); return; }
       let deviceKeyVersion;
-      try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:client.publicationIdentity()}); }
+      try { deviceKeyVersion = await resolvePublicationDeviceKeyVersion({client,repository:deviceTrustRepository,identity,sessionIdentity:priorIdentity}); }
       catch(error) {
         if(isPublicationOfflineError(error))await openPublication({staleOnly:true});
-        else { await clearLostPublication(error);setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); }
+        else { await clearLostPublication(error);if(ownsSelection(error))setText(workspaceStatus,publicationCopy(documentValue,"localKeyFailed")); }
         return;
       }
       await openPublication({deviceKeyVersion});

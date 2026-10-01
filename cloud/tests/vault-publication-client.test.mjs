@@ -118,7 +118,8 @@ export async function browserFixture({
     },
     payload = null,
     highWater = null,
-    pin = null;
+    pin = null,
+    payloadReceipt = null;
   const requests = [],
     scope = {
       teamID: publisher.scope.teamID,
@@ -181,7 +182,7 @@ export async function browserFixture({
   };
   const repository = {
     async load() {
-      return { highWater: clone(highWater), payload: clone(payload) };
+      return { highWater: clone(highWater), payload: clone(payload), payloadReceipt };
     },
     async persist(_scope, value, guard) {
       guard();
@@ -194,9 +195,15 @@ export async function browserFixture({
         throw Error("publication_fork");
       highWater = clone(value.highWater);
       payload = clone(value.payload);
+      payloadReceipt = uuid();
+      return payloadReceipt;
     },
-    async clearPayload() {
+    async clearPayload(_scope, expected = payloadReceipt, guard = () => {}) {
+      guard();
+      if (expected !== payloadReceipt || !payloadReceipt) return false;
       payload = null;
+      payloadReceipt = null;
+      return true;
     },
   };
   const publisherTrustRepository = {
@@ -1047,4 +1054,128 @@ test("main browser logout clears views synchronously and cannot finish over a ne
   finishLogout();
   await pending;
   assert.equal(restored, 0);
+});
+
+// Keep authentication and all reader crypto real; only remote HTTP is synthetic.
+async function authenticatedPublicationFixture() {
+  const f = await browserFixture();
+  let intercept = null;
+  const authenticated = createAuthenticatedVaultClient({
+    fetchValue: async (path) => {
+      if (path === "/v1/auth/login") return Response.json({
+        user: { id: f.reader.accountID }, deviceID: f.reader.deviceID, token: "t".repeat(43),
+      });
+      if (path === "/v1/auth/logout") return Response.json({});
+      const url = new URL(path, f.reader.endpoint), q = Object.fromEntries(url.searchParams);
+      if (intercept) {
+        const result = intercept(url);
+        if (result) return result;
+      }
+      let value;
+      if (url.pathname.endsWith("/header")) value = await f.transport.header();
+      else if (url.pathname.endsWith("/publisher")) value = await f.transport.publisher();
+      else if (url.pathname.endsWith("/directory")) value = await f.transport.directory();
+      else {
+        const match = url.pathname.match(/resources\/([^/]+)\/parts\/([^/]+)$/);
+        value = await f.transport.part(f.scope, { ...q, resourceID: match[1], part: match[2] });
+      }
+      return Response.json(value);
+    },
+  });
+  await authenticated.login({ deviceID: f.reader.deviceID });
+  const options = { ...f.options, transport: authenticated.publicationTransport(),
+    identity: () => authenticated.publicationIdentity(f.reader.endpoint),
+    subscribeIdentityChange: cb => authenticated.subscribePublicationIdentity(cb) };
+  return { ...f, authenticated, options, intercept: fn => { intercept = fn; } };
+}
+
+test("causal authenticated current 401 retires protected payload even after its identity event, retaining high-water", async () => {
+  const f = await authenticatedPublicationFixture(), client = api.createVaultPublicationClient(f.options);
+  await client.load();
+  const highWater = clone(f.getStored().highWater);
+  f.intercept(() => Response.json({ error: "session_revoked" }, { status: 401 }));
+  await assert.rejects(client.load(), /authentication_required/);
+  assert.equal(f.authenticated.publicationIdentity(f.reader.endpoint), null);
+  assert.equal(client.view(), null);
+  assert.equal(f.getStored().payload, null);
+  assert.deepEqual(f.getStored().highWater, highWater);
+});
+
+for (const [operation, status] of [["load", 401], ["load", 403], ["SECRET", 401], ["SECRET", 403], ["SECRET", 200]]) {
+  test(`delayed authenticated ${operation} ${status} cannot invalidate a same-account relogin's protected publication`, async () => {
+    const f = await authenticatedPublicationFixture();
+    let invalidations = 0, finish, started;
+    const ready = new Promise(resolve => { started = resolve; });
+    const old = api.createVaultPublicationClient({ ...f.options, onInvalidate: () => invalidations++ });
+    const view = await old.load(), credential = view.models.find(m => m.kind === "CREDENTIAL");
+    f.intercept(url => {
+      if ((operation === "load" && url.pathname.endsWith("/header")) ||
+          (operation === "SECRET" && url.pathname.endsWith("/parts/SECRET"))) {
+        f.intercept(null);
+        started();
+        return new Promise(resolve => { finish = async () => {
+          const value = status === 200 ? await f.transport.part(f.scope, { resourceID: credential.resourceID, part: "SECRET" }) :
+            { error: status === 401 ? "session_revoked" : "publication_access_denied" };
+          resolve(Response.json(value, { status }));
+        }; });
+      }
+      return null;
+    });
+    const pending = (operation === "load" ? old.load() : old.revealSecret(credential.resourceID)).catch(e => e);
+    await ready;
+    await f.authenticated.logout();
+    await f.authenticated.login({ deviceID: f.reader.deviceID });
+    const newer = api.createVaultPublicationClient(f.options), newView = await newer.load();
+    const before = invalidations, newIdentity = f.options.identity(), cached = clone(f.getStored());
+    await finish();
+    const error = await pending;
+    assert.match(error.message, /authentication_required|publication_access_denied|publication_session_changed/);
+    assert.deepEqual(f.options.identity(), newIdentity);
+    assert.deepEqual(newer.view(), newView);
+    assert.deepEqual(f.getStored(), cached, "old completion erased the new protected payload");
+    assert.equal(invalidations, before, "old completion invalidated the newer UI owner");
+  });
+}
+
+test("payload cleanup compares the captured receipt even when another client persists before cleanup", async () => {
+  const f = await authenticatedPublicationFixture(), old = api.createVaultPublicationClient(f.options);
+  await old.load();
+  const clear = f.repository.clearPayload;
+  let resume, entered;
+  const ready = new Promise(resolve => { entered = resolve; });
+  f.repository.clearPayload = async (...args) => {
+    entered(); await new Promise(resolve => { resume = resolve; });
+    return clear(...args);
+  };
+  f.intercept(() => { f.intercept(null); return Response.json({ error: "publication_access_denied" }, { status: 403 }); });
+  const pending = old.load().catch(e => e);
+  await ready;
+  const newer = api.createVaultPublicationClient(f.options), newView = await newer.load(), cached = clone(f.getStored());
+  resume();
+  assert.equal((await pending).message, "publication_access_denied");
+  assert.deepEqual(f.getStored(), cached);
+  assert.deepEqual(newer.view(), newView);
+});
+
+
+test("a verified-to-stale transition retires current content dialogs before offline rendering", async () => {
+  const f = await browserFixture();
+  let invalidations = 0;
+  const client = api.createVaultPublicationClient({...f.options, onInvalidate:()=>invalidations++});
+  await client.load();
+  assert.equal(invalidations, 0);
+  f.transport.header = async ()=>{throw Error("publication_network_unavailable");};
+  assert.equal((await client.load()).stale, true);
+  assert.equal(invalidations, 1, "verified detail remains open with false current label");
+});
+
+
+test("causal authenticated current401 retires cache without an identity event subscription", async () => {
+  const f = await authenticatedPublicationFixture();
+  const client = api.createVaultPublicationClient({...f.options, subscribeIdentityChange:undefined});
+  await client.load();
+  f.intercept(()=>Response.json({error:"session_revoked"},{status:401}));
+  await assert.rejects(client.load(), /authentication_required/);
+  assert.equal(f.getStored().payload, null);
+  assert.equal(f.getStored().highWater.sequence, 1);
 });

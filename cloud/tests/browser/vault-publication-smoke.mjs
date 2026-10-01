@@ -36,6 +36,7 @@ try {
     executablePath: process.env.CHROMIUM_PATH ?? chromium.executablePath(),
   });
   const page = await browser.newPage();
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("http://127.0.0.1:" + server.address().port);
@@ -130,6 +131,12 @@ try {
             title: "Metadata only",
             username: "alice",
             secret: "BROWSER_PRIVATE_SECRET",
+          }),
+          { ...record("snippet", {
+            title: "Read the published snippet", body: "printf '<img src=x onerror=alert(1)>'\necho preserved", folder: "",
+          }), id: "legacy-snippet-id" },
+          record("forwarding", {
+            title: "Read the published forwarding", destination: "internal.example:443", configuration: '{"mode":"local","sourcePort":8443,"destination":"internal.example:443"}' ,
           }),
         ],
         tombstones: [],
@@ -310,7 +317,7 @@ try {
     const restarted = createVaultPublicationClient(options);
     network = true;
     const stale = await restarted.load();
-    if (!stale.stale || stale.models.length !== 3)
+    if (!stale.stale || stale.models.length !== 5)
       throw Error("offline restart cache failed");
     network = false;
     denial = "publication_repair_required";
@@ -452,11 +459,14 @@ try {
       q.onsuccess = r;
       q.onerror = j;
     });
+    let backgroundTick = null;
     const workspace = initializeTeamWorkspace({
       documentValue: document,
       client: appClient,
       deviceTrustRepository: ownTrustRepository,
-      backgroundSyncIntervalMilliseconds: 0,
+      setIntervalValue: callback => {backgroundTick = callback;return {unref(){}};},
+      clearIntervalValue: () => {backgroundTick = null;},
+      backgroundSyncIntervalMilliseconds: 15000,
       workspaceRefreshIntervalMilliseconds: 0,
     });
     await workspace.activate(identity);
@@ -478,6 +488,32 @@ try {
       );
     if (!document.querySelector("#team-record-create")?.disabled)
       throw Error("published edit enabled");
+    async function readPublishedDetail(kind, expected, stale = false) {
+      const model = view.models.find(m => m.kind === kind);
+      const card = appRecords.querySelector(`[data-resource-id="${model.resourceID}"]`);
+      const button = card?.querySelector('[data-publication-action="detail"]');
+      if (!button || button.disabled) throw Error("published " + kind + " body has no read surface: " + JSON.stringify({resource:model.resourceID,cards:[...appRecords.querySelectorAll("article")].map(c=>({id:c.dataset.resourceId,title:c.querySelector("h4")?.textContent,actions:[...c.querySelectorAll("button")].map(b=>({action:b.dataset.publicationAction,disabled:b.disabled}))}))}));
+      button.click();
+      const detail = document.querySelector('dialog[data-publication-dialog="detail"]');
+      if (!detail?.open || detail.querySelector("pre")?.textContent !== expected)
+        throw Error("published " + kind + " detail lost verified content");
+      if (detail.dataset.resourceId !== model.reference.resourceID || detail.dataset.teamId !== scope.teamID ||
+          detail.dataset.vaultId !== scope.vaultID || detail.dataset.generationId !== scope.attemptID)
+        throw Error("detail inferred original source ID instead of exact physical reference");
+      if (!detail.querySelector(`[data-publication-state="${stale ? "stale" : "verified"}"]`))
+        throw Error("detail current/stale label is false");
+      if (detail.querySelector("img,input,textarea,[data-publication-action=edit],[data-publication-action=run]"))
+        throw Error("read-only content constructed HTML or mutation surface");
+      detail.querySelector('[data-publication-action="copy"]').click();
+      for(let n=0; n<100 && await navigator.clipboard.readText() !== expected; n++)
+        await new Promise(r=>setTimeout(r,10));
+      if(await navigator.clipboard.readText() !== expected) throw Error("published " + kind + " copy failed");
+      detail.querySelector('[data-publication-action="close"]').click();
+      return button;
+    }
+    const snippetBody = "printf '<img src=x onerror=alert(1)>'\necho preserved";
+    await readPublishedDetail("SNIPPET", snippetBody);
+    await readPublishedDetail("FORWARDING", '{"mode":"local","sourcePort":8443,"destination":"internal.example:443"}' );
     const contextualID = appRecords.querySelector("article").dataset.resourceId;
     appRecords
       .querySelector("article")
@@ -510,8 +546,9 @@ try {
       throw Error(
         "actual workspace cannot reopen protected prior V2 cache offline",
       );
-    if ([...appRecords.querySelectorAll("button")].some((b) => !b.disabled))
+    if ([...appRecords.querySelectorAll("button:not([data-publication-action=detail])")].some((b) => !b.disabled))
       throw Error("stale SECRET/context Access enabled");
+    await readPublishedDetail("SNIPPET", snippetBody, true);
     // A separate online format probe with offline trust-snapshot preflight also uses only the prior protected publication.
     contextOffline = false;
     snapshotOffline = true;
@@ -549,6 +586,7 @@ try {
     contextDenial = null;
     const { createAuthenticatedVaultClient } = await import("/vault-sync.js");
     let finishLogout,
+      heldRequest = null,
       protectedReads = 0;
     const authenticated = createAuthenticatedVaultClient({
       fetchValue: async (path, options) => {
@@ -568,6 +606,20 @@ try {
         protectedReads++;
         const url = new URL(path, endpoint),
           query = Object.fromEntries(url.searchParams);
+        if (heldRequest?.matches(url)) {
+          const request = heldRequest;
+          heldRequest = null;
+          request.started();
+          return new Promise(resolve => {
+            request.finish = async () => {
+              const match = url.pathname.match(/resources\/([^/]+)\/parts\/([^/]+)$/);
+              const value = request.status !== 200 ? { error: request.status === 401 ? "session_revoked" : "publication_access_denied" } :
+                match ? await transport.part(scope, { ...query, resourceID: match[1], part: match[2] }) :
+                  { formatState: "V2_ACTIVE", policyMutationAvailable: false, groupMutationAvailable: false, blockers: ["crypto_publication_required"] };
+              resolve(new Response(JSON.stringify(value), { status: request.status }));
+            };
+          });
+        }
         let value;
         if (url.pathname.endsWith("/access-context"))
           value = {
@@ -678,19 +730,150 @@ try {
       !appRecords.querySelector("article")
     )
       throw Error("delayed main logout affected newer workspace identity");
+    async function waitFor(condition, failure) {
+      for (let n=0; n<200 && !condition(); n++) await new Promise(r=>setTimeout(r,10));
+      if(!condition()) throw Error(failure);
+    }
+    // Same authenticated adapter as the app, real WebCrypto and a shared IndexedDB scope.
+    const raceCases = [["load",401],["load",403],["SECRET",401],["SECRET",403],["SECRET",200],
+      ["preflight",401],["preflight",403],["preflight",200]];
+    for (const [operation,status] of raceCases) {
+      let started;
+      const ready = new Promise(r=>{started=r;});
+      const request = { status, started, matches: url =>
+        operation === "load" ? url.pathname.endsWith("/publication/header") :
+        operation === "SECRET" ? url.pathname.endsWith("/parts/SECRET") : url.pathname.endsWith("/access-context") };
+      heldRequest = request;
+      if (operation === "SECRET") [...appRecords.querySelectorAll("button")].find(b=>b.textContent === "Показать секрет").click();
+      else document.querySelector("#team-vault-open").click();
+      await ready;
+      document.querySelector("#cloud-logout").click();
+      const previousLogout = pendingLogout, previousFinish = finishLogout;
+      await authenticated.login({deviceID});
+      await workspace.activate(identity); workspace.setView("hosts");
+      await waitFor(()=>!!appRecords.querySelector('[data-publication-state="verified"]'), "new session did not materialize during " + operation + status);
+      await readPublishedDetail("SNIPPET", snippetBody);
+      const snippet = view.models.find(m=>m.kind === "SNIPPET");
+      appRecords.querySelector(`[data-resource-id="${snippet.resourceID}"] [data-publication-action="detail"]`).click();
+      const dialog = document.querySelector('dialog[data-publication-dialog="detail"]');
+      [...appRecords.querySelectorAll("button")].find(b=>b.textContent === "Показать секрет").click();
+      await waitFor(()=>!!document.querySelector('dialog[data-publication-dialog="secret"]'), "new secret dialog missing");
+      const newSecret = document.querySelector('dialog[data-publication-dialog="secret"]');
+      const protectedPayload = await repository.load(cs), newIdentity = authenticated.publicationIdentity(endpoint);
+      const statusBefore = document.querySelector("#team-vault-workspace-status").textContent;
+      const cardsBefore = appRecords.textContent;
+      await request.finish();
+      await new Promise(r=>setTimeout(r,80));
+      const after = await repository.load(cs);
+      if (!after.payload || JSON.stringify(after.payloadReceipt) !== JSON.stringify(protectedPayload.payloadReceipt) ||
+          JSON.stringify(after.payload) !== JSON.stringify(protectedPayload.payload)) throw Error("old " + operation + status + " erased newer protected payload");
+      if (JSON.stringify(authenticated.publicationIdentity(endpoint)) !== JSON.stringify(newIdentity)) throw Error("old response erased new authentication");
+      if (cardsBefore !== appRecords.textContent || !dialog.isConnected || !dialog.open ||
+          !newSecret.isConnected || !newSecret.open || newSecret.querySelector("pre").textContent !== "BROWSER_PRIVATE_SECRET" ||
+          statusBefore !== document.querySelector("#team-vault-workspace-status").textContent)
+        throw Error("old " + operation + status + " affected newer DOM/dialog/status owner");
+      dialog.querySelector('[data-publication-action="close"]').click(); newSecret.querySelector("button").click();
+      previousFinish(); await previousLogout;
+    }
+    // Selection changes without relogin must also reject a late preflight denial.
+    let selectedStarted;
+    const selectionReady = new Promise(r=>{selectedStarted=r;});
+    const selectedRequest = { status:403, started:selectedStarted, matches:url=>url.pathname.endsWith("/access-context") };
+    heldRequest = selectedRequest;
+    document.querySelector("#team-vault-open").click(); await selectionReady;
+    document.querySelector("#team-vault-open").click();
+    await waitFor(()=>!!appRecords.querySelector('[data-publication-state="verified"]'), "new selection did not materialize");
+    const selectionCache = await repository.load(cs), selectionStatus = document.querySelector("#team-vault-workspace-status").textContent;
+    await selectedRequest.finish(); await new Promise(r=>setTimeout(r,80));
+    if (JSON.stringify((await repository.load(cs)).payload) !== JSON.stringify(selectionCache.payload) ||
+        document.querySelector("#team-vault-workspace-status").textContent !== selectionStatus || !appRecords.querySelector("article"))
+      throw Error("old selected preflight denied newer selection");
+    // A content dialog cannot retain a confirmed-current label after a network fallback.
+    const transitionSnippet = view.models.find(m=>m.kind === "SNIPPET");
+    appRecords.querySelector(`[data-resource-id="${transitionSnippet.resourceID}"] [data-publication-action="detail"]`).click();
+    const onlineDetail = document.querySelector('dialog[data-publication-dialog="detail"]');
+    network = true; backgroundTick();
+    await waitFor(()=>!!appRecords.querySelector('[data-publication-state="stale"]'), "same-client network fallback was not stale");
+    if(onlineDetail.isConnected || onlineDetail.querySelector("pre").textContent) throw Error("offline fallback retained falsely-current content dialog");
+    await readPublishedDetail("SNIPPET", snippetBody, true);
+    appRecords.querySelector(`[data-resource-id="${transitionSnippet.resourceID}"] [data-publication-action="detail"]`).click();
+    const staleDetail = document.querySelector('dialog[data-publication-dialog="detail"]');
+    network = false; backgroundTick();
+    await waitFor(()=>!!appRecords.querySelector('[data-publication-state="verified"]'), "online recheck was not current");
+    if(staleDetail.isConnected || staleDetail.querySelector("pre").textContent) throw Error("online refresh retained old stale dialog");
+    // A real current 401 must still remove managed payload after its synchronous identity event.
+    let currentStarted;
+    const currentReady = new Promise(r=>{currentStarted=r;});
+    const currentRequest = { status:401, started:currentStarted, matches:url=>url.pathname.endsWith("/publication/header") };
+    appRecords.querySelector(`[data-resource-id="${transitionSnippet.resourceID}"] [data-publication-action="detail"]`).click();
+    const deniedDetail = document.querySelector('dialog[data-publication-dialog="detail"]');
+    [...appRecords.querySelectorAll("button")].find(b=>b.textContent === "Показать секрет").click();
+    await waitFor(()=>!!document.querySelector('dialog[data-publication-dialog="secret"]'), "current denied view lacked secret dialog");
+    const deniedSecret = document.querySelector('dialog[data-publication-dialog="secret"]');
+    heldRequest = currentRequest;
+    backgroundTick(); await currentReady;
+    await currentRequest.finish();
+    await waitFor(()=>authenticated.publicationIdentity(endpoint) === null, "current401 kept identity");
+    await waitFor(()=>!appRecords.querySelector("article"), "current401 kept DOM");
+    await waitFor(()=>!document.querySelector('dialog[data-publication-dialog]'), "current401 kept dialog");
+    for(let n=0;n<100 && (await repository.load(cs)).payload;n++) await new Promise(r=>setTimeout(r,10));
+    const retired = await repository.load(cs);
+    if(deniedDetail.isConnected || deniedDetail.querySelector("pre").textContent || deniedSecret.isConnected || deniedSecret.querySelector("pre").textContent)
+      throw Error("current401 failed to scrub existing owned ordinary/SECRET dialogs");
+    if(retired.payload !== null || retired.highWater.sequence !== 1 || retired.highWater.hash !== headerHash)
+      throw Error("current401 lost payload retirement or protected high-water");
+    await authenticated.login({deviceID}); await workspace.activate(identity); workspace.setView("hosts");
+    await waitFor(()=>!!appRecords.querySelector("article"), "post-denial session failed to restore");
+    // Race a real IndexedDB cleanup against another same-session client's completed persistence.
+    const cleanupReader = createVaultPublicationClient({...options, transport:authenticated.publicationTransport(),
+      identity:()=>authenticated.publicationIdentity(endpoint), subscribeIdentityChange:cb=>authenticated.subscribePublicationIdentity(cb)});
+    await cleanupReader.load();
+    const clearPayload = repository.clearPayload;
+    let cleanupEntered, resumeCleanup;
+    const cleanupReady = new Promise(r=>{cleanupEntered=r;});
+    repository.clearPayload = async (...args)=>{cleanupEntered();await new Promise(r=>{resumeCleanup=r;});return clearPayload(...args);};
+    let casStarted;
+    const casReady = new Promise(r=>{casStarted=r;});
+    const casRequest = {status:403,started:casStarted,matches:url=>url.pathname.endsWith("/publication/header")};
+    heldRequest = casRequest;
+    const pendingCleanup = cleanupReader.load().catch(e=>e);
+    await casReady; await casRequest.finish(); await cleanupReady;
+    const replacement = createVaultPublicationClient({...options, transport:authenticated.publicationTransport(),
+      identity:()=>authenticated.publicationIdentity(endpoint)});
+    await replacement.load();
+    const replacementCache = await repository.load(cs);
+    resumeCleanup();
+    if((await pendingCleanup).message !== "publication_access_denied") throw Error("CAS race did not reach authenticated403");
+    if(JSON.stringify((await repository.load(cs)).payload) !== JSON.stringify(replacementCache.payload)) throw Error("atomic durable cleanup erased replacement");
+    repository.clearPayload = clearPayload; cleanupReader.dispose(); replacement.dispose();
+    // Actual logout closes and scrubs the read-only ordinary content dialog too.
+    const currentSnippet = view.models.find(m=>m.kind === "SNIPPET");
+    appRecords.querySelector(`[data-resource-id="${currentSnippet.resourceID}"] [data-publication-action="detail"]`).click();
+    const logoutDetail = document.querySelector('dialog[data-publication-dialog="detail"]');
+    document.querySelector("#cloud-logout").click();
+    if(logoutDetail.isConnected || logoutDetail.querySelector("pre")?.textContent || appRecords.querySelector("article"))
+      throw Error("actual logout retained ordinary plaintext display");
+    finishLogout(); await pendingLogout;
     workspace.deactivate();
     return {
       models: view.models.length,
       requests,
       highWaterTamperDenied,
       actualApp: true,
+      publishedSnippetReadCopy: true,
+      publishedForwardingReadCopy: true,
+      delayedAuthenticatedRaces: raceCases.length,
+      sameSessionSelectionRace: true,
+      protectedCleanupCAS: true,
+      current401PayloadRetirement: true,
+      ordinaryDialogLogoutCleanup: true,
       actualContextReference: true,
       actualOfflineReopen: true,
       actualPendingLogoutBlocked: true,
       offlineDenialAndMissingCache: true,
     };
   });
-  assert.equal(result.models, 3);
+  assert.equal(result.models, 5);
   assert.equal(result.highWaterTamperDenied, true);
   assert.deepEqual(errors, []);
   console.log("PUBLICATION_BROWSER " + JSON.stringify(result));
