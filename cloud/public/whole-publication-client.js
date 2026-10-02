@@ -117,11 +117,11 @@ export function canonicalWholePublicationRequest(request) {
     v.contentChanges.sort((a,b)=>compare(a.resourceID+'/'+a.part,b.resourceID+'/'+b.part));v.custodianDeviceIDs.sort(compare);}
   value.vaults.sort((a,b)=>compare(a.vaultID,b.vaultID));return value;
 }
-export async function collectWholePublicationPreview({ request, transport, getIdentity, cryptoValue = globalThis.crypto }) {
+export async function collectWholePublicationPreview({ request, transport, getIdentity, token, cryptoValue = globalThis.crypto }) {
   const context = capturedContext(getIdentity), wanted = canonicalWholePublicationRequest(request), rows = [], cursors = new Set();
   let first, cursor = null;
   do {
-    const page = await context.checked(() => transport.preview(copy(wanted), first ? { token: first.token, cursor } : {}));
+    const page = await context.checked(() => transport.preview(copy(wanted), first ? { token: first.token, cursor } : token === undefined ? {} : { token }));
     bindingIdentity(page, context.identity);
     if (!Array.isArray(page.rows) || page.rows.length > 100 || (first && (!equal(page.binding, first.binding)
       || page.token !== first.token || !equal(page.generations, first.generations) || !equal(page.request, first.request)))) fail('publication_preview_invalid');
@@ -436,10 +436,11 @@ export function createWholePublicationCoordinator(options) {
     const { state, checkpoint } = stored, op = state.request.operationID;
     const started = await context.checked(() => transport.start(token, copy(state.request)));
     if (started?.generations && !equal(started.generations, state.generations.map(({ objects, administrativeSidecar, readerProjection, manifest, resources, ...g }) => g))) fail('publication_stale');
+    const checkpointVaultID = state.generations.map(g => g.vaultID).sort(compare)[0];
     for (const g of state.generations) {
       for (const object of g.objects) await context.checked(() => transport.putPart(op, g.vaultID, copy(object)));
       const opaqueCheckpoint = { version: checkpoint.version, nonce: checkpoint.nonce, ciphertext: checkpoint.ciphertext };
-      await context.checked(() => transport.putProjection(op, g.vaultID, copy(g.readerProjection), copy(g.administrativeSidecar), opaqueCheckpoint));
+      await context.checked(() => transport.putProjection(op, g.vaultID, copy(g.readerProjection), copy(g.administrativeSidecar), g.vaultID === checkpointVaultID ? opaqueCheckpoint : undefined));
     }
     await context.checked(() => transport.validate(op, state.generations.map(g => ({ vaultID: g.vaultID, manifest: copy(g.manifest) }))));
     return { ...state, checkpoint };
@@ -492,10 +493,11 @@ export function createWholePublicationCoordinator(options) {
       const context={...current,identity:{...current.identity,sessionID:checkpointIdentity.sessionID,keyVersion:checkpointIdentity.keyVersion}},stored=await load(request,context);
       const receipt=await recoverReceipt(stored.state,context);if(!receipt)fail('publication_not_committed');return receipt;
     },
-    async prepare({ request, plaintextByVault, administrativeByVault, confirm }) {
-      const context = capturedContext(getIdentity), preview = await collectWholePublicationPreview({ request, transport, getIdentity, cryptoValue });
+    async prepare({ request, token, plaintextByVault, administrativeByVault, confirm, onPrepared }) {
+      const context = capturedContext(getIdentity), preview = await collectWholePublicationPreview({ request, token, transport, getIdentity, cryptoValue });
       context.guard(); if (confirm && !await context.checked(() => confirm(copy(preview)))) fail('publication_cancelled');
       await prepareWholePublication({ ...options, preview, plaintextByVault, administrativeByVault, cryptoValue });
+      if (onPrepared) await context.checked(() => onPrepared());
       const stored = await load(preview.request, context); return upload(stored, context, preview.token);
     },
     async resume({ request }) {

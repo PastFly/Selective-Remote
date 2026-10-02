@@ -79,7 +79,7 @@ jobs:
           node --test tests/vault-v2-migration-postgres.test.mjs
           node --test tests/vault-publication-identities-postgres.test.mjs
           node --test tests/vault-publication-store.test.mjs
-          node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs
+          node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs tests/whole-publication-browser-postgres.test.mjs
           WHOLE_PUBLICATION_BENCHMARK=1 WHOLE_PUBLICATION_BENCHMARK_SCENARIOS=resources100,resources1000 node scripts/whole-publication-benchmark.mjs
           node scripts/benchmark-vault-v2-migration.mjs 100 1000
 

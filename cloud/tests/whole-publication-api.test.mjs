@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto, createHash } from 'node:crypto';
 import { uuid } from './vault-v2-migration-fixtures.mjs';
+import { publicationHash } from '../public/vault-publication-v1.js';
 import { canonicalMigrationJSON } from '../public/vault-v2-migration.js';
 import { createAuthenticatedVaultClient } from '../public/vault-sync.js';
 const api = await import('../public/whole-publication-api.js').catch(() => ({}));
@@ -42,10 +43,11 @@ test('context requires explicit staging capability and rejects stale identity be
 });
 
 test('projection chunks carry exact immutable canonical bytes and stop on an invalid assembly acknowledgment', async () => {
+  const expectedHeader = {version:1,synthetic:'chunk-header'}, expectedHash = await publicationHash('header',expectedHeader,webcrypto);
   const calls = [], transport = api.createWholePublicationTransport({ teamID, getIdentity: () => ({ accountID, deviceID, sessionEpoch: '1' }), cryptoValue: webcrypto,
     request: async (path, options) => { const body = JSON.parse(options.body); calls.push({ path, body }); return new Response(JSON.stringify({ complete: body.index === body.count - 1,
-      ...(body.index === body.count - 1 ? { headerHash: 'b'.repeat(64) } : {}) })); } });
-  const projection = { ciphertext: 'A'.repeat(1024 * 1024 + 5) }, sidecar = { envelope: { ciphertext: 'B'.repeat(8) } }, checkpoint = { version: 1, nonce: 'AA', ciphertext: 'CC' };
+      ...(body.index === body.count - 1 ? { headerHash: expectedHash } : {}) })); } });
+  const projection = { header: expectedHeader, ciphertext: 'A'.repeat(1024 * 1024 + 5) }, sidecar = { envelope: { ciphertext: 'B'.repeat(8) } }, checkpoint = { version: 1, nonce: 'AA', ciphertext: 'CC' };
   await transport.putProjection(operationID, vaultID, projection, sidecar, checkpoint);
   assert.equal(calls.length, 3);
   assert.ok(calls.every(c => c.path === `/v1/teams/${teamID}/publication/operations/${operationID}/projection-chunks/${vaultID}`));
@@ -79,4 +81,15 @@ test('COMMITTED recovery-only context is confined to an owned operation and neve
   const transport=api.createWholePublicationTransport({teamID,getIdentity:()=>({accountID,deviceID}),request:async()=>new Response(JSON.stringify(body))});
   assert.equal((await transport.context({operationID})).recoveryOnly,true);await assert.rejects(transport.context(),/publication_unavailable/);
   body.current[0].policy=[{id:uuid()}];await assert.rejects(transport.context({operationID}),/publication_unavailable/);
+});
+
+
+test('completed multi-chunk replay accepts only the exact expected header commitment',async()=>{
+ const {publicationHash}=await import('../public/vault-publication-v1.js');
+ const projection={header:{version:1,synthetic:'commitment'},ciphertext:'A'.repeat(600000)},sidecar={envelope:{}},checkpoint={version:1,nonce:'AA',ciphertext:'CC'};
+ const headerHash=await publicationHash('header',projection.header,webcrypto);let calls=0;
+ const transport=api.createWholePublicationTransport({teamID,getIdentity:()=>({accountID,deviceID}),cryptoValue:webcrypto,request:async()=>{calls++;return new Response(JSON.stringify({complete:true,headerHash}));}});
+ await transport.putProjection(operationID,vaultID,projection,sidecar,checkpoint);assert.ok(calls>=1);
+ const forged=api.createWholePublicationTransport({teamID,getIdentity:()=>({accountID,deviceID}),cryptoValue:webcrypto,request:async()=>new Response(JSON.stringify({complete:true,headerHash:'b'.repeat(64)}))});
+ await assert.rejects(forged.putProjection(operationID,vaultID,projection,sidecar,checkpoint),/publication_response_invalid/);
 });

@@ -1,3 +1,4 @@
+import { publicationHash } from './vault-publication-v1.js';
 import { accessID } from './access-model.js';
 import { canonicalMigrationJSON, toBase64 } from './vault-v2-migration.js';
 
@@ -56,14 +57,20 @@ export function createWholePublicationTransport({ request, teamID, getIdentity, 
       return json(`${op(operationID)}/parts/${accessID(vaultID)}`, { object });
     },
     async putProjection(operationID, vaultID, projection, sidecar, checkpoint) {
-      const guard = capture(), bytes = encoder.encode(canonicalMigrationJSON({ projection, sidecar, checkpoint }));
+      const guard = capture(), bytes = encoder.encode(canonicalMigrationJSON({ projection, sidecar, ...(checkpoint === undefined ? {} : { checkpoint }) }));
       if (!bytes.length || bytes.length > MAX_TOTAL) fail('publication_limit');
       const count = Math.ceil(bytes.length / MAX_CHUNK);
       const sha256 = Array.from(new Uint8Array(await cryptoValue.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join(''); guard();
+      const headerHash = await publicationHash('header', projection.header, cryptoValue); guard();
       for (let index = 0; index < count; index++) {
         guard(); const result = await json(`${op(operationID)}/projection-chunks/${accessID(vaultID)}`, {
           version: 1, index, count, sha256, data: toBase64(bytes.subarray(index * MAX_CHUNK, Math.min(bytes.length, (index + 1) * MAX_CHUNK))) }); guard();
-        if (result?.complete !== (index === count - 1) || index === count - 1 && !/^[a-f0-9]{64}$/u.test(result.headerHash)) fail('publication_response_invalid');
+        if (typeof result?.complete !== 'boolean') fail('publication_response_invalid');
+        if (result.complete) {
+          if (result.headerHash !== headerHash) fail('publication_response_invalid');
+          return;
+        }
+        if (index === count - 1) fail('publication_response_invalid');
       }
     },
     validate(operationID, manifests) { return json(op(operationID) + '/validate', { manifests }); },

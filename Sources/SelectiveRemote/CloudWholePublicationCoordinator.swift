@@ -382,6 +382,9 @@ actor SelectiveRemoteWholePublicationCoordinator {
     }
     func preview(request value: SelectiveRemoteJSONValue) async throws -> SelectiveRemoteWholePublicationPreview {
         try enter(); defer { busy = false }
+        return try await collectPreview(request: value)
+    }
+    private func collectPreview(request value: SelectiveRemoteJSONValue) async throws -> SelectiveRemoteWholePublicationPreview {
         let value = try SelectiveRemoteWholePublicationWire.canonicalRequest(value)
         guard try !writesDisabled() else { throw SelectiveRemoteWholePublicationError.readbackRequired }
         let vaults = try validateRequest(value)
@@ -876,10 +879,13 @@ actor SelectiveRemoteWholePublicationCoordinator {
         guard !state.discarded else { throw SelectiveRemoteWholePublicationError.replayConflict }
         if state.pending { return try await resolve(plan: plan) }
         guard plan["binding"] == preview.binding, plan["generations"] == .array(preview.generations) else { throw SelectiveRemoteWholePublicationError.replayConflict }
-        try validateToken(preview.token, binding: preview.binding)
+        // Preparation can outlive the preview TTL. Renew only identical frozen consent under this actor's write fence.
+        let fresh = try await collectPreview(request: preview.request)
+        guard plan["binding"] == fresh.binding, plan["generations"] == .array(fresh.generations) else { throw SelectiveRemoteWholePublicationError.replayConflict }
+        try validateToken(fresh.token, binding: fresh.binding)
         try check(); try store.recordCommit(scope: scope, session: session); try check()
         let receipt: SelectiveRemoteJSONValue
-        do { receipt = try await request("operations/\(scope.operationID.canonicalCloudString)/commit", .object(["request": preview.request, "token": .string(preview.token)])) }
+        do { receipt = try await request("operations/\(scope.operationID.canonicalCloudString)/commit", .object(["request": preview.request, "token": .string(fresh.token)])) }
         catch {
             try check()
             if case let SelectiveRemoteCloudError.serviceError(status, code) = error, status == 409,

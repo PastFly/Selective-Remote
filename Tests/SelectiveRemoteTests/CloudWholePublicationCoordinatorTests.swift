@@ -298,6 +298,11 @@ private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
                 p["token"] = .string(try SelectiveRemoteWholePublicationWire.bytes(claims).selectiveRemoteBase64URL + "." + Data(repeating: 1, count: 32).selectiveRemoteBase64URL)
             }
             requestedPreview = .object(p)
+            if fault == "changed-preview" {
+                var binding = try p["binding"]!.publicationObject(); binding["effectiveAt"] = .string("2026-10-02T01:00:00.000Z"); p["binding"] = .object(binding)
+                let claims: SelectiveRemoteJSONValue = .object(["version": .number(1), "instanceID": .string(UUID().canonicalCloudString), "issuedAt": .number(0), "expiresAt": .number(4_000_000_000_000), "binding": .object(binding)])
+                p["token"] = .string(try SelectiveRemoteWholePublicationWire.bytes(claims).selectiveRemoteBase64URL + "." + Data(repeating: 1, count: 32).selectiveRemoteBase64URL)
+            }
             if fault == "partial-preview" { p["rows"] = .array(Array(try p["rows"]!.publicationArray().prefix(1))) }
             if fault == "repeated-preview" { p["nextCursor"] = .string("same") }
             return .object(p)
@@ -407,6 +412,31 @@ struct CloudWholePublicationPipelineTests {
             #expect(await remote.uploaded.isEmpty)
             #expect(try store.load(scope: coordinator.scope, session: session) == nil)
         }
+    }
+
+    @Test("commit renews expired consent only against the frozen prepared binding")
+    func renewExpiredConsent() async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        let claims: SelectiveRemoteJSONValue = .object(["version": .number(1), "instanceID": .string(UUID().canonicalCloudString), "issuedAt": .number(0), "expiresAt": .number(1), "binding": preview.binding])
+        let expired = SelectiveRemoteWholePublicationPreview(scope: preview.scope, token: try SelectiveRemoteWholePublicationWire.bytes(claims).selectiveRemoteBase64URL + "." + Data(repeating: 1, count: 32).selectiveRemoteBase64URL, binding: preview.binding, request: preview.request, generations: preview.generations, rows: preview.rows)
+        let uploadCount = await remote.uploaded.count
+        _ = try await coordinator.commit(preview: expired)
+        #expect(await remote.uploaded.count == uploadCount)
+        #expect(await remote.committed != nil)
+    }
+
+    @Test("renewed commit refuses changed successor consent before any commit")
+    func changedRenewedConsent() async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        await remote.setFault("changed-preview")
+        await #expect(throws: Error.self) { try await coordinator.commit(preview: preview) }
+        #expect(await remote.committed == nil)
     }
 
     @Test("fresh complete generation uses sequence contexts, exact wrappers and decryptable unchanged content")

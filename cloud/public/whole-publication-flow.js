@@ -239,8 +239,8 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
       if(p.prepared){const resumed=await c.checked(()=>p.coordinator.resume({request:p.preview.request}));if(resumed?.committedAt){pending=null;return resumed;}}
       else {
         const keys=await local(c),sources=await c.checked(()=>repairWholePublicationSources({context,preview:p.preview,transport,pinnedTrust:keys.pinnedTrust,devicePrivateKey:keys.identity.privateKey,ownIdentity:c.identity,getIdentity,cryptoValue}));
-        applyLocalChanges(sources,p.preview.request,p.intent,p.vaultID);p.prepared=true;
-        await c.checked(()=>p.coordinator.prepare({request:p.preview.request,...sources,confirm:fresh=>same(fresh.binding,p.preview.binding)&&same(fresh.generations,p.preview.generations)}));
+        applyLocalChanges(sources,p.preview.request,p.intent,p.vaultID);
+        await c.checked(()=>p.coordinator.prepare({request:p.preview.request,token:p.preview.token,...sources,onPrepared:()=>{p.prepared=true;},confirm:fresh=>same(fresh.binding,p.preview.binding)&&same(fresh.generations,p.preview.generations)}));
       }
       const receipt=await c.checked(()=>p.coordinator.commit({request:p.preview.request}));pending=null;return receipt;
     },
