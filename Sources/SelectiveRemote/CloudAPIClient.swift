@@ -339,15 +339,19 @@ enum SelectiveRemoteCloudPortalURL {
 actor SelectiveRemoteCloudAPIClient {
     private let dataLoader: SelectiveRemoteCloudDataLoader
     let tokenStore: any SelectiveRemoteCloudTokenStore
+    let publicationStore: @Sendable () throws -> SelectiveRemoteVaultPublicationStore
+    var publicationRetirementSessions: [String: SelectiveRemotePublicationSession] = [:]
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
     init(
         session: URLSession = .shared,
         tokenStore: any SelectiveRemoteCloudTokenStore = SelectiveRemoteCloudKeychainTokenStore(),
-        dataLoader: SelectiveRemoteCloudDataLoader? = nil
+        dataLoader: SelectiveRemoteCloudDataLoader? = nil,
+        publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try SelectiveRemoteVaultPublicationStore() }
     ) {
         self.tokenStore = tokenStore
+        self.publicationStore = publicationStore
         self.dataLoader = dataLoader ?? { request in
             try await session.data(for: request)
         }
@@ -1094,12 +1098,18 @@ actor SelectiveRemoteCloudAPIClient {
             request.setValue(value, forHTTPHeaderField: name)
         }
         let requestEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint)
+        let retirement = try publicationRetirementSession(endpoint: endpoint, token: token)?.retirementSnapshot()
         let (data, response) = try await dataLoader(request)
         let http = try httpResponse(response)
         guard SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == requestEpoch, try storedToken(for: endpoint) == token else { throw CancellationError() }
         if http.statusCode == 401 {
-            SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+            try SelectiveRemotePublicationLifecycle.loseAuthentication(endpoint: endpoint, expectedEpoch: requestEpoch)
             try? tokenStore.removeToken(for: endpoint)
+            if let retirement {
+                // Payload deletion precedes protected receipt writes; retirement attempts every captured owner.
+                try? retirement.prepareAuthenticationLossRetirement()
+                try? await retirePublications(session: retirement, selection: .all)
+            }
             await MainActor.run { SelectiveRemotePublicationPresentation.shared.clearInvalidSessions(endpoint: endpoint) }
             throw SelectiveRemoteCloudError.authenticationRequired
         }

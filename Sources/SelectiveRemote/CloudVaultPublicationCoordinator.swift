@@ -123,6 +123,25 @@ actor SelectiveRemoteVaultPublicationCoordinator {
         let response = try await read("header").publicationObject(["header", "headerHash", "subject", "inventory"])
         guard response["header"] == cache.header, response["headerHash"] == .string(cache.headerHash), response["subject"] == cache.subject, response["inventory"] == cache.inventory else { throw SelectiveRemoteCloudError.serviceError(409, "publication_changed") }
     }
+    static func authenticationLoss(_ error: Error) -> Bool {
+        if case SelectiveRemoteCloudError.authenticationRequired = error { return true }
+        if case let SelectiveRemoteCloudError.serviceError(status, _) = error { return status == 401 }
+        return false
+    }
+    private func retire(_ error: Error, payloadStamp: SelectiveRemotePublicationPayloadStamp, retirementSession: SelectiveRemotePublicationSession) async {
+        if Self.authenticationLoss(error) {
+            do { try retirementSession.prepareAuthenticationLossRetirement(); _ = try store.retireScopes(session: retirementSession, selection: .all) } catch {}
+            await MainActor.run {
+                let presentation = SelectiveRemotePublicationPresentation.shared
+                for cache in presentation.caches where cache.scope.endpoint == session.endpoint && cache.scope.accountID == session.accountID && cache.scope.deviceID == session.deviceID {
+                    presentation.detach(scope: cache.scope, expectedSession: session)
+                }
+            }
+        } else if Self.authoritative(error) {
+            try? store.removePayload(scope: scope, session: session, expectedStamp: payloadStamp)
+            await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
+        }
+    }
     static func authoritative(_ error: Error) -> Bool {
         if case SelectiveRemoteCloudError.authenticationRequired = error { return true }
         if case let SelectiveRemoteCloudError.serviceError(status, code) = error { return status == 401 || status == 403 || status == 404 || code == "publication_repair_required" }
@@ -135,8 +154,10 @@ actor SelectiveRemoteVaultPublicationCoordinator {
     }
     func load(teamName: String, vaultName: String, role: SelectiveRemoteCloudTeamRole) async throws -> SelectiveRemotePublicationCache {
         let payloadStamp = try store.payloadStamp(scope: scope)
+        var retirementSession = session
         do {
-            try session.check()
+            try session.check(); try store.captureRetirementOwners(session: session)
+            retirementSession = try session.retirementSnapshot()
             let highWater = try store.highWater(scope: scope)
             let response = try await read("header").publicationObject(["header", "headerHash", "subject", "inventory"])
             let header = response["header"]!, h = try SelectiveRemoteVaultPublicationV1.headerPayload(header)
@@ -175,11 +196,12 @@ actor SelectiveRemoteVaultPublicationCoordinator {
             _ = try cache.materializedSnapshot()
             try await pointer(cache)
             try session.check(); try store.commit(cache, expected: highWater, session: session); try session.check()
+            try store.captureRetirementOwners(session: session)
             current = cache
             return cache
         } catch {
             current = nil
-            if Self.authoritative(error) { try? store.removePayload(scope: scope, session: session, expectedStamp: payloadStamp); await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) } }
+            await retire(error, payloadStamp: payloadStamp, retirementSession: retirementSession)
             if Self.transient(error) { return try offline() }
             await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
             throw error
@@ -201,33 +223,39 @@ actor SelectiveRemoteVaultPublicationCoordinator {
         cache.stale = true; _ = try cache.materializedSnapshot(); try session.check(); current = cache
         return cache
     }
-    func secretRecord(resourceID: UUID) async throws -> SelectiveRemoteVaultRecord {
+    func secretRecord(resourceID: UUID, expectedHeaderHash: String? = nil) async throws -> SelectiveRemoteVaultRecord {
+        if let expectedHeaderHash { guard current?.headerHash == expectedHeaderHash else { throw SelectiveRemotePublicationError.scope } }
         let payloadStamp = try store.payloadStamp(scope: scope)
+        var retirementSession = session
         do {
-            try session.check()
+            try session.check(); try store.captureRetirementOwners(session: session)
+            retirementSession = try session.retirementSnapshot()
             guard let cache = current, !cache.stale, let descriptor = cache.descriptors.first(where: {
                 guard let p = try? SelectiveRemoteVaultPublicationV1.descriptorPayload($0) else { return false }
                 return p["resourceID"] == .string(resourceID.canonicalCloudString) && p["kind"] == .string("CREDENTIAL") && p["part"] == .string("SECRET")
             }) else { throw SelectiveRemotePublicationError.subject }
             try await pointer(cache)
+            guard current?.headerHash == cache.headerHash else { throw CancellationError() }
             let generation = try SelectiveRemoteVaultPublicationV1.headerPayload(cache.header)["generationID"]!.publicationString()
             let response = try await read("resources/" + resourceID.canonicalCloudString + "/parts/SECRET", generation: generation, hash: cache.headerHash)
+            guard current?.headerHash == cache.headerHash else { throw CancellationError() }
             let part = try decrypt(response, descriptor: descriptor, cache: cache)
             let payload = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: part.plaintext).publicationObject()
             let record = try payload["record"]!.publicationObject(), data = try record["data"]!.publicationObject()
             _ = try data["secret"]!.publicationString()
             let decodedRecord = try SelectiveRemotePublicationPartDecoder.runtimeRecord(payload["record"]!, resourceID: resourceID)
             try await pointer(cache); try session.check()
+            guard current?.headerHash == cache.headerHash else { throw CancellationError() }
             return decodedRecord
         } catch {
             current = nil
-            if Self.authoritative(error) { try? store.removePayload(scope: scope, session: session, expectedStamp: payloadStamp) }
+            await retire(error, payloadStamp: payloadStamp, retirementSession: retirementSession)
             await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
             throw error
         }
     }
-    func reveal(resourceID: UUID) async throws -> String {
-        let record = try await secretRecord(resourceID: resourceID)
+    func reveal(resourceID: UUID, expectedHeaderHash: String? = nil) async throws -> String {
+        let record = try await secretRecord(resourceID: resourceID, expectedHeaderHash: expectedHeaderHash)
         try session.check()
         return try record.data.publicationObject()["secret"]!.publicationString()
     }

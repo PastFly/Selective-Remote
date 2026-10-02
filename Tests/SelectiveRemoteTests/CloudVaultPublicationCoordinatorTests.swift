@@ -20,6 +20,7 @@ actor PublicationFixtureRemote: SelectiveRemoteVaultPublicationRemote {
         requests.append(route); await hook?(route)
         if fault == "offline" { throw URLError(.notConnectedToInternet) }
         if fault == "denied" { throw SelectiveRemoteCloudError.serviceError(403, "publication_access_denied") }
+        if fault == "authentication" || (fault == "authentication-secret" && route.hasSuffix("/SECRET")) { throw SelectiveRemoteCloudError.authenticationRequired }
         if route == "header" { return fixture.headerResponse }
         if fault == "pointer" { throw SelectiveRemoteCloudError.serviceError(409, "publication_changed") }
         if route == "publisher" { return fixture.publisher }
@@ -51,8 +52,8 @@ struct PublicationFixture: @unchecked Sendable {
     let parts: [String: SelectiveRemoteJSONValue]
     let resourceID: UUID
     let trustRoot: P256.Signing.PrivateKey
-    init(crossPublisher: Bool = false, empty: Bool = false, allKinds: Bool = false, credentialCount: Int = 1, includeSecret: Bool = true, transport: String = "ssh", sourceID: String? = nil, omitSourceID: Bool = false, folderName: String? = nil, converterProduced: Bool = false, credentialKind: String? = nil, nativeProfileMismatch: Bool = false, sameAccountAs prior: PublicationFixture? = nil, sameTeam: Bool = true) throws {
-        let endpoint = prior?.scope.endpoint ?? URL(string: "https://fixture-\(UUID().uuidString.lowercased()).example.test")!, accountID = prior?.scope.accountID ?? UUID(), deviceID = prior?.scope.deviceID ?? UUID(), teamID = sameTeam ? prior?.scope.teamID ?? UUID() : UUID(), vaultID = UUID(), membershipID = UUID(), generationID = UUID()
+    init(crossPublisher: Bool = false, empty: Bool = false, allKinds: Bool = false, credentialCount: Int = 1, includeSecret: Bool = true, transport: String = "ssh", sourceID: String? = nil, omitSourceID: Bool = false, folderName: String? = nil, converterProduced: Bool = false, credentialKind: String? = nil, nativeProfileMismatch: Bool = false, sameAccountAs prior: PublicationFixture? = nil, sameTeam: Bool = true, sameVault: Bool = false) throws {
+        let endpoint = prior?.scope.endpoint ?? URL(string: "https://fixture-\(UUID().uuidString.lowercased()).example.test")!, accountID = prior?.scope.accountID ?? UUID(), deviceID = prior?.scope.deviceID ?? UUID(), teamID = sameTeam ? prior?.scope.teamID ?? UUID() : UUID(), vaultID = sameVault ? prior?.scope.vaultID ?? UUID() : UUID(), membershipID = UUID(), generationID = UUID()
         scope = .init(endpoint: endpoint, accountID: accountID, deviceID: deviceID, teamID: teamID, vaultID: vaultID)
         identity = try prior?.identity ?? .init(deviceID: deviceID, privateKeyRepresentation: P256.KeyAgreement.PrivateKey().rawRepresentation)
         let root = prior?.trustRoot ?? P256.Signing.PrivateKey(); trustRoot = root
@@ -82,7 +83,7 @@ struct PublicationFixture: @unchecked Sendable {
             let url = try #require(Bundle.module.url(forResource: "native-converter-mapped-v1", withExtension: "json", subdirectory: "Fixtures"))
             converted = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: Data(contentsOf: url)).publicationObject()["parts"]!.publicationArray().map { try $0.publicationObject() }
         } else { converted = [] }
-        resourceID = try converted.first(where: { $0["kind"] == .string("CREDENTIAL") }).map { UUID(uuidString: try $0["resourceID"]!.publicationString())! } ?? UUID()
+        resourceID = try converted.first(where: { $0["kind"] == .string("CREDENTIAL") }).map { UUID(uuidString: try $0["resourceID"]!.publicationString())! } ?? (sameVault ? prior?.resourceID ?? UUID() : UUID())
         var cores: [SelectiveRemoteJSONValue] = [], bodies: [(SelectiveRemoteJSONValue, SelectiveRemoteJSONValue)] = []
         let hostID = UUID(), folderID = UUID(), snippetFolderID = UUID(), snippetID = UUID(), forwardingID = UUID()
         var resources: [(UUID, CloudAccessKind, SelectiveRemoteResourcePart)] = empty ? [] : [(resourceID, .credential, .metadata), (resourceID, .credential, .secret)]
@@ -134,7 +135,7 @@ struct PublicationFixture: @unchecked Sendable {
             cores.append(.object(["resourceID": .string(resourceID.canonicalCloudString), "kind": .string(kind.rawValue), "part": .string(part.rawValue), "parentFolderID": parent, "context": try json(context), "ciphertextHash": .string(try SelectiveRemoteVaultPublicationV1.hash("ciphertext", envelope)), "wrapperRoot": .string(try SelectiveRemoteVaultPublicationV1.hash("wrapper-leaf", entry))]))
             bodies.append((envelope, entry))
         }
-        let header = try sign("header", .object(["version": .number(1), "teamID": .string(teamID.canonicalCloudString), "vaultID": .string(vaultID.canonicalCloudString), "generationID": .string(generationID.canonicalCloudString), "sequence": .number(1), "previousHash": .null, "descriptorCommitment": .string(try SelectiveRemoteVaultPublicationV1.hash("descriptors", .array(cores))), "publisherAccountID": .string(publisherAccount.canonicalCloudString), "publisherDeviceID": .string(publisherDevice.canonicalCloudString), "publisherKeyVersion": .number(3)]))
+        let header = try sign("header", .object(["version": .number(1), "teamID": .string(teamID.canonicalCloudString), "vaultID": .string(vaultID.canonicalCloudString), "generationID": .string(generationID.canonicalCloudString), "sequence": .number(sameVault ? 2 : 1), "previousHash": sameVault ? prior!.headerResponse.publicationObject()["headerHash"]! : .null, "descriptorCommitment": .string(try SelectiveRemoteVaultPublicationV1.hash("descriptors", .array(cores))), "publisherAccountID": .string(publisherAccount.canonicalCloudString), "publisherDeviceID": .string(publisherDevice.canonicalCloudString), "publisherKeyVersion": .number(3)]))
         let hash = try SelectiveRemoteVaultPublicationV1.hash("header", header)
         descriptors = try cores.map { core in var object = try core.publicationObject(); object["headerHash"] = .string(hash); return try sign("descriptor", .object(object)) }
         let subject: SelectiveRemoteJSONValue = .object(["accountID": .string(accountID.canonicalCloudString), "deviceID": .string(deviceID.canonicalCloudString), "membershipID": .string(membershipID.canonicalCloudString), "membershipEpoch": .number(2)])
@@ -259,6 +260,7 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     var probeFailure = false
     var legacyCalls = 0
     var listFault: String?
+    var additionalTeams: [PublicationFixture] = []
     var reader: SelectiveRemoteVaultPublicationCoordinator?
     init(_ fixture: PublicationFixture, directory: URL) {
         self.fixture = fixture; self.directory = directory; transport = PublicationFixtureRemote(fixture)
@@ -267,6 +269,13 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     func setMode(_ value: CloudAccessFormatState) { mode = value }
     func setProbeFailure() { probeFailure = true }
     func setListFault(_ value: String?) { listFault = value }
+    func includeTeam(_ value: PublicationFixture) { additionalTeams.append(value) }
+    private func rejectAuthentication(endpoint: URL) async throws {
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+            (Data(#"{"error":"authentication_required"}"#.utf8), HTTPURLResponse(url: request.url!, statusCode: 401, httpVersion: nil, headerFields: nil)!)
+        })
+        _ = try await client.teams(endpoint: endpoint)
+    }
     func resetProcessEpoch() { SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint) }
     func restoreAuthentication() { tokens.saveToken(String(repeating: "a", count: 40), for: fixture.scope.endpoint) }
     func retirePublications(session: SelectiveRemotePublicationSession, selection: SelectiveRemotePublicationRetirement) async throws {
@@ -279,7 +288,10 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
     func publicationSession(endpoint: URL, deviceID: UUID) async throws -> SelectiveRemotePublicationSession? {
         .init(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "a", count: 40), tokenStore: tokens)
     }
-    func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState { if probeFailure { throw URLError(.notConnectedToInternet) }; return mode }
+    func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState {
+        if listFault == "format-auth" { try await rejectAuthentication(endpoint: endpoint) }
+        if probeFailure { throw URLError(.notConnectedToInternet) }; return mode
+    }
     func teams(endpoint: URL) async throws -> [SelectiveRemoteCloudTeam] {
         if listFault?.hasPrefix("team-auth") == true {
             let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
@@ -290,14 +302,16 @@ actor PublicationAutoSyncFixture: SelectiveRemoteTeamVaultAutoSyncRemote {
         if listFault == "offline" { throw URLError(.notConnectedToInternet) }
         if listFault == "team-denied" { throw SelectiveRemoteCloudError.serviceError(403, "team_not_found") }
         if listFault == "team-omitted" { return [] }
-        return [.init(id: fixture.scope.teamID, name: "Team", membershipID: UUID(), role: .viewer, membershipEpoch: 2, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z")]
+        return ([fixture] + additionalTeams).map { .init(id: $0.scope.teamID, name: "Team", membershipID: UUID(), role: .viewer, membershipEpoch: 2, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z") }
     }
     func sharedVaults(endpoint: URL, teamID: UUID) async throws -> [SelectiveRemoteCloudSharedVault] {
+        if listFault == "vault-auth" { try await rejectAuthentication(endpoint: endpoint) }
         if listFault == "vault-denied" { throw SelectiveRemoteCloudError.serviceError(404, "team_not_found") }
         if listFault == "vault-omitted" { return [] }
-        return [.init(id: fixture.scope.vaultID, teamID: teamID, name: "Vault", revision: 1, keyGeneration: 1, rotationRequired: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z")]
+        return ([fixture] + additionalTeams).filter { $0.scope.teamID == teamID }.map { .init(id: $0.scope.vaultID, teamID: teamID, name: "Vault", revision: 1, keyGeneration: 1, rotationRequired: false, createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:00Z") }
     }
     func materializePublication(session: SelectiveRemotePublicationSession, identity: SelectiveRemoteTeamDeviceIdentity, team: SelectiveRemoteCloudTeam, vault: SelectiveRemoteCloudSharedVault, offline: Bool) async throws -> SelectiveRemoteTeamVaultMaterializedSnapshot {
+        if listFault == "publication-auth" { try await rejectAuthentication(endpoint: session.endpoint) }
         let pin = fixture.ownPin
         let coordinator = SelectiveRemoteVaultPublicationCoordinator(scope: fixture.scope, session: session, remote: transport, identity: identity, store: try .init(directory: directory, protected: protected), ownPin: { _, _ in pin }, advanceOwnPin: { _, _, _ in })
         reader = coordinator
@@ -421,7 +435,7 @@ struct CloudVaultPublicationActualModelTests {
         let secret = try await reader.secretRecord(resourceID: fixture.resourceID)
         #expect(secret.id == fixture.resourceID); #expect(try secret.data.publicationObject()["secret"] == .string("CONVERTER-SYNTHETIC-SECRET"))
         #expect(try cache.forwardings().first?.record.id == cache.forwardings().first?.reference.resourceID)
-        let presentation = SelectiveRemotePublicationPresentation(); try presentation.bind(reader: reader, session: session, scope: fixture.scope); presentation.replace(with: [snapshot])
+        let presentation = SelectiveRemotePublicationPresentation(); try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         #expect(presentation.folders().count == 4)
         let ambiguous = try #require(hosts.first { $0.profile.connectionType == .ssh })
         await #expect(throws: Error.self) { try await presentation.hostCredentials(ambiguous) }
@@ -440,7 +454,7 @@ struct CloudVaultPublicationActualModelTests {
         let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner), snapshot = try cache.materializedSnapshot()
         let host = try #require(try SelectiveRemoteTeamHostMaterializer.materialize(snapshot).first)
         let presentation = SelectiveRemotePublicationPresentation()
-        try presentation.bind(reader: reader, session: session, scope: fixture.scope); presentation.replace(with: [snapshot])
+        try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         #expect(host.credentials.password == nil)
         #expect(presentation.connectionEnabled(host, temporaryPassword: ""))
         #expect(await remote.requests.filter { $0.hasSuffix("/SECRET") }.isEmpty)
@@ -457,7 +471,7 @@ struct CloudVaultPublicationActualModelTests {
         let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner), snapshot = try cache.materializedSnapshot()
         let host = try #require(try SelectiveRemoteTeamHostMaterializer.materialize(snapshot).first)
         let presentation = SelectiveRemotePublicationPresentation()
-        try presentation.bind(reader: reader, session: session, scope: fixture.scope); presentation.replace(with: [snapshot])
+        try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         var connected = false
         try await presentation.performHostConnection(host) { #expect($0 == .empty); connected = true }
         #expect(connected)
@@ -497,7 +511,7 @@ struct CloudVaultPublicationActualModelTests {
         var profile = host.profile; profile.sshAuthenticationMode = .agent
         let agentHost = SelectiveRemoteTeamHost(id: host.id, recordID: host.recordID, teamID: host.teamID, teamName: host.teamName, role: host.role, vaultID: host.vaultID, vaultName: host.vaultName, revision: host.revision, keyGeneration: host.keyGeneration, modifiedAt: host.modifiedAt, address: host.address, profile: profile, credentials: host.credentials, publication: host.publication)
         let presentation = SelectiveRemotePublicationPresentation()
-        try presentation.bind(reader: reader, session: session, scope: fixture.scope); presentation.replace(with: [snapshot])
+        try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         await #expect(throws: Error.self) { try await presentation.hostCredentials(agentHost) }
     }
     @MainActor
@@ -517,7 +531,7 @@ struct CloudVaultPublicationActualModelTests {
         let cache = try await reader.load(teamName: "Team", vaultName: "Vault", role: .owner), snapshot = try cache.materializedSnapshot()
         let presentation = SelectiveRemotePublicationPresentation.shared
         defer { presentation.detach(scope: fixture.scope, expectedSession: newer) }
-        try presentation.bind(reader: reader, session: newer, scope: fixture.scope); presentation.replace(with: [snapshot])
+        try presentation.bind(reader: reader, session: newer, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         let reference = try #require(try cache.reference(cache.parts[0]) as SelectiveRemotePublishedModelReference?)
         await oldRemote.setFault("denied"); await gate.release()
         await #expect(throws: Error.self) { try await pending.value }
@@ -543,7 +557,7 @@ struct CloudVaultPublicationActualModelTests {
         #expect(try reference.access(displayName: credential.title).resourceID == fixture.resourceID)
         #expect(reference.resourceID != credential.id)
         let presentation = SelectiveRemotePublicationPresentation()
-        try presentation.bind(reader: reader, session: session, scope: fixture.scope); presentation.replace(with: [snapshot])
+        try presentation.bind(reader: reader, session: session, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         #expect(presentation.forwardings.count == 1)
         #expect(presentation.forwardings.first?.reference.kind == .forwarding)
         #expect(cache.parts.filter { $0.kind == .folder }.count == 2)

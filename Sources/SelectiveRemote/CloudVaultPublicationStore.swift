@@ -99,7 +99,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     func removePayload(scope: SelectiveRemotePublicationScope, session: SelectiveRemotePublicationSession? = nil, expectedStamp: SelectiveRemotePublicationPayloadStamp? = nil) throws {
         try Self.lock.withLock {
             guard var state = try receipt(scope) else { return }
-            if let expectedStamp { guard state.owner == expectedStamp.owner else { return } }
+            if let expectedStamp { guard SelectiveRemotePublicationPayloadStamp(owner: state.owner, file: state.file) == expectedStamp else { return } }
             else if let session, (try? session.check()) == nil, state.owner != session.id { return }
             try retirePayload(scope: scope, state: &state)
             let key = catalogKey(scope)
@@ -135,8 +135,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
                     if var state = try receipt(scope) {
                         if session.retiringAuthenticationLoss {
                             // Fence the protected owner captured before the request, including receipts from a prior process/schema.
-                            guard let captured = session.capturedRetirementOwner(scope: scope), captured.owner == state.owner else { continue }
-                            if state.authorizationVersion == 2 && state.authorization != session.authorizationStamp { continue }
+                            guard let captured = session.capturedRetirementOwner(scope: scope), captured == SelectiveRemotePublicationPayloadStamp(owner: state.owner, file: state.file) else { continue }
                         }
                         retired.append(scope)
                         try retirePayload(scope: scope, state: &state)
@@ -156,14 +155,14 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
         }
     }
     func payloadStamp(scope: SelectiveRemotePublicationScope) throws -> SelectiveRemotePublicationPayloadStamp {
-        try Self.lock.withLock { .init(owner: try receipt(scope)?.owner) }
+        try Self.lock.withLock { let state = try receipt(scope); return .init(owner: state?.owner, file: state?.file) }
     }
     func captureRetirementOwners(session: SelectiveRemotePublicationSession) throws {
         try Self.lock.withLock {
             try session.check()
             let scopes = try protected.read(catalogKey(session)).map { try JSONDecoder().decode([SelectiveRemotePublicationScope].self, from: $0) } ?? []
             var owners: [String: SelectiveRemotePublicationPayloadStamp] = [:]
-            for scope in scopes { try checkScope(scope, session: session); owners[scope.key] = .init(owner: try receipt(scope)?.owner) }
+            for scope in scopes { try checkScope(scope, session: session); let state = try receipt(scope); owners[scope.key] = .init(owner: state?.owner, file: state?.file) }
             try session.captureRetirementOwners(owners)
         }
     }
@@ -201,4 +200,4 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     }
 }
 
-struct SelectiveRemotePublicationPayloadStamp: Equatable, Sendable { let owner: UUID? }
+struct SelectiveRemotePublicationPayloadStamp: Equatable, Sendable { let owner: UUID?; let file: String? }

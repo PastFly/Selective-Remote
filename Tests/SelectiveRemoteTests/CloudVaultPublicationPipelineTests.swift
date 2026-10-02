@@ -17,7 +17,10 @@ struct CloudVaultPublicationPipelineTests {
         let endpoint = URL(string: "https://account-binding-\(UUID()).example.test")!, tokens = SelectiveRemoteCloudMemoryTokenStore()
         let newerAccount = UUID(), olderToken = String(repeating: "o", count: 40), newerToken = String(repeating: "n", count: 40), deviceID = UUID()
         tokens.saveToken(newerToken, for: endpoint)
-        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { _ in throw URLError(.notConnectedToInternet) })
+        let directory = FileManager.default.temporaryDirectory.appending(path: "publication-account-binding-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let publicationStore = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: PublicationProtectedMemory())
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { _ in throw URLError(.notConnectedToInternet) }, publicationStore: { publicationStore })
         try await client.rememberPublicationAccount(newerAccount, endpoint: endpoint, token: newerToken)
         // Simulate the older /me protected-storage completion after the newer login's save.
         try await client.rememberPublicationAccount(UUID(), endpoint: endpoint, token: olderToken)
@@ -135,8 +138,7 @@ struct CloudVaultPublicationDurabilityTests {
         try store.commit(cache, expected: highWater, session: newer)
         #expect(throws: CancellationError.self) { try old.prepareAuthenticationLossRetirement() }
         try tokens.removeToken(for: fixture.scope.endpoint); SelectiveRemotePublicationLifecycle.invalidate(endpoint: fixture.scope.endpoint)
-        try old.prepareAuthenticationLossRetirement()
-        #expect(try store.retireScopes(session: old, selection: .all).isEmpty)
+        #expect(throws: CancellationError.self) { try old.prepareAuthenticationLossRetirement() }
         tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
         let checking = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)
         #expect(try store.load(scope: fixture.scope, session: checking) == cache)
@@ -171,7 +173,10 @@ struct CloudVaultPublicationDurabilityTests {
         try store.commit(cache, expected: highWater, session: newer)
         let presentation = SelectiveRemotePublicationPresentation(), snapshot = try cache.materializedSnapshot()
         defer { presentation.detach(scope: fixture.scope, expectedSession: newer) }
-        try presentation.bind(reader: reader, session: newer, scope: fixture.scope); presentation.replace(with: [snapshot])
+        let pin = fixture.ownPin
+        let currentReader = SelectiveRemoteVaultPublicationCoordinator(scope: fixture.scope, session: newer, remote: PublicationFixtureRemote(fixture), identity: fixture.identity, store: store, ownPin: { _, _ in pin }, advanceOwnPin: { _, _, _ in })
+        _ = try await currentReader.load(teamName: "Team", vaultName: "Vault", role: .owner)
+        try presentation.bind(reader: currentReader, session: newer, scope: fixture.scope, cache: cache); presentation.replace(with: [snapshot])
         SelectiveRemoteTeamHostStore.shared.replaceVault(with: snapshot); SelectiveRemoteTeamSnippetStore.shared.replaceVault(with: snapshot); SelectiveRemoteTeamCredentialStore.shared.replaceVault(with: snapshot)
         #expect(throws: CancellationError.self) { try store.retireScopes(session: old, selection: .all) }
         presentation.detach(scope: fixture.scope, expectedSession: old)

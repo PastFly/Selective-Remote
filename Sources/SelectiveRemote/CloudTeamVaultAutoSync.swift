@@ -168,7 +168,7 @@ actor SelectiveRemoteTeamVaultAutoSync {
         let teams: [SelectiveRemoteCloudTeam]
         do { teams = try await remote.teams(endpoint: endpoint) }
         catch {
-            if case SelectiveRemoteCloudError.authenticationRequired = error { try session?.prepareAuthenticationLossRetirement() }
+            if SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error) { try session?.prepareAuthenticationLossRetirement() }
             try session?.checkRetirement(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
             if SelectiveRemoteVaultPublicationCoordinator.transient(error), let session {
                 var cached = try await remote.reopenPublications(session: session, identity: identity)
@@ -193,14 +193,14 @@ actor SelectiveRemoteTeamVaultAutoSync {
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                if case SelectiveRemoteCloudError.authenticationRequired = error { try session?.prepareAuthenticationLossRetirement() }
+                if SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error) { try session?.prepareAuthenticationLossRetirement() }
                 try session?.checkRetirement(); guard eligible, generation == cycleGeneration else { throw CancellationError() }
                 if SelectiveRemoteVaultPublicationCoordinator.transient(error), let session {
                     let cached = try await remote.reopenPublications(session: session, identity: identity)
                     materialized += cached.filter { $0.teamID == team.id }
                 }
                 if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session {
-                    try await remote.retirePublications(session: session, selection: .team(team.id, keepingVaults: nil))
+                    try await remote.retirePublications(session: session, selection: SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error) ? .all : .team(team.id, keepingVaults: nil))
                 }
                 report.failures += 1
                 report.lastFailure = error.localizedDescription
@@ -225,8 +225,8 @@ actor SelectiveRemoteTeamVaultAutoSync {
                             continue
                         }
                         if SelectiveRemoteVaultPublicationCoordinator.authoritative(error), let session {
-                            if case SelectiveRemoteCloudError.authenticationRequired = error { try session.prepareAuthenticationLossRetirement() }
-                            try await remote.retirePublications(session: session, selection: .vault(teamID: team.id, vaultID: vault.id))
+                            if SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error) { try session.prepareAuthenticationLossRetirement() }
+                            try await remote.retirePublications(session: session, selection: SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error) ? .all : .vault(teamID: team.id, vaultID: vault.id))
                         }
                         throw error
                     }
@@ -324,6 +324,11 @@ actor SelectiveRemoteTeamVaultAutoSync {
                 } catch SelectiveRemoteTeamVaultSyncError.rotationRequired {
                     report.rotations += 1
                 } catch {
+                    if SelectiveRemoteVaultPublicationCoordinator.authenticationLoss(error), let session {
+                        try session.prepareAuthenticationLossRetirement()
+                        try await remote.retirePublications(session: session, selection: .all)
+                        throw error
+                    }
                     report.failures += 1
                     report.lastFailure = error.localizedDescription
                 }

@@ -78,34 +78,49 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
     @Published private(set) var secrets: [String: String] = [:]
     private var sessions: [String: SelectiveRemotePublicationSession] = [:]
     private var readers: [String: SelectiveRemoteVaultPublicationCoordinator] = [:]
+    private struct ReaderBinding {
+        let id = UUID()
+        let header: SelectiveRemoteJSONValue
+        let headerHash: String
+    }
+    private var bindings: [String: ReaderBinding] = [:]
     func detach(scope: SelectiveRemotePublicationScope, expectedSession: SelectiveRemotePublicationSession? = nil) {
         if let expectedSession, sessions[scope.key]?.sameAuthorization(as: expectedSession) != true { return }
-        caches.removeAll { $0.scope == scope }; secrets = secrets.filter { !$0.key.hasPrefix(scope.key) }; sessions.removeValue(forKey: scope.key); readers.removeValue(forKey: scope.key); PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
+        caches.removeAll { $0.scope == scope }; secrets = secrets.filter { !$0.key.hasPrefix(scope.key) }; sessions.removeValue(forKey: scope.key); readers.removeValue(forKey: scope.key); bindings.removeValue(forKey: scope.key); PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
         SelectiveRemoteTeamHostStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
         SelectiveRemoteTeamSnippetStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
         SelectiveRemoteTeamCredentialStore.shared.removeVault(teamID: scope.teamID, vaultID: scope.vaultID)
     }
     func clear() {
-        sessions.values.forEach { $0.invalidate() }; caches = []; secrets = [:]; sessions = [:]; readers = [:]; PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
+        sessions.values.forEach { $0.invalidate() }; caches = []; secrets = [:]; sessions = [:]; readers = [:]; bindings = [:]; PublishedAccessWindows.closeInvalid(); SelectiveRemotePublisherVerificationSheet.closeAll()
         SelectiveRemoteTeamHostStore.shared.clear(); SelectiveRemoteTeamSnippetStore.shared.clear(); SelectiveRemoteTeamCredentialStore.shared.clear()
     }
     func clearInvalidSessions(endpoint: URL? = nil) {
         for (key, session) in sessions where (endpoint == nil || session.endpoint == endpoint) && (try? session.check()) == nil {
             if let cache = caches.first(where: { $0.scope.key == key }) { detach(scope: cache.scope, expectedSession: session) }
-            else { sessions.removeValue(forKey: key); readers.removeValue(forKey: key) }
+            else { sessions.removeValue(forKey: key); readers.removeValue(forKey: key); bindings.removeValue(forKey: key) }
         }
         SelectiveRemotePublisherVerificationSheet.closeInvalid()
     }
-    func bind(reader: SelectiveRemoteVaultPublicationCoordinator, session: SelectiveRemotePublicationSession, scope: SelectiveRemotePublicationScope) throws {
-        try session.check(); sessions[scope.key] = session; readers[scope.key] = reader
+    func bind(reader: SelectiveRemoteVaultPublicationCoordinator, session: SelectiveRemotePublicationSession, scope: SelectiveRemotePublicationScope, cache: SelectiveRemotePublicationCache) throws {
+        try session.check()
+        guard reader.scope == scope, reader.session === session, cache.scope == scope,
+              cache.headerHash == (try SelectiveRemoteVaultPublicationV1.hash("header", cache.header)) else { throw SelectiveRemotePublicationError.scope }
+        sessions[scope.key] = session; readers[scope.key] = reader
+        bindings[scope.key] = .init(header: cache.header, headerHash: cache.headerHash)
+        secrets = secrets.filter { !$0.key.hasPrefix(scope.key) }
     }
     func replace(with snapshots: [SelectiveRemoteTeamVaultMaterializedSnapshot]) {
-        caches = snapshots.compactMap(\.publication).filter { cache in (try? sessions[cache.scope.key]?.check()) != nil }
+        caches = snapshots.compactMap(\.publication).filter { cache in
+            (try? sessions[cache.scope.key]?.check()) != nil && bindings[cache.scope.key]?.header == cache.header && bindings[cache.scope.key]?.headerHash == cache.headerHash
+        }
         secrets = [:]
     }
     func valid(_ reference: SelectiveRemotePublishedModelReference) -> Bool {
         guard let session = sessions[reference.scope.key], (try? session.check()) != nil,
-              let cache = caches.first(where: { $0.scope == reference.scope }), cache.headerHash == reference.headerHash else { return false }
+              let binding = bindings[reference.scope.key], let cache = caches.first(where: { $0.scope == reference.scope }),
+              binding.header == cache.header, binding.headerHash == cache.headerHash, cache.headerHash == reference.headerHash,
+              (try? SelectiveRemoteVaultPublicationV1.headerPayload(cache.header)["generationID"]?.publicationString()) == reference.generationID else { return false }
         return !cache.stale && !reference.stale
     }
     func isPublished(teamID: UUID, vaultID: UUID) -> Bool { caches.contains { $0.scope.teamID == teamID && $0.scope.vaultID == vaultID } }
@@ -119,14 +134,14 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
     func secret(_ reference: SelectiveRemotePublishedModelReference) -> String? { valid(reference) ? secrets[reference.key] : nil }
     func conceal(_ reference: SelectiveRemotePublishedModelReference) { secrets.removeValue(forKey: reference.key) }
     func reveal(_ reference: SelectiveRemotePublishedModelReference) async throws -> String {
-        guard canReveal(reference), let reader = readers[reference.scope.key] else { throw SelectiveRemotePublicationError.subject }
-        let result = try await reader.reveal(resourceID: reference.resourceID)
-        guard valid(reference) else { throw CancellationError() }
+        guard canReveal(reference), let reader = readers[reference.scope.key], let binding = bindings[reference.scope.key] else { throw SelectiveRemotePublicationError.subject }
+        let result = try await reader.reveal(resourceID: reference.resourceID, expectedHeaderHash: binding.headerHash)
+        guard valid(reference), bindings[reference.scope.key]?.id == binding.id, readers[reference.scope.key] === reader else { throw CancellationError() }
         secrets[reference.key] = result
         return result
     }
     func hostCredentials(_ host: SelectiveRemoteTeamHost) async throws -> SelectiveRemoteTeamHostCredentials {
-        guard let reference = host.publication, valid(reference), let reader = readers[reference.scope.key],
+        guard let reference = host.publication, valid(reference), let reader = readers[reference.scope.key], let binding = bindings[reference.scope.key],
               let cache = caches.first(where: { $0.scope == reference.scope }),
               let hostPart = cache.parts.first(where: { $0.resourceID == reference.resourceID && $0.kind == .host }),
               let original = try cache.payload(hostPart)["record"] else { throw SelectiveRemotePublicationError.subject }
@@ -146,8 +161,8 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
             guard let kind = try metadata["kind"]?.publicationString(), kind == requiredKind || (kind == "gateway" && host.profile.connectionType == .rdp && !host.profile.gatewayHost.isEmpty) else { continue }
             let credentialReference = try cache.reference(part)
             guard canReveal(credentialReference) else { continue }
-            let record = try await reader.secretRecord(resourceID: part.resourceID)
-            guard valid(reference) else { throw CancellationError() }
+            let record = try await reader.secretRecord(resourceID: part.resourceID, expectedHeaderHash: binding.headerHash)
+            guard valid(reference), bindings[reference.scope.key]?.id == binding.id, readers[reference.scope.key] === reader else { throw CancellationError() }
             let data = try record.data.publicationObject()
             guard let credentialSource = try data["sourceID"]?.publicationString(), Data(credentialSource.utf8) == Data(sourceID.utf8) else { continue }
             guard data["kind"] == .string(kind) else { throw SelectiveRemotePublicationError.scope }
@@ -157,7 +172,7 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
         }
         let passwordRequired = [.rdp, .ssh].contains(host.profile.connectionType)
         guard !passwordRequired || result.password != nil else { throw SelectiveRemotePublicationError.subject }
-        guard valid(reference) else { throw CancellationError() }
+        guard valid(reference), bindings[reference.scope.key]?.id == binding.id, readers[reference.scope.key] === reader else { throw CancellationError() }
         return result
     }
     func connectionEnabled(_ host: SelectiveRemoteTeamHost, temporaryPassword: String) -> Bool {
@@ -174,8 +189,9 @@ final class SelectiveRemotePublicationPresentation: ObservableObject {
         } == true
     }
     func performHostConnection(_ host: SelectiveRemoteTeamHost, action: (SelectiveRemoteTeamHostCredentials) -> Void) async throws {
+        guard let reference = host.publication, valid(reference), let binding = bindings[reference.scope.key] else { throw SelectiveRemotePublicationError.subject }
         let credentials = try await hostCredentials(host)
-        guard let reference = host.publication, valid(reference) else { throw CancellationError() }
+        guard valid(reference), bindings[reference.scope.key]?.id == binding.id else { throw CancellationError() }
         action(credentials)
     }
     func folders(type: String? = nil) -> [SelectiveRemotePublishedFolder] {
