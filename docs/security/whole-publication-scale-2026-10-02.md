@@ -2,7 +2,9 @@
 
 This evidence concerns PR B's bounded whole-generation publication. It is an isolated local fixture measurement, not production capacity, Chromium or native acceptance, staging deployment, controller-fence acceptance, or release approval.
 
-The recorded local 100/1000-resource and count-boundary processes loaded the migration-021 precursor before the additive migration-022 pre-START cancellation work. Migration 021's checksum and the measured non-cancellation resource/wrapper crypto paths remained unchanged. The migration-022 cancellation lookups are not included in those query counts. A separate complete 100-resource smoke applied migration 022 incrementally and loaded the current store; its evidence is identified below. Candidate CI separately runs the 100/1000-resource profiles after applying migration 022. Cancellation correctness and lost-START races require their dedicated integration tests, not extrapolation from this scale evidence.
+The earlier local 100/1000-resource and count-boundary processes loaded the migration-021 precursor before the additive migration-022 pre-START cancellation work. Migration 021's checksum and the measured non-cancellation resource/wrapper crypto paths remained unchanged. The migration-022 cancellation lookups are not included in those query counts. A separate complete 100-resource smoke applied migration 022 incrementally and loaded the current store; its evidence is identified below. Candidate CI separately runs the 100/1000-resource profiles after applying migration 022. Cancellation correctness and lost-START races require their dedicated integration tests, not extrapolation from this scale evidence.
+
+A fresh all-seven-profile schema-22 rerun is recorded in the final section below; it supersedes the precursor migration limitation for those rerun measurements while preserving the original evidence.
 
 ## Reproduce
 
@@ -101,3 +103,23 @@ At 1000 resources, the exact part query used `vault_migration_parts_pkey` (one r
 The fixtures use small plaintext payloads and few accounts. No-op successor operations create audit and receipt records without effective permission changes, so their outbox is empty. An empty-outbox plan establishes neither populated-outbox performance nor worker delivery throughput. PostgreSQL can appropriately choose sequential scans for tiny operation/outbox/chunk tables; the harness does not force index use. EXPLAIN timing alone excludes transport encoding and the cost of repeatedly loading and processing complete JSON projections/snapshots; the full-stage measurements include that work.
 
 The 64 MiB checkpoint, 128 MiB prepared aggregate and 1 MiB request limits remain independent encoded-byte gates. Passing resource or wrapper count boundaries with these small fixture payloads does not mean every payload/fanout shape at those counts fits the byte budgets or preview expiry. Full Cloud/Swift/regression, browser runtime, immutable candidate review, Security, CI and Test DMG evidence remains owned by the main PR B verification cycle.
+
+## Fresh schema-22 verification — 2026-10-02 UTC
+
+The resumed PR #223 verification ran all seven profiles in one successful process against a newly created loopback PostgreSQL 16.15 database, `pr223_scale_20261003_test`, with migrations 1–22 applied through the normal runner before any profile. Node was 26.7.0. No reset, production connection, checksum rewrite, activation or migration of an existing Vault occurred. Raw report: `/tmp/pr-b-whole-benchmark-pr223-final.json`; log: `/tmp/pr223-scale-final.log`. Report SHA-256: `32486f4822c2656f55bb0e68d0b3f21ea79e98683f911f2f4630a860e022850d`.
+
+The process began at 2026-10-02T21:36:04.603Z with the frozen whole-publication crypto/flow/backend code. Subsequent Browser changes were confined to the IndexedDB repository, which this benchmark does not instantiate (its checkpoint seam is in-memory); subsequent Swift toolchain fixes are also outside the harness. Real IndexedDB durability and trust-race proofs are separate Browser tests and are not claimed by these scale measurements. Concurrent local build/test activity makes these observations unsuitable as isolated hardware or production capacity estimates.
+
+| Profile | Complete successor cycle | Upload + READY | Atomic commit | Successor client SQL queries | Profile sampled peak RSS, including seed |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| resources100 | 3.430 s | 2.091 s | 0.127 s | 7773 | 236.72 MiB |
+| resources1000 | 265.392 s | 188.332 s | 1.327 s | 73729 | 609.27 MiB |
+| resources1001 | typed limit; state unchanged | 31.301 ms rejection | — | 32 rejection queries | — |
+| vaults10 | 3.042 s | 2.083 s | 0.565 s | 15742 | 515.77 MiB |
+| vaults11 | typed limit; state unchanged | 1.748 ms rejection | — | 7 rejection queries | — |
+| wrappers10000 | 780.715 s | 627.117 s | 6.634 s | 76475 | 1290.62 MiB |
+| wrappers10001 | typed limit; state unchanged | 201.346 ms rejection | — | 34 rejection queries | — |
+
+All four accepted profiles freshly encrypted every resource part and administrative sidecar, checked every predecessor/successor CEK and nonce for freshness, atomically committed the complete Vault set, recovered exact receipts/manifests, and verified/decrypted all committed parts. The 10,000-wrapper profile decrypted all 1,000 actor wrappers plus 9,000 wrappers for nine other certified devices. The 1001-resource, 11-Vault and 10001-wrapper profiles each returned `publication_limit` and preserved all compared pointer/policy/operation/generation/receipt/outbox/audit state. Every profile retained its actual query plans in the JSON report.
+
+The 10,000-wrapper run used 8,245,215 B of prepared ciphertext/sidecar, 12,452,997 B of projection and 28,942,040 B of encrypted checkpoint. Its 1,081 upload/start/validate calls included 80 projection chunks, largest body 699,172 B. The original five-minute preview expired during preparation/upload; an explicit fresh preview preserved the exact immutable binding before commit. Process maximum RSS across the entire seven-profile run was 1405.23 MiB; this aggregate maximum cannot be attributed to one stage. The large-profile latency and memory cost remain an operating-envelope gate before runtime enablement. Passing these count boundaries does not prove the maximum Vault × resource × device cross-product, large plaintext payloads, populated outbox throughput, real browser/native capacity or PR C staging/controller acceptance.

@@ -441,7 +441,7 @@ struct CloudWholePublicationPipelineTests {
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: s.teamID, operationID: operation)
         let history = try publicationStore ?? SelectiveRemoteVaultPublicationStore(directory: directory, protected: PublicationProtectedMemory())
         let remote = WholeRemote(fixture, history: history)
-        let coordinator = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { history },
+        let coordinator = try SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { history },
             pin: { _, _, _ in pins ? pinState?.read() ?? pinOverride ?? fixture.source.ownPin : nil }, advancePin: { _, _, prior, next in #expect(next.highWater >= prior.highWater) })
         return (coordinator, remote, store, session, directory)
     }
@@ -715,6 +715,30 @@ struct CloudWholePublicationPipelineTests {
         #expect(try history.highWater(scope: fixture.source.scope) == next)
     }
 
+    @Test("serialized signing root preserves authenticated headers and manifests across main-actor transfer")
+    @MainActor func serializedSigningRoot() async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        let manifest = try #require(await remote.manifest), projection = try #require(await remote.projection)
+        _ = try SelectiveRemoteWholePublicationWire.verifyManifest(manifest, root: fixture.source.trustRoot.publicKey)
+        let header = try #require(try projection.publicationObject()["header"])
+        let verified = try SelectiveRemoteVaultPublicationV1.verifyHeader(header, rootPublicKey: fixture.source.trustRoot.publicKey.x963Representation.selectiveRemoteBase64URL, teamID: fixture.source.scope.teamID.canonicalCloudString, vaultID: fixture.source.scope.vaultID.canonicalCloudString, highWater: nil)
+        #expect(verified.sequence == 2)
+        #expect(throws: SelectiveRemotePublicationError.signature) { try SelectiveRemoteWholePublicationWire.verifyManifest(manifest, root: P256.Signing.PrivateKey().publicKey) }
+    }
+
+    @Test("malformed serialized signing root is rejected before coordinator work", arguments: [0, 31, 33])
+    @MainActor func malformedSigningRoot(_ count: Int) async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, store, session, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        #expect(throws: Error.self) {
+            try SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: Data(repeating: 1, count: count), store: store, publicationStore: { remote.history })
+        }
+        #expect(await remote.uploaded.isEmpty)
+    }
+
     @Test("a truncated or repeated preview cannot be confirmed")
     func previewCompleteness() async throws {
         let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
@@ -853,10 +877,10 @@ struct CloudWholePublicationPipelineTests {
         await #expect(throws: Error.self) { try await coordinator.commit(preview: preview) }
         #expect(try await coordinator.writesDisabled())
         #expect(try store.commitState(scope: coordinator.scope, session: session).receipt != nil)
-        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let restarted = try SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await restarted.writesDisabled())
         let nextScope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: UUID())
-        let newOperation = SelectiveRemoteWholePublicationCoordinator(scope: nextScope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let newOperation = try SelectiveRemoteWholePublicationCoordinator(scope: nextScope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await newOperation.writesDisabled())
         await remote.setFault(nil)
         _ = try await restarted.resolveReceipt(request: fixture.request)
@@ -874,7 +898,7 @@ struct CloudWholePublicationPipelineTests {
         let session = SelectiveRemotePublicationSession(endpoint: old.endpoint, accountID: old.accountID, deviceID: old.deviceID, token: "renewed-own-token", tokenStore: tokens)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: coordinator.scope.operationID)
         #expect(throws: Error.self) { try store.load(scope: scope, session: session) }
-        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let renewed = try SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         await #expect(throws: Error.self) { try await renewed.resume(request: fixture.request) }
         let before = await remote.uploaded.count
         #expect(try await renewed.savedRequest() == fixture.request)
@@ -893,7 +917,7 @@ struct CloudWholePublicationPipelineTests {
         let tokens = SelectiveRemoteCloudMemoryTokenStore(); tokens.saveToken("renewed-ready-token", for: old.endpoint)
         let session = SelectiveRemotePublicationSession(endpoint: old.endpoint, accountID: old.accountID, deviceID: old.deviceID, token: "renewed-ready-token", tokenStore: tokens)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: coordinator.scope.operationID)
-        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let renewed = try SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await renewed.canDiscardUncommitted())
         await #expect(throws: Error.self) { try await renewed.resume(request: fixture.request) }
         let before = await remote.uploaded.count
@@ -959,7 +983,7 @@ struct CloudWholePublicationPipelineTests {
         let preview = try await coordinator.preview(request: fixture.request); await remote.setFault("upload")
         await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
         let original = try #require(await remote.uploaded.first { $0.0.contains("/parts/") })
-        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let restarted = try SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, rootKeyData: fixture.source.trustRoot.rawRepresentation, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         await remote.setFault(nil); try await restarted.resume(request: fixture.request)
         let replayed = await remote.uploaded.filter { $0.0 == original.0 }
         #expect(replayed.count == 3 && replayed[0].1 == replayed[1].1)

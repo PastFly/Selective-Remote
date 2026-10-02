@@ -290,14 +290,15 @@ actor SelectiveRemoteWholePublicationCoordinator {
     private var contextKeyVersion: Int?
     init(scope: SelectiveRemoteWholePublicationScope, session: SelectiveRemotePublicationSession,
          remote: any SelectiveRemoteWholePublicationRemote, identity: SelectiveRemoteTeamDeviceIdentity,
-         root: P256.Signing.PrivateKey, store: SelectiveRemoteWholePublicationCheckpointStore,
+         rootKeyData: Data, store: SelectiveRemoteWholePublicationCheckpointStore,
          publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try .init() },
          pin: @escaping @Sendable (URL, UUID, UUID) throws -> SelectiveRemoteDeviceTrustPin? = { endpoint, teamID, accountID in
              try SelectiveRemoteDeviceTrustLocalStore().pin(endpoint: endpoint, accountID: accountID)
                 ?? SelectiveRemoteVaultPublicationStore().publisherPin(endpoint: endpoint, teamID: teamID, accountID: accountID)
          },
-         advancePin: (@Sendable (URL, UUID, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void)? = nil) {
-        self.scope = scope; self.session = session; self.remote = remote; self.identity = identity; self.root = root; self.store = store
+         advancePin: (@Sendable (URL, UUID, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void)? = nil) throws {
+        self.scope = scope; self.session = session; self.remote = remote; self.identity = identity
+        self.root = try P256.Signing.PrivateKey(rawRepresentation: rootKeyData); self.store = store
         self.publicationStore = publicationStore; self.pin = pin; self.advancePin = advancePin
     }
     private func check() throws { try scope.check(session); guard identity.deviceID == scope.deviceID else { throw SelectiveRemoteWholePublicationError.scope } }

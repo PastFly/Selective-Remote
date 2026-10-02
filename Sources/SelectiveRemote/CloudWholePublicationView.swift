@@ -43,7 +43,7 @@ final class SelectiveRemoteWholePublicationModel: ObservableObject {
     private func makeCoordinator(_ operationID: UUID) throws -> SelectiveRemoteWholePublicationCoordinator {
         guard let session, let identity, let root, let store else { throw SelectiveRemoteWholePublicationError.custodianUnavailable }
         try check()
-        return .init(scope: .init(session: session, teamID: reference.scope.teamID, operationID: operationID), session: session, remote: client, identity: identity, root: root, store: store)
+        return try .init(scope: .init(session: session, teamID: reference.scope.teamID, operationID: operationID), session: session, remote: client, identity: identity, rootKeyData: root.rawRepresentation, store: store)
     }
     func load() async {
         guard !busy else { return }; busy = true; defer { busy = false }
