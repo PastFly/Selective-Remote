@@ -1795,7 +1795,7 @@ export function initializeTeamWorkspace({
     const pinnedTrust={loadPin:async(endpoint,account)=>account===client.session()?.id?deviceTrustRepository.loadPin(endpoint,account):publisherPins.loadPin(endpoint,team,account),
       advancePin:async(old,next)=>old.accountID===client.session()?.id?deviceTrustRepository.advancePin(old,next):publisherPins.advancePin(old.endpoint,team,old,next)};
     publicationAccessTeamID=team;
-    publicationAccessDriver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(team),checkpointRepository:createIndexedDBWholePublicationRepository(),
+    publicationAccessDriver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(team),checkpointRepository:createIndexedDBWholePublicationRepository(),publicationRepository:publisherPins,
       sessionIdentity:()=>{const value=client.publicationIdentity?.();return value?{...value,selection:String(publicationSelection),teamID:selectedTeam?.id??null,vaultID:selectedVault?.id??null}:null;},
       getLocalKeys:async value=>({root:await deviceTrustRepository.loadRoot(value.endpoint,value.accountID),identity,pinnedTrust})});
     return publicationAccessDriver;

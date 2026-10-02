@@ -32,15 +32,20 @@ async function browser(pool,{multiple=false,repeatConsent=false,loseFinalAck=fal
  // the consent regression below uses the transport without this adapter.
  if(repeatConsent){const original=transport.preview;let token;transport.preview=async(request,options={})=>{const result=await original(request,options.token?options:token?{...options,token}:options);token??=result.token;return result;};}
  const records=new Map(),storage={async load(k){return structuredClone(records.get(k)??null);},async putIfAbsent(k,v){if(!records.has(k))records.set(k,structuredClone(v));return structuredClone(records.get(k));},async save(k,v){records.set(k,structuredClone(v));}};
- driver=createWholePublicationAccessDriver({transport,sessionIdentity:identity,checkpointRepository:createWholePublicationCheckpointRepository({storage}),getLocalKeys:async()=>({root:f.root,identity:f.identity,pinnedTrust:f.pinnedTrust})});
+ const histories=new Map(),historyKey=scope=>JSON.stringify([scope.endpoint,scope.accountID,scope.deviceID,scope.teamID,scope.vaultID]);
+ const publicationRepository={loadHighWater:async scope=>structuredClone(histories.get(historyKey(scope))??null),
+  advanceHighWater:async(scope,next,guard=()=>{})=>{guard();const key=historyKey(scope),old=histories.get(key);
+   if(old&&(next.sequence<old.sequence||next.sequence===old.sequence&&next.hash!==old.hash))throw Error('publication_fork');histories.set(key,structuredClone(next));}};
+ driver=createWholePublicationAccessDriver({transport,sessionIdentity:identity,checkpointRepository:createWholePublicationCheckpointRepository({storage}),publicationRepository,getLocalKeys:async()=>({root:f.root,identity:f.identity,pinnedTrust:f.pinnedTrust})});
  const scope={teamID:f.input.teamID,vaultID:f.input.vaultID};
- return {f,driver,scope,async close(){driver.dispose();await new Promise(r=>server.close(r));},stats:()=>({lost,completeReplays})};
+ return {f,driver,scope,publicationRepository,async close(){driver.dispose();await new Promise(r=>server.close(r));},stats:()=>({lost,completeReplays})};
 }
 test('real Browser confirmation preserves approved consent through actual HTTP/PostgreSQL timestamps',{skip:!database},()=>withDB(async pool=>{
  const b=await browser(pool);try{
   await b.driver.getContext(b.scope);const approved=await b.driver.preview(b.scope,{type:'GROUP_CREATE',name:'Real confirmation'});
   await new Promise(r=>setTimeout(r,20));const receipt=await b.driver.commit(b.scope,approved);
   assert.equal(receipt.operationID,approved.request.operationID);
+  for(const v of receipt.vaults)assert.deepEqual(await b.publicationRepository.loadHighWater({endpoint:b.f.endpoint,accountID:b.f.accountID,deviceID:b.f.deviceID,teamID:b.scope.teamID,vaultID:v.vaultID}),{sequence:v.sequence,hash:v.headerHash});
   assert.equal((await pool.query('SELECT count(*)::int n FROM team_publication_receipts WHERE operation_id=$1',[receipt.operationID])).rows[0].n,1);
  }finally{await b.close();}
 }));

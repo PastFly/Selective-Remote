@@ -914,11 +914,9 @@ export function createIndexedDBPublicationRepository(
     );
   }
 
-  return {
-    async load(scope) {
-      const stored = await read("cache:" + scopeKey(scope));
-      if (!stored) return { highWater: null, payload: null };
-      const k = await read("key:" + scopeKey(scope));
+  async function openHighWater(scope, stored, protection = null) {
+      if (!stored) return null;
+      const k = protection ?? await read("key:" + scopeKey(scope));
       if (!k || !stored.highWaterSeal || !stored.highWaterNonce)
         fail("publication_storage_failed");
       const receipt = await cryptoValue.subtle.decrypt(
@@ -934,6 +932,84 @@ export function createIndexedDBPublicationRepository(
       );
       if (!equal(JSON.parse(decode.decode(receipt)), stored.highWater))
         fail("publication_high_water_invalid");
+      return stored.highWater;
+  }
+  function sameHistory(a, b) {
+    return (!a && !b) || (a && b && equal(a.highWater, b.highWater)
+      && a.highWaterNonce && b.highWaterNonce && a.highWaterSeal && b.highWaterSeal
+      && sameSealed({ nonce: a.highWaterNonce, sealed: a.highWaterSeal },
+        { nonce: b.highWaterNonce, sealed: b.highWaterSeal }));
+  }
+  async function protectedHistory(scope) {
+    const suffix = scopeKey(scope);
+    const value = await transaction("readonly", (store, done) => {
+      const result = {}; done(result);
+      for (const [field, prefix] of [["stored", "cache:"], ["key", "key:"], ["marked", "history:"]]) {
+        const r = store.get(prefix + suffix); r.onsuccess = () => { result[field] = r.result ?? null; };
+      }
+    });
+    if (!value.stored) {
+      if (value.marked) fail("publication_storage_failed");
+      return value;
+    }
+    if (!value.key) fail("publication_storage_failed");
+    await openHighWater(scope, value.stored, value.key);
+    if (!value.marked) {
+      // Upgrade an existing authenticated record. Before this first upgraded
+      // read, deletion of an old unmarked record is indistinguishable from absence.
+      await transaction("readwrite", (store, _done, tx) => {
+        const r = store.get("cache:" + suffix);
+        r.onsuccess = () => {
+          try {
+            if (!sameHistory(r.result, value.stored)) fail("publication_fork");
+            store.put(true, "history:" + suffix);
+          } catch (error) { tx.publicationFailure = error; tx.abort(); }
+        };
+      });
+    }
+    return value;
+  }
+  function checkHistoryWrite(actual, expected, highWater, hasKey, marked) {
+    if (!hasKey || !actual && marked) fail("publication_storage_failed");
+    if (!sameHistory(actual, expected)) fail("publication_fork");
+    const old = actual?.highWater;
+    if (old && (highWater.sequence < old.sequence || highWater.sequence === old.sequence && highWater.hash !== old.hash)) fail("publication_fork");
+  }
+  return {
+    async loadHighWater(scope) {
+      return (await protectedHistory(scope)).stored?.highWater ?? null;
+    },
+    async advanceHighWater(scope, highWater, guard = () => {}) {
+      if (!Number.isSafeInteger(highWater?.sequence) || highWater.sequence < 1 || !/^[a-f0-9]{64}$/u.test(highWater.hash)) fail("publication_high_water_invalid");
+      const id = "cache:" + scopeKey(scope), history = await protectedHistory(scope), expected = history.stored;
+      // Existing protected history must authenticate before it can be replaced;
+      // losing its key must never silently create a new trust baseline.
+      const k = history.key ?? await key(scope);
+      const highWaterNonce = cryptoValue.getRandomValues(new Uint8Array(12));
+      const highWaterSeal = await cryptoValue.subtle.encrypt({ name: "AES-GCM", iv: highWaterNonce,
+        additionalData: encode.encode(JSON.stringify({ scope, purpose: "high-water" })) }, k, encode.encode(JSON.stringify(highWater)));
+      guard();
+      return transaction("readwrite", (store, done, tx) => {
+        let hasKey = false, marked = false;
+        const keyRequest = store.get("key:" + scopeKey(scope)); keyRequest.onsuccess = () => { hasKey = !!keyRequest.result; };
+        const markerRequest = store.get("history:" + scopeKey(scope)); markerRequest.onsuccess = () => { marked = !!markerRequest.result; };
+        const r = store.get(id);
+        r.onsuccess = () => {
+          try {
+            guard(); const old = r.result?.highWater;
+            checkHistoryWrite(r.result, expected, highWater, hasKey, marked);
+            // Keep a matching coherent cache; a newer observed generation retires
+            // its older payload without ever discarding the monotonic history.
+            store.put({ ...(old && equal(old, highWater) ? r.result : {}), highWater, highWaterNonce, highWaterSeal }, id);
+            store.put(true, "history:" + scopeKey(scope));
+            done(highWater);
+          } catch (error) { tx.publicationFailure = error; tx.abort(); }
+        };
+      });
+    },
+    async load(scope) {
+      const { stored, key: k } = await protectedHistory(scope);
+      if (!stored) return { highWater: null, payload: null };
       if (!stored.sealed) return { highWater: stored.highWater, payload: null };
       const bytes = await cryptoValue.subtle.decrypt(
         {
@@ -957,7 +1033,9 @@ export function createIndexedDBPublicationRepository(
       };
     },
     async persist(scope, { highWater, payload }, guard) {
-      const k = await key(scope),
+      if (!Number.isSafeInteger(highWater?.sequence) || highWater.sequence < 1 || !/^[a-f0-9]{64}$/u.test(highWater.hash)) fail("publication_high_water_invalid");
+      const history = await protectedHistory(scope), expected = history.stored;
+      const k = history.key ?? await key(scope),
         nonce = cryptoValue.getRandomValues(new Uint8Array(12)),
         bytes = encode.encode(JSON.stringify(payload));
       let sealed;
@@ -994,19 +1072,15 @@ export function createIndexedDBPublicationRepository(
         );
       guard();
       return transaction("readwrite", (store, done, tx) => {
+        let hasKey = false, marked = false;
+        const keyRequest = store.get("key:" + scopeKey(scope)); keyRequest.onsuccess = () => { hasKey = !!keyRequest.result; };
+        const markerRequest = store.get("history:" + scopeKey(scope)); markerRequest.onsuccess = () => { marked = !!markerRequest.result; };
         const id = "cache:" + scopeKey(scope),
           r = store.get(id);
         r.onsuccess = () => {
           try {
             guard();
-            const old = r.result?.highWater;
-            if (
-              old &&
-              (highWater.sequence < old.sequence ||
-                (highWater.sequence === old.sequence &&
-                  highWater.hash !== old.hash))
-            )
-              fail("publication_fork");
+            checkHistoryWrite(r.result, expected, highWater, hasKey, marked);
             store.put(
               {
                 highWater,
@@ -1018,6 +1092,7 @@ export function createIndexedDBPublicationRepository(
               },
               id,
             );
+            store.put(true, "history:" + scopeKey(scope));
             done({ nonce, sealed });
           } catch (error) {
             tx.publicationFailure = error;

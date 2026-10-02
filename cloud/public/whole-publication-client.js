@@ -162,6 +162,41 @@ function checkpointScope(identity, request, generations) {
     generations: generations.map(g => ({ vaultID: g.vaultID, generationID: g.generationID, sequence: g.sequence, previousHash: g.previousHash })) };
 }
 
+// Prepared wrappers retain their original directory. Re-read protected local pins
+// after awaits: a newer checkpoint or removed pin must fence those frozen bytes.
+async function revalidateRecipients(targets, pinnedTrust, context, cryptoValue) {
+  const seen = new Set(), pins = new Map();
+  for (const target of targets) {
+    const key = target.accountID + '/' + target.deviceID;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      const loaded = await context.checked(() => pinnedTrust.loadPin(context.identity.endpoint, target.accountID));
+      const trust = loaded && copy(loaded);
+      if (!trust || trust.endpoint !== context.identity.endpoint || trust.accountID !== target.accountID) fail('recipient_trust_unverified');
+      if (pins.has(target.accountID) && !equal(pins.get(target.accountID), trust)) fail('recipient_trust_unverified');
+      pins.set(target.accountID, trust);
+      await context.checked(() => verifyDeviceForWrapping({ ...target, trust, expectedDeviceID: target.deviceID, cryptoValue }));
+    } catch (error) {
+      context.guard(); fail('recipient_trust_unverified');
+    }
+  }
+  await checkRecipientPins(pins, pinnedTrust, context);
+  return pins;
+}
+async function checkRecipientPins(pins, pinnedTrust, context) {
+  for (const [accountID, pin] of pins) {
+    const current = await context.checked(() => pinnedTrust.loadPin(context.identity.endpoint, accountID));
+    if (!current || !equal(current, pin)) fail('recipient_trust_unverified');
+  }
+}
+function preparedRecipients(state) {
+  return state.generations.flatMap(g => {
+    const devices = new Set([...g.objects, g.administrativeSidecar].flatMap(o => o.wrappers.map(w => w.context.deviceID)));
+    return g.snapshot.devices.filter(d => devices.has(d.deviceID));
+  });
+}
+
 // V2 base64 fields have fixed encoded lengths; ciphertext length depends only on plaintext bytes.
 // Predict the actual wire size before encryption, then check the produced object again.
 function encodedPartBudget(context, plaintextBytes, recipients, includeHash) {
@@ -278,6 +313,7 @@ export async function prepareWholePublication({ preview, plaintextByVault, admin
   }
   const state = { version: 1, request: frozen.request, binding: frozen.binding, generations };
   const scope = checkpointScope(context.identity, frozen.request, generations);
+  await revalidateRecipients([...targets.values()], pinnedTrust, context, cryptoValue);
   sourceGuard();
   const checkpoint = await context.checked(() => checkpointRepository.save(scope, state, sourceGuard));
   return { ...state, checkpoint };
@@ -434,15 +470,25 @@ export function createWholePublicationCoordinator(options) {
   const upload = async (stored, context, token) => {
     if (writesBlocked) fail('publication_readback_required');
     const { state, checkpoint } = stored, op = state.request.operationID;
+    const pins = await revalidateRecipients(preparedRecipients(state), options.pinnedTrust, context, cryptoValue);
+    const checkTrust = () => checkRecipientPins(pins, options.pinnedTrust, context);
     const started = await context.checked(() => transport.start(token, copy(state.request)));
-    if (started?.generations && !equal(started.generations, state.generations.map(({ objects, administrativeSidecar, readerProjection, manifest, resources, ...g }) => g))) fail('publication_stale');
+    if (!started || started.operationID !== op || !['PREPARING', 'READY'].includes(started.state) || !Array.isArray(started.generations)) fail('publication_response_invalid');
+    if (!equal(started.generations, state.generations.map(({ objects, administrativeSidecar, readerProjection, manifest, resources, ...g }) => g))) fail('publication_stale');
+    await checkTrust();
     const checkpointVaultID = state.generations.map(g => g.vaultID).sort(compare)[0];
     for (const g of state.generations) {
-      for (const object of g.objects) await context.checked(() => transport.putPart(op, g.vaultID, copy(object)));
+      for (const object of g.objects) {
+        await checkTrust();
+        await context.checked(() => transport.putPart(op, g.vaultID, copy(object)));
+      }
       const opaqueCheckpoint = { version: checkpoint.version, nonce: checkpoint.nonce, ciphertext: checkpoint.ciphertext };
-      await context.checked(() => transport.putProjection(op, g.vaultID, copy(g.readerProjection), copy(g.administrativeSidecar), g.vaultID === checkpointVaultID ? opaqueCheckpoint : undefined));
+      await checkTrust();
+      await context.checked(() => transport.putProjection(op, g.vaultID, copy(g.readerProjection), copy(g.administrativeSidecar), g.vaultID === checkpointVaultID ? opaqueCheckpoint : undefined, checkTrust));
     }
-    await context.checked(() => transport.validate(op, state.generations.map(g => ({ vaultID: g.vaultID, manifest: copy(g.manifest) }))));
+    await checkTrust();
+    const validated = await context.checked(() => transport.validate(op, state.generations.map(g => ({ vaultID: g.vaultID, manifest: copy(g.manifest) }))));
+    if (validated?.operationID !== op || validated.state !== 'READY') fail('publication_response_invalid');
     return { ...state, checkpoint };
   };
   const load = async (request, context) => {
@@ -472,6 +518,8 @@ export function createWholePublicationCoordinator(options) {
         || !equal(record.header, generation.readerProjection.header) || !equal(record.manifest, generation.manifest)
         || expected.headerHash !== await context.checked(() => publicationHash('header', record.header, cryptoValue))) fail('publication_readback_required');
     }
+    if (typeof options.recordHighWater !== 'function') fail('publication_storage_failed');
+    await context.checked(() => options.recordHighWater(copy(receipt), context.guard));
     if(typeof checkpointRepository.markComplete==='function')await context.checked(()=>checkpointRepository.markComplete(scopeFor(context,state.request),receipt,context.guard));
     writesBlocked = false; return copy(receipt);
   };
@@ -512,6 +560,7 @@ export function createWholePublicationCoordinator(options) {
       const recovered = await recoverReceipt(stored.state, context); if (recovered) return recovered;
       const preview = await collectWholePublicationPreview({ request, transport, getIdentity, cryptoValue }); context.guard();
       if (!equal(preview.binding, stored.state.binding) || !equal(preview.generations, stored.state.generations.map(({ objects, administrativeSidecar, readerProjection, manifest, resources, ...g }) => g))) fail('publication_stale');
+      await revalidateRecipients(preparedRecipients(stored.state), options.pinnedTrust, context, cryptoValue);
       writesBlocked = true;
       let receipt;
       try { receipt = await context.checked(() => transport.commit(request.operationID, preview.token, copy(stored.state.request))); }

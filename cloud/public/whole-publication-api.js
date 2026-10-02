@@ -56,13 +56,14 @@ export function createWholePublicationTransport({ request, teamID, getIdentity, 
       if (encoder.encode(canonicalMigrationJSON({object})).length > 1024 * 1024) fail('publication_limit');
       return json(`${op(operationID)}/parts/${accessID(vaultID)}`, { object });
     },
-    async putProjection(operationID, vaultID, projection, sidecar, checkpoint) {
+    async putProjection(operationID, vaultID, projection, sidecar, checkpoint, checkTrust = async () => {}) {
       const guard = capture(), bytes = encoder.encode(canonicalMigrationJSON({ projection, sidecar, ...(checkpoint === undefined ? {} : { checkpoint }) }));
       if (!bytes.length || bytes.length > MAX_TOTAL) fail('publication_limit');
       const count = Math.ceil(bytes.length / MAX_CHUNK);
       const sha256 = Array.from(new Uint8Array(await cryptoValue.subtle.digest('SHA-256', bytes)), b => b.toString(16).padStart(2, '0')).join(''); guard();
       const headerHash = await publicationHash('header', projection.header, cryptoValue); guard();
       for (let index = 0; index < count; index++) {
+        await checkTrust();
         guard(); const result = await json(`${op(operationID)}/projection-chunks/${accessID(vaultID)}`, {
           version: 1, index, count, sha256, data: toBase64(bytes.subarray(index * MAX_CHUNK, Math.min(bytes.length, (index + 1) * MAX_CHUNK))) }); guard();
         if (typeof result?.complete !== 'boolean') fail('publication_response_invalid');

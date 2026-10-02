@@ -47,7 +47,7 @@ export function buildWholePublicationRequest({context,vaultID,draft,cryptoValue=
       if(change.newParentFolderID!==null&&resource(change.newParentFolderID).kind!=='FOLDER')fail('invalid_access_target');r.parentFolderID=change.newParentFolderID;
       const seen=new Set([r.id]);let p=r.parentFolderID;while(p!==null){if(seen.has(p))fail('folder_cycle');seen.add(p);p=resource(p).parentFolderID;}
       if(['HOST','SNIPPET'].includes(r.kind))changed(r,'GENERAL');
-      if(r.kind==='FOLDER')for(const candidate of selected.resources.filter(v=>['FOLDER','HOST','SNIPPET'].includes(v.kind))) {let p=candidate.id;while(p!==null){if(p===r.id){changed(candidate,'GENERAL');break;}p=resource(p).parentFolderID;}}
+      if(r.kind==='FOLDER')for(const candidate of selected.resources.filter(v=>['FOLDER','HOST','SNIPPET'].includes(v.kind))) {const ancestors=new Set();let p=candidate.id;while(p!==null){if(ancestors.has(p))fail('folder_cycle');ancestors.add(p);if(p===r.id){changed(candidate,'GENERAL');break;}p=resource(p).parentFolderID;}}
     } else if(change.type==='RESOURCE_EDIT') {const r=resource(change.resourceID);if(r.kind==='FOLDER')fail('publication_edit_unsupported');for(const part of partsFor(r))changed(r,part);}
     else if(change.type==='GROUP_CREATE')request.groupMutation={action:'CREATE',groupID:cryptoValue.randomUUID(),name:change.name};
     else if(['GROUP_RENAME','GROUP_DELETE'].includes(change.type)) {
@@ -65,10 +65,13 @@ export function buildWholePublicationRequest({context,vaultID,draft,cryptoValue=
   vaults.sort((a,b)=>compare(a.vaultID,b.vaultID));return request;
 }
 
-export async function repairWholePublicationSources({context,preview,transport,pinnedTrust,devicePrivateKey,ownIdentity,getIdentity,cryptoValue=globalThis.crypto}) {
+export async function repairWholePublicationSources({context,preview,transport,pinnedTrust,devicePrivateKey,ownIdentity,getIdentity,loadHighWater,saveHighWater,cryptoValue=globalThis.crypto}) {
   const c=capture(getIdentity);if(!same(ownIdentity,c.identity)||!devicePrivateKey)fail('publication_local_keys_required');
+  if(typeof loadHighWater!=='function'||typeof saveHighWater!=='function')fail('publication_storage_failed');
   const plaintextByVault={},administrativeByVault={};
   for(const vault of context.current) {
+    const historyScope={endpoint:c.identity.endpoint,accountID:c.identity.accountID,deviceID:c.identity.deviceID,teamID:context.teamID,vaultID:vault.vaultID};
+    const highWater=await c.checked(()=>loadHighWater(historyScope));
     const predecessor=preview.binding.predecessors.find(p=>p.vaultID===vault.vaultID);
     if(!predecessor||['generationID','sequence','headerHash'].some(k=>predecessor[k]!==vault[k]))fail('publication_stale');
     let directory=null,cursor=null;const descriptors=[],cursors=new Set();
@@ -89,7 +92,8 @@ export async function repairWholePublicationSources({context,preview,transport,p
       else {verified=await c.checked(()=>verifyDeviceForWrapping({...b,trust:pin,expectedDeviceID:b.deviceID,cryptoValue}));if(b.certificate.payload.keyVersion!==b.keyVersion)fail('publisher_trust_unverified');}
     }catch(error){c.guard();fail('publisher_trust_unverified');}
     if(verified){const next=advancePinnedTrust(pin,{...pin,highWater:verified.highWater,checkpointDigest:verified.checkpointDigest});if(!same(pin,next))await c.checked(()=>pinnedTrust.advancePin(pin,next));}
-    if(await c.checked(()=>verifyReaderHeader({header:directory.header,rootPublicKey:b.rootPublicKey,teamID:context.teamID,vaultID:vault.vaultID,highWater:{sequence:predecessor.sequence,hash:predecessor.headerHash},cryptoValue}))!==directory.headerHash)fail('publication_changed');
+    const verifyHistory=water=>c.checked(()=>verifyReaderHeader({header:directory.header,rootPublicKey:b.rootPublicKey,teamID:context.teamID,vaultID:vault.vaultID,highWater:water,cryptoValue}));
+    if(await verifyHistory(highWater)!==directory.headerHash)fail('publication_changed');
     const m=directory.manifest,p=m?.payload;
     try {
       const key=await c.checked(()=>cryptoValue.subtle.importKey('raw',fromBase64(b.rootPublicKey),{name:'ECDSA',namedCurve:'P-256'},false,['verify']));
@@ -131,6 +135,8 @@ export async function repairWholePublicationSources({context,preview,transport,p
       ||await c.checked(()=>publicationHash('ciphertext',wire.envelope,cryptoValue))!==commitment.envelopeHash)fail('publication_administrative_unavailable');
     await c.checked(()=>verifyWrapperProof({entry:wire.entry,proof:wire.proof,root:commitment.wrapperRoot,cryptoValue}));
     const data=await decrypt(wire,commitment.resourceID,'SECRET',wire.envelope.context);if(data.generationID!==h.generationID)fail('publication_administrative_unavailable');
+    await verifyHistory(await c.checked(()=>loadHighWater(historyScope)));
+    await c.checked(()=>saveHighWater(historyScope,{sequence:h.sequence,hash:directory.headerHash},c.guard));
     plaintextByVault[vault.vaultID]={verified:true,predecessor:copy(predecessor),parts};administrativeByVault[vault.vaultID]={verified:true,predecessor:copy(predecessor),data};
   }
   c.guard();return {plaintextByVault,administrativeByVault};
@@ -164,7 +170,7 @@ function applyLocalChanges(sources,request,draft,vaultID) {
   }
 }
 
-export function createWholePublicationAccessDriver({transport,sessionIdentity,getLocalKeys,checkpointRepository,cryptoValue=globalThis.crypto}) {
+export function createWholePublicationAccessDriver({transport,sessionIdentity,getLocalKeys,checkpointRepository,publicationRepository,cryptoValue=globalThis.crypto}) {
   let context=null,pending=null,disposed=false;
   const getIdentity=()=>{
     const base=sessionIdentity();if(disposed||!context||!base)return null;
@@ -172,6 +178,19 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
   };
   const checkScope=scope=>{if(!context||scope.teamID!==context.teamID||!context.current.some(v=>v.vaultID===scope.vaultID))fail('publication_scope_mismatch');};
   async function local(c) {const keys=await c.checked(()=>getLocalKeys(copy(c.identity)));if(!keys?.root?.privateKey||!keys?.identity?.privateKey||!keys.pinnedTrust)fail('publication_local_keys_required');return keys;}
+  const loadHighWater=scope=>{if(typeof publicationRepository?.loadHighWater!=='function')fail('publication_storage_failed');return publicationRepository.loadHighWater(scope);};
+  const saveHighWater=(scope,water,guard)=>{if(typeof publicationRepository?.advanceHighWater!=='function')fail('publication_storage_failed');return publicationRepository.advanceHighWater(scope,water,guard);};
+  const recordHighWater=async(receipt,guard)=>{
+    const c=capture(getIdentity);
+    for(const vault of receipt.vaults){
+      const scope={endpoint:c.identity.endpoint,accountID:c.identity.accountID,deviceID:c.identity.deviceID,teamID:receipt.teamID,vaultID:vault.vaultID};
+      const observed=await c.checked(()=>loadHighWater(scope));guard();
+      // Receipt recovery is read-only: an independently observed later generation
+      // already fences replay and must survive completion of this earlier commit.
+      if(observed&&observed.sequence>vault.sequence)continue;
+      await c.checked(()=>saveHighWater(scope,{sequence:vault.sequence,hash:vault.headerHash},()=>{c.guard();guard();}));
+    }
+  };
   const rowsFor=scope=>{checkScope(scope);const v=currentVault(context,scope.vaultID);return v.resources.map(r=>({...r,teamID:context.teamID,vaultID:v.vaultID,policyKind:r.kind,resourceVersion:v.sequence,version:v.sequence}));};
   const driver={
     get enabled(){return !disposed&&context?.publicationAvailable===true&&context.recoveryOnly!==true;},
@@ -228,17 +247,17 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
       checkScope(reference);const r=driver.getResource(reference,reference.resourceID);if(r.kind==='FOLDER')fail('publication_edit_unsupported');
       const request=buildWholePublicationRequest({context,vaultID:reference.vaultID,draft:{type:'RESOURCE_EDIT',resourceID:r.id},cryptoValue}),c=capture(getIdentity);
       const preview=await c.checked(()=>collectWholePublicationPreview({request,transport,getIdentity,cryptoValue})),keys=await local(c);
-      const sources=await c.checked(()=>repairWholePublicationSources({context,preview,transport,pinnedTrust:keys.pinnedTrust,devicePrivateKey:keys.identity.privateKey,ownIdentity:c.identity,getIdentity,cryptoValue}));
+      const sources=await c.checked(()=>repairWholePublicationSources({context,preview,transport,pinnedTrust:keys.pinnedTrust,devicePrivateKey:keys.identity.privateKey,ownIdentity:c.identity,getIdentity,loadHighWater,saveHighWater,cryptoValue}));
       const parts=sources.plaintextByVault[reference.vaultID].parts[r.id];return copy(parts.SECRET?.record??parts.GENERAL?.record);
     },
     async commit(scope,approved) {
       checkScope(scope);const p=pending;if(!p||p.vaultID!==scope.vaultID||!same(p.preview.binding,approved.binding)||!same(p.preview.request,approved.request))fail('publication_resume_changed');
       const c=capture(getIdentity);
-      if(!p.coordinator){const keys=await local(c);p.coordinator=createWholePublicationCoordinator({...keys,endpoint:c.identity.endpoint,deviceID:c.identity.deviceID,transport,checkpointRepository,getIdentity,cryptoValue,
+      if(!p.coordinator){const keys=await local(c);p.coordinator=createWholePublicationCoordinator({...keys,endpoint:c.identity.endpoint,deviceID:c.identity.deviceID,transport,checkpointRepository,getIdentity,recordHighWater,cryptoValue,
         readback:receipt=>Promise.all(receipt.vaults.map(v=>transport.readback(receipt.operationID,v.vaultID)))});}
       if(p.prepared){const resumed=await c.checked(()=>p.coordinator.resume({request:p.preview.request}));if(resumed?.committedAt){pending=null;return resumed;}}
       else {
-        const keys=await local(c),sources=await c.checked(()=>repairWholePublicationSources({context,preview:p.preview,transport,pinnedTrust:keys.pinnedTrust,devicePrivateKey:keys.identity.privateKey,ownIdentity:c.identity,getIdentity,cryptoValue}));
+        const keys=await local(c),sources=await c.checked(()=>repairWholePublicationSources({context,preview:p.preview,transport,pinnedTrust:keys.pinnedTrust,devicePrivateKey:keys.identity.privateKey,ownIdentity:c.identity,getIdentity,loadHighWater,saveHighWater,cryptoValue}));
         applyLocalChanges(sources,p.preview.request,p.intent,p.vaultID);
         await c.checked(()=>p.coordinator.prepare({request:p.preview.request,token:p.preview.token,...sources,onPrepared:()=>{p.prepared=true;},confirm:fresh=>same(fresh.binding,p.preview.binding)&&same(fresh.generations,p.preview.generations)}));
       }
@@ -250,7 +269,7 @@ export function createWholePublicationAccessDriver({transport,sessionIdentity,ge
       if(pending.renewed){
         if(!pending.remoteReceipt)fail('publication_session_renewed');const c=capture(getIdentity),metadata=pending.metadata;
         const stored=await c.checked(()=>checkpointRepository.load(metadata,c.guard));
-        const coordinator=createWholePublicationCoordinator({transport,checkpointRepository,getIdentity,cryptoValue,readback:receipt=>Promise.all(receipt.vaults.map(v=>transport.readback(receipt.operationID,v.vaultID)))});
+        const coordinator=createWholePublicationCoordinator({transport,checkpointRepository,getIdentity,recordHighWater,cryptoValue,readback:receipt=>Promise.all(receipt.vaults.map(v=>transport.readback(receipt.operationID,v.vaultID)))});
         pending.coordinator=coordinator;const receipt=await c.checked(()=>coordinator.recoverCommitted({request:stored.state.request,checkpointIdentity:metadata}));pending=null;return receipt;
       }
       return driver.commit(scope,pending.preview);

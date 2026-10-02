@@ -52,7 +52,7 @@ async function fixture() {
     mapping: { 'credential/legacy-id': resourceID }, tombstones: [], vectorClock: {} } } };
   let current = { endpoint: f.endpoint, accountID: f.accountID, deviceID: f.deviceID, sessionID, keyVersion: 1, predecessors: [predecessor] };
   const storage = localStorage();
-  const options = { ...f, preview, plaintextByVault, administrativeByVault, getIdentity: () => clone(current), cryptoValue: webcrypto };
+  const options = { ...f, preview, plaintextByVault, administrativeByVault, recordHighWater: async () => {}, getIdentity: () => clone(current), cryptoValue: webcrypto };
   return { ...f, resourceID, request, preview, storage, options,
     setIdentity(value) { current = value; }, getIdentity: () => clone(current) };
 }
@@ -176,9 +176,9 @@ test('checkpoint persistence failure and identity changes during crypto prevent 
 
 test('resume reuses persisted bytes after upload failure and rejects changed request or lost local protection', async () => {
   const f = await fixture(), repo = repository(f); let fail = true; const accepted = [];
-  const transport = { preview: async () => clone(f.preview), start: async () => ({ generations: f.preview.generations }),
+  const transport = { preview: async () => clone(f.preview), start: async () => ({ operationID: f.request.operationID, state: 'PREPARING', generations: f.preview.generations }),
     putPart: async (_op, _vault, object) => { accepted.push(clone(object)); if (fail) { fail = false; throw Error('network_failure'); } },
-    putProjection: async () => {}, validate: async () => ({ state: 'READY' }) };
+    putProjection: async () => {}, validate: async () => ({ operationID: f.request.operationID, state: 'READY' }) };
   const coordinator = api.createWholePublicationCoordinator({ ...f.options, transport, checkpointRepository: repo });
   await assert.rejects(coordinator.prepare({ request: f.request, plaintextByVault: f.options.plaintextByVault, administrativeByVault: f.options.administrativeByVault }), /network_failure/);
   const resumed = await coordinator.resume({ request: f.request });
@@ -354,17 +354,59 @@ if (process.env.PLAYWRIGHT_MODULE && process.env.CHROMIUM_PATH) test('real Chrom
         sessionID: id(), keyVersion: 1, teamID: id(), operationID: id(), generations: [{ vaultID: id(), generationID: id(), sequence: 2, previousHash: 'a'.repeat(64) }] };
       const state = { request: { teamID: scope.teamID, operationID: scope.operationID }, generations: scope.generations, syntheticSecret: 'BROWSER-SYNTHETIC-CHECKPOINT' };
       const checkpoint = await createIndexedDBWholePublicationRepository().save(scope, state);
+      const { createIndexedDBPublicationRepository } = await import('/vault-publication-client.js');
+      const historyScope = Object.fromEntries(['endpoint','accountID','deviceID','teamID'].map(k => [k,scope[k]])); historyScope.vaultID = scope.generations[0].vaultID;
+      await createIndexedDBPublicationRepository().advanceHighWater(historyScope, { sequence: 3, hash: 'c'.repeat(64) });
       let current = true;
       const guard = () => { if (!current) throw Error('publication_context_changed'); };
       const interrupted = { ...scope, operationID: id() };
       const pending = createIndexedDBWholePublicationRepository().save(interrupted, { ...state, request: { ...state.request, operationID: interrupted.operationID } }, guard);
       current = false;
       let raceCode; try { await pending; } catch (error) { raceCode = error.message; }
-      return { scope, ciphertext: checkpoint.ciphertext, raceCode, unprotectedSecret: JSON.stringify(checkpoint).includes(state.syntheticSecret) };
+      return { scope, historyScope, ciphertext: checkpoint.ciphertext, raceCode, unprotectedSecret: JSON.stringify(checkpoint).includes(state.syntheticSecret) };
     });
     assert.equal(saved.unprotectedSecret, false); assert.equal(saved.raceCode, 'publication_context_changed');
     await page.reload();
-    const restored = await page.evaluate(async ({ scope, ciphertext }) => {
+    const restored = await page.evaluate(async ({ scope, historyScope, ciphertext }) => {
+      const { createIndexedDBPublicationRepository } = await import('/vault-publication-client.js');
+      const history = createIndexedDBPublicationRepository(), restartedHistory = await history.load(historyScope);
+      let rollbackDenied = false, forkDenied = false;
+      try { await history.advanceHighWater(historyScope, { sequence: 2, hash: 'a'.repeat(64) }); } catch (error) { rollbackDenied = error.message === 'publication_fork'; }
+      try { await history.advanceHighWater(historyScope, { sequence: 3, hash: 'a'.repeat(64) }); } catch (error) { forkDenied = error.message === 'publication_fork'; }
+      const raced = await Promise.allSettled(['a','b'].map(c => createIndexedDBPublicationRepository().advanceHighWater(historyScope, { sequence: 4, hash: c.repeat(64) })));
+      const finalHistory = await history.loadHighWater(historyScope);
+      const historyCorruptionDenied=[];let historyReadDenials=0;
+      for (const operation of ['advance','persist']) for (const fault of ['seal','water','key','cache']) {
+        const damagedScope={...historyScope,vaultID:crypto.randomUUID()},id=JSON.stringify([damagedScope.endpoint,damagedScope.accountID,damagedScope.deviceID,damagedScope.teamID,damagedScope.vaultID]);
+        await history.advanceHighWater(damagedScope,{sequence:3,hash:'c'.repeat(64)});
+        const db=await new Promise(resolve=>{const r=indexedDB.open('selective-remote-publication-v1',1);r.onsuccess=()=>resolve(r.result);});
+        await new Promise((resolve,reject)=>{const tx=db.transaction('records','readwrite'),store=tx.objectStore('records');
+          if(fault==='key')store.delete('key:'+id);else if(fault==='cache')store.delete('cache:'+id);else {const r=store.get('cache:'+id);r.onsuccess=()=>{const row=r.result;
+            if(fault==='seal')new Uint8Array(row.highWaterSeal)[0]^=1;else row.highWater={sequence:1,hash:'a'.repeat(64)};store.put(row,'cache:'+id);};}
+          tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();
+        for(const method of ['loadHighWater','load'])try{await history[method](damagedScope);}catch{historyReadDenials++;}
+        try { if(operation==='advance')await history.advanceHighWater(damagedScope,{sequence:4,hash:'d'.repeat(64)});
+          else await history.persist(damagedScope,{highWater:{sequence:4,hash:'d'.repeat(64)},payload:{header:{payload:{generationID:crypto.randomUUID()}}}},()=>{});
+          historyCorruptionDenied.push(false); } catch { historyCorruptionDenied.push(true); }
+      }
+      const mutateHistory=async work=>{const db=await new Promise(resolve=>{const r=indexedDB.open('selective-remote-publication-v1',1);r.onsuccess=()=>resolve(r.result);});
+        try{await new Promise((resolve,reject)=>{const tx=db.transaction('records','readwrite');work(tx.objectStore('records'));tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}finally{db.close();}};
+      const suffix=value=>JSON.stringify([value.endpoint,value.accountID,value.deviceID,value.teamID,value.vaultID]);
+      const legacyScope={...historyScope,vaultID:crypto.randomUUID()};await history.advanceHighWater(legacyScope,{sequence:3,hash:'c'.repeat(64)});
+      await mutateHistory(store=>store.delete('history:'+suffix(legacyScope)));
+      const legacyWater=await history.loadHighWater(legacyScope);
+      await mutateHistory(store=>store.delete('cache:'+suffix(legacyScope)));
+      let upgradedHistoryLossDenied=false;try{await history.loadHighWater(legacyScope);}catch{upgradedHistoryLossDenied=true;}
+      const firstScope={...historyScope,vaultID:crypto.randomUUID()},firstKey=await crypto.subtle.generateKey({name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+      await mutateHistory(store=>store.put(firstKey,'key:'+suffix(firstScope)));
+      const emptyBeforeFirstSave=await history.loadHighWater(firstScope)===null;
+      await history.advanceHighWater(firstScope,{sequence:1,hash:'a'.repeat(64)});
+      const interruptedFirstSaveRetry=emptyBeforeFirstSave&&(await history.loadHighWater(firstScope)).sequence===1;
+      let entered,release,firstEncrypt=true;const ready=new Promise(resolve=>{entered=resolve;}),held=new Promise(resolve=>{release=resolve;});
+      const slowCrypto={getRandomValues:value=>crypto.getRandomValues(value),subtle:new Proxy(crypto.subtle,{get(target,key){return key==='encrypt'?async(...args)=>{if(firstEncrypt){firstEncrypt=false;entered();await held;}return target.encrypt(...args);}:target[key].bind(target);}})};
+      const pendingWrite=createIndexedDBPublicationRepository(indexedDB,slowCrypto).persist(historyScope,{highWater:{sequence:5,hash:'e'.repeat(64)},payload:{header:{payload:{generationID:crypto.randomUUID()}}}},()=>{});
+      await ready;await history.advanceHighWater(historyScope,{sequence:6,hash:'f'.repeat(64)});release();
+      let concurrentNewerPreserved=false;try{await pendingWrite;}catch{concurrentNewerPreserved=(await history.loadHighWater(historyScope)).sequence===6;}
       const { createIndexedDBWholePublicationRepository } = await import('/whole-publication-client.js');
       const repository = createIndexedDBWholePublicationRepository(), result = await repository.load(scope);
       const db = await new Promise((resolve, reject) => { const r = indexedDB.open('selective-remote-whole-publication-v1', 1); r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error); });
@@ -376,11 +418,64 @@ if (process.env.PLAYWRIGHT_MODULE && process.env.CHROMIUM_PATH) test('real Chrom
         r.onsuccess = () => { const cursor = r.result; if (!cursor) return; if (String(cursor.key).startsWith('protection:')) cursor.delete(); cursor.continue(); };
         tx.oncomplete = resolve; tx.onerror = () => reject(tx.error); }); db.close();
       let keyLossDenied = false; try { await repository.load(scope); } catch (error) { keyLossDenied = error.message === 'publication_checkpoint_lost'; }
-      return { immutable: result.checkpoint.ciphertext === ciphertext, syntheticSecret: result.state.syntheticSecret,
+      return { historyReadDenials, upgradedHistoryLossDenied:upgradedHistoryLossDenied&&legacyWater.sequence===3, interruptedFirstSaveRetry, concurrentNewerPreserved, historyCorruptionDenied, historyRetained: restartedHistory.highWater.sequence === 3 && restartedHistory.highWater.hash === 'c'.repeat(64) && restartedHistory.payload === null,
+        rollbackDenied, forkDenied, historyRaceDenied: raced.filter(r => r.status === 'rejected').length === 1 && finalHistory.sequence === 4,
+        immutable: result.checkpoint.ciphertext === ciphertext, syntheticSecret: result.state.syntheticSecret,
         nonextractable: protection.extractable === false, exportDenied, foreignScopeDenied, keyLossDenied,
         storageLeaked: JSON.stringify(records).includes('BROWSER-SYNTHETIC-CHECKPOINT') };
     }, saved);
-    assert.deepEqual(restored, { immutable: true, syntheticSecret: 'BROWSER-SYNTHETIC-CHECKPOINT', nonextractable: true,
+    assert.deepEqual(restored, { historyReadDenials:16, upgradedHistoryLossDenied:true, interruptedFirstSaveRetry:true, concurrentNewerPreserved:true, historyCorruptionDenied: [true,true,true,true,true,true,true,true], historyRetained: true, rollbackDenied: true, forkDenied: true, historyRaceDenied: true, immutable: true, syntheticSecret: 'BROWSER-SYNTHETIC-CHECKPOINT', nonextractable: true,
       exportDenied: true, foreignScopeDenied: true, keyLossDenied: true, storageLeaked: false });
   } finally { await browser?.close(); await new Promise(resolve => server.close(resolve)); }
+});
+
+
+test('prepared publication revalidates local recipient pins after waits and before transport writes', async () => {
+  for (const stage of ['sign', 'checkpoint', 'start', 'resume', 'commit']) {
+    const f = await fixture(), repo = repository(f); let trusted = true, uploads = 0, commits = 0;
+    const pinnedTrust = { ...f.pinnedTrust, loadPin: async (...args) => trusted ? f.pinnedTrust.loadPin(...args) : null };
+    const transport = { preview: async () => { if (stage === 'commit') trusted = false; return clone(f.preview); },
+      receipt: async () => null, start: async () => { if (stage === 'start') trusted = false; return { operationID: f.request.operationID, state: 'PREPARING', generations: f.preview.generations }; },
+      putPart: async () => { uploads++; }, putProjection: async () => {}, validate: async () => ({ operationID: f.request.operationID, state: 'READY' }),
+      commit: async () => { commits++; throw Error('unexpected_commit'); } };
+    const options = { ...f.options, pinnedTrust, checkpointRepository: repo, transport };
+    if (stage === 'sign') {
+      options.cryptoValue = { randomUUID: () => webcrypto.randomUUID(), getRandomValues: x => webcrypto.getRandomValues(x),
+        subtle: new Proxy(webcrypto.subtle, { get(target, key) { return key === 'sign' ? async (...args) => { const value = await target.sign(...args); trusted = false; return value; } : target[key].bind(target); } }) };
+      await assert.rejects(api.prepareWholePublication(options), /recipient_trust_unverified/);
+      assert.equal(f.storage.records.size, 0);
+    } else if (stage === 'resume' || stage === 'commit') {
+      await api.prepareWholePublication(options); if (stage === 'resume') trusted = false;
+      await assert.rejects(api.createWholePublicationCoordinator(options)[stage]({ request: f.request }), /recipient_trust_unverified/);
+    } else {
+      await assert.rejects(api.createWholePublicationCoordinator(options).prepare({ request: f.request,
+        plaintextByVault: f.options.plaintextByVault, administrativeByVault: f.options.administrativeByVault,
+        onPrepared: async () => { if (stage === 'checkpoint') trusted = false; } }), /recipient_trust_unverified/);
+    }
+    assert.equal(uploads, 0); assert.equal(commits, 0);
+  }
+});
+
+test('malformed START and READY answers never authorize later publication steps', async () => {
+  for (const stage of ['start', 'validate']) for (const response of [null, {}, { operationID: uuid(), state: 'READY', generations: [] }]) {
+    const f = await fixture(), repo = repository(f); await prepare(f); let uploads = 0;
+    const coordinator = api.createWholePublicationCoordinator({ ...f.options, checkpointRepository: repo,
+      transport: { preview: async () => clone(f.preview), receipt: async () => null,
+        start: async () => stage === 'start' ? response : { operationID: f.request.operationID, state: 'PREPARING', generations: f.preview.generations },
+        putPart: async () => { uploads++; }, putProjection: async () => {}, validate: async () => response } });
+    await assert.rejects(coordinator.resume({ request: f.request }), /publication_response_invalid|publication_stale/);
+    if (stage === 'start') assert.equal(uploads, 0);
+  }
+});
+
+test('pin advancement during recipient verification or one upload fences the next write', async () => {
+  for (const stage of ['pin-await', 'part']) {
+    const f=await fixture(),repo=repository(f);await prepare(f);let trusted=true,uploads=0,starts=0;
+    const pinnedTrust={...f.pinnedTrust,loadPin:async(...args)=>{const pin=trusted?clone(await f.pinnedTrust.loadPin(...args)):null;if(stage==='pin-await')trusted=false;return pin;}};
+    const coordinator=api.createWholePublicationCoordinator({...f.options,pinnedTrust,checkpointRepository:repo,transport:{
+      preview:async()=>clone(f.preview),receipt:async()=>null,start:async()=>{starts++;return {operationID:f.request.operationID,state:'PREPARING',generations:f.preview.generations};},
+      putPart:async()=>{uploads++;trusted=false;},putProjection:async()=>{},validate:async()=>({operationID:f.request.operationID,state:'READY'})}});
+    await assert.rejects(coordinator.resume({request:f.request}),/recipient_trust_unverified/);
+    assert.equal(uploads,stage==='part'?1:0);assert.equal(starts,stage==='part'?1:0);
+  }
 });

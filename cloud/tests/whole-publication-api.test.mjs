@@ -93,3 +93,11 @@ test('completed multi-chunk replay accepts only the exact expected header commit
  const forged=api.createWholePublicationTransport({teamID,getIdentity:()=>({accountID,deviceID}),cryptoValue:webcrypto,request:async()=>new Response(JSON.stringify({complete:true,headerHash:'b'.repeat(64)}))});
  await assert.rejects(forged.putProjection(operationID,vaultID,projection,sidecar,checkpoint),/publication_response_invalid/);
 });
+
+test('projection trust invalidated during one chunk prevents sending the next chunk',async()=>{
+ let trusted=true,calls=0;const projection={header:{version:1,synthetic:'chunks'},ciphertext:'A'.repeat(600000)};
+ const transport=api.createWholePublicationTransport({teamID,getIdentity:()=>({accountID,deviceID}),cryptoValue:webcrypto,
+  request:async(_path,options)=>{calls++;trusted=false;const body=JSON.parse(options.body);return new Response(JSON.stringify({complete:body.index===body.count-1,headerHash:await publicationHash('header',projection.header,webcrypto)}));}});
+ await assert.rejects(transport.putProjection(operationID,vaultID,projection,{},undefined,async()=>{if(!trusted)throw Error('recipient_trust_unverified');}),/recipient_trust_unverified/);
+ assert.equal(calls,1);
+});

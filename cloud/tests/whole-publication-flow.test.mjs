@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import { webcrypto, createHash } from 'node:crypto';
 import { migrationFixture, uuid, legacy, record } from './vault-v2-migration-fixtures.mjs';
 import { prepareLegacyMigration, canonicalMigrationJSON } from '../public/vault-v2-migration.js';
@@ -41,7 +42,9 @@ async function fixture() {
   const transport={repairDirectory:async()=>clone(directory),repairPart:async(_p,_v,resourceID,part)=>part==='ADMINISTRATIVE'?{...clone(side),resourceID,part:'SECRET',envelope:clone(initial.administrativeSidecar.envelope),headerHash,generationID:f.scope.attemptID,manifest:clone(initial.manifest),scope:clone(f.scope),publisher:clone(publisher)}:
     {headerHash,generationID:f.scope.attemptID,descriptor:clone(initial.readerProjection.descriptors.find(d=>d.payload.resourceID===resourceID&&d.payload.part===part)),envelope:clone(initial.objects.find(o=>o.resourceID===resourceID&&o.part===part).envelope),...clone(own.proofs.find(p=>p.resourceID===resourceID&&p.part===part))}};
   const identity={endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,keyVersion:1,sessionID:uuid()};
-  return {...f,initial,context,directory,transport,localIdentity:identity,preview:{token:'bound-repair-preview',request:{teamID:f.scope.teamID,operationID:uuid()},binding:{predecessors:[predecessor]}},getIdentity:()=>clone(identity)};
+  let water=null;
+  const publicationRepository={loadHighWater:async()=>clone(water),advanceHighWater:async(_scope,next,guard=()=>{})=>{guard();if(water&&(next.sequence<water.sequence||next.sequence===water.sequence&&next.hash!==water.hash))throw Error('publication_fork');water=clone(next);}};
+  return {...f,initial,context,directory,transport,publicationRepository,loadHighWater:publicationRepository.loadHighWater,saveHighWater:publicationRepository.advanceHighWater,localIdentity:identity,preview:{token:'bound-repair-preview',request:{teamID:f.scope.teamID,operationID:uuid()},binding:{predecessors:[predecessor]}},getIdentity:()=>clone(identity)};
 }
 test('repair authenticates the actual initial manifest, all ordinary parts, and administrative own-wrapper proof',async()=>{
   assert.equal(typeof api.repairWholePublicationSources,'function');const f=await fixture();
@@ -83,12 +86,12 @@ test('active access driver publishes a same-ID edit only after complete approval
     binding.recipientHash=hash([{vaultID:f.scope.vaultID,parts:rows.filter(r=>r.type==='PART').map(r=>({resourceID:r.resourceID,part:r.part,devices:[subject]})),custodians:[subject]}]);
     binding.successorHash=hash([{vaultID:f.scope.vaultID,sequence:2,previousHash:predecessor.headerHash,resources:request.vaults[0].resources,policyHash:hash(request.vaults[0].policy),snapshot}]);
     preview={request:clone(request),token:'signed-preview',binding,generations:[generation],rows,nextCursor:null};return clone(preview);
-  },start:async()=>{assert.equal(approved,true);assert.ok([...stored.keys()].some(k=>k.startsWith('checkpoint:')));return{};},
-  putPart:async(_op,_vault,object)=>uploaded.push(clone(object)),putProjection:async(_op,_vault,p)=>{projection=clone(p);},validate:async(_op,manifests)=>{manifest=clone(manifests[0].manifest);},
+  },start:async()=>{assert.equal(approved,true);assert.ok([...stored.keys()].some(k=>k.startsWith('checkpoint:')));return{operationID:preview.request.operationID,state:'PREPARING',generations:preview.generations};},
+  putPart:async(_op,_vault,object)=>uploaded.push(clone(object)),putProjection:async(_op,_vault,p)=>{projection=clone(p);},validate:async(_op,manifests)=>{manifest=clone(manifests[0].manifest);return {operationID:_op,state:'READY'};},
   receipt:async()=>lastReceipt??null,commit:async()=>{committed=true;return lastReceipt={operationID:preview.request.operationID,teamID:f.scope.teamID,requestHash:preview.binding.requestHash,actorAccountID:f.accountID,actorDeviceID:f.deviceID,vaults:[{vaultID:f.scope.vaultID,generationID:projection.header.payload.generationID,sequence:2,headerHash:await publicationHash('header',projection.header,webcrypto)}],committedAt:'2026-10-02T00:01:00Z'};},
   readback:async()=>{if(!readbackAllowed)throw Error('team_permission_denied');return {vaultID:f.scope.vaultID,header:projection.header,headerHash:await publicationHash('header',projection.header,webcrypto),manifest};}};
   const repository=createWholePublicationCheckpointRepository({cryptoValue:webcrypto,storage:{load:async k=>clone(stored.get(k)??null),putIfAbsent:async(k,v)=>{if(!stored.has(k))stored.set(k,clone(v));return clone(stored.get(k));},save:async(k,v)=>stored.set(k,clone(v)),keys:async()=>[...stored.keys()]}});
-  const driver=api.createWholePublicationAccessDriver({transport,sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'1'}),getLocalKeys:async()=>({root:f.root,identity:f.identity,pinnedTrust:f.pinnedTrust}),checkpointRepository:repository,cryptoValue:webcrypto});
+  const driver=api.createWholePublicationAccessDriver({transport,sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'1'}),getLocalKeys:async()=>({root:f.root,identity:f.identity,pinnedTrust:f.pinnedTrust}),checkpointRepository:repository,publicationRepository:f.publicationRepository,cryptoValue:webcrypto});
   await driver.getContext({teamID:f.scope.teamID,vaultID:f.scope.vaultID});
   const original=(await api.repairWholePublicationSources({...f,devicePrivateKey:f.identity.privateKey,ownIdentity:f.getIdentity(),cryptoValue:webcrypto})).plaintextByVault[f.scope.vaultID].parts[f.initial.resources[0].id].SECRET.record;
   const edited={...original,modifiedAt:1800000001,version:2,data:{...original.data,secret:'EDITED-SYNTHETIC-SECRET'}};
@@ -97,20 +100,30 @@ test('active access driver publishes a same-ID edit only after complete approval
   await assert.rejects(driver.commit({teamID:f.scope.teamID,vaultID:f.scope.vaultID},impact),/publication_readback_required|team_permission_denied/);
   assert.equal(lastReceipt.vaults[0].sequence,2);assert.equal(committed,true);assert.equal(uploaded.length,2);assert.equal(driver.writesBlocked,true);
   const recoveryContext={...ctx,recoveryOnly:true,operationState:'COMMITTED',actorRole:null,groups:[],edges:[],memberships:[],current:lastReceipt.vaults.map(v=>({...v,teamID:f.scope.teamID,resources:[],policy:[],custodianDeviceIDs:[]}))};
-  let keyLoads=0;const reloaded=api.createWholePublicationAccessDriver({transport:{...transport,context:async options=>{assert.equal(options.operationID,lastReceipt.operationID);return recoveryContext;},preview:async()=>{throw Error('recovery_preview');},start:async()=>{throw Error('recovery_start');},putPart:async()=>{throw Error('recovery_upload');}},sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'1'}),getLocalKeys:async()=>{keyLoads++;throw Error('private_key_rehydration');},checkpointRepository:repository,cryptoValue:webcrypto});
+  let keyLoads=0;const reloaded=api.createWholePublicationAccessDriver({transport:{...transport,context:async options=>{assert.equal(options.operationID,lastReceipt.operationID);return recoveryContext;},preview:async()=>{throw Error('recovery_preview');},start:async()=>{throw Error('recovery_start');},putPart:async()=>{throw Error('recovery_upload');}},sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'1'}),getLocalKeys:async()=>{keyLoads++;throw Error('private_key_rehydration');},checkpointRepository:repository,publicationRepository:f.publicationRepository,cryptoValue:webcrypto});
   const recoveryScope={teamID:f.scope.teamID,vaultID:f.scope.vaultID};assert.equal((await reloaded.getContext(recoveryScope)).policyMutationAvailable,false);assert.equal(reloaded.enabled,false);
-  await assert.rejects(reloaded.resumePrepared(recoveryScope),/publication_readback_required|team_permission_denied/);assert.equal(reloaded.writesBlocked,true);readbackAllowed=true;assert.deepEqual(await reloaded.resumePrepared(recoveryScope),lastReceipt);assert.equal(reloaded.writesBlocked,false);assert.equal(keyLoads,0);assert.equal(uploaded.length,2);
+  await assert.rejects(reloaded.resumePrepared(recoveryScope),/publication_readback_required|team_permission_denied/);assert.equal(reloaded.writesBlocked,true);readbackAllowed=true;
+  const advance=f.publicationRepository.advanceHighWater;f.publicationRepository.advanceHighWater=async()=>{throw Error('history_disk_failure');};
+  await assert.rejects(reloaded.resumePrepared(recoveryScope),/history_disk_failure/);assert.equal(reloaded.writesBlocked,true);assert.deepEqual(reloaded.pendingReceipt,lastReceipt);
+  f.publicationRepository.advanceHighWater=advance;
+  await advance({}, {sequence:3,hash:'c'.repeat(64)});
+  assert.deepEqual(await reloaded.resumePrepared(recoveryScope),lastReceipt);assert.equal(reloaded.writesBlocked,false);assert.equal(keyLoads,0);assert.equal(uploaded.length,2);
+  assert.deepEqual(await f.publicationRepository.loadHighWater({}),{sequence:3,hash:'c'.repeat(64)});
   assert.equal(uploaded[1].resourceID,f.initial.resources[0].id);assert.notEqual(uploaded[1].envelope.nonce,f.initial.objects.find(o=>o.part==='SECRET').envelope.nonce);
   const cek=await (await import('../public/resource-crypto-v2.js')).unwrapResourceCEK({wrapper:uploaded[1].wrappers[0],context:uploaded[1].wrappers[0].context,privateKey:f.identity.privateKey,cryptoValue:webcrypto});
   const plaintext=await (await import('../public/resource-crypto-v2.js')).decryptResourcePart({envelope:uploaded[1].envelope,context:uploaded[1].envelope.context,cek,cryptoValue:webcrypto});cek.fill(0);
   assert.equal(JSON.parse(new TextDecoder().decode(plaintext)).record.data.secret,'EDITED-SYNTHETIC-SECRET');plaintext.fill(0);
+  preview=null;
+  const replayed=api.createWholePublicationAccessDriver({transport,sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'1'}),getLocalKeys:async()=>({root:f.root,identity:f.identity,pinnedTrust:f.pinnedTrust}),checkpointRepository:repository,publicationRepository:f.publicationRepository,cryptoValue:webcrypto});
+  await replayed.getContext(recoveryScope);
+  await assert.rejects(replayed.readRecord({...recoveryScope,resourceID:f.initial.resources[0].id}),/publication_rollback/);
 });
 test('renewed-session READY recovery discovers metadata before context and permits only authenticated discard',async()=>{
   const f=await fixture(),events=[],old={endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,teamID:f.scope.teamID,operationID:uuid(),sessionID:uuid(),keyVersion:1};let forgotten=false,keys=0;
   const context={...f.context,sessionID:uuid(),actorKeyVersion:1,actorRole:'owner',environment:'staging',publicationAvailable:true,operationState:'READY',groups:[],edges:[],memberships:[]};
   const repository={discover:async()=>{events.push('metadata');return forgotten?[]:[old];},pending:async()=>{throw Error('old_session_payload_rehydrated');},forgetDiscarded:async(scope,result)=>{assert.equal(scope.operationID,old.operationID);assert.equal(result.state,'DISCARDED');forgotten=true;}};
   const transport={receipt:async op=>{assert.equal(op,old.operationID);events.push('receipt');return null;},context:async options=>{events.push(options?.operationID?'owned-context':'context');if(!forgotten)assert.equal(options.operationID,old.operationID);return context;},discard:async op=>{events.push('discard');return {operationID:op,state:'DISCARDED'};}};
-  const driver=api.createWholePublicationAccessDriver({transport,sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'new'}),getLocalKeys:async()=>{keys++;throw Error('keys_should_not_be_loaded');},checkpointRepository:repository,cryptoValue:webcrypto});
+  const driver=api.createWholePublicationAccessDriver({transport,sessionIdentity:()=>({endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID,sessionEpoch:'new'}),getLocalKeys:async()=>{keys++;throw Error('keys_should_not_be_loaded');},checkpointRepository:repository,publicationRepository:f.publicationRepository,cryptoValue:webcrypto});
   const scope={teamID:f.scope.teamID,vaultID:f.scope.vaultID},gate=await driver.getContext(scope);assert.deepEqual(events,['metadata','receipt','owned-context']);assert.equal(gate.policyMutationAvailable,false);assert.equal(driver.canResumePending,false);
   await assert.rejects(driver.resumePrepared(scope),/publication_session_renewed/);await driver.discardPrepared(scope);assert.equal(keys,0);assert.equal(forgotten,true);
   assert.equal((await driver.getContext(scope)).policyMutationAvailable,true);assert.equal(driver.pendingOperationID,null);
@@ -128,4 +141,34 @@ test('checkpoint before START remains fenced after missing context; only confirm
   discardFailure=false;receipt={operationID:old.operationID};await assert.rejects(driver.discardPrepared(scope),/publication_readback_required/);assert.equal(forgotten,false);
   receipt=null;await driver.getContext(scope);renewed=true;await assert.rejects(driver.discardPrepared(scope),/publication_context_changed/);assert.equal(forgotten,false);
   current={endpoint:f.endpoint,accountID:f.accountID,deviceID:f.deviceID};renewed=false;await driver.getContext(scope);events.length=0;await driver.discardPrepared(scope);assert.deepEqual(events,['discard','receipt','forget']);assert.equal((await driver.getContext(scope)).policyMutationAvailable,true);
+});
+
+
+test('repair never accepts a lower or same-sequence fork against protected observed history',async()=>{
+ const f=await fixture(),base={...f,devicePrivateKey:f.identity.privateKey,ownIdentity:f.getIdentity(),cryptoValue:webcrypto};
+ for(const water of [{sequence:3,hash:'a'.repeat(64)},{sequence:1,hash:'b'.repeat(64)}])
+  await assert.rejects(api.repairWholePublicationSources({...base,loadHighWater:async()=>water}),/publication_rollback|publication_fork|publication_changed/);
+});
+
+
+test('repair rejects observed history advanced during download and cannot return before durable advancement', async () => {
+ const f=await fixture(),base={...f,devicePrivateKey:f.identity.privateKey,ownIdentity:f.getIdentity(),cryptoValue:webcrypto};
+ let water=null,saved=0;
+ await assert.rejects(api.repairWholePublicationSources({...base,loadHighWater:async()=>water,
+  saveHighWater:async()=>{saved++;},transport:{...f.transport,repairPart:async(...args)=>{const value=await f.transport.repairPart(...args);water={sequence:2,hash:'a'.repeat(64)};return value;}}}),/publication_rollback|publication_fork/);
+ assert.equal(saved,0);
+ await assert.rejects(api.repairWholePublicationSources({...base,loadHighWater:async()=>null,saveHighWater:async()=>{throw Error('disk_failure');}}),/disk_failure/);
+});
+
+
+test('Folder move rejects an unrelated cyclic Cloud ancestry without hanging the browser', () => {
+ const teamID=uuid(),vaultID=uuid(),moving=uuid(),parent=uuid(),cycleA=uuid(),cycleB=uuid();
+ const context={teamID,current:[{vaultID,sequence:1,policy:[],custodianDeviceIDs:[uuid()],resources:[
+  {id:moving,kind:'FOLDER',parentFolderID:null},{id:parent,kind:'FOLDER',parentFolderID:null},
+  {id:cycleA,kind:'FOLDER',parentFolderID:cycleB},{id:cycleB,kind:'FOLDER',parentFolderID:cycleA}]}],memberships:[],groups:[]};
+ const input={context,vaultID,draft:{type:'RESOURCE_MOVE',resourceID:moving,newParentFolderID:parent,expectedResourceVersion:1}};
+ const script=`import {buildWholePublicationRequest} from ${JSON.stringify(new URL('../public/whole-publication-flow.js',import.meta.url).href)};
+  try {buildWholePublicationRequest(${JSON.stringify(input)});process.exit(1);}catch(error){if(error.message!=='folder_cycle')throw error;}`;
+ const result=spawnSync(process.execPath,['--input-type=module','-e',script],{timeout:1500,encoding:'utf8'});
+ assert.equal(result.error,undefined,'cyclic Cloud ancestry must terminate with a typed rejection');assert.equal(result.status,0,result.stderr);
 });
