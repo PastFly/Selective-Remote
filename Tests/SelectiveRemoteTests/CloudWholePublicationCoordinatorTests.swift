@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
+import Vision
 @testable import SelectiveRemote
 
 @Suite("Whole publication native edit intent")
@@ -71,6 +72,57 @@ private actor WholeUIProbe {
 }
 @Suite("Whole publication native entrypoint")
 @MainActor struct CloudWholePublicationViewTests {
+    @Test("populated preview retains localized rows in light and graphite at narrow and wide widths", .enabled(if: ProcessInfo.processInfo.environment["SELECTIVE_REMOTE_WHOLE_PUBLICATION_UI_OUTPUT"] != nil))
+    func renderedPreview() async throws {
+        let output = try #require(ProcessInfo.processInfo.environment["SELECTIVE_REMOTE_WHOLE_PUBLICATION_UI_OUTPUT"])
+        try FileManager.default.createDirectory(atPath: output, withIntermediateDirectories: true)
+        let preference = "SelectiveRemote.applicationLanguage.v1", priorLanguage = UserDefaults.standard.object(forKey: preference)
+        defer {
+            if let priorLanguage { UserDefaults.standard.set(priorLanguage, forKey: preference) }
+            else { UserDefaults.standard.removeObject(forKey: preference) }
+        }
+        let fixture = try WholeFixture(), scope = fixture.source.scope
+        let reference = SelectiveRemotePublishedModelReference(scope: scope, resourceID: fixture.source.resourceID, kind: .credential, generationID: fixture.generation.canonicalCloudString, headerHash: String(repeating: "a", count: 64), part: .metadata, stale: false)
+        let model = SelectiveRemoteWholePublicationModel(reference: reference, title: "Preview acceptance", section: .share)
+        let tokens = SelectiveRemoteCloudMemoryTokenStore()
+        let session = SelectiveRemotePublicationSession(endpoint: scope.endpoint, accountID: scope.accountID, deviceID: scope.deviceID, token: "synthetic-preview", tokenStore: tokens)
+        let page = try fixture.preview.publicationObject()
+        var rows = try page["rows"]!.publicationArray()
+        rows.append(.object(["type": .string("DELTA"), "vaultID": .string(scope.vaultID.canonicalCloudString), "resourceID": .string(fixture.source.resourceID.canonicalCloudString), "accountID": .string(scope.accountID.canonicalCloudString), "beforeMask": .number(0), "afterMask": .number(1)]))
+        let preview = SelectiveRemoteWholePublicationPreview(scope: .init(session: session, teamID: scope.teamID, operationID: UUID()), token: "synthetic-preview", binding: page["binding"]!, request: fixture.request, generations: try page["generations"]!.publicationArray(), rows: rows)
+        for english in [false, true] {
+            UserDefaults.standard.set(english ? "english" : "russian", forKey: preference)
+            for dark in [false, true] {
+                for width in [480, 820] {
+                    let view = SelectiveRemoteWholePublicationPreviewList(model: model, preview: preview)
+                        .padding(12).frame(width: CGFloat(width), height: 680)
+                        .preferredColorScheme(dark ? .dark : .light)
+                    let host = NSHostingView(rootView: view)
+                    host.frame = CGRect(x: 0, y: 0, width: width, height: 680)
+                    let window = NSWindow(contentRect: host.frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+                    window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+                    window.contentView = host; window.makeKeyAndOrderFront(nil)
+                    try await Task.sleep(for: .milliseconds(50))
+                    window.layoutIfNeeded(); host.layoutSubtreeIfNeeded()
+                    let image = try #require(CGWindowListCreateImage(.null, .optionIncludingWindow, CGWindowID(window.windowNumber), [.boundsIgnoreFraming, .bestResolution]))
+                    window.orderOut(nil)
+                    let bitmap = NSBitmapImageRep(cgImage: image)
+                    #expect(bitmap.pixelsWide >= width && bitmap.pixelsHigh >= 680)
+                    let name = "preview-\(english ? "en" : "ru")-\(dark ? "graphite" : "light")-\(width)"
+                    try #require(bitmap.representation(using: .png, properties: [:])).write(to: URL(fileURLWithPath: output).appending(path: name + ".png"))
+                    let recognition = VNRecognizeTextRequest()
+                    recognition.recognitionLevel = .accurate; recognition.recognitionLanguages = [english ? "en-US" : "ru-RU"]
+                    try VNImageRequestHandler(cgImage: image).perform([recognition])
+                    let text = (recognition.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " ")
+                    try text.write(to: URL(fileURLWithPath: output).appending(path: name + ".ocr.txt"), atomically: true, encoding: .utf8)
+                    for label in english ? ["Whole Team", "4 rows", "Data", "Secret", "Custodians", "No access", "View"] : ["Вся команда", "4 строк", "Данные", "Секрет", "Хранители", "Нет доступа", "Просмотр"] {
+                        #expect(text.contains(label), "Missing visible label \(label) in \(name)")
+                    }
+                }
+            }
+        }
+    }
+
     @Test("mounted stale publication edit cannot prepare or send a mutation")
     func staleMountedView() async throws {
         let scope = SelectiveRemotePublicationScope(endpoint: URL(string: "https://ui.example.test")!, accountID: UUID(), deviceID: UUID(), teamID: UUID(), vaultID: UUID())
@@ -261,8 +313,31 @@ private extension SelectiveRemoteJSONValue {
     func publicationObjectUnchecked(_ key: String) -> Self { try! publicationObject()[key]! }
 }
 
+private final class WholeTrustPinState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: SelectiveRemoteDeviceTrustPin
+    init(_ value: SelectiveRemoteDeviceTrustPin) { self.value = value }
+    func read() -> SelectiveRemoteDeviceTrustPin { lock.withLock { value } }
+    func replace(_ next: SelectiveRemoteDeviceTrustPin) { lock.withLock { value = next } }
+}
+
+private final class WholeHistoryProtection: SelectiveRemotePublicationProtectedStorage, @unchecked Sendable {
+    private let memory = PublicationProtectedMemory(), lock = NSLock()
+    private var fault: String?
+    func setFault(_ value: String) { lock.withLock { fault = value } }
+    func read(_ key: String) throws -> Data? {
+        switch lock.withLock({ fault }) {
+        case "missing": return nil
+        case "corrupt": return Data([0])
+        default: return memory.read(key)
+        }
+    }
+    func save(_ data: Data, key: String) throws { try memory.save(data, key: key) }
+}
+
 private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
     let fixture: WholeFixture
+    nonisolated let history: SelectiveRemoteVaultPublicationStore
     var fault: String?
     var uploaded: [(String, Data)] = []
     var projection: SelectiveRemoteJSONValue?
@@ -272,7 +347,9 @@ private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
     var requestedPreview: SelectiveRemoteJSONValue?
     var discarded = false
     var previewOverride: SelectiveRemoteJSONValue?
-    init(_ fixture: WholeFixture) { self.fixture = fixture }
+    var contextOverride: SelectiveRemoteJSONValue?
+    func setContext(_ value: SelectiveRemoteJSONValue) { contextOverride = value }
+    init(_ fixture: WholeFixture, history: SelectiveRemoteVaultPublicationStore) { self.fixture = fixture; self.history = history }
     func setFault(_ value: String?) { fault = value }
     func setHook(_ value: @escaping @Sendable (String) async -> Void) { hook = value }
     func setCurrentCheckpoint(_ directory: SelectiveRemoteSignedDeviceDirectory) throws {
@@ -286,6 +363,7 @@ private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
     func wholePublication(scope: SelectiveRemoteWholePublicationScope, route: String, body: Data?) async throws -> SelectiveRemoteJSONValue {
         await hook?(route)
         if route == "context" {
+            if let contextOverride { return contextOverride }
             let vault = try fixture.request.publicationObject()["vaults"]!.publicationArray()[0].publicationObject(), old = try fixture.directory.publicationObject(), binding = try fixture.preview.publicationObject()["binding"]!.publicationObject()
             return .object(["teamID": .string(scope.teamID.canonicalCloudString), "publicationAvailable": .boolean(fault != "context-off"), "environment": .string(fault == "context-production" ? "production" : "staging"), "actorRole": .string("owner"), "sessionID": binding["sessionID"]!, "actorKeyVersion": binding["keyVersion"]!, "current": .array([.object(["teamID": .string(scope.teamID.canonicalCloudString), "vaultID": vault["vaultID"]!, "generationID": old["generationID"]!, "sequence": .number(1), "headerHash": old["headerHash"]!, "resources": vault["resources"]!, "policy": vault["policy"]!, "custodianDeviceIDs": vault["custodianDeviceIDs"]!])]), "groups": .array([]), "memberships": .array([]), "edges": .array([])])
         }
@@ -334,6 +412,15 @@ private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
         if route.contains("/projections/") { projection = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: #require(body)).publicationObject()["projection"] }
         if route.hasSuffix("/validate") { manifest = try JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: #require(body)).publicationObject()["manifests"]!.publicationArray()[0].publicationObject()["manifest"] }
         if fault == "upload" && route.contains("/parts/") { throw URLError(.networkConnectionLost) }
+        if route == "start" {
+            let generations = try (requestedPreview ?? fixture.preview).publicationObject()["generations"]!
+            if fault == "start-missing" { return .object(["state": .string("PREPARING"), "generations": generations]) }
+            return .object(["operationID": .string(scope.operationID.canonicalCloudString), "state": .string(fault == "start-state" ? "COMMITTED" : "PREPARING"), "generations": fault == "start-generations" ? .array([]) : generations])
+        }
+        if route.hasSuffix("/validate") {
+            if fault == "ready-missing" { return .object(["state": .string("READY")]) }
+            return .object(["operationID": .string(scope.operationID.canonicalCloudString), "state": .string(fault == "ready-state" ? "PREPARING" : "READY")])
+        }
         return .object(["state": .string("PREPARING")])
     }
     func wholePublicationReadback(scope: SelectiveRemoteWholePublicationScope, vaultID: UUID) async throws -> SelectiveRemoteJSONValue {
@@ -345,16 +432,287 @@ private actor WholeRemote: SelectiveRemoteWholePublicationRemote {
 
 @Suite("Whole publication verified crypto and ownership")
 struct CloudWholePublicationPipelineTests {
-    private func setup(_ fixture: WholeFixture, protected: PublicationProtectedMemory = PublicationProtectedMemory(), pins: Bool = true, pinOverride: SelectiveRemoteDeviceTrustPin? = nil) throws -> (SelectiveRemoteWholePublicationCoordinator, WholeRemote, SelectiveRemoteWholePublicationCheckpointStore, SelectiveRemotePublicationSession, URL) {
+    private func setup(_ fixture: WholeFixture, protected: PublicationProtectedMemory = PublicationProtectedMemory(), pins: Bool = true, pinOverride: SelectiveRemoteDeviceTrustPin? = nil, pinState: WholeTrustPinState? = nil, publicationStore: SelectiveRemoteVaultPublicationStore? = nil) throws -> (SelectiveRemoteWholePublicationCoordinator, WholeRemote, SelectiveRemoteWholePublicationCheckpointStore, SelectiveRemotePublicationSession, URL) {
         let s = fixture.source.scope, token = "whole-token", tokens = SelectiveRemoteCloudMemoryTokenStore(); tokens.saveToken(token, for: s.endpoint)
         let session = SelectiveRemotePublicationSession(endpoint: s.endpoint, accountID: s.accountID, deviceID: s.deviceID, token: token, tokenStore: tokens)
         let operation = try SelectiveRemoteWholePublicationWire.id(fixture.request.publicationObject()["operationID"]!)
         let directory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
-        let store = try SelectiveRemoteWholePublicationCheckpointStore(directory: directory, protected: protected), remote = WholeRemote(fixture)
+        let store = try SelectiveRemoteWholePublicationCheckpointStore(directory: directory, protected: protected)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: s.teamID, operationID: operation)
-        let coordinator = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store,
-            pin: { _, _, _ in pins ? pinOverride ?? fixture.source.ownPin : nil }, advancePin: { _, _, prior, next in #expect(next.highWater >= prior.highWater) })
+        let history = try publicationStore ?? SelectiveRemoteVaultPublicationStore(directory: directory, protected: PublicationProtectedMemory())
+        let remote = WholeRemote(fixture, history: history)
+        let coordinator = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { history },
+            pin: { _, _, _ in pins ? pinState?.read() ?? pinOverride ?? fixture.source.ownPin : nil }, advancePin: { _, _, prior, next in #expect(next.highWater >= prior.highWater) })
         return (coordinator, remote, store, session, directory)
+    }
+
+    @Test("incomplete Cloud context is rejected before native presentation", arguments: ["memberships", "groups", "edges", "membership-id", "membership-user", "membership-epoch", "group-id", "group-name", "duplicate-membership", "duplicate-group"])
+    func malformedContext(_ fault: String) async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var context = try await coordinator.context().publicationObject()
+        let member: [String: SelectiveRemoteJSONValue] = ["id": .string(UUID().canonicalCloudString), "userID": .string(fixture.source.scope.accountID.canonicalCloudString), "epoch": .number(1)]
+        let group: [String: SelectiveRemoteJSONValue] = ["id": .string(UUID().canonicalCloudString), "name": .string("Team group"), "version": .number(1)]
+        if ["memberships", "groups", "edges"].contains(fault) { context.removeValue(forKey: fault) }
+        else if fault.hasPrefix("membership-") {
+            var row = member
+            row.removeValue(forKey: ["membership-id": "id", "membership-user": "userID", "membership-epoch": "epoch"][fault]!)
+            context["memberships"] = .array([.object(row)])
+        } else if fault.hasPrefix("group-") {
+            var row = group; row.removeValue(forKey: fault == "group-id" ? "id" : "name")
+            context["groups"] = .array([.object(row)])
+        } else if fault == "duplicate-membership" { context["memberships"] = .array([.object(member), .object(member)]) }
+        else { context["groups"] = .array([.object(group), .object(group)]) }
+        await remote.setContext(.object(context))
+        await #expect(throws: Error.self) { try await coordinator.context() }
+        #expect(await remote.uploaded.isEmpty)
+    }
+
+    @Test("newer local recipient revocation during repair prevents checkpoint and uploads")
+    func trustChangesDuringRepair() async throws {
+        let fixture = try WholeFixture(), pins = WholeTrustPinState(fixture.source.ownPin)
+        let revoked = try SelectiveRemoteDeviceTrustV1.signDirectory(root: fixture.source.trustRoot, accountID: fixture.source.scope.accountID, version: fixture.source.ownPin.highWater + 1, certificates: [])
+        let next = SelectiveRemoteDeviceTrustPin(accountID: fixture.source.scope.accountID, rootFingerprint: fixture.source.ownPin.rootFingerprint, highWater: revoked.payload.version, checkpointDigest: try SelectiveRemoteDeviceTrustV1.directoryDigest(revoked))
+        let (coordinator, remote, store, session, directory) = try setup(fixture, pinState: pins)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        await remote.setHook { route in if route == "repairPart" { pins.replace(next) } }
+        await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
+        #expect(try store.load(scope: coordinator.scope, session: session) == nil)
+        #expect(await remote.uploaded.isEmpty)
+    }
+
+    @Test("local trust changes across upload awaits prevent the next mutation", arguments: ["start", "/parts/", "/projections/"])
+    func trustChangesDuringUpload(_ boundary: String) async throws {
+        let fixture = try WholeFixture(), pins = WholeTrustPinState(fixture.source.ownPin)
+        let next = SelectiveRemoteDeviceTrustPin(accountID: fixture.source.scope.accountID, rootFingerprint: fixture.source.ownPin.rootFingerprint, highWater: fixture.source.ownPin.highWater + 1, checkpointDigest: "newer-local-revocation")
+        let (coordinator, remote, _, _, directory) = try setup(fixture, pinState: pins)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        await remote.setHook { route in if route == boundary || route.contains(boundary) { pins.replace(next) } }
+        await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
+        let routes = await remote.uploaded.map(\.0)
+        #expect(routes.last.map { $0 == boundary || $0.contains(boundary) } == true)
+        #expect(!routes.contains { $0.hasSuffix("/validate") })
+        #expect(try await coordinator.canDiscardUncommitted())
+    }
+
+    @Test("session loss during START prevents ciphertext upload")
+    func sessionChangesDuringUpload() async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, store, session, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        await remote.setHook { route in if route == "start" { session.invalidate() } }
+        await #expect(throws: CancellationError.self) { try await coordinator.prepare(preview: preview) }
+        #expect(await remote.uploaded.map(\.0) == ["start"])
+        _ = store
+    }
+
+    @Test("verified repair and successor readback persist ordinary rollback history through reload and payload cleanup")
+    func durablePublicationHistory() async throws {
+        let fixture = try WholeFixture(), protected = PublicationProtectedMemory()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let (coordinator, _, _, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 1)
+        _ = try await coordinator.commit(preview: preview)
+        #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 2)
+        try history.removePayload(scope: fixture.source.scope, session: session)
+        let reloaded = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let water = try reloaded.highWater(scope: fixture.source.scope)
+        #expect(water?.sequence == 2)
+        let oldHeader = try fixture.directory.publicationObject()["header"]!
+        #expect(throws: SelectiveRemotePublicationError.rollback) {
+            try SelectiveRemoteVaultPublicationV1.verifyHeader(oldHeader, rootPublicKey: fixture.source.trustRoot.publicKey.x963Representation.selectiveRemoteBase64URL, teamID: fixture.source.scope.teamID.canonicalCloudString, vaultID: fixture.source.scope.vaultID.canonicalCloudString, highWater: water)
+        }
+    }
+
+    @Test("readback history persistence failure retains verified receipt and write fence")
+    func historyPersistenceFailure() async throws {
+        let fixture = try WholeFixture(), protected = PublicationProtectedMemory()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let (coordinator, _, store, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        protected.fail = true
+        await #expect(throws: SelectiveRemoteWholePublicationError.readbackRequired) { try await coordinator.commit(preview: preview) }
+        let state = try store.commitState(scope: coordinator.scope, session: session)
+        #expect(state.receipt != nil && !state.complete)
+        #expect(try await coordinator.writesDisabled())
+        protected.fail = false
+        _ = try await coordinator.resolveReceipt(request: fixture.request)
+        #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 2)
+        #expect(try await coordinator.writesDisabled() == false)
+    }
+
+    @Test("concurrent newer generation during repair prevents old custody from publishing")
+    func historyChangesDuringRepair() async throws {
+        let fixture = try WholeFixture(), protected = PublicationProtectedMemory()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let (coordinator, remote, store, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let response = try fixture.source.headerResponse.publicationObject()
+        var payload = try SelectiveRemoteVaultPublicationV1.headerPayload(response["header"]!)
+        payload["sequence"] = .number(3); payload["previousHash"] = .string(String(repeating: "a", count: 64)); payload["generationID"] = .string(UUID().canonicalCloudString)
+        let header = try SelectiveRemoteWholePublicationWire.signed(.object(payload), purpose: "header", root: fixture.source.trustRoot)
+        let newer = try SelectiveRemotePublicationCache(scope: fixture.source.scope, teamName: "Team", vaultName: "Vault", role: .owner, header: header, headerHash: SelectiveRemoteVaultPublicationV1.hash("header", header), subject: response["subject"]!, inventory: response["inventory"]!, publisher: .null, descriptors: [], readerPublicKey: fixture.source.identity.publicKey, readerKeyVersion: 3, parts: [])
+        let preview = try await coordinator.preview(request: fixture.request)
+        await remote.setHook { route in
+            if route == "repairPart", (try? history.highWater(scope: fixture.source.scope)) == nil {
+                do { try history.commit(newer, expected: nil, session: session) } catch { Issue.record(error) }
+            }
+        }
+        await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
+        #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 3)
+        #expect(try store.load(scope: coordinator.scope, session: session) == nil)
+        #expect(await remote.uploaded.isEmpty)
+    }
+
+    @Test("observed generation history never becomes first use after secure receipt loss or corruption", arguments: ["missing", "corrupt"])
+    func lostHistoryProtection(_ fault: String) async throws {
+        let fixture = try WholeFixture(), protected = WholeHistoryProtection()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let (coordinator, _, _, _, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 1)
+        protected.setFault(fault)
+        let reloaded = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        #expect(throws: Error.self) { try reloaded.highWater(scope: fixture.source.scope) }
+        await #expect(throws: Error.self) { try await coordinator.commit(preview: preview) }
+    }
+
+    @Test("history marker failure prevents protected advance and publication")
+    func historyMarkerFailure() async throws {
+        let fixture = try WholeFixture(), protected = PublicationProtectedMemory()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protected)
+        let (coordinator, remote, store, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try FileManager.default.removeItem(at: cacheDirectory)
+        try Data("unwritable directory".utf8).write(to: cacheDirectory)
+        await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
+        #expect(try history.highWater(scope: fixture.source.scope) == nil)
+        #expect(try store.load(scope: coordinator.scope, session: session) == nil)
+        #expect(await remote.uploaded.isEmpty)
+    }
+
+    @Test("verified older receipt can finish recovery while preserving a newer authenticated history")
+    func receiptRecoveryWithNewerHistory() async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, session, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        try await coordinator.prepare(preview: preview)
+        _ = try await coordinator.commit(preview: preview)
+        let history = remote.history, prior = try #require(try history.highWater(scope: fixture.source.scope))
+        let newer = SelectiveRemotePublicationHighWater(sequence: 3, hash: String(repeating: "b", count: 64))
+        try history.advanceHighWater(newer, expected: prior, scope: fixture.source.scope, session: session)
+        _ = try await coordinator.resolveReceipt(request: fixture.request)
+        #expect(try history.highWater(scope: fixture.source.scope) == newer)
+        #expect(try await coordinator.writesDisabled() == false)
+        let (restarted, replay, _, _, nextDirectory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: nextDirectory) }
+        let old = try await restarted.preview(request: fixture.request)
+        await #expect(throws: Error.self) { try await restarted.prepare(preview: old) }
+        #expect(await replay.uploaded.isEmpty)
+    }
+
+    @Test("ordinary cache history survives protected loss and advance retains payload until a fresh normal commit")
+    func ordinaryHistoryAndPayloadReplacement() async throws {
+        let fixture = try WholeFixture(), protection = WholeHistoryProtection()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protection)
+        let (_, _, _, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let response = try fixture.source.headerResponse.publicationObject(), oldHeader = response["header"]!
+        func cache(_ header: SelectiveRemoteJSONValue) throws -> SelectiveRemotePublicationCache {
+            try .init(scope: fixture.source.scope, teamName: "Team", vaultName: "Vault", role: .owner, header: header, headerHash: SelectiveRemoteVaultPublicationV1.hash("header", header), subject: response["subject"]!, inventory: response["inventory"]!, publisher: .null, descriptors: [], readerPublicKey: fixture.source.identity.publicKey, readerKeyVersion: 3, parts: [])
+        }
+        let oldCache = try cache(oldHeader)
+        try history.commit(oldCache, expected: nil, session: session)
+        let oldFiles = try FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil).filter { $0.pathExtension == "sealed" }
+        var payload = try SelectiveRemoteVaultPublicationV1.headerPayload(oldHeader)
+        payload["sequence"] = .number(2); payload["previousHash"] = .string(oldCache.headerHash); payload["generationID"] = .string(UUID().canonicalCloudString)
+        let newHeader = try SelectiveRemoteWholePublicationWire.signed(.object(payload), purpose: "header", root: fixture.source.trustRoot), nextCache = try cache(newHeader)
+        let next = SelectiveRemotePublicationHighWater(sequence: 2, hash: nextCache.headerHash)
+        try history.advanceHighWater(next, expected: history.highWater(scope: fixture.source.scope), scope: fixture.source.scope, session: session)
+        #expect(oldFiles.count == 1 && oldFiles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+        #expect(throws: Error.self) { try history.load(scope: fixture.source.scope, session: session) }
+        try history.commit(nextCache, expected: next, session: session)
+        #expect(try history.load(scope: fixture.source.scope, session: session) == nextCache)
+        #expect(oldFiles.allSatisfy { !FileManager.default.fileExists(atPath: $0.path) })
+        protection.setFault("missing")
+        #expect(throws: Error.self) { try history.highWater(scope: fixture.source.scope) }
+    }
+
+    @Test("ordinary cache commit or authenticated legacy read records observed history before secure receipt can be lost", arguments: [false, true])
+    func ordinaryHistoryLoss(_ legacyRead: Bool) async throws {
+        let fixture = try WholeFixture(), protection = WholeHistoryProtection()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protection)
+        let (_, _, _, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let response = try fixture.source.headerResponse.publicationObject(), header = response["header"]!
+        let cache = try SelectiveRemotePublicationCache(scope: fixture.source.scope, teamName: "Team", vaultName: "Vault", role: .owner, header: header, headerHash: SelectiveRemoteVaultPublicationV1.hash("header", header), subject: response["subject"]!, inventory: response["inventory"]!, publisher: .null, descriptors: [], readerPublicKey: fixture.source.identity.publicKey, readerKeyVersion: 3, parts: [])
+        try history.commit(cache, expected: nil, session: session)
+        if legacyRead {
+            for marker in try FileManager.default.contentsOfDirectory(at: cacheDirectory, includingPropertiesForKeys: nil) where marker.pathExtension == "history" {
+                try FileManager.default.removeItem(at: marker)
+            }
+            #expect(try history.highWater(scope: fixture.source.scope)?.sequence == 1)
+        }
+        protection.setFault("missing")
+        #expect(throws: Error.self) { try history.highWater(scope: fixture.source.scope) }
+    }
+
+    @Test("malformed START or READY acknowledgment never completes preparation", arguments: ["start-missing", "start-state", "start-generations", "ready-missing", "ready-state"])
+    func malformedMutationAcknowledgment(_ fault: String) async throws {
+        let fixture = try WholeFixture(), (coordinator, remote, _, _, directory) = try setup(fixture)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let preview = try await coordinator.preview(request: fixture.request)
+        await remote.setFault(fault)
+        await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
+        if fault.hasPrefix("start-") { #expect(await remote.uploaded.map(\.0) == ["start"]) }
+        #expect(await remote.committed == nil)
+        #expect(try await coordinator.canDiscardUncommitted())
+    }
+
+    @Test("first secure history save failure can retry without losing a known-history marker", arguments: [false, true])
+    func firstHistorySaveRetry(_ ordinary: Bool) async throws {
+        let fixture = try WholeFixture(), protection = PublicationProtectedMemory()
+        let cacheDirectory = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: cacheDirectory) }
+        let history = try SelectiveRemoteVaultPublicationStore(directory: cacheDirectory, protected: protection)
+        let (_, _, _, session, directory) = try setup(fixture, publicationStore: history)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let response = try fixture.source.headerResponse.publicationObject(), header = response["header"]!
+        let cache = try SelectiveRemotePublicationCache(scope: fixture.source.scope, teamName: "Team", vaultName: "Vault", role: .owner, header: header, headerHash: SelectiveRemoteVaultPublicationV1.hash("header", header), subject: response["subject"]!, inventory: response["inventory"]!, publisher: .null, descriptors: [], readerPublicKey: fixture.source.identity.publicKey, readerKeyVersion: 3, parts: [])
+        let next = SelectiveRemotePublicationHighWater(sequence: 1, hash: cache.headerHash)
+        func save() throws {
+            if ordinary { try history.commit(cache, expected: nil, session: session) }
+            else { try history.advanceHighWater(next, expected: nil, scope: fixture.source.scope, session: session) }
+        }
+        protection.fail = true
+        #expect(throws: Error.self) { try save() }
+        protection.fail = false
+        try save()
+        #expect(try history.highWater(scope: fixture.source.scope) == next)
     }
 
     @Test("a truncated or repeated preview cannot be confirmed")
@@ -495,10 +853,10 @@ struct CloudWholePublicationPipelineTests {
         await #expect(throws: Error.self) { try await coordinator.commit(preview: preview) }
         #expect(try await coordinator.writesDisabled())
         #expect(try store.commitState(scope: coordinator.scope, session: session).receipt != nil)
-        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await restarted.writesDisabled())
         let nextScope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: UUID())
-        let newOperation = SelectiveRemoteWholePublicationCoordinator(scope: nextScope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let newOperation = SelectiveRemoteWholePublicationCoordinator(scope: nextScope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await newOperation.writesDisabled())
         await remote.setFault(nil)
         _ = try await restarted.resolveReceipt(request: fixture.request)
@@ -516,7 +874,7 @@ struct CloudWholePublicationPipelineTests {
         let session = SelectiveRemotePublicationSession(endpoint: old.endpoint, accountID: old.accountID, deviceID: old.deviceID, token: "renewed-own-token", tokenStore: tokens)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: coordinator.scope.operationID)
         #expect(throws: Error.self) { try store.load(scope: scope, session: session) }
-        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         await #expect(throws: Error.self) { try await renewed.resume(request: fixture.request) }
         let before = await remote.uploaded.count
         #expect(try await renewed.savedRequest() == fixture.request)
@@ -535,7 +893,7 @@ struct CloudWholePublicationPipelineTests {
         let tokens = SelectiveRemoteCloudMemoryTokenStore(); tokens.saveToken("renewed-ready-token", for: old.endpoint)
         let session = SelectiveRemotePublicationSession(endpoint: old.endpoint, accountID: old.accountID, deviceID: old.deviceID, token: "renewed-ready-token", tokenStore: tokens)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: coordinator.scope.teamID, operationID: coordinator.scope.operationID)
-        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let renewed = SelectiveRemoteWholePublicationCoordinator(scope: scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         #expect(try await renewed.canDiscardUncommitted())
         await #expect(throws: Error.self) { try await renewed.resume(request: fixture.request) }
         let before = await remote.uploaded.count
@@ -601,7 +959,7 @@ struct CloudWholePublicationPipelineTests {
         let preview = try await coordinator.preview(request: fixture.request); await remote.setFault("upload")
         await #expect(throws: Error.self) { try await coordinator.prepare(preview: preview) }
         let original = try #require(await remote.uploaded.first { $0.0.contains("/parts/") })
-        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
+        let restarted = SelectiveRemoteWholePublicationCoordinator(scope: coordinator.scope, session: session, remote: remote, identity: fixture.source.identity, root: fixture.source.trustRoot, store: store, publicationStore: { remote.history }, pin: { _, _, _ in fixture.source.ownPin }, advancePin: { _, _, _, _ in })
         await remote.setFault(nil); try await restarted.resume(request: fixture.request)
         let replayed = await remote.uploaded.filter { $0.0 == original.0 }
         #expect(replayed.count == 3 && replayed[0].1 == replayed[1].1)

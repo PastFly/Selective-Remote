@@ -229,7 +229,7 @@ struct SelectiveRemoteWholePublicationView: View {
                 SelectiveRemoteCloudResourceAccessView(reference: access, client: .init(client: model.client), session: .init(endpoint: model.reference.scope.endpoint), initialSection: .who)
             } else {
                 inputs.disabled(!model.available || model.busy || model.blocked || model.committed)
-                if let preview = model.preview { previewList(preview) } else { Spacer() }
+                if let preview = model.preview { SelectiveRemoteWholePublicationPreviewList(model: model, preview: preview) } else { Spacer() }
                 if !model.blocked && !model.committed {
                     HStack {
                         Button(CloudAccessLocalization.text("Просмотреть изменения всей команды", "Preview all Team changes")) { Task { await model.preparePreview() } }.disabled(!model.available || model.busy)
@@ -290,26 +290,47 @@ struct SelectiveRemoteWholePublicationView: View {
         case .access: EmptyView()
         }
     }
-    private func previewList(_ preview: SelectiveRemoteWholePublicationPreview) -> some View {
+}
+
+struct SelectiveRemoteWholePublicationPreviewList: View {
+    @ObservedObject var model: SelectiveRemoteWholePublicationModel
+    let preview: SelectiveRemoteWholePublicationPreview
+
+    var body: some View {
         VStack(alignment: .leading) {
-            let counts = (try? preview.binding.publicationObject()["counts"]?.publicationObject()) ?? [:]
-            Text("\(CloudAccessLocalization.text("Вся команда", "Whole Team")): \((try? counts["vaults"]?.publicationInteger()) ?? 0) Vault · \((try? counts["resources"]?.publicationInteger()) ?? 0) \(CloudAccessLocalization.text("ресурсов", "resources")) · \(preview.rows.count) \(CloudAccessLocalization.text("строк", "rows"))").font(.headline)
+            Text(summary).font(.headline)
             List(Array(preview.rows.enumerated()), id: \.offset) { _, raw in
-                if let row = try? raw.publicationObject() {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(model.vaultName(row["vaultID"])).foregroundStyle(.secondary)
-                        Text(model.resourceName(row["resourceID"], vault: row["vaultID"])).font(.headline)
-                        if row["type"] == .string("DELTA") {
-                            Text(model.accountName(row["accountID"]) + " · " + rights(row["beforeMask"]) + " → " + rights(row["afterMask"]))
-                        } else {
-                            let devices = (try? row["devices"]?.publicationArray()) ?? []
-                            let names = devices.compactMap { try? $0.publicationObject()["accountID"] }.map { model.accountName($0) }
-                            Text((row["part"] == .string("SECRET") ? CloudAccessLocalization.text("Секрет", "Secret") : row["type"] == .string("CUSTODY") ? CloudAccessLocalization.text("Хранители", "Custodians") : CloudAccessLocalization.text("Данные", "Data")) + " · " + Array(Set(names)).sorted().joined(separator: ", ") + " · \(devices.count) " + CloudAccessLocalization.text("устройств", "devices"))
-                        }
-                    }.font(.caption).textSelection(.enabled)
-                }
+                previewRow(raw)
             }.frame(minHeight: 160)
         }
+    }
+    private var summary: String {
+        let counts = (try? preview.binding.publicationObject()["counts"]?.publicationObject()) ?? [:]
+        let vaults = (try? counts["vaults"]?.publicationInteger()) ?? 0
+        let resources = (try? counts["resources"]?.publicationInteger()) ?? 0
+        return "\(CloudAccessLocalization.text("Вся команда", "Whole Team")): \(vaults) Vault · \(resources) \(CloudAccessLocalization.text("ресурсов", "resources")) · \(preview.rows.count) \(CloudAccessLocalization.text("строк", "rows"))"
+    }
+    @ViewBuilder
+    private func previewRow(_ raw: SelectiveRemoteJSONValue) -> some View {
+        if let row = try? raw.publicationObject() {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.vaultName(row["vaultID"])).foregroundStyle(.secondary)
+                Text(model.resourceName(row["resourceID"], vault: row["vaultID"])).font(.headline)
+                Text(detail(row))
+            }.font(.caption).textSelection(.enabled)
+        }
+    }
+    private func detail(_ row: [String: SelectiveRemoteJSONValue]) -> String {
+        if row["type"] == .string("DELTA") {
+            return model.accountName(row["accountID"]) + " · " + rights(row["beforeMask"]) + " → " + rights(row["afterMask"])
+        }
+        let devices = (try? row["devices"]?.publicationArray()) ?? []
+        let names = devices.compactMap { try? $0.publicationObject()["accountID"] }.map { model.accountName($0) }
+        let label: String
+        if row["part"] == .string("SECRET") { label = CloudAccessLocalization.text("Секрет", "Secret") }
+        else if row["type"] == .string("CUSTODY") { label = CloudAccessLocalization.text("Хранители", "Custodians") }
+        else { label = CloudAccessLocalization.text("Данные", "Data") }
+        return label + " · " + Array(Set(names)).sorted().joined(separator: ", ") + " · \(devices.count) " + CloudAccessLocalization.text("устройств", "devices")
     }
     private func rights(_ value: SelectiveRemoteJSONValue?) -> String {
         let mask = (try? value?.publicationInteger(min: 0, max: 63)) ?? 0

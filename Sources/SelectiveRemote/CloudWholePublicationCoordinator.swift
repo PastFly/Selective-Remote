@@ -282,6 +282,7 @@ actor SelectiveRemoteWholePublicationCoordinator {
     private let identity: SelectiveRemoteTeamDeviceIdentity
     private let root: P256.Signing.PrivateKey
     private let store: SelectiveRemoteWholePublicationCheckpointStore
+    private let publicationStore: @Sendable () throws -> SelectiveRemoteVaultPublicationStore
     private let pin: @Sendable (URL, UUID, UUID) throws -> SelectiveRemoteDeviceTrustPin?
     private let advancePin: (@Sendable (URL, UUID, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void)?
     private var busy = false
@@ -290,27 +291,42 @@ actor SelectiveRemoteWholePublicationCoordinator {
     init(scope: SelectiveRemoteWholePublicationScope, session: SelectiveRemotePublicationSession,
          remote: any SelectiveRemoteWholePublicationRemote, identity: SelectiveRemoteTeamDeviceIdentity,
          root: P256.Signing.PrivateKey, store: SelectiveRemoteWholePublicationCheckpointStore,
+         publicationStore: @escaping @Sendable () throws -> SelectiveRemoteVaultPublicationStore = { try .init() },
          pin: @escaping @Sendable (URL, UUID, UUID) throws -> SelectiveRemoteDeviceTrustPin? = { endpoint, teamID, accountID in
              try SelectiveRemoteDeviceTrustLocalStore().pin(endpoint: endpoint, accountID: accountID)
                 ?? SelectiveRemoteVaultPublicationStore().publisherPin(endpoint: endpoint, teamID: teamID, accountID: accountID)
          },
          advancePin: (@Sendable (URL, UUID, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void)? = nil) {
         self.scope = scope; self.session = session; self.remote = remote; self.identity = identity; self.root = root; self.store = store
-        self.pin = pin; self.advancePin = advancePin
+        self.publicationStore = publicationStore; self.pin = pin; self.advancePin = advancePin
     }
     private func check() throws { try scope.check(session); guard identity.deviceID == scope.deviceID else { throw SelectiveRemoteWholePublicationError.scope } }
     private func enter() throws { try check(); guard !busy else { throw SelectiveRemoteWholePublicationError.operationInProgress }; busy = true }
-    private func request(_ route: String, _ body: SelectiveRemoteJSONValue?) async throws -> SelectiveRemoteJSONValue {
-        try check(); let encoded = try body.map(SelectiveRemoteWholePublicationWire.bytes)
+    private func check(recipientPins: [UUID: SelectiveRemoteDeviceTrustPin]) throws {
+        try check()
+        for (accountID, expected) in recipientPins {
+            guard try pin(scope.endpoint, scope.teamID, accountID) == expected else { throw SelectiveRemoteWholePublicationError.recipientTrustUnverified }
+        }
+        try check()
+    }
+    private func request(_ route: String, _ body: SelectiveRemoteJSONValue?, recipientPins: [UUID: SelectiveRemoteDeviceTrustPin] = [:]) async throws -> SelectiveRemoteJSONValue {
+        try check(recipientPins: recipientPins); let encoded = try body.map(SelectiveRemoteWholePublicationWire.bytes)
         guard encoded == nil || encoded!.count <= 1024 * 1024 else { throw SelectiveRemoteWholePublicationError.limit }
         let result = try await remote.wholePublication(scope: scope, route: route, body: encoded)
-        try check(); return result
+        try check(recipientPins: recipientPins); return result
     }
     func context() async throws -> SelectiveRemoteJSONValue {
         try enter(); defer { busy = false }
-        let value = try await request("context", nil), c = try value.publicationObject()
+        let value = try await request("context", nil), c = try validatedContext(value)
+        contextSessionID = try SelectiveRemoteWholePublicationWire.id(c["sessionID"]!); contextKeyVersion = try c["actorKeyVersion"]!.publicationInteger()
+        try check(); return value
+    }
+    private func validatedContext(_ value: SelectiveRemoteJSONValue) throws -> [String: SelectiveRemoteJSONValue] {
+        let c = try value.publicationObject()
         guard c["teamID"] == .string(scope.teamID.canonicalCloudString), c["publicationAvailable"] == .boolean(true), c["environment"] == .string("staging"),
               [SelectiveRemoteJSONValue.string("owner"), .string("admin")].contains(c["actorRole"] ?? .null), let rawSession = c["sessionID"], let rawVersion = c["actorKeyVersion"], let current = c["current"] else { throw SelectiveRemoteWholePublicationError.custodianUnavailable }
+        guard let memberships = c["memberships"], let groups = c["groups"], let edges = c["edges"] else { throw SelectiveRemoteWholePublicationError.invalid }
+        _ = try SelectiveRemoteWholePublicationWire.id(rawSession); _ = try rawVersion.publicationInteger()
         let rows = try current.publicationArray()
         guard !rows.isEmpty, rows.count <= 10 else { throw SelectiveRemoteWholePublicationError.limit }
         var ids = Set<UUID>()
@@ -318,14 +334,29 @@ actor SelectiveRemoteWholePublicationCoordinator {
             let v = try raw.publicationObject(["teamID", "vaultID", "generationID", "sequence", "headerHash", "resources", "policy", "custodianDeviceIDs"])
             guard v["teamID"] == c["teamID"], ids.insert(try SelectiveRemoteWholePublicationWire.id(v["vaultID"]!)).inserted else { throw SelectiveRemoteWholePublicationError.scope }
             _ = try SelectiveRemoteWholePublicationWire.id(v["generationID"]!); _ = try v["sequence"]!.publicationInteger()
+            _ = try v["headerHash"]!.publicationString(); _ = try v["resources"]!.publicationArray(); _ = try v["policy"]!.publicationArray(); _ = try v["custodianDeviceIDs"]!.publicationArray()
         }
-        contextSessionID = try SelectiveRemoteWholePublicationWire.id(rawSession); contextKeyVersion = try rawVersion.publicationInteger()
-        try check(); return value
+        var membershipIDs = Set<UUID>(), accountIDs = Set<UUID>(), groupIDs = Set<UUID>()
+        let members = try memberships.publicationArray(), groupRows = try groups.publicationArray()
+        guard members.count <= 1000 else { throw SelectiveRemoteWholePublicationError.limit }
+        for raw in members {
+            let member = try raw.publicationObject()
+            guard let id = member["id"], let user = member["userID"], let epoch = member["epoch"],
+                  membershipIDs.insert(try SelectiveRemoteWholePublicationWire.id(id)).inserted,
+                  accountIDs.insert(try SelectiveRemoteWholePublicationWire.id(user)).inserted else { throw SelectiveRemoteWholePublicationError.invalid }
+            _ = try epoch.publicationInteger()
+        }
+        for raw in groupRows {
+            let group = try raw.publicationObject()
+            guard let id = group["id"], let name = group["name"], groupIDs.insert(try SelectiveRemoteWholePublicationWire.id(id)).inserted else { throw SelectiveRemoteWholePublicationError.invalid }
+            _ = try name.publicationString()
+        }
+        _ = try edges.publicationArray()
+        return c
     }
     func desiredRequest(context: SelectiveRemoteJSONValue, vaultOverrides: [UUID: SelectiveRemoteJSONValue] = [:], groupMutation: SelectiveRemoteJSONValue = .null) throws -> SelectiveRemoteJSONValue {
-        try check(); let c = try context.publicationObject()
-        guard c["teamID"] == .string(scope.teamID.canonicalCloudString), c["publicationAvailable"] == .boolean(true), c["environment"] == .string("staging"), let current = c["current"] else { throw SelectiveRemoteWholePublicationError.scope }
-        let vaults = try current.publicationArray().map { raw -> SelectiveRemoteJSONValue in
+        try check(); let c = try validatedContext(context)
+        let vaults = try c["current"]!.publicationArray().map { raw -> SelectiveRemoteJSONValue in
             let v = try raw.publicationObject(), id = try SelectiveRemoteWholePublicationWire.id(v["vaultID"]!)
             if let override = vaultOverrides[id] {
                 let o = try override.publicationObject(["vaultID", "resources", "policy", "contentChanges", "custodianDeviceIDs"])
@@ -471,6 +502,7 @@ actor SelectiveRemoteWholePublicationCoordinator {
     private struct Target {
         let accountID: UUID; let deviceID: UUID; let membershipID: UUID; let epoch: Int; let keyVersion: Int
         let publicKey: SelectiveRemoteTeamDevicePublicKey
+        let trustPin: SelectiveRemoteDeviceTrustPin
         var recipientKey: String { membershipID.canonicalCloudString + "/" + deviceID.canonicalCloudString }
     }
     private func trustedTarget(_ value: SelectiveRemoteJSONValue, vaultID: UUID) throws -> Target {
@@ -500,7 +532,26 @@ actor SelectiveRemoteWholePublicationCoordinator {
                 scope: .init(endpoint: scope.endpoint, accountID: scope.accountID, deviceID: scope.deviceID, teamID: scope.teamID, vaultID: vaultID), session: session)
         }
         try check()
-        return Target(accountID: account, deviceID: device, membershipID: membership, epoch: epoch, keyVersion: certificate.payload.keyVersion, publicKey: verified.publicKey)
+        return Target(accountID: account, deviceID: device, membershipID: membership, epoch: epoch, keyVersion: certificate.payload.keyVersion, publicKey: verified.publicKey, trustPin: next)
+    }
+    private func verifiedRecipientPins(_ preview: SelectiveRemoteWholePublicationPreview) throws -> [UUID: SelectiveRemoteDeviceTrustPin] {
+        var result: [UUID: SelectiveRemoteDeviceTrustPin] = [:], targets: [String: Target] = [:]
+        for raw in preview.rows {
+            let row = try raw.publicationObject()
+            if row["type"] == .string("DELTA") { continue }
+            guard let rawVault = row["vaultID"], let devices = row["devices"] else { throw SelectiveRemoteWholePublicationError.invalid }
+            let vaultID = try SelectiveRemoteWholePublicationWire.id(rawVault)
+            for device in try devices.publicationArray() {
+                let key = try SelectiveRemoteWholePublicationWire.hash(device)
+                let target: Target
+                if let cached = targets[key] { target = cached }
+                else { target = try trustedTarget(device, vaultID: vaultID); targets[key] = target }
+                guard result[target.accountID] == nil || result[target.accountID] == target.trustPin else { throw SelectiveRemoteWholePublicationError.recipientTrustUnverified }
+                result[target.accountID] = target.trustPin
+            }
+        }
+        try check(recipientPins: result)
+        return result
     }
     private func publisherRoot(_ value: SelectiveRemoteJSONValue, header: SelectiveRemoteJSONValue, vaultID: UUID) throws -> P256.Signing.PublicKey {
         let p = try value.publicationObject(), h = try SelectiveRemoteVaultPublicationV1.headerPayload(header)
@@ -568,7 +619,8 @@ actor SelectiveRemoteWholePublicationCoordinator {
         } while cursor != nil
         let page = baseline!, header = page["header"]!, hp = try SelectiveRemoteVaultPublicationV1.headerPayload(header)
         let publisher = try publisherRoot(page["publisher"]!, header: header, vaultID: vaultID)
-        let water = try SelectiveRemoteVaultPublicationStore().highWater(scope: .init(endpoint: scope.endpoint, accountID: scope.accountID, deviceID: scope.deviceID, teamID: scope.teamID, vaultID: vaultID))
+        let history = try publicationStore(), publicationScope = SelectiveRemotePublicationScope(endpoint: scope.endpoint, accountID: scope.accountID, deviceID: scope.deviceID, teamID: scope.teamID, vaultID: vaultID)
+        let water = try history.highWater(scope: publicationScope)
         let verified = try SelectiveRemoteVaultPublicationV1.verifyHeader(header, rootPublicKey: publisher.x963Representation.selectiveRemoteBase64URL, teamID: scope.teamID.canonicalCloudString, vaultID: vaultID.canonicalCloudString, highWater: water)
         guard verified.hash == (try old["headerHash"]!.publicationString()), hp["generationID"] == old["generationID"], hp["sequence"] == old["sequence"] else { throw SelectiveRemoteWholePublicationError.scope }
         let manifest = try SelectiveRemoteWholePublicationWire.verifyManifest(page["manifest"]!, root: publisher), manifestScope = try manifest["scope"]!.publicationObject()
@@ -603,6 +655,8 @@ actor SelectiveRemoteWholePublicationCoordinator {
         guard metadata["version"] == .number(1), metadata["generationID"] == old["generationID"],
               metadata["scope"] == nil || metadata["scope"] == .object(["teamID": .string(scope.teamID.canonicalCloudString), "vaultID": .string(vaultID.canonicalCloudString)]),
               metadata["mapping"] != nil, metadata["sourceMetadata"] != nil else { throw SelectiveRemoteWholePublicationError.custodianUnavailable }
+        try check()
+        try history.advanceHighWater(verified, expected: water, scope: publicationScope, session: session)
         try check(); return Custody(parts: parts, administrative: data, header: header)
     }
     private func encrypted(_ plaintext: Data, context: SelectiveRemoteResourceCipherContext, targets: [Target], includeHash: Bool = false) throws -> SelectiveRemoteJSONValue {
@@ -709,6 +763,7 @@ actor SelectiveRemoteWholePublicationCoordinator {
             guard plan["request"] == preview.request, plan["binding"] == preview.binding, plan["changeHashes"] == changeHashes else { throw SelectiveRemoteWholePublicationError.replayConflict }
             try await upload(plan: plan, preview: preview); return
         }
+        let recipientPins = try verifiedRecipientPins(preview)
         let binding = try preview.binding.publicationObject(), keyVersion = try binding["keyVersion"]!.publicationInteger()
         var uploads: [SelectiveRemoteJSONValue] = [], manifests: [SelectiveRemoteJSONValue] = [], headers: [SelectiveRemoteJSONValue] = []
         var aggregate = 0, nonces = Set<String>(), targetsByIdentity: [String: SelectiveRemoteJSONValue] = [:]
@@ -797,14 +852,16 @@ actor SelectiveRemoteWholePublicationCoordinator {
             manifests.append(.object(["vaultID": vault["vaultID"]!, "manifest": manifest])); headers.append(.object(["vaultID": vault["vaultID"]!, "header": header, "headerHash": .string(headerHash), "manifest": manifest]))
         }
         let plan: SelectiveRemoteJSONValue = .object(["version": .number(1), "request": preview.request, "binding": preview.binding, "generations": .array(preview.generations), "uploads": .array(uploads), "manifests": .array(manifests), "headers": .array(headers), "changeHashes": changeHashes])
-        try check(); try store.persist(SelectiveRemoteWholePublicationWire.bytes(plan), scope: scope, generationsHash: preview.generationsHash, session: session); try check()
+        try check(recipientPins: recipientPins); try store.persist(SelectiveRemoteWholePublicationWire.bytes(plan), scope: scope, generationsHash: preview.generationsHash, session: session); try check(recipientPins: recipientPins)
         guard let persisted = try store.load(scope: scope, generationsHash: preview.generationsHash, session: session) else { throw SelectiveRemoteWholePublicationError.checkpointUnavailable }
         try await upload(plan: JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: persisted).publicationObject(), preview: preview)
     }
     private func upload(plan: [String: SelectiveRemoteJSONValue], preview: SelectiveRemoteWholePublicationPreview) async throws {
         guard plan["request"] == preview.request, plan["binding"] == preview.binding, plan["generations"] == .array(preview.generations) else { throw SelectiveRemoteWholePublicationError.replayConflict }
-        try check(); try store.recordPreparing(scope: scope, session: session); try check()
-        _ = try await request("start", .object(["request": preview.request, "token": .string(preview.token)]))
+        let recipientPins = try verifiedRecipientPins(preview)
+        try check(recipientPins: recipientPins); try store.recordPreparing(scope: scope, session: session); try check(recipientPins: recipientPins)
+        let started = try await request("start", .object(["request": preview.request, "token": .string(preview.token)]), recipientPins: recipientPins).publicationObject(["operationID", "state", "generations"])
+        guard started["operationID"] == .string(scope.operationID.canonicalCloudString), [.string("PREPARING"), .string("READY")].contains(started["state"]!), started["generations"] == .array(preview.generations) else { throw SelectiveRemoteWholePublicationError.incompletePreview }
         let checkpoint = try store.checkpoint(scope: scope, session: session)
         var checkpointAttached = false
         for raw in try plan["uploads"]!.publicationArray() {
@@ -817,12 +874,13 @@ actor SelectiveRemoteWholePublicationCoordinator {
                 guard count <= 256 else { throw SelectiveRemoteWholePublicationError.limit }
                 for index in 0..<count {
                     let chunk = bytes.subdata(in: index * 512 * 1024..<min((index + 1) * 512 * 1024, bytes.count))
-                    let response = try await request(route.replacingOccurrences(of: "/projections/", with: "/projection-chunks/"), SelectiveRemoteWholePublicationWire.projectionChunk(chunk, index: index, count: count, sha256: sha))
+                    let response = try await request(route.replacingOccurrences(of: "/projections/", with: "/projection-chunks/"), SelectiveRemoteWholePublicationWire.projectionChunk(chunk, index: index, count: count, sha256: sha), recipientPins: recipientPins)
                     if index == count - 1 { guard try response.publicationObject()["complete"] == .boolean(true) else { throw SelectiveRemoteWholePublicationError.incompletePreview } }
                 }
-            } else { _ = try await request(route, .object(body)) }
+            } else { _ = try await request(route, .object(body), recipientPins: recipientPins) }
         }
-        _ = try await request("operations/\(scope.operationID.canonicalCloudString)/validate", .object(["manifests": plan["manifests"]!]))
+        let ready = try await request("operations/\(scope.operationID.canonicalCloudString)/validate", .object(["manifests": plan["manifests"]!]), recipientPins: recipientPins).publicationObject(["operationID", "state"])
+        guard ready["operationID"] == .string(scope.operationID.canonicalCloudString), ready["state"] == .string("READY") else { throw SelectiveRemoteWholePublicationError.incompletePreview }
         try check()
     }
     func resume(request value: SelectiveRemoteJSONValue) async throws {
@@ -862,11 +920,16 @@ actor SelectiveRemoteWholePublicationCoordinator {
         do {
             for raw in try plan["headers"]!.publicationArray() {
                 let expected = try raw.publicationObject(["vaultID", "header", "headerHash", "manifest"]), vaultID = try SelectiveRemoteWholePublicationWire.id(expected["vaultID"]!)
+                let history = try publicationStore(), publicationScope = SelectiveRemotePublicationScope(endpoint: scope.endpoint, accountID: scope.accountID, deviceID: scope.deviceID, teamID: scope.teamID, vaultID: vaultID)
+                let water = try history.highWater(scope: publicationScope)
                 try check(); let response = try await remote.wholePublicationReadback(scope: scope, vaultID: vaultID); try check()
                 let actual = try response.publicationObject(["vaultID", "header", "headerHash", "manifest"])
                 guard actual == expected, actual["headerHash"] == .string(try SelectiveRemoteVaultPublicationV1.hash("header", actual["header"]!)) else { throw SelectiveRemoteWholePublicationError.replayConflict }
                 _ = try SelectiveRemoteWholePublicationWire.verifyManifest(actual["manifest"]!, root: root.publicKey)
-                _ = try SelectiveRemoteVaultPublicationV1.verifyHeader(actual["header"]!, rootPublicKey: root.publicKey.x963Representation.selectiveRemoteBase64URL, teamID: scope.teamID.canonicalCloudString, vaultID: vaultID.canonicalCloudString, highWater: nil)
+                let verified = try SelectiveRemoteVaultPublicationV1.verifyHeader(actual["header"]!, rootPublicKey: root.publicKey.x963Representation.selectiveRemoteBase64URL, teamID: scope.teamID.canonicalCloudString, vaultID: vaultID.canonicalCloudString, highWater: nil)
+                // Receipt recovery is read-only: a newer authenticated generation stays authoritative.
+                let next = water.map { $0.sequence > verified.sequence ? $0 : verified } ?? verified
+                try check(); try history.advanceHighWater(next, expected: water, scope: publicationScope, session: session); try check()
             }
             try check(); try store.recordCommit(scope: scope, session: session, receipt: receipt, complete: true, receiptRecovery: receiptRecovery); try check(); return receipt
         } catch is CancellationError { throw CancellationError() }
@@ -883,9 +946,10 @@ actor SelectiveRemoteWholePublicationCoordinator {
         let fresh = try await collectPreview(request: preview.request)
         guard plan["binding"] == fresh.binding, plan["generations"] == .array(fresh.generations) else { throw SelectiveRemoteWholePublicationError.replayConflict }
         try validateToken(fresh.token, binding: fresh.binding)
-        try check(); try store.recordCommit(scope: scope, session: session); try check()
+        let recipientPins = try verifiedRecipientPins(fresh)
+        try check(recipientPins: recipientPins); try store.recordCommit(scope: scope, session: session); try check(recipientPins: recipientPins)
         let receipt: SelectiveRemoteJSONValue
-        do { receipt = try await request("operations/\(scope.operationID.canonicalCloudString)/commit", .object(["request": preview.request, "token": .string(fresh.token)])) }
+        do { receipt = try await request("operations/\(scope.operationID.canonicalCloudString)/commit", .object(["request": preview.request, "token": .string(fresh.token)]), recipientPins: recipientPins) }
         catch {
             try check()
             if case let SelectiveRemoteCloudError.serviceError(status, code) = error, status == 409,
