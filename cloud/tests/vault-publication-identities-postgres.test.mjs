@@ -27,7 +27,7 @@ async function prefix(max,work) {
  try{for(const migration of await loadMigrations(directory))if(migration.version<=max)await copyFile(join(directory,migration.name),join(path,migration.name));return await work(path);}
  finally{await rm(path,{recursive:true,force:true});}
 }
-test('fresh and schema12→21 preserve an existing V1 Vault and install scoped identity storage',{skip:!database},async()=>{
+test('fresh and schema12→22 preserve an existing V1 Vault and install scoped identity storage',{skip:!database},async()=>{
  await isolatedDatabase(async pool=>{
   await prefix(12,async old=>applyMigrations(pool,old,{info(){}}));
   const user=uuid(),device=uuid(),team=uuid(),vault=uuid();
@@ -39,7 +39,7 @@ test('fresh and schema12→21 preserve an existing V1 Vault and install scoped i
   await applyMigrations(pool,directory,{info(){}});
   const row=(await pool.query('SELECT format_state,format_schema_version,active_publication_attempt_id FROM shared_vaults WHERE id=$1',[vault])).rows[0];
   assert.deepEqual(row,{format_state:'V1_ACTIVE',format_schema_version:1,active_publication_attempt_id:null});
-  assert.equal(Number((await pool.query('SELECT max(version) version FROM schema_migrations')).rows[0].version),21);
+  assert.equal(Number((await pool.query('SELECT max(version) version FROM schema_migrations')).rows[0].version),22);
   assert.match((await pool.query('SHOW server_version')).rows[0].server_version,/^16\./);
  });
 });

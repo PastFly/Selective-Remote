@@ -7,7 +7,7 @@ import { seedMigration,addSyntheticDevices } from './vault-v2-migration-db-fixtu
 import { VaultMigrationStore } from '../src/vault-migration-store.mjs';
 import { legacy, record, uuid, migrationFixture } from './vault-v2-migration-fixtures.mjs';
 import { prepareLegacyMigration, prepareMigrationInventory } from '../public/vault-v2-migration.js';
-import { prepareReaderProjection, validateReaderProjection, wrapperCommitment } from '../public/vault-publication-v1.js';
+import { prepareReaderProjection, validateReaderProjection, wrapperCommitment, prepareAdministrativeSidecarCommitment } from '../public/vault-publication-v1.js';
 import { PostgresStore } from '../src/postgres-store.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
@@ -18,8 +18,8 @@ const directory=fileURLToPath(new URL('../migrations/',import.meta.url));
 const database=process.env.TEST_DATABASE_URL;
 const resource=()=>({id:uuid(),kind:'HOST',parentFolderID:null,sourceOrdinal:0});
 
-test('reader schema20 remains present in latest schema21',async()=>{
- const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));assert.equal(versions.at(-1),21);
+test('reader schema20 remains present in latest schema22',async()=>{
+ const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));assert.equal(versions.at(-1),22);
 });
 test('discard retains permanent identity, permits scoped successor and rejects cross scope or kind reuse',{skip:!database},async()=>{
  const pool=new pg.Pool({connectionString:database});
@@ -387,7 +387,8 @@ test('1000-resource/10000-wrapper boundary stores and reads real cryptographic p
   await store.putReaderProjection(f.input,projection,sidecar);
   const payload={version:2,scope:started.scope,policyHash:await migrationHash(started.policy),resources,
    parts:objects.map(o=>({resourceID:o.resourceID,part:o.part,sha256:o.sha256})),
-   reader:{projectionHash:await publicationHash('projection',projection),sidecarHash:await publicationHash('sidecar',sidecar),custodianDeviceIDs:[f.deviceID]}};
+   reader:{projectionHash:await publicationHash('projection',projection),sidecarHash:await publicationHash('sidecar',sidecar),
+    sidecarCommitment:(await prepareAdministrativeSidecarCommitment(sidecar,targets)).commitment,custodianDeviceIDs:[f.deviceID]}};
   const manifest={payload,signature:toBase64(new Uint8Array(await crypto.subtle.sign({name:'ECDSA',hash:'SHA-256'},f.root.privateKey,migrationBytes(payload))))};
   await store.validate(f.input,manifest);await store.activate(f.input,await store.manifestHash(f.input));
   const reader=new PostgresStore(null,pool).publication({...f.config,cursorSecret:'c'.repeat(32)}),input={...f.input,sessionID:uuid()},h=await reader.header(input);
