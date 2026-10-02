@@ -95,16 +95,27 @@ function deltaRows(before,after,currentSnapshot,successorSnapshot,vaultID) {
     return {vaultID,membershipID,accountID:m.userID,membershipEpoch:m.epoch,resourceID,beforeMask:before[key]??0,afterMask:after[key]??0};
   });
 }
+// A predecessor may retain grants for an already revoked principal. They remain
+// authenticated history, but confer no current rights during repair/planning.
+export function survivingPublicationPolicy(policy,snapshot){
+  return policy.filter(g=>g.principalKind==='USER'
+    ?snapshot.memberships.some(m=>m.id===g.membershipID&&m.userID===g.principalID&&m.epoch===g.membershipEpoch)
+    :snapshot.groups.some(group=>group.id===g.principalID));
+}
 export async function deriveWholePublicationPlan({request,current,snapshots,actorRole}) {
   requireAccessMutation(actorRole);
   const canonical=validateWholePublicationRequest(request,current),orderedCurrent=[...current].sort((a,b)=>compare(a.vaultID,b.vaultID));
   const counts={vaults:canonical.vaults.length,resources:0,parts:0,wrappers:0};
+  let evaluationCells=0;
   const readSet=[],successor=[],policies=[],recipientSets=[],effectiveDeltas=[],predecessors=[];
   for(const v of canonical.vaults){
     const old=orderedCurrent.find(c=>c.vaultID===v.vaultID),pair=snapshots?.[v.vaultID];
     checkSnapshot(pair?.current,canonical.teamID,v.vaultID);checkSnapshot(pair?.successor,canonical.teamID,v.vaultID);
+    evaluationCells+=old.resources.length*pair.current.memberships.length*(old.policy.length+pair.current.edges.length+pair.current.devices.length)
+      +v.resources.length*pair.successor.memberships.length*(v.policy.length+pair.successor.edges.length+pair.successor.devices.length);
+    if(!Number.isSafeInteger(evaluationCells)||evaluationCells>20000000)fail('publication_limit',{evaluationCells});
     const before={},after={};
-    migrationRecipients({resources:old.resources,policy:old.policy,snapshot:pair.current,actorRole:'owner',effectiveMasks:before,requireDevices:false});
+    migrationRecipients({resources:old.resources,policy:survivingPublicationPolicy(old.policy,pair.current),snapshot:pair.current,actorRole:'owner',effectiveMasks:before,requireDevices:false});
     const recipients=migrationRecipients({resources:v.resources,policy:v.policy,snapshot:pair.successor,actorRole,effectiveMasks:after});
     const custody=v.custodianDeviceIDs.map(id=>{
       const target=pair.successor.devices.find(d=>d.deviceID===id);
@@ -134,9 +145,12 @@ export async function deriveWholePublicationPlan({request,current,snapshots,acto
 }
 
 function checkBinding(b) {
-  exact(b,['version','teamID','operationID','actorAccountID','sessionID','actorDeviceID','keyVersion','requestHash','readSetHash','successorHash','policyHash','recipientHash','predecessors','counts']);
+  exact(b,['version','teamID','operationID','actorAccountID','sessionID','actorDeviceID','keyVersion','requestHash','readSetHash','successorHash','policyHash','recipientHash','predecessors','counts','effectiveAt','rowsHash','rowCount']);
   if(b.version!==1||['teamID','operationID','actorAccountID','sessionID','actorDeviceID'].some(k=>!isUUID(b[k]))||!positive(b.keyVersion)
-    ||['requestHash','readSetHash','successorHash','policyHash','recipientHash'].some(k=>!digest.test(b[k]))||!Array.isArray(b.predecessors)||!b.predecessors.length||b.predecessors.length>MAX_VAULTS)fail('invalid_publication_request');
+    ||['requestHash','readSetHash','successorHash','policyHash','recipientHash','rowsHash'].some(k=>!digest.test(b[k]))
+    ||!Number.isSafeInteger(b.rowCount)||b.rowCount<0||b.rowCount>22010
+    ||typeof b.effectiveAt!=='string'||b.effectiveAt.length>64||!Number.isFinite(Date.parse(b.effectiveAt))
+    ||!Array.isArray(b.predecessors)||!b.predecessors.length||b.predecessors.length>MAX_VAULTS)fail('invalid_publication_request');
   const ids=new Set();
   for(const p of b.predecessors){exact(p,['vaultID','generationID','sequence','headerHash']);
     if(!isUUID(p.vaultID)||!isUUID(p.generationID)||!positive(p.sequence)||!digest.test(p.headerHash)||ids.has(p.vaultID))fail('invalid_publication_request');ids.add(p.vaultID);}
@@ -159,15 +173,21 @@ export class WholePublicationPreviewTokens {
   }
   open(token,binding) {
     try{checkBinding(binding);}catch{fail('preview_invalidated');}
+    const value=this.claims(token);
+    if(canonicalMigrationJSON(value.binding)!==canonicalMigrationJSON(binding))fail('preview_invalidated');
+    return {issuedAt:value.issuedAt,expiresAt:value.expiresAt};
+  }
+  claims(token) {
     if(typeof token!=='string'||token.length>16428)fail('preview_invalidated');
     const [body,signature,...extra]=token.split('.');
     if(extra.length||!body||!/^[A-Za-z0-9_-]+$/u.test(body)||!/^[A-Za-z0-9_-]{43}$/u.test(signature??'')
       ||!timingSafeEqual(Buffer.from(signature),Buffer.from(this.signature(body))))fail('preview_invalidated');
     let value;try{value=JSON.parse(Buffer.from(body,'base64url').toString('utf8'));exact(value,['version','instanceID','issuedAt','expiresAt','binding']);}catch{fail('preview_invalidated');}
-    if(value.version!==1||value.instanceID!==this.instanceID||canonicalMigrationJSON(value.binding)!==canonicalMigrationJSON(binding)
+    try{checkBinding(value.binding);}catch{fail('preview_invalidated');}
+    if(value.version!==1||value.instanceID!==this.instanceID
       ||!Number.isSafeInteger(value.issuedAt)||!Number.isSafeInteger(value.expiresAt)||value.expiresAt-value.issuedAt!==this.ttlMS
       ||value.issuedAt>this.clock())fail('preview_invalidated');
     if(value.expiresAt<=this.clock())fail('preview_expired');
-    return {issuedAt:value.issuedAt,expiresAt:value.expiresAt};
+    return value;
   }
 }

@@ -7,7 +7,7 @@ import {
 } from "./resource-crypto-v2.js";
 import { wrapForVerifiedDevice } from "./device-trust-v1.js";
 import { inspectLegacyResources, mapLegacyResources, legacyAdministrativeMetadata } from "./legacy-resource-mapping.js";
-import { prepareReaderProjection, publicationHash, validateReaderProjection } from "./vault-publication-v1.js";
+import { prepareReaderProjection, publicationHash, validateReaderProjection, prepareAdministrativeSidecarCommitment } from "./vault-publication-v1.js";
 export const canonicalMigrationJSON = (value) => {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return JSON.stringify(value);
@@ -254,6 +254,7 @@ export async function prepareLegacyMigration({
       scope,
     );
   }
+  let administrativeCommitment;
   if (readerPublication) {
     if (!state.mappingState || typeof readerPublication.verifyIdentityReservations !== "function")
       throw Error("identity_reservation_verification_required");
@@ -474,6 +475,7 @@ export async function prepareLegacyMigration({
     }
     await validateReaderProjection({ projection: state.readerProjection, scope, resources: state.resources,
       objects: state.objects, recipients, rootPublicKey: root.publicKey, cryptoValue });
+    administrativeCommitment=(await prepareAdministrativeSidecarCommitment(state.administrativeSidecar,[...targets.values()],cryptoValue)).commitment;
   }
   const payload = {
     version: 2,
@@ -489,6 +491,7 @@ export async function prepareLegacyMigration({
   if (readerPublication) payload.reader = {
     projectionHash: await publicationHash("projection", state.readerProjection, cryptoValue),
     sidecarHash: await publicationHash("sidecar", state.administrativeSidecar, cryptoValue),
+    sidecarCommitment: administrativeCommitment,
     custodianDeviceIDs: state.readerOptions.custodianDeviceIDs,
   };
   await faultAt("manifest");

@@ -25,9 +25,9 @@ export class VaultPublicationStore extends VaultMigrationStore {
       JOIN vault_migration_attempts a ON a.id=v.active_publication_attempt_id AND a.team_id=v.team_id AND a.vault_id=v.id
       JOIN vault_publication_projections p ON p.attempt_id=a.id AND p.team_id=a.team_id AND p.vault_id=a.vault_id
       WHERE v.team_id=$1 AND v.id=$2 AND v.format_state='V2_ACTIVE' AND v.format_schema_version=2
-      AND a.state='V2_ACTIVE' AND a.manifest->'payload'->'reader' IS NOT NULL
-      AND NOT v.rotation_required AND v.access_policy_version=(a.scope->>'policyVersion')::bigint`,[input.teamID,input.vaultID])).rows[0];
+      AND a.state='V2_ACTIVE' AND a.manifest->'payload'->'reader' IS NOT NULL`,[input.teamID,input.vaultID])).rows[0];
     if(!a)throw Error('publication_unavailable');
+    if(snapshot.raw.vault.rotation_required||Number(snapshot.raw.vault.access_policy_version)!==a.scope.policyVersion)throw Error('publication_repair_required');
     const identities=(await c.query('SELECT id,kind,deleted_at FROM vault_resource_identity_reservations WHERE team_id=$1 AND vault_id=$2 AND id=ANY($3::uuid[])',[a.team_id,a.vault_id,a.resources.map(r=>r.id)])).rows;
     if(identities.length!==a.resources.length||identities.some(i=>i.deleted_at||!a.resources.some(r=>r.id===i.id&&r.kind===i.kind)))throw Error('publication_repair_required');
     if(coherentKeys.some(k=>canonicalMigrationJSON(snapshot.raw[k])!==canonicalMigrationJSON(a.snapshot.raw[k])))throw Error('publication_repair_required');

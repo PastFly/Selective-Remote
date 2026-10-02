@@ -6,9 +6,9 @@ import { loadMigrations, applyMigrations } from "../src/migrations.mjs";
 export const migrationDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
 );
-test("migration publication schema exists and latest version is 20", async () => {
+test("migration publication schema exists and latest version is 21", async () => {
   const m = await loadMigrations(migrationDirectory);
-  assert.equal(m.at(-1).version, 20);
+  assert.equal(m.at(-1).version, 21);
 });
 test(
   "PG16 applies publication foundation without activating existing Vaults",

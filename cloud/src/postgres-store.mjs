@@ -1,5 +1,6 @@
 import { VaultMigrationStore } from './vault-migration-store.mjs';
 import { VaultPublicationStore } from './vault-publication-store.mjs';
+import { WholePublicationStore } from './whole-publication-store.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
 import { createHash } from "node:crypto";
@@ -107,6 +108,15 @@ export class PostgresStore {
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
   publication(stagingConfig = {}) { return new VaultPublicationStore(this.pool, stagingConfig); }
+  wholePublication(stagingConfig = {}) {
+    // The issuer's process identity must persist between requests. Replacing
+    // configuration/secret intentionally invalidates outstanding previews.
+    if(this.wholePublicationConfig!==stagingConfig||!this.wholePublicationInstance){
+      this.wholePublicationConfig=stagingConfig;
+      this.wholePublicationInstance=new WholePublicationStore(this.pool,stagingConfig);
+    }
+    return this.wholePublicationInstance;
+  }
 
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }

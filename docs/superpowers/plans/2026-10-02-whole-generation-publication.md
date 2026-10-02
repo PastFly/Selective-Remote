@@ -71,10 +71,10 @@
 
 **Interfaces:** `WholePublicationStore(pool,config).preview(input,request)`, `.repairDirectory(input,token,page)`, `.repairPart(input,token,{vaultID,resourceID,part})`. Snapshot module produces exact ordered current/successor read-sets; Task 1 signs them. Input actor/session/device comes from authenticated service, not body fields.
 
-- [ ] RED: preview is read-only, exhaustible 100-descriptor pages match signed totals, all ACTIVE Vaults are required, live READY attempt returns `publication_ready_attempt_exists`, Owner/Admin ceiling and actor admission/root apply.
-- [ ] Implement current loading and deterministic successor projection with existing evaluator; validate group lifecycle independently of Vaults. Group delete >1000 grants returns `group_grants_must_be_revoked_first` with safe remaining count and bounded prior revoke workflow.
-- [ ] RED→GREEN repair after actual membership/trust revoke: intersect predecessor and current entitlement; same surviving device wrapper only; SECRET/sidecar custody enforced; new device, expired/stale token or second revoke denies. Ordinary reader remains unchanged and returns repair-required on stale full snapshot.
-- [ ] Test role matrix Owner/Admin/Editor/Viewer, every scope/session/key mix and SQL phantom changes. Commit `feat: preview coherent successor publication and scoped repair`.
+- [x] RED: preview is read-only, exhaustible 100-descriptor pages match signed totals, all ACTIVE Vaults are required, live READY attempt returns `publication_ready_attempt_exists`, Owner/Admin ceiling and actor admission/root apply.
+- [x] Implement current loading and deterministic successor projection with existing evaluator; validate group lifecycle independently of Vaults. Group delete >1000 grants returns `group_grants_must_be_revoked_first` with safe remaining count and bounded prior revoke workflow.
+- [x] RED→GREEN repair after actual membership/trust revoke: intersect predecessor and current entitlement; same surviving device wrapper only; SECRET/sidecar custody enforced; new device, expired/stale token or second revoke denies. Ordinary reader remains unchanged and returns repair-required on stale full snapshot.
+- [x] Test role matrix Owner/Admin/Editor/Viewer, every scope/session/key mix and SQL phantom changes. Commit `feat: preview coherent successor publication and scoped repair`.
 
 ### Task 4: Complete immutable preparation/start/upload/READY
 
@@ -82,9 +82,9 @@
 
 **Interfaces:** `.start(input,token,request)`, `.putPart(input,operationID,vaultID,object)`, `.putProjection(input,operationID,vaultID,projection,sidecar,checkpoint)`, `.validate(input,operationID,manifests)` return immutable generation IDs/scope and READY commitments. Shared projection validator receives explicit expected sequence/previousHash; no unconstrained sequence acceptance.
 
-- [ ] RED: reused cross-generation bytes/context, missing/extra/wrong-epoch wrapper, incomplete parts/sidecar/recipient inventory, identity resurrection, >1MiB request or aggregate limits, changed replay and incomplete multi-Vault preparation cannot reach READY.
-- [ ] Implement complete generation associations and exact commitments using existing cipher/manifest/projection validators; clients fresh-encrypt every part. Recheck live verified recipient/custody sets and durable checkpoint encoded budget. No current pointer changes during preparation.
-- [ ] Test restart and identical immutable uploads, two competing preparations and SQL writes against READY. Commit `feat: freeze complete successor publication generations`.
+- [x] RED: reused cross-generation bytes/context, missing/extra/wrong-epoch wrapper, incomplete parts/sidecar/recipient inventory, identity resurrection, >1MiB request or aggregate limits, changed replay and incomplete multi-Vault preparation cannot reach READY.
+- [x] Implement complete generation associations and exact commitments using existing cipher/manifest/projection validators; clients fresh-encrypt every part. Recheck live verified recipient/custody sets and durable checkpoint encoded budget. No current pointer changes during preparation.
+- [x] Test restart and identical immutable uploads, two competing preparations and SQL writes against READY. Commit `feat: freeze complete successor publication generations`.
 
 ### Task 5: Atomic all-Vault commit, effective outbox/audit and receipt replay
 
@@ -92,10 +92,10 @@
 
 **Interfaces:** `.commit(input,operationID,token,request)`, `.receipt(input,operationID)` produce account/device/Team-scoped immutable `{operationID,requestHash,vaults:[{vaultID,generationID,sequence,headerHash}],committedAt}`. A replay with a different body fails, even after success.
 
-- [ ] RED: two-Vault old-or-new visibility, all persistence-boundary failures roll back policy/pointers/audit/outbox/receipt, changed full read-set denies, signed old snapshot never ACTIVE after mutation, session expiry rechecked after lock wait.
-- [ ] Acquire deterministic locks including direct-SQL-conflicting tables; validate precondition/preview expiry/READY, install exact projected Team/group/policy versions, recompute successor and require exact hash before all pointer swaps. Keep old objects private. Bound deadlock/serialization retries to the same operation, never auto-re-preview.
-- [ ] RED→GREEN lost response returns original receipt; cross-account/device/Team read denied; equivalent remaining access suppresses false notification; real effective changes create committed outbox with idempotent delivery. Refresh failure cannot roll back a committed result.
-- [ ] Run direct SQL group/member/device/grant/tombstone/pointer races and fault injection; commit `feat: atomically commit whole-Team publication with receipts`.
+- [x] RED: two-Vault old-or-new visibility, all persistence-boundary failures roll back policy/pointers/audit/outbox/receipt, changed full read-set denies, signed old snapshot never ACTIVE after mutation, session expiry rechecked after lock wait.
+- [x] Acquire deterministic locks including direct-SQL-conflicting tables; validate precondition/preview expiry/READY, install exact projected Team/group/policy versions, recompute successor and require exact hash before all pointer swaps. Keep old objects private. Bound deadlock/serialization retries to the same operation, never auto-re-preview.
+- [x] RED→GREEN lost response returns original receipt; cross-account/device/Team read denied; equivalent remaining access suppresses false notification; real effective changes create committed outbox with idempotent delivery. Refresh failure cannot roll back a committed result.
+- [x] Run direct SQL group/member/device/grant/tombstone/pointer races and fault injection; commit `feat: atomically commit whole-Team publication with receipts`.
 
 ### Task 6: Browser and Mac verified custody, fresh encryption and durable resume
 

@@ -120,7 +120,9 @@ BEGIN
   OR predecessor.header_hash IS DISTINCT FROM NEW.predecessor_hash
   OR (predecessor.projection->'header'->'payload'->>'sequence')::bigint+1 IS DISTINCT FROM NEW.sequence
   OR NOT EXISTS(SELECT 1 FROM shared_vaults v WHERE v.id=NEW.vault_id AND v.team_id=NEW.team_id
-   AND v.format_state='V2_ACTIVE' AND v.active_publication_attempt_id=NEW.predecessor_id AND v.access_policy_version+1=NEW.policy_version)
+   AND v.format_state='V2_ACTIVE' AND v.active_publication_attempt_id=NEW.predecessor_id
+   AND v.access_policy_version+1+(SELECT count(*) FROM jsonb_array_elements(COALESCE(operation.prepared->'foundationGrants','[]'::jsonb)) f
+      WHERE f->>'vault_id'=NEW.vault_id::text)=NEW.policy_version)
   THEN RAISE EXCEPTION 'publication_scope_mismatch'; END IF;
  RETURN NEW;
 END $$;
@@ -185,7 +187,8 @@ BEGIN
  IF TG_TABLE_NAME='shared_vaults' THEN
   IF OLD.active_publication_attempt_id IS NULL OR NEW.active_publication_attempt_id IS NOT DISTINCT FROM OLD.active_publication_attempt_id THEN RETURN NULL; END IF;
   SELECT operation_id INTO operation_id_value FROM team_publication_generations WHERE attempt_id=NEW.active_publication_attempt_id;
- ELSE operation_id_value:=CASE WHEN TG_TABLE_NAME='team_publication_operations' THEN NEW.id ELSE NEW.operation_id END; END IF;
+ ELSIF TG_TABLE_NAME='team_publication_operations' THEN operation_id_value:=NEW.id;
+ ELSE operation_id_value:=NEW.operation_id; END IF;
  SELECT * INTO operation FROM team_publication_operations WHERE id=operation_id_value;
  IF TG_TABLE_NAME='shared_vaults' AND operation.state IS DISTINCT FROM 'COMMITTED' THEN RAISE EXCEPTION 'publication_atomic_commit_incomplete'; END IF;
  IF operation.state<>'COMMITTED' THEN RETURN NULL; END IF;
@@ -219,3 +222,32 @@ CREATE CONSTRAINT TRIGGER whole_publication_pointer_complete AFTER UPDATE ON sha
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_whole_publication_commit();
 CREATE CONSTRAINT TRIGGER whole_publication_receipt_complete AFTER INSERT ON team_publication_receipts
  DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION check_whole_publication_commit();
+
+-- Bounded immutable framing permits large complete projections without a large
+-- individual HTTP descriptor upload. No frame is itself a READY publication.
+CREATE TABLE team_publication_upload_chunks (
+ operation_id uuid NOT NULL,
+ team_id uuid NOT NULL,
+ vault_id uuid NOT NULL,
+ chunk_index integer NOT NULL CHECK(chunk_index>=0),
+ chunk_count integer NOT NULL CHECK(chunk_count BETWEEN 1 AND 256 AND chunk_index<chunk_count),
+ payload_hash text NOT NULL CHECK(payload_hash ~ '^[a-f0-9]{64}$'),
+ chunk_data bytea NOT NULL CHECK(octet_length(chunk_data) BETWEEN 1 AND 524288),
+ PRIMARY KEY(operation_id,vault_id,chunk_index),
+ FOREIGN KEY(operation_id,team_id) REFERENCES team_publication_operations(id,team_id),
+ FOREIGN KEY(operation_id,vault_id) REFERENCES team_publication_generations(operation_id,vault_id),
+ FOREIGN KEY(vault_id,team_id) REFERENCES shared_vaults(id,team_id)
+);
+CREATE FUNCTION guard_publication_upload() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF TG_OP<>'INSERT' THEN RAISE EXCEPTION 'immutable_publication_upload'; END IF;
+ IF NOT EXISTS(SELECT 1 FROM team_publication_operations o JOIN team_publication_generations g ON g.operation_id=o.id
+  JOIN vault_migration_attempts a ON a.id=g.attempt_id WHERE o.id=NEW.operation_id AND o.team_id=NEW.team_id
+  AND g.vault_id=NEW.vault_id AND o.state='PREPARING' AND a.state='V2_PREPARING')
+  OR EXISTS(SELECT 1 FROM team_publication_upload_chunks WHERE operation_id=NEW.operation_id AND vault_id=NEW.vault_id
+   AND (chunk_count,payload_hash) IS DISTINCT FROM(NEW.chunk_count,NEW.payload_hash))
+  THEN RAISE EXCEPTION 'publication_upload_conflict'; END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER guard_publication_upload BEFORE INSERT OR UPDATE OR DELETE ON team_publication_upload_chunks
+ FOR EACH ROW EXECUTE FUNCTION guard_publication_upload();

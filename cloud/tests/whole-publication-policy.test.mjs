@@ -140,6 +140,7 @@ test('new trust device changes successor and exact crypto recipient commitment',
 function binding() {
   return {version:1,teamID:uuid(),operationID:uuid(),actorAccountID:uuid(),sessionID:uuid(),actorDeviceID:uuid(),keyVersion:1,
     requestHash:hash,readSetHash:hash,successorHash:hash,policyHash:hash,recipientHash:hash,
+    effectiveAt:'2026-10-02T00:00:00Z',rowsHash:hash,rowCount:2,
     predecessors:[{vaultID:uuid(),generationID:uuid(),sequence:1,headerHash:hash}],counts:{vaults:1,resources:1,parts:2,wrappers:2}};
 }
 test('preview requires configured 32-byte secret, valid bound identities and <=5 minute lifetime',()=>{

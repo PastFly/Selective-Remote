@@ -12,6 +12,7 @@ import { CloudService } from "./service.mjs";
 import { DeviceTrustStore } from "./device-trust-store.mjs";
 import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
+import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
@@ -108,6 +109,8 @@ async function route(request, response) {
       if (cookie) clearBrowserSessionCookie(response);
       return sendError(response, 401, "unauthorized");
     }
+    const wholeRoute=wholePublicationRoute(url.pathname,method);
+    if(wholeRoute)return handleOperation(response,()=>runWholePublicationRoute(request,url,session,service,wholeRoute));
     const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|resources\/([^/]+)\/parts\/([^/]+))$/u);
     if(publicationRoute&&method==="GET")return handleOperation(response,async()=>{
       const operation=publicationRoute[3].startsWith("resources/")?"part":publicationRoute[3];
@@ -790,8 +793,11 @@ function handleOperationError(response, error) {
   }
   if (publicError.code === "group_grants_must_be_revoked_first") {
     return sendJSON(response, 409, { error: publicError.code,
-      safeCount: error.safeCount === "1001+" ? "1001+" : null });
+      safeCount: error.safeCount === "1001+" ? "1001+" : null,
+      ...(Number.isSafeInteger(error.remainingGrantCount)&&error.remainingGrantCount>=0?{remainingGrantCount:error.remainingGrantCount}:{}) });
   }
+  if(publicError.code==='publication_limit')return sendJSON(response,413,{error:publicError.code,
+    counts:Object.fromEntries(Object.entries(error.counts??{}).filter(([k,n])=>['vaults','resources','parts','wrappers','memberships','grants','evaluationCells'].includes(k)&&Number.isSafeInteger(n)&&n>=0))});
   return sendError(response, publicError.status, publicError.code);
 }
 
