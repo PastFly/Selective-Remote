@@ -18,7 +18,9 @@ const directory=fileURLToPath(new URL('../migrations/',import.meta.url));
 const database=process.env.TEST_DATABASE_URL;
 const resource=()=>({id:uuid(),kind:'HOST',parentFolderID:null,sourceOrdinal:0});
 
-test('reader schema migration is version 20',async()=>assert.equal((await loadMigrations(directory)).at(-1).version,20));
+test('reader schema20 remains present in latest schema21',async()=>{
+ const versions=(await loadMigrations(directory)).map(m=>m.version);assert.ok(versions.includes(20));assert.equal(versions.at(-1),21);
+});
 test('discard retains permanent identity, permits scoped successor and rejects cross scope or kind reuse',{skip:!database},async()=>{
  const pool=new pg.Pool({connectionString:database});
  try {

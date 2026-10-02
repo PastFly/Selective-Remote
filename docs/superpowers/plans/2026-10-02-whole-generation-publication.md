@@ -61,9 +61,9 @@
 
 **Interfaces:** Produce scoped immutable operation/generation links, generation-linked policy versions, append-only committed receipt and effective-delta outbox rows. Reuse permanent identity reservations and generation associations from schema 20.
 
-- [ ] Write PG tests for fresh/12→latest migration, no changes to any real/default V1 row, operation/account/device/Team scope, competing publishers, READY freeze, retained prior ACTIVE bytes, immutable receipts and direct-SQL cross-scope/partial-commit rejection.
-- [ ] Observe RED, then add scoped FKs, uniqueness and trigger constraints. Allow successor associations without deleting or reusing a tombstone and without mutating predecessor attempts. Bind every generation to one exact operation and predecessor.
-- [ ] Test existing independent writers and both identity insertion orders; run with disposable `TEST_DATABASE_URL` on PG16, zero skips. Commit `feat: retain immutable publication operations and receipts`.
+- [x] Write PG tests for fresh/12→latest migration, no changes to any real/default V1 row, operation/account/device/Team scope, competing publishers, READY freeze, retained prior ACTIVE bytes, immutable receipts and direct-SQL cross-scope/partial-commit rejection.
+- [x] Observe RED, then add scoped FKs, uniqueness and trigger constraints. Allow successor associations without deleting or reusing a tombstone and without mutating predecessor attempts. Bind every generation to one exact operation and predecessor.
+- [x] Test existing independent writers and both identity insertion orders; run with disposable `TEST_DATABASE_URL` on PG16, zero skips. Commit `feat: retain immutable publication operations and receipts`.
 
 ### Task 3: Authenticated read-only preview and predecessor repair
 
