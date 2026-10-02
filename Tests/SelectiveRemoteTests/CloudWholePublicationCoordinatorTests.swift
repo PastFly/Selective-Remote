@@ -194,15 +194,19 @@ struct CloudWholePublicationCoordinatorTests {
         let endpoint = URL(string: "https://transport.example.test")!, tokens = SelectiveRemoteCloudMemoryTokenStore(), token = String(repeating: "t", count: 43); tokens.saveToken(token, for: endpoint)
         let session = SelectiveRemotePublicationSession(endpoint: endpoint, accountID: UUID(), deviceID: UUID(), token: token, tokenStore: tokens)
         let scope = SelectiveRemoteWholePublicationScope(session: session, teamID: UUID(), operationID: UUID()), vault = UUID()
-        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
+        let expectedAuthorization = "Bearer \(token)"
+        let expectedPath = "/v1/teams/\(scope.teamID.canonicalCloudString)/publication/operations/\(scope.operationID.canonicalCloudString)/readback/\(vault.canonicalCloudString)"
+        let dataLoader: SelectiveRemoteCloudDataLoader = { request in
             #expect(request.value(forHTTPHeaderField: "X-Vault-Schema-Version") == "2")
             #expect(request.value(forHTTPHeaderField: "X-Vault-Capability") == "resource_acl_v2")
             #expect(request.value(forHTTPHeaderField: "X-Publication-Version") == "1")
-            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer " + token)
+            #expect(request.value(forHTTPHeaderField: "Authorization") == expectedAuthorization)
             #expect(request.httpMethod == "GET")
-            #expect(request.url?.path == "/v1/teams/" + scope.teamID.canonicalCloudString + "/publication/operations/" + scope.operationID.canonicalCloudString + "/readback/" + vault.canonicalCloudString)
-            return (Data("null".utf8), HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
-        })
+            #expect(request.url?.path == expectedPath)
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data("null".utf8), response)
+        }
+        let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: dataLoader)
         #expect(try await client.wholePublicationReadback(scope: scope, vaultID: vault) == .null)
     }
 
