@@ -1,5 +1,8 @@
 import { createVaultPublicationClient, createIndexedDBPublicationRepository, renderPublishedVault, requestPublisherVerification, resolvePublicationDeviceKeyVersion, publicationCopy, closePublicationDialogs, isPublicationOfflineError, isPublicationAccessLoss } from "./vault-publication-client.js";
 import { createAccessManager } from "./access-manager.js";
+import { accessErrorCopy } from './access-copy.js';
+import { createWholePublicationAccessDriver } from './whole-publication-flow.js';
+import { createIndexedDBWholePublicationRepository } from './whole-publication-client.js';
 import { accessAuditActionLabel } from "./access-audit.js";
 import {
   createAccountDeviceCoordinator,
@@ -1753,8 +1756,9 @@ export function initializeTeamWorkspace({
       resolveLabel: reference => {
         const model=publicationClient?.view()?.models.find(value=>value.resourceID===(reference.id??reference.resourceID)&&value.teamID===reference.teamID&&value.vaultID===reference.vaultID);
         return model ? (model.record?.data?.title??model.metadata?.title??model.folder?.path??null) : accessResolveLabel(reference);
-      }, onCommitted: (result, scope) => {
+      }, publicationDriver: scope => publicationDriverFor(scope), onCommitted: async (result, scope) => {
         onAccessCommitted(result, scope);
+        if(result?.vaults && selectedTeam?.id === scope.teamID && selectedVault?.id === scope.vaultID) await openSelectedVault();
         if (activeView === "activity" && selectedTeam?.id === scope.teamID) {
           void loadActivity().catch(() => setText(message, "Не удалось обновить журнал активности."));
         }
@@ -1763,6 +1767,7 @@ export function initializeTeamWorkspace({
   let selectedVault = null;
   let controller = null;
   let publicationClient = null;
+  let publicationAccessDriver = null, publicationAccessTeamID = null, editingPublication = null;
   let publicationSelection = 0;
   let activeConflicts = null;
   let activeView = "teams";
@@ -1781,6 +1786,20 @@ export function initializeTeamWorkspace({
   let editingRecordID = null;
   let recordSavePending = false;
   let detailedHostID = null;
+
+  function publicationDriverFor(scope,{recovery=false}={}) {
+    if(!identity || !deviceTrustRepository || typeof client.wholePublicationTransport !== 'function' || selectedTeam?.id !== scope.teamID)return null;
+    if(publicationAccessDriver && publicationAccessTeamID === scope.teamID)return publicationAccessDriver;
+    if(!recovery&&!['owner','admin'].includes(selectedTeam?.role))return null;
+    publicationAccessDriver?.dispose();const team=scope.teamID,publisherPins=createIndexedDBPublicationRepository();
+    const pinnedTrust={loadPin:async(endpoint,account)=>account===client.session()?.id?deviceTrustRepository.loadPin(endpoint,account):publisherPins.loadPin(endpoint,team,account),
+      advancePin:async(old,next)=>old.accountID===client.session()?.id?deviceTrustRepository.advancePin(old,next):publisherPins.advancePin(old.endpoint,team,old,next)};
+    publicationAccessTeamID=team;
+    publicationAccessDriver=createWholePublicationAccessDriver({transport:client.wholePublicationTransport(team),checkpointRepository:createIndexedDBWholePublicationRepository(),
+      sessionIdentity:()=>{const value=client.publicationIdentity?.();return value?{...value,selection:String(publicationSelection),teamID:selectedTeam?.id??null,vaultID:selectedVault?.id??null}:null;},
+      getLocalKeys:async value=>({root:await deviceTrustRepository.loadRoot(value.endpoint,value.accountID),identity,pinnedTrust})});
+    return publicationAccessDriver;
+  }
 
   function renderOverviewSummary() {
     setText(overviewTeamCount, identity ? String(teams.length) : "—");
@@ -1915,8 +1934,11 @@ export function initializeTeamWorkspace({
   }
 
   function setWorkspaceControls(disabled) {
+    const publishedEdit = editingPublication?.driver === publicationAccessDriver
+      && editingPublication?.selection === publicationSelection
+      && publicationAccessDriver?.enabled === true && !publicationAccessDriver.pendingOperationID;
     for (const control of recordForm.querySelectorAll("input, select, textarea, button")) {
-      control.disabled = disabled || !canEdit();
+      control.disabled = disabled || !(canEdit() || publishedEdit);
     }
     // Folder disclosure is read-only navigation and must remain usable by Viewers.
     if (!publicationClient) for (const button of records.querySelectorAll(".record-actions button, [data-snippet-create-child]")) button.disabled = disabled || !canEdit();
@@ -1962,6 +1984,7 @@ export function initializeTeamWorkspace({
   }
 
   function resetRecordEditor() {
+    editingPublication = null;
     editingRecordID = null;
     recordForm.reset();
     recordTitle.disabled = false;
@@ -1969,6 +1992,9 @@ export function initializeTeamWorkspace({
     hostProtocol.disabled = false;
     hostPort.disabled = false;
     hostUsername.disabled = false;
+    hostFolder.disabled = false;
+    if(snippetFolder)snippetFolder.disabled=false;
+    hostPassword.disabled=false;hostRemovePassword.disabled=false;
     if (activeView === "hosts" && activeRecordFilter !== "all") recordType.value = activeRecordFilter;
     recordType.disabled = activeView === "hosts" && activeRecordFilter !== "all";
     updateRecordLabels();
@@ -1986,7 +2012,8 @@ export function initializeTeamWorkspace({
   }
 
   function beginRecordEdit(record) {
-    if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+    if (!controller || !(canEdit() || editingPublication?.record === record && publicationAccessDriver?.enabled) || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
+    setWorkspaceControls(false);
     const values = localVaultRecordFormValues(record);
     editingRecordID = record.id;
     recordType.value = record.type;
@@ -2018,8 +2045,17 @@ export function initializeTeamWorkspace({
         : "Измените Host и сохраните зашифрованную запись.");
     }
     updateRecordLabels();
+    if(editingPublication){hostFolder.disabled=true;if(snippetFolder)snippetFolder.disabled=true;hostPassword.disabled=true;hostRemovePassword.disabled=true;}
     recordEditor?.showModal?.();
     recordTitle.focus();
+  }
+
+  async function beginPublishedRecordEdit(reference) {
+    const active=publicationClient,driver=publicationAccessDriver,selection=publicationSelection;
+    if(!active||!driver?.enabled||active.view()?.stale)return;
+    const record=await accessManager.readPublishedRecord({...reference,role:selectedTeam?.role,deviceID:client.deviceID?.()});
+    if(publicationClient!==active||publicationAccessDriver!==driver||selection!==publicationSelection)return;
+    resetRecordEditor();editingPublication={record,reference:{...reference,role:selectedTeam?.role,deviceID:client.deviceID?.()},driver,selection};beginRecordEdit(record);
   }
 
   function hostCredentials(hostID) {
@@ -2118,8 +2154,10 @@ export function initializeTeamWorkspace({
     if (publicationClient) {
       const renderingClient = publicationClient;
       renderPublishedVault({documentValue,container:records,client:renderingClient,filter:activeRecordFilter,
+        mutationAvailable:publicationAccessDriver?.enabled===true && !publicationAccessDriver.pendingOperationID,
         onStatus:value=>{if(publicationClient === renderingClient) setText(workspaceStatus,value);},onAccess:async(reference,action)=>{
           if(publicationClient !== renderingClient || !renderingClient.view()) return;
+          if(action === 'edit'){await beginPublishedRecordEdit(reference);return;}
           setView("access");
           await accessManager?.openResource({...reference,role:selectedTeam?.role,deviceID:client.deviceID?.()},action);
         }});
@@ -3069,6 +3107,7 @@ export function initializeTeamWorkspace({
     publicationSelection++;
     publicationClient?.dispose();
     publicationClient = null;
+    publicationAccessDriver?.dispose();publicationAccessDriver=null;publicationAccessTeamID=null;
     publishSyncObservation(documentValue, { scope: "team", type: "locked", vaultID: selectedVault?.id,
       recipient: client.session()?.id });
     controller?.lock();
@@ -3202,10 +3241,22 @@ export function initializeTeamWorkspace({
           await active.confirmPublisher(fingerprint); await active.load();
         }
         if (publicationClient !== active) return;
+        let publicationAccessFailure=null;
+        if(!staleOnly){try{await publicationDriverFor(scope)?.getContext(scope);}catch(error){publicationAccessFailure=error;publicationAccessDriver?.dispose();publicationAccessDriver=null;publicationAccessTeamID=null;}}
+        if(publicationClient !== active || !ownsSelection())return;
         renderRecords();setWorkspaceControls(false);
-        setText(workspaceStatus,publicationCopy(documentValue,active.view()?.stale ? "stale" : "readonly"));
+        setText(workspaceStatus,publicationAccessFailure && publicationAccessFailure.message!=='publication_unavailable' ? accessErrorCopy(publicationAccessFailure,activeInterfaceLocale(documentValue.documentElement?.lang)) : publicationCopy(documentValue,active.view()?.stale ? "stale" : publicationAccessDriver?.enabled && !publicationAccessDriver.pendingOperationID ? 'editable' : "readonly"));
         if(!staleOnly)startBackgroundSync();
       } catch(error) { if(publicationClient === active) { records.replaceChildren();setText(workspaceStatus,error.message === "publication_repair_required" ? publicationCopy(documentValue,"repair") : publicationCopy(documentValue,"unverified")); } }
+    }
+    // A READY operation can block normal reader/context routes. Recover its scoped
+    // public operation metadata before requesting either route after a reload.
+    if(deviceTrustRepository) {
+      try {
+        const saved=await createIndexedDBWholePublicationRepository().discover({...priorIdentity,teamID:scope.teamID},()=>{if(!ownsSelection())throw Error('publication_context_changed');});
+        if(saved.length){const driver=publicationDriverFor(scope,{recovery:true});await driver.getContext(scope);if(!ownsSelection())return;
+          if(driver.pendingOperationID){accessManager.setContext({...scope,role:selectedTeam.role,deviceID:client.deviceID()});setView('access');await accessManager.refresh();return;}}
+      }catch(error){if(ownsSelection())setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));return;}
     }
     let format;
     try { format = await resolveTeamVaultFormat(client,scope); }
@@ -3803,6 +3854,22 @@ export function initializeTeamWorkspace({
   });
   recordForm.addEventListener("submit", async (event) => {
     event.preventDefault();
+    if(editingPublication) {
+      const edited=editingPublication,button=recordForm.querySelector('button[type="submit"]');if(recordSavePending||!edited.driver.enabled||edited.selection!==publicationSelection)return;
+      recordSavePending=true;button.disabled=true;
+      try {
+        const before=edited.record,connection=before.type==='host'&&!before.data.profile?teamHostConnectionData({protocol:hostProtocol.value,host:recordTarget.value,port:hostPort.value,username:hostUsername.value}):null;
+        const data=before.type==='host'?teamHostRecordData({title:recordTitle.value,target:connection?.target??recordTarget.value,folder:hostFolder.value,tags:hostTags.value,description:hostDescription.value,baseData:before.data})
+          :before.type==='snippet'?teamSnippetRecordData({title:recordTitle.value,body:recordSecret.value,folder:snippetFolder.value},before.data)
+          :localVaultRecordData(before.type,{title:recordTitle.value,target:recordTarget.value,secret:recordSecret.value},before.data);
+        const version=typeof before.version==='number'?before.version+1:{...before.version,[client.deviceID()]:Number(before.version?.[client.deviceID()]??0)+1};
+        setView('access');
+        await accessManager.previewPublishedEdit(edited.reference,{...before,data,version,modifiedAt:Date.now()});
+        if(edited.selection!==publicationSelection)return;resetRecordEditor();setText(workspaceStatus,activeInterfaceLocale(documentValue.documentElement?.lang)==='en'?'Review the impact and confirm the secure update.':'Проверьте последствия и подтвердите защищённое изменение.');
+      }catch(error){setText(workspaceStatus,accessErrorCopy(error,activeInterfaceLocale(documentValue.documentElement?.lang)));}
+      finally{recordSavePending=false;button.disabled=false;}
+      return;
+    }
     if (!controller || !canEdit() || activeConflicts || selectedVault?.rotationRequired || recordSavePending) return;
     const editingController = controller;
     const submittedType = recordType.value;

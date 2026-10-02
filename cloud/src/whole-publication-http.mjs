@@ -6,12 +6,12 @@ export function wholePublicationRoute(path,method){
   if(method==='GET'&&tail==='context')return {teamID,operation:'context'};
   if(method==='POST'&&['preview','start'].includes(tail))return {teamID,operation:tail};
   if(method==='POST'&&/^repair\/(directory|part)$/.test(tail))return {teamID,operation:tail==='repair/directory'?'repairDirectory':'repairPart'};
-  const match=tail.match(/^operations\/([^/]+)\/(receipt|discard|validate|commit|parts\/([^/]+)|projections\/([^/]+)|projection-chunks\/([^/]+)|readback\/([^/]+))$/u);
+  const match=tail.match(/^operations\/([^/]+)\/(context|receipt|discard|validate|commit|parts\/([^/]+)|projections\/([^/]+)|projection-chunks\/([^/]+)|readback\/([^/]+))$/u);
   if(!match)return null;
   const operationID=match[1],vaultID=match[3]??match[4]??match[5]??match[6];
   if(!isUUID(operationID)||vaultID&&!isUUID(vaultID))throw Error('invalid_access_request');
   const operation=match[2].startsWith('parts/')?'putPart':match[2].startsWith('projections/')?'putProjection':match[2].startsWith('projection-chunks/')?'putProjectionChunk':match[2].startsWith('readback/')?'readback':match[2];
-  if((['receipt','readback'].includes(operation)?'GET':'POST')!==method)return null;
+  if((['context','receipt','readback'].includes(operation)?'GET':'POST')!==method)return null;
   return {teamID,operation,operationID,...(vaultID?{vaultID}:{})};
 }
 export async function runWholePublicationRoute(request,url,session,service,route){

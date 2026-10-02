@@ -1,4 +1,5 @@
 import { createAccessClient } from "./access-client.js";
+import { createWholePublicationTransport } from "./whole-publication-api.js";
 import {
   normalizeTeamDevicePublicKey,
   normalizeTeamVaultScope,
@@ -686,6 +687,10 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     accessClient() {
       return createAccessClient({ request: authorizedRequest, currentUserID: () => user?.id ?? null,
         currentDeviceID: () => currentDeviceID });
+    },
+    wholePublicationTransport(teamID) {
+      return createWholePublicationTransport({ request: authorizedRequest, teamID,
+        getIdentity: () => user ? { accountID: user.id, deviceID: currentDeviceID, sessionEpoch: String(sessionEpoch) } : null });
     },
 
     session() {

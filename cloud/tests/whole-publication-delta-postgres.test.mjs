@@ -37,9 +37,13 @@ test('only committed effective delta creates outbox; lost response retries an id
   const {WholePublicationOutbox}=await import('../src/whole-publication-outbox.mjs');
   const notifications=new Map();let failResponse=true;
   const runner=new WholePublicationOutbox(pool,{...f.config,deliver:async event=>{notifications.set(event.idempotencyKey,event);if(failResponse){failResponse=false;throw Error('lost_sink_response');}}});
+  for(const config of [{...f.config,enabled:false},{...f.config,environment:'production'},{...f.config,allowedVaultIDs:[uuid()]}])
+    assert.equal(await new WholePublicationOutbox(pool,{...config,deliver:async()=>assert.fail('disabled or foreign outbox delivered')}).dispatchOne(),false);
   assert.equal(await runner.dispatchOne(),false);assert.equal(notifications.size,1);
   await pool.query('UPDATE team_publication_outbox SET available_at=now() WHERE id=$1',[row.id]);
-  assert.equal(await runner.dispatchOne(),true);assert.equal(await runner.dispatchOne(),false);assert.equal(notifications.size,1);
+  const otherRunner=new WholePublicationOutbox(pool,{...f.config,deliver:async event=>notifications.set(event.idempotencyKey,event)});
+  const results=await Promise.all([runner.dispatchOne(),otherRunner.dispatchOne()]);assert.equal(results.filter(Boolean).length,1);
+  assert.equal(await runner.dispatchOne(),false);assert.equal(notifications.size,1);
   assert.equal([...notifications.values()][0].kind,'effective_access_changed');
   assert.equal((await pool.query('SELECT delivered_at FROM team_publication_outbox WHERE id=$1',[row.id])).rows[0].delivered_at instanceof Date,true);
 }));

@@ -19,6 +19,7 @@ export function createAccessManager({
   context = {},
   resolveLabel = () => null,
   onCommitted = () => {},
+  publicationDriver = null,
 } = {}) {
   if (!root?.ownerDocument || !client)
     throw new Error("invalid_access_manager");
@@ -45,6 +46,7 @@ export function createAccessManager({
     impact = null,
     committing = null,
     details = null;
+  let wholeDriver = null, moveParentFolderID = null;
   let selectedGroup = null,
     selectedResource = null,
     selectedPrincipal = null,
@@ -130,10 +132,10 @@ export function createAccessManager({
     return label;
   };
   const policyAvailable = () =>
-    capability?.formatState === "V2_PREPARING" &&
+    (capability?.formatState === "V2_PREPARING" || (capability?.wholePublication === true && wholeDriver?.enabled)) &&
     capability?.policyMutationAvailable === true;
   const groupAvailable = () =>
-    capability?.formatState === "V2_PREPARING" &&
+    (capability?.formatState === "V2_PREPARING" || (capability?.wholePublication === true && wholeDriver?.enabled)) &&
     capability?.groupMutationAvailable === true;
   const ref = (row) => ({
     teamID: scope.teamID,
@@ -174,7 +176,8 @@ export function createAccessManager({
     if (!draft) draftFocus = documentValue.activeElement?.dataset?.accessFocus ?? null;
     editSequence++;
     details = null;
-    draft = value === null ? null : normalizeMutation(value);
+    draft = value === null ? null : value.type === 'RESOURCE_EDIT' && capability?.wholePublication === true
+      ? structuredClone(value) : normalizeMutation(value);
     impact = null;
     draftGeneration++;
     error = null;
@@ -213,6 +216,10 @@ export function createAccessManager({
     if (key === "vaults") result = await client.listVaults(s.teamID, options);
     else if (key === "members")
       result = await client.listMembers(s.teamID, options);
+    else if (key === "groups" && wholeDriver?.enabled) result = wholeDriver.groups();
+    else if (key === "resources" && wholeDriver?.enabled) result = wholeDriver.resources(s);
+    else if (key === "grants" && wholeDriver?.enabled) result = wholeDriver.grants(s);
+    else if (key === "groupMembers" && group && wholeDriver?.enabled) result = wholeDriver.groupMembers(group.id);
     else if (key === "groups")
       result = await client.listGroups(s.teamID, options);
     else if (key === "resources")
@@ -245,6 +252,7 @@ export function createAccessManager({
     error = null;
     status = "";
     capability = null;
+    wholeDriver = null;
     resetPages();
     details = null;
     editSequence++;
@@ -257,15 +265,22 @@ export function createAccessManager({
     render();
     try {
       if (!scope.teamID) return;
+      const recoveryDriver=typeof publicationDriver==='function'?await publicationDriver({...scope}):null;
+      if(!active(g))return;
+      if(recoveryDriver?.pendingOperationID){capability=await recoveryDriver.getContext({...scope});if(active(g))wholeDriver=recoveryDriver;return;}
       await loadPage("vaults");
       if (!active(g) || !scope.vaultID) return;
       const result = await client.getContext({ ...scope });
       if (!active(g)) return;
       capability = result;
+      if(result.formatState === 'V2_ACTIVE' && typeof publicationDriver === 'function') {
+        const driver=await publicationDriver({...scope});if(!active(g))return;
+        if(driver){const enabled=await driver.getContext({...scope});if(!active(g))return;wholeDriver=driver;capability=enabled;}
+      }
       await Promise.all([
         loadPage("members"),
         loadPage("groups"),
-        ...(result.formatState === "V2_PREPARING"
+        ...(result.formatState === "V2_PREPARING" || wholeDriver?.enabled
           ? [loadPage("resources"), loadPage("grants")]
           : []),
       ]);
@@ -283,6 +298,7 @@ export function createAccessManager({
     generation++;
     scope = { ...value };
     capability = null;
+    wholeDriver = null;
     loading = false;
     error = null;
     status = "";
@@ -309,12 +325,14 @@ export function createAccessManager({
     impact = null;
     error = null;
     render();
-    const result = await client.preview({ ...scope }, request);
+    const result = wholeDriver?.enabled ? await wholeDriver.preview({...scope},request) : await client.preview({ ...scope }, request);
     if (active(g) && dg === draftGeneration && seq === previewSequence) {
-      validateImpact(result);
+      if(result.wholePublication) {
+        if(result.complete !== true || result.nextCursor !== null || result.rows?.length !== result.binding?.rowCount)throw Error('access_preview_incomplete');
+      } else validateImpact(result);
       impact = {
         ...result,
-        request,
+        request: result.wholePublication ? result.request : request,
         idempotencyKey:
           globalThis.crypto?.randomUUID?.() ??
           `access-${Date.now()}-${Math.random()}`,
@@ -395,7 +413,7 @@ export function createAccessManager({
       s = { ...scope };
     committing = (async () => {
       try {
-        const result = await client.commit(
+        const result = approved.wholePublication ? await wholeDriver.commit(s,approved) : await client.commit(
           s,
           approved.request,
           approved.token,
@@ -422,7 +440,7 @@ export function createAccessManager({
       } catch (e) {
         if (active(g) && dg === draftGeneration) {
           impact =
-            e instanceof TypeError || e.message === "network_unavailable"
+            approved.wholePublication || e instanceof TypeError || e.message === "network_unavailable"
               ? approved
               : null;
           error = e;
@@ -751,6 +769,12 @@ export function createAccessManager({
     parent.append(box);
   }
   function renderDetails(parent) {
+    if(details?.type === 'move' && wholeDriver?.enabled) {
+      const section=node('section',null,{class:'access-detail'});
+      section.append(node('h3',t('move')),select('destination',[['',t('vaultScope')],...pages.resources.rows.filter(r=>r.policyKind==='FOLDER'&&r.id!==details.resourceID).map(r=>[r.id,label(r)])],moveParentFolderID??'',value=>{moveParentFolderID=value||null;impact=null;render();}),
+        button('move',()=>setDraft({changes:[{type:'RESOURCE_MOVE',resourceID:details.resourceID,newParentFolderID:moveParentFolderID,expectedResourceVersion:wholeDriver.getResource(scope,details.resourceID).resourceVersion}]}),!!committing));
+      parent.append(section);
+    }
     if (selectedGroup) {
       const section = node("section", null, { class: "access-detail" });
       section.append(node("h3", `${t("groupMembers")}: ${selectedGroup.name}`));
@@ -958,7 +982,7 @@ export function createAccessManager({
     }
   }
   function renderGrants(parent) {
-    if (capability?.formatState !== "V2_PREPARING") return;
+    if (capability?.formatState !== "V2_PREPARING" && !wholeDriver?.enabled) return;
     const section = node("section", null, { class: "access-detail" });
     section.append(node("h3", t("grants")));
     if (pages.grants.rows.length) section.append(node("p", t("preserved")));
@@ -1006,7 +1030,7 @@ export function createAccessManager({
                 throw new Error("access_scope_mismatch");
               kind = "VAULT";
             } else {
-              const target = await client.getResource(
+              const target = wholeDriver?.enabled ? wholeDriver.getResource(requestScope,row.target_id) : await client.getResource(
                 requestScope,
                 row.target_id,
               );
@@ -1087,6 +1111,7 @@ export function createAccessManager({
         GROUP_MEMBER_ADD: "addMember",
         GROUP_MEMBER_REMOVE: "removeMember",
         RESOURCE_MOVE: "move",
+        RESOURCE_EDIT: "edit",
       }[operation.type];
       section.append(
         node(
@@ -1114,6 +1139,13 @@ export function createAccessManager({
       section.setAttribute("aria-modal", "false");
       section.setAttribute("aria-label", t("preview"));
       section.tabIndex = -1;
+      if(impact.wholePublication) {
+        section.append(node('p',`${t('wholeUpdate')} · ${t('vaults')}: ${impact.binding.counts.vaults} · ${t('resources')}: ${impact.binding.counts.resources}`));
+        for(const row of impact.details){const kind=row.kind??pages.resources.rows.find(r=>r.id===row.resourceID)?.policyKind;
+          const permissionNames=mask=>mask===0?t('denied'):kind?permissionsFor(kind).filter(p=>(mask&p.bit)===p.bit).map(p=>t(p.name)).join(', '):t('allowed');
+          section.append(node('p',`${row.accountID} · ${accessLabel({teamID:scope.teamID,vaultID:row.vaultID,resourceID:row.resourceID,policyKind:'RESOURCE'},resolveLabel,t)} · ${t('before')}: ${permissionNames(row.beforeMask)} → ${t('after')}: ${permissionNames(row.afterMask)}`));}
+        section.append(button('confirm',confirm,!impact.complete||!!committing));
+      } else {
       section.append(
         node(
           "p",
@@ -1151,6 +1183,7 @@ export function createAccessManager({
       section.append(
         button("confirm", confirm, !impact.complete || !!committing),
       );
+      }
     }
     section.append(
       button(
@@ -1225,7 +1258,7 @@ export function createAccessManager({
           t(
             capability.formatState === "V1_ACTIVE"
               ? "legacy"
-              : capability.formatState === "V2_PREPARING"
+              : capability.wholePublication ? 'wholeUpdate' : capability.formatState === "V2_PREPARING"
                 ? "preparing"
                 : "publication",
           ),
@@ -1236,6 +1269,12 @@ export function createAccessManager({
         fragment.append(node("p", t("groupPublication")));
       if (capability.blockers.includes("team_permission_denied"))
         fragment.append(node("p", t("permissionDenied")));
+      if(wholeDriver?.pendingOperationID) {
+        const recover=async discard=>{if(committing)return committing;const g=generation,s={...scope};
+          committing=(async()=>{try{const result=discard?await wholeDriver.discardPrepared(s):await wholeDriver.resumePrepared(s);if(!active(g))return;if(!discard)await onCommitted(result,s);if(active(g))await refresh();}finally{committing=null;if(!destroyed)render();}})();render();return committing;};
+        fragment.append(node('p',t('resumeUpdate')),button('retry',()=>recover(false),!!committing||(!wholeDriver.canResumePending&&!wholeDriver.pendingReceipt)));
+        if(!wholeDriver.pendingReceipt)fragment.append(button('discardUpdate',()=>recover(true),!!committing));
+      }
       const tabs = node("nav", null, { "aria-label": t("title") });
       for (const name of ["members", "groups", "resources"]) {
         const b = button(name, () => {
@@ -1246,7 +1285,7 @@ export function createAccessManager({
         tabs.append(b);
       }
       fragment.append(tabs);
-      if (capability.formatState === "V2_PREPARING" || tab !== "resources")
+      if (capability.formatState === "V2_PREPARING" || wholeDriver?.enabled || tab !== "resources")
         fragment.append(listPanel(tab));
       if (tab === "groups") {
         const form = node("section", null, { class: "access-composer" });
@@ -1273,7 +1312,7 @@ export function createAccessManager({
         );
         fragment.append(form);
       }
-      if (capability.formatState === "V2_PREPARING") {
+      if (capability.formatState === "V2_PREPARING" || wholeDriver?.enabled) {
         renderComposer(fragment);
         renderGrants(fragment);
       }
@@ -1330,11 +1369,15 @@ export function createAccessManager({
       setContext({teamID:reference.teamID,vaultID:reference.vaultID,role:reference.role,deviceID:reference.deviceID});
       await refresh();
       if (scope.teamID !== reference.teamID || scope.vaultID !== reference.vaultID) return;
-      selectedResource={id:reference.resourceID,policyKind:reference.kind === "FOLDER" ? "FOLDER" : reference.kind === "CREDENTIAL" ? "SECRET" : "GENERAL"};
-      if(action === "share") status="publication";
+      selectedResource={id:reference.resourceID,policyKind:wholeDriver?.enabled ? reference.kind : reference.kind === "FOLDER" ? "FOLDER" : reference.kind === "CREDENTIAL" ? "SECRET" : "GENERAL"};
+      if(action === 'share' && wholeDriver?.enabled){tab='resources';targets.set(reference.resourceID,wholeDriver.getResource(scope,reference.resourceID));permissionKind=reference.kind;permissionMask=presetMask(reference.kind,'view');targetScope=reference.kind==='FOLDER'?'FOLDER':'RESOURCE';}
+      else if(action === 'share') status="publication";
+      if(action === 'move' && wholeDriver?.enabled){tab='resources';moveParentFolderID=reference.parentFolderID??null;details={type:'move',resourceID:reference.resourceID};}
       render();
-      await loadPage("who");
+      if(action === 'who' || !wholeDriver?.enabled)await loadPage("who");
     },
+    async readPublishedRecord(reference){setContext({...reference});await refresh();if(!wholeDriver?.enabled)throw Error('publication_unavailable');return wholeDriver.readRecord(reference);},
+    async previewPublishedEdit(reference,record){setContext({...reference});await refresh();if(!wholeDriver?.enabled)throw Error('publication_unavailable');setDraft({type:'RESOURCE_EDIT',resourceID:reference.resourceID,record});return preview();},
     refresh,
     destroy() {
       destroyed = true;

@@ -103,10 +103,10 @@
 
 **Interfaces:** Client coordinator prepares frozen complete plans only after full preview/custody verification, uploads persisted exact bytes, commits with a fresh matching token and validates/read-backs the scoped receipt. Existing reader supplies verified linked plaintext/sidecar; keys remain local.
 
-- [ ] RED for missing plaintext/sidecar key despite Admin role, metadata-only Credential, checkpoint persist failure, logout/endpoint/account/device changes, stale generation during await, fresh nonce/CEK every part, round-trip mismatch and changed resume input.
-- [ ] Implement fresh operation checkpoint key in Mac's secure device envelope/browser nonextractable local protection; bind account/endpoint/Team/operation/generations. Persist bytes before upload, reuse only persisted immutable bytes, require fresh keys/attempt after checkpoint loss. Never borrow predecessor CEK or legacy whole-Vault key for checkpoint encryption.
-- [ ] Recheck request/session/generation ownership at persistence/display/commit; verify complete preview and receipts. Lost success keeps receipt and disables writes until exact read-back. Add real browser IDB/WebCrypto restart/race tests and Swift secure-store failure tests.
-- [ ] Run targeted browser/Swift tests, commit `feat: prepare and resume verified whole publication on clients`.
+- [x] RED for missing plaintext/sidecar key despite Admin role, metadata-only Credential, checkpoint persist failure, logout/endpoint/account/device changes, stale generation during await, fresh nonce/CEK every part, round-trip mismatch and changed resume input.
+- [x] Implement fresh operation checkpoint key in Mac's secure device envelope/browser nonextractable local protection; bind account/endpoint/Team/operation/generations. Persist bytes before upload, reuse only persisted immutable bytes, require fresh keys/attempt after checkpoint loss. Never borrow predecessor CEK or legacy whole-Vault key for checkpoint encryption.
+- [x] Recheck request/session/generation ownership at persistence/display/commit; verify complete preview and receipts. Lost success keeps receipt and disables writes until exact read-back. Add real browser IDB/WebCrypto restart/race tests and Swift secure-store failure tests.
+- [x] Run targeted browser/Swift tests, commit `feat: prepare and resume verified whole publication on clients`.
 
 ### Task 7: Distinct authenticated stage-gated transport and active editing entrypoints
 
@@ -114,9 +114,9 @@
 
 **Interfaces:** `/v1/teams/:teamID/publication/{preview,start,upload,validate,commit,receipt,repair}` uses only the new coordinator. Config is disabled by default, explicit staging/allowlist/capability required. Existing PREPARING/recipient routes retain their contracts.
 
-- [ ] RED: unauthenticated, forged actor body, production/default config, V1, old client, off-allowlist and oversized requests fail closed. Contextual edit/move/share uses exact materialized resource identity and publication flow, never V1/registry fallback.
-- [ ] Implement typed safe errors and causal session ownership, custodian blocker and read-only retry state. Use real component/HTTP tests; no new UI architecture or feature breadth.
-- [ ] Run transport/API/entrypoint tests; commit `feat: expose bounded authenticated successor publication workflow`.
+- [x] RED: unauthenticated, forged actor body, production/default config, V1, old client, off-allowlist and oversized requests fail closed. Contextual edit/move/share uses exact materialized resource identity and publication flow, never V1/registry fallback.
+- [x] Implement typed safe errors and causal session ownership, custodian blocker and read-only retry state. Use real component/HTTP tests; no new UI architecture or feature breadth.
+- [x] Run transport/API/entrypoint tests; commit `feat: expose bounded authenticated successor publication workflow`.
 
 ### Task 8: Full candidate proof and fresh Owner gate
 

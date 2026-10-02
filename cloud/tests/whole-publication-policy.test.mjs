@@ -109,6 +109,20 @@ test('bounds complete ordinary and custody wrappers at 10000/10001',async()=>{
   assert.equal((await derive(fixture({resources:999,devices:10,custodians:10}))).counts.wrappers,10000);
   await assert.rejects(derive(fixture({resources:1000,devices:10,custodians:1})),e=>e.code==='publication_limit'&&e.counts.wrappers===10001);
 });
+test('bounds evaluator work even when resource and wrapper counts remain inside their limits',async()=>{
+  const f=fixture({resources:1000});
+  const vaultID=f.current[0].vaultID;
+  const pair=f.snapshots[vaultID];
+  const additional=Array.from({length:9},()=>({id:uuid(),userID:uuid(),epoch:1,role:'viewer'}));
+  pair.current.memberships.push(...additional);
+  pair.successor.memberships.push(...structuredClone(additional));
+  const original=structuredClone(f.current[0].policy);
+  f.current[0].policy=original.slice(0,-1);f.request.vaults[0].policy=structuredClone(f.current[0].policy);
+  assert.equal((await derive(f)).counts.wrappers,1000); // exactly 20,000,000 evaluation cells
+  f.current[0].policy.push(original.at(-1));
+  await assert.rejects(derive(f),e=>e.code==='publication_limit'&&e.counts.evaluationCells===20010000
+    &&Object.keys(e.counts).length===1&&!JSON.stringify(e).includes(vaultID));
+});
 test('missing devices, foreign snapshots, absent snapshot or revoked custody fail closed',async()=>{
   const f=fixture(),vault=f.current[0].vaultID;
   for(const mutate of [g=>delete g.snapshots[vault],g=>g.snapshots[vault].successor.teamID=uuid(),g=>g.snapshots[vault].successor.devices=[]]){

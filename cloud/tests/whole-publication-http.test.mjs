@@ -7,9 +7,15 @@ import {CloudService} from '../src/service.mjs';
 import {PostgresStore} from '../src/postgres-store.mjs';
 import {publicOperationError} from '../src/service-error.mjs';
 import {loadConfig} from '../src/config.mjs';
-import {withDB,seedPublishedVault,requestFor} from './whole-publication-fixtures.mjs';
+import {withDB,seedPublishedVault,requestFor,prepareWholeFixture,uploadWholeFixture} from './whole-publication-fixtures.mjs';
+import {uuid} from './vault-v2-migration-fixtures.mjs';
 const headers={'content-type':'application/json','authorization':'Bearer LOCAL-SYNTHETIC-SESSION','x-vault-schema-version':'2','x-vault-capability':'resource_acl_v2','x-publication-version':'1'};
 const database=process.env.TEST_DATABASE_URL;
+test('whole publication expected conflicts are typed safe HTTP results',()=>{
+  for(const [code,status] of Object.entries({invalid_migration_checkpoint:400,access_group_conflict:409,access_group_member_scope_or_epoch_invalid:409,publication_upload_conflict:409})){
+    const error=Object.assign(Error(code),{code});assert.deepEqual(publicOperationError(error),{code,status});
+  }
+});
 async function http(service,session,work){
   const server=createServer(async(req,res)=>{try{
     if(req.headers.authorization!==headers.authorization){res.writeHead(401);res.end(JSON.stringify({error:'unauthorized'}));return;}
@@ -52,4 +58,35 @@ test('disabled/default, production or off-allowlist whole runtime never exposes 
     const service=new CloudService(store,{wholePublication:config});
     await assert.rejects(service.wholePublication(session,f.input.teamID,'context',{}, {schemaVersion:2,capability:'resource_acl_v2',publicationVersion:1}),/publication_staging_only/);
   }
+}));
+test('owned READY recovery context survives authenticated session renewal without exempting another operation',{skip:!database},()=>withDB(async pool=>{
+  const f=await seedPublishedVault(pool),store=new PostgresStore(null,pool),config={wholePublication:{...f.config,previewSecret:'recovery-context-preview-secret-32-bytes'}},service=new CloudService(store,config),s=store.wholePublication(config.wholePublication),request=requestFor(f),p=await s.preview(f.input,request),out=await prepareWholeFixture(f,p);
+  await uploadWholeFixture(s,f,p,out);
+  const sessionID=uuid();await pool.query("INSERT INTO sessions(id,user_id,device_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 day')",[sessionID,f.accountID,f.deviceID,uuid()]);
+  await http(service,{user_id:f.accountID,device_id:f.deviceID,session_id:sessionID},async base=>{
+    const path=base+'/v1/teams/'+f.input.teamID+'/publication/';
+    assert.equal((await fetch(path+'context',{headers})).status,409);
+    const response=await fetch(path+'operations/'+request.operationID+'/context',{headers});assert.equal(response.status,200);
+    const context=await response.json();assert.equal(context.sessionID,sessionID);assert.equal(context.actorKeyVersion,1);assert.equal(context.current[0].generationID,f.scope.attemptID);
+    assert.equal((await fetch(path+'operations/'+uuid()+'/context',{headers})).status,404);
+    assert.equal((await fetch(path+'operations/'+request.operationID+'/context?other=1',{headers})).status,400);
+    const discard=await fetch(path+'operations/'+request.operationID+'/discard',{method:'POST',headers,body:'{}'});assert.equal(discard.status,200);
+    assert.equal((await fetch(path+'context',{headers})).status,200);
+  });
+}));
+test('committed owned recovery exposes only receipt metadata after mutation role and custody loss',{skip:!database},()=>withDB(async pool=>{
+  const f=await seedPublishedVault(pool),store=new PostgresStore(null,pool),config={wholePublication:{...f.config,previewSecret:'committed-recovery-preview-secret-32-bytes'}},service=new CloudService(store,config),s=store.wholePublication(config.wholePublication),request=requestFor(f),p=await s.preview(f.input,request),out=await prepareWholeFixture(f,p);
+  await uploadWholeFixture(s,f,p,out);const receipt=await s.commit(f.input,request.operationID,p.token,request);
+  await pool.query("UPDATE team_memberships SET role='viewer' WHERE id=$1",[f.recipient.membershipID]);
+  await pool.query('DELETE FROM team_membership_device_admissions WHERE device_id=$1',[f.deviceID]);
+  const sessionID=uuid();await pool.query("INSERT INTO sessions(id,user_id,device_id,token_hash,expires_at) VALUES($1,$2,$3,$4,now()+interval '1 day')",[sessionID,f.accountID,f.deviceID,uuid()]);
+  await http(service,{user_id:f.accountID,device_id:f.deviceID,session_id:sessionID},async base=>{
+    const path=base+'/v1/teams/'+f.input.teamID+'/publication/';
+    assert.notEqual((await fetch(path+'context',{headers})).status,200);
+    const response=await fetch(path+'operations/'+request.operationID+'/context',{headers});assert.equal(response.status,200);
+    assert.deepEqual(await response.json(),{teamID:f.input.teamID,publicationAvailable:true,environment:'staging',sessionID,actorKeyVersion:1,operationState:'COMMITTED',recoveryOnly:true,actorRole:null,groups:[],edges:[],memberships:[],current:receipt.vaults.map(v=>({...v,teamID:f.input.teamID,resources:[],policy:[],custodianDeviceIDs:[]}))});
+    const recovered=await fetch(path+'operations/'+request.operationID+'/receipt',{headers});assert.equal(recovered.status,200);assert.deepEqual(await recovered.json(),receipt);
+    assert.notEqual((await fetch(path+'operations/'+request.operationID+'/readback/'+f.input.vaultID,{headers})).status,200);
+    assert.equal((await fetch(path+'operations/'+uuid()+'/context',{headers})).status,404);
+  });
 }));

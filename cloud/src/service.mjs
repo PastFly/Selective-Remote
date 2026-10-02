@@ -65,7 +65,7 @@ export class CloudService {
     const input={teamID,actorUserID:session.user_id,actorDeviceID:session.device_id,sessionID:session.session_id,schemaVersion:args.schemaVersion,capability:args.capability};
     const s=this.store.wholePublication(this.config.wholePublication);
     switch(operation){
-      case 'context':return s.context(input);
+      case 'context':if(args.operationID!==undefined&&!isUUID(args.operationID))throw Error('invalid_access_request');return s.context(input,args.operationID??null);
       case 'preview':return s.preview(input,body.request,{token:body.token??null,cursor:body.cursor??null});
       case 'start':return s.start(input,body.token,body.request);
       case 'receipt':return s.receipt(input,args.operationID);

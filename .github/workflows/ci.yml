@@ -36,7 +36,7 @@ jobs:
   cloud-postgres:
     name: Team storage on PostgreSQL 16
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:16.6-alpine@sha256:1d04b9ba1d4996401f2552b51beda8187f175c0645c091e4781134fc9c9a3eef
@@ -79,6 +79,8 @@ jobs:
           node --test tests/vault-v2-migration-postgres.test.mjs
           node --test tests/vault-publication-identities-postgres.test.mjs
           node --test tests/vault-publication-store.test.mjs
+          node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs
+          WHOLE_PUBLICATION_BENCHMARK=1 WHOLE_PUBLICATION_BENCHMARK_SCENARIOS=resources100,resources1000 node scripts/whole-publication-benchmark.mjs
           node scripts/benchmark-vault-v2-migration.mjs 100 1000
 
   test:

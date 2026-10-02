@@ -52,6 +52,20 @@ function fixture(extra = {}) {
   return { client, root: node() };
 }
 const context = { teamID, vaultID, role: "owner" };
+test('active publication uses the staging driver and confirms its complete team preview without foundation writes',async()=>{
+  let foundation=0,publications=0;
+  const f=fixture({getContext:async()=>({formatState:'V2_ACTIVE',policyMutationAvailable:false,groupMutationAvailable:false,blockers:['crypto_publication_required']}),preview:async()=>foundation++,commit:async()=>foundation++});
+  const driver={enabled:true,getContext:async()=>({formatState:'V2_ACTIVE',wholePublication:true,policyMutationAvailable:true,groupMutationAvailable:true,blockers:[]}),
+    resources:()=>({rows:[],nextCursor:null}),grants:()=>({rows:[],nextCursor:null}),groups:()=>({rows:[],nextCursor:null}),
+    preview:async()=>({wholePublication:true,complete:true,request:{operationID:teamID},binding:{rowCount:1,counts:{vaults:2,resources:4,parts:5,wrappers:5}},counts:{vaults:2,resources:4,parts:5,wrappers:5},rows:[{type:'CUSTODY'}],details:[],nextCursor:null}),
+    commit:async(_scope,approved)=>{assert.equal(approved.binding.counts.vaults,2);publications++;return{vaults:[]};}};
+  const m=createAccessManager({...f,context,publicationDriver:async()=>driver});await m.refresh();
+  m.setDraft({type:'GROUP_CREATE',name:'Stage group'});await m.preview();await m.confirm();
+  assert.equal(publications,1);assert.equal(foundation,0);assert.equal(m.state().capability.wholePublication,true);m.destroy();
+});
+test('active publication cannot use a partial preview or activate without an explicit driver capability',async()=>{
+  const f=fixture({getContext:async()=>({formatState:'V2_ACTIVE',policyMutationAvailable:true,groupMutationAvailable:true,blockers:[]})});const m=createAccessManager({...f,context});await m.refresh();m.setDraft({type:'GROUP_CREATE',name:'A'});await assert.rejects(m.preview(),/crypto_publication_required/);m.destroy();
+});
 test("first grant and surviving-path revoke use distinct copy", () => {
   const first = accessConsequence({ gainedMask: 1, lostMask: 0, after: { policyEffective: { paths: [] } } }, "en");
   assert.match(first, /will gain/);
@@ -315,4 +329,11 @@ test("verified published contextual reference queries exact resource and keeps p
   await manager.openResource({teamID,vaultID,resourceID,kind:"CREDENTIAL",role:"owner"},"share");
   assert.equal(requested.id,resourceID);assert.equal(requested.scope.teamID,teamID);assert.equal(requested.scope.vaultID,vaultID);
   manager.setDraft({type:"GROUP_CREATE",name:"Frozen"});await assert.rejects(manager.preview(),/crypto_publication_required/);manager.destroy();
+});
+
+
+test('a discovered committed operation exposes receipt recovery before current policy or membership routes',async()=>{
+  let ordinary=0;const f=fixture({listVaults:async()=>{ordinary++;throw Error('team_permission_denied');},getContext:async()=>{ordinary++;throw Error('team_permission_denied');}});
+  const driver={enabled:false,pendingOperationID:teamID,pendingReceipt:{operationID:teamID},canResumePending:false,getContext:async()=>({formatState:'V2_ACTIVE',wholePublication:true,policyMutationAvailable:false,groupMutationAvailable:false,blockers:['publication_resume_required']})};
+  const manager=createAccessManager({...f,context:{...context,role:'viewer'},publicationDriver:()=>driver});await manager.refresh();assert.equal(ordinary,0);assert.equal(manager.state().capability.wholePublication,true);manager.setDraft({type:'GROUP_CREATE',name:'Denied'});await assert.rejects(manager.preview(),/crypto_publication_required/);manager.destroy();
 });

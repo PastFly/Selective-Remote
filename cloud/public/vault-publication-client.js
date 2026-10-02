@@ -1103,6 +1103,7 @@ export function createIndexedDBPublicationRepository(
   };
 }
 const uiCopy = {
+  editable: ['Публикация проверена. Изменения доступны после проверки последствий и подтверждения.','Publication verified. Changes require an impact review and confirmation.'],
   readonly: [
     "Публикация проверена · только чтение. Изменение и доступ требуют новой публикации.",
     "Verified publication · read only. Changes and access updates require a new publication.",
@@ -1284,6 +1285,7 @@ export function renderPublishedVault({
   filter = "all",
   onAccess = () => {},
   onStatus = () => {},
+  mutationAvailable = false,
 }) {
   container.replaceChildren();
   const view = client.view();
@@ -1292,7 +1294,7 @@ export function renderPublishedVault({
   status.dataset.publicationState = view.stale ? "stale" : "verified";
   status.textContent = publicationCopy(
     documentValue,
-    view.stale ? "stale" : "readonly",
+    view.stale ? "stale" : mutationAvailable ? 'editable' : "readonly",
   );
   container.append(status);
   const labels = Object.fromEntries(
@@ -1330,6 +1332,7 @@ export function renderPublishedVault({
     for (const [action, label] of [
       ["share", publicationCopy(documentValue, "share")],
       ["who", publicationCopy(documentValue, "who")],
+      ...(mutationAvailable ? [['move',documentValue.documentElement?.lang==='en'?'Move':'Переместить'],...(model.kind==='FOLDER'?[]:[['edit',documentValue.documentElement?.lang==='en'?'Edit':'Редактировать']])] : []),
     ]) {
       const button = documentValue.createElement("button");
       button.type = "button";

@@ -9,8 +9,8 @@ import { uuid } from './vault-v2-migration-fixtures.mjs';
 
 const directory=fileURLToPath(new URL('../migrations/',import.meta.url));
 const database=process.env.TEST_DATABASE_URL;
-test('whole publication storage migration is additive version21',async()=>{
-  const m=(await loadMigrations(directory)).at(-1);assert.equal(m.version,21);
+test('whole publication storage and cancellation migrations are additive through version22',async()=>{
+  const m=(await loadMigrations(directory)).at(-1);assert.equal(m.version,22);
   assert.doesNotMatch(m.sql,/UPDATE shared_vaults SET format_state|TRUNCATE/iu);
 });
 async function withDB(work){

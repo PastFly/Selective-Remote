@@ -2051,7 +2051,9 @@ struct SelectiveRemoteTeamHostsView: View {
                 editorRequest = .duplicateDraft(profile: host.profile, context: context)
             }
         case .edit:
-            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
+            if host.publication != nil {
+                AccessResourceEntry.showPublished(host.publication, title: host.profile.friendlyName, kind: .host, section: .edit)
+            } else if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
                let context = context(for: host) {
                 editorRequest = .init(context: context, host: host)
             }
@@ -2143,6 +2145,14 @@ struct SelectiveRemoteTeamHostsView: View {
         ) {
             revealTeamHost(host)
             personalSettingsHost = host
+        }
+        if host.publication != nil {
+            Button(CloudAccessLocalization.text("Изменить…", "Edit…"), systemImage: "pencil") {
+                AccessResourceEntry.showPublished(host.publication, title: host.profile.friendlyName, kind: .host, section: .edit)
+            }
+            Button(CloudAccessLocalization.text("Переместить…", "Move…"), systemImage: "folder") {
+                AccessResourceEntry.showPublished(host.publication, title: host.profile.friendlyName, kind: .host, section: .move)
+            }
         }
         if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
             Button(

@@ -33,7 +33,7 @@ export class WholePublicationStore extends VaultMigrationStore{
         if(write){
           await c.query('SELECT id FROM teams WHERE id=$1 AND archived_at IS NULL FOR UPDATE',[input.teamID]);
           await c.query("SELECT id FROM shared_vaults WHERE team_id=$1 AND format_state='V2_ACTIVE' AND archived_at IS NULL ORDER BY id FOR UPDATE",[input.teamID]);
-          await c.query(`LOCK TABLE ${[...migrationLockTables,'sessions','team_publication_operations','team_publication_generations','team_publication_receipts','team_publication_outbox','team_publication_upload_chunks'].join(',')} IN SHARE ROW EXCLUSIVE MODE`);
+          await c.query(`LOCK TABLE ${[...migrationLockTables,'sessions','team_publication_operations','team_publication_generations','team_publication_receipts','team_publication_outbox','team_publication_upload_chunks','team_publication_operation_keys','team_publication_cancellations'].join(',')} IN SHARE ROW EXCLUSIVE MODE`);
           await this.authenticate(c,input);
         }
         const result=await work(c);await this.authenticate(c,input);await c.query('COMMIT');return result;
@@ -79,6 +79,8 @@ export class WholePublicationStore extends VaultMigrationStore{
     return {current,snapshots,attempts};
   }
   async plan(c,input,request,token=null){
+    if(!isUUID(request?.operationID))fail('invalid_publication_request');
+    if((await c.query('SELECT operation_id FROM team_publication_cancellations WHERE operation_id=$1',[request.operationID])).rows.length)fail('publication_discarded');
     const loaded=await this.current(c,input,request?.operationID),canonical=validateWholePublicationRequest(request,loaded.current);
     const op=await this.operation(c,input,request.operationID,{optional:true});
     if(op&&!same(op.request,canonical))fail('publication_replay_conflict');
@@ -137,10 +139,21 @@ export class WholePublicationStore extends VaultMigrationStore{
         nextCursor:offset+100<p.rows.length?this.signPage(signed,'preview',offset+100):null};
     },{write:false});
   }
-  context(input){return this.transaction(input,async c=>{
-    const loaded=await this.current(c,input,randomUUID()),snapshot=loaded.snapshots[loaded.current[0].vaultID];
+  context(input,operationID=null){return this.transaction(input,async c=>{
+    const op=operationID!==null?await this.operation(c,input,operationID):null;
+    if(op?.state==='COMMITTED'){
+      // A receipt remains recoverable after mutation authority/custody loss.
+      // This context grants no policy access or publication authority; ordinary
+      // read-back still verifies current recipient entitlement independently.
+      const receipt=await this.committedReceipt(c,input,op);
+      const keyVersion=Number(op.actor_key_version);if(!Number.isSafeInteger(keyVersion)||keyVersion<1)fail('publication_receipt_invalid');
+      return {teamID:input.teamID,publicationAvailable:true,environment:'staging',sessionID:input.sessionID,
+        actorKeyVersion:keyVersion,operationState:'COMMITTED',recoveryOnly:true,actorRole:null,
+        groups:[],edges:[],memberships:[],current:receipt.vaults.map(v=>({...v,teamID:input.teamID,resources:[],policy:[],custodianDeviceIDs:[]}))};
+    }
+    const loaded=await this.current(c,input,operationID??randomUUID()),snapshot=loaded.snapshots[loaded.current[0].vaultID];
     const actor=snapshot.devices.find(d=>d.deviceID===input.actorDeviceID);
-    return {teamID:input.teamID,publicationAvailable:true,environment:'staging',sessionID:input.sessionID,actorKeyVersion:actor.certificate.payload.keyVersion,
+    return {teamID:input.teamID,publicationAvailable:true,environment:'staging',sessionID:input.sessionID,actorKeyVersion:actor.certificate.payload.keyVersion,...(op?{operationState:op.state}:{}),
       current:loaded.current,groups:snapshot.raw.groups.filter(g=>!g.deleted_at).map(g=>({id:g.id,name:g.name,version:g.version})),
       edges:snapshot.raw.edges.filter(e=>!e.removed_at).map(e=>({id:e.id,version:Number(e.version),groupID:e.group_id,userID:e.user_id,membershipID:e.membership_id,membershipEpoch:Number(e.membership_epoch)})),memberships:snapshot.memberships,actorRole:snapshot.actorRole};
   },{write:false});}
@@ -266,7 +279,17 @@ export class WholePublicationStore extends VaultMigrationStore{
     });
   }
   discard(input,operationID){return this.transaction(input,async c=>{
-    const op=await this.operation(c,input,operationID);if(op.state==='COMMITTED')fail('publication_already_committed');
+    const op=await this.operation(c,input,operationID,{optional:true});
+    if(!op){
+      const cancelled=(await c.query('SELECT * FROM team_publication_cancellations WHERE operation_id=$1',[operationID])).rows[0];
+      if(cancelled){if(cancelled.team_id!==input.teamID||cancelled.actor_user_id!==input.actorUserID||cancelled.actor_device_id!==input.actorDeviceID)fail('publication_operation_not_found');}
+      else {
+        await this.current(c,input,operationID);
+        await c.query('INSERT INTO team_publication_cancellations(operation_id,team_id,actor_user_id,actor_device_id,confirmed_by_session) VALUES($1,$2,$3,$4,$5)',[operationID,input.teamID,input.actorUserID,input.actorDeviceID,input.sessionID]);
+      }
+      return {operationID,state:'DISCARDED'};
+    }
+    if(op.state==='COMMITTED')fail('publication_already_committed');
     if(op.state!=='DISCARDED'){
       await c.query("UPDATE vault_migration_attempts SET state='DISCARDED' WHERE id IN(SELECT attempt_id FROM team_publication_generations WHERE operation_id=$1)",[operationID]);
       await c.query("UPDATE team_publication_operations SET state='DISCARDED' WHERE id=$1",[operationID]);
