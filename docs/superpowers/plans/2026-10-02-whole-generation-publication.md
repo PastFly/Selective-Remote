@@ -37,7 +37,7 @@
 
 ## Shared interfaces
 
-`request` is version 1, exact Team/operation UUIDs, a complete sorted `vaults` list of `{vaultID, resources, policy, contentChanges}`, and optional one Team-scoped `groupMutation`. `contentChanges` identifies `{resourceID, part}` only: no plaintext or plaintext fingerprint is sent to the server. A full new generation encrypts every part regardless of that intention list. The store verifies the request against permanent identities and authenticated predecessors; clients cannot invent the participating list.
+`request` is version 1, exact Team/operation UUIDs, a complete sorted `vaults` list of `{vaultID, resources, policy, contentChanges, custodianDeviceIDs}`, and optional one Team-scoped `groupMutation`. `contentChanges` identifies `{resourceID, part}` only: no plaintext or plaintext fingerprint is sent to the server. Custodians are explicit admitted predecessor custody selections, not implicit Owner/Admin devices; count their sidecar wrappers in the complete budget. A full new generation encrypts every part regardless of that intention list. The store verifies the request against permanent identities and authenticated predecessors; clients cannot invent the participating list.
 
 `current` lists `{vaultID, generationID, sequence, headerHash, resources, policy}` for every ACTIVE Vault. `snapshots` contains the exact current and projected successor snapshots per Vault, with the same membership/device/trust/policy records used by PR A. Fixed operation timestamps and deterministic group/revision changes make the projected state checkable without writes during preview. Any discrepancy with real trigger results conflicts at commit; do not omit a security-bearing snapshot field to make it match.
 
@@ -49,11 +49,11 @@
 
 **Interfaces:** Produce `validateWholePublicationRequest(request, current)`, `deriveWholePublicationPlan({request,current,snapshots,actorRole})`, `WholePublicationPreviewTokens({secret,clock,ttlMS}).issue(binding)` and `.open(token,binding)`; subsequent tasks provide authenticated snapshots and immutable requests, not user-selected authority.
 
-- [ ] Write tests for complete ACTIVE set, foreign/duplicate IDs, invalid Credential masks, broken Folder graph, exact content-part intents, 10/11 Vaults, 1000/1001 resources and 10000/10001 wrappers.
-- [ ] Run `node --test cloud/tests/whole-publication-policy.test.mjs`; expect RED for missing implementation.
-- [ ] Validate exact request shape and scope; use existing `validateMigrationResources`, `migrationRecipients` and Team role ceiling; sort canonical consent deterministically without normalizing identity bytes. Typed limits return safe counts without payloads.
-- [ ] Test token binding to session/account/device/key epoch, operation/request/read-set/predecessors/successor/counts/expiry; tamper, expiry, rotation, restart, unsigned token and changed selection all fail. Sign domain-separated canonical bytes with existing Node HMAC, minimum 32-byte server secret, 5-minute maximum lifetime.
-- [ ] Run the task tests and relevant `vault-v2-migration-policy` / `team-policy` tests; expect zero failures. Commit `feat: bind whole-Team publication intent and limits`.
+- [x] Write tests for complete ACTIVE set, foreign/duplicate IDs, invalid Credential masks, broken Folder graph, exact content-part intents, 10/11 Vaults, 1000/1001 resources and 10000/10001 wrappers.
+- [x] Run `node --test cloud/tests/whole-publication-policy.test.mjs`; expect RED for missing implementation.
+- [x] Validate exact request shape and scope; use existing `validateMigrationResources`, `migrationRecipients` and Team role ceiling; sort canonical consent deterministically without normalizing identity bytes. Typed limits return safe counts without payloads.
+- [x] Test token binding to session/account/device/key epoch, operation/request/read-set/predecessors/successor/counts/expiry; tamper, expiry, rotation, restart, unsigned token and changed selection all fail. Sign domain-separated canonical bytes with existing Node HMAC, minimum 32-byte server secret, 5-minute maximum lifetime.
+- [x] Run the task tests and relevant `vault-v2-migration-policy` / `team-policy` tests; expect zero failures. Commit `feat: bind whole-Team publication intent and limits`.
 
 ### Task 2: Immutable operation/generation, policy-version, receipt and outbox storage
 
