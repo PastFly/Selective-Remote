@@ -14,6 +14,7 @@ import {
   validateResourceKeyWrapper,
 } from "../public/resource-crypto-v2.js";
 import { requireAccessMutation } from "./team-policy.mjs";
+import { publicationHash, validateReaderProjection } from "../public/vault-publication-v1.js";
 const lockTables = [
   "devices",
   "device_trust_certificates_v1",
@@ -41,6 +42,7 @@ const lockTables = [
   "vault_resource_manifest_pointers_v2",
   "vault_resource_registry",
   "vault_resource_identity_reservations",
+  "vault_publication_projections",
 ];
 export class VaultMigrationStore {
   constructor(
@@ -596,7 +598,62 @@ export class VaultMigrationStore {
         .filter(Boolean),
     );
   }
+  async verifyIdentityReservations(input) {
+    return this.transaction(input, async c => {
+      const a=await this.attempt(c,input);await this.current(c,input,a);
+      if(canonicalMigrationJSON(input.resources)!==canonicalMigrationJSON(a.resources))throw Error("migration_resource_graph_changed");
+      const rows=(await c.query("SELECT r.id,r.team_id,r.vault_id,r.kind,r.deleted_at FROM vault_resource_identity_reservations r JOIN vault_migration_resources g ON g.id=r.id AND g.team_id=r.team_id AND g.vault_id=r.vault_id AND g.kind=r.kind WHERE g.attempt_id=$1",[a.id])).rows;
+      if(rows.length!==a.resources.length||rows.some(r=>r.deleted_at))throw Error("tombstoned_resource_identity");
+      return true;
+    },{write:false});
+  }
+  async checkReader(c,a,s,projection,sidecar) {
+    const parts=await this.parts(c,a),recipients=migrationRecipients({resources:a.resources,policy:a.policy,snapshot:s,actorRole:"owner"});
+    if(!projection||!sidecar||Object.keys(sidecar).sort().join(",")!=="envelope,part,resourceID,wrappers"||sidecar.part!=="SECRET"
+      ||a.resources.some(r=>r.id===sidecar.resourceID))throw Error("publication_invalid");
+    validateResourceCipherEnvelope(sidecar.envelope);
+    const context=sidecar.envelope.context;
+    if(context.teamID!==a.team_id||context.vaultID!==a.vault_id||context.resourceID!==sidecar.resourceID||context.part!=="SECRET"
+      ||context.policyVersion!==a.scope.policyVersion||[context.keyVersion,context.registryVersion,context.resourceVersion,context.manifestVersion].some(n=>n!==1))throw Error("publication_scope_mismatch");
+    if(!Array.isArray(sidecar.wrappers)||sidecar.wrappers.length<1||sidecar.wrappers.length>100)throw Error("publication_custodian_unavailable");
+    const custody=[],seen=new Set();
+    for(const w of sidecar.wrappers){validateResourceKeyWrapper(w);const t=s.devices.find(d=>d.deviceID===w.context.deviceID);
+      if(!t||seen.has(t.deviceID)||w.context.membershipID!==t.membershipID||w.context.membershipEpoch!==t.membershipEpoch
+        ||["teamID","vaultID","resourceID","part","keyVersion"].some(k=>w.context[k]!==context[k]))throw Error("publication_custodian_unavailable");
+      seen.add(t.deviceID);custody.push(t);}
+    const publisher=s.devices.find(d=>d.accountID===a.actor_user_id&&d.deviceID===a.actor_device_id);
+    const h=projection.header?.payload;
+    if(!publisher||!seen.has(publisher.deviceID)||h?.publisherAccountID!==publisher.accountID||h?.publisherDeviceID!==publisher.deviceID
+      ||h?.publisherKeyVersion!==publisher.certificate.payload.keyVersion)throw Error("invalid_publishing_custodian");
+    const targets=new Map();
+    for(const lists of Object.values(recipients))for(const list of Object.values(lists))for(const t of list)targets.set(t.membershipID+"/"+t.deviceID,t);
+    if(a.resources.length===0)for(const t of custody)targets.set(t.membershipID+"/"+t.deviceID,t);
+    const {headerHash}=await validateReaderProjection({projection,scope:a.scope,resources:a.resources,objects:parts,
+      recipients:[...targets.values()].map(t=>({...t,deviceKeyVersion:t.certificate.payload.keyVersion})),rootPublicKey:publisher.rootPublicKey});
+    const wrapperCount=parts.reduce((n,p)=>n+p.wrappers.length,sidecar.wrappers.length);
+    if(wrapperCount>10000||Buffer.byteLength(canonicalMigrationJSON(projection))>64*1024*1024
+      ||Buffer.byteLength(canonicalMigrationJSON(sidecar))>1024*1024
+      ||parts.some(p=>Buffer.byteLength(canonicalMigrationJSON(p))>1024*1024)
+      ||Buffer.byteLength(canonicalMigrationJSON({parts,sidecar}))>128*1024*1024)throw Error("publication_limit");
+    return {headerHash,reader:{projectionHash:await publicationHash("projection",projection),sidecarHash:await publicationHash("sidecar",sidecar),custodianDeviceIDs:[...seen].sort()}};
+  }
+  async putReaderProjection(input,projection,sidecar,checkpoint) {
+    return this.transaction(input,async c=>{
+      const a=await this.attempt(c,input),s=await this.current(c,input,a);
+      const checked=await this.checkReader(c,a,s,projection,sidecar);
+      const old=(await c.query("SELECT * FROM vault_publication_projections WHERE attempt_id=$1",[a.id])).rows[0];
+      if(old){if(canonicalMigrationJSON(old.projection)!==canonicalMigrationJSON(projection)||canonicalMigrationJSON(old.administrative_sidecar)!==canonicalMigrationJSON(sidecar))throw Error("migration_replay_conflict");return {headerHash:old.header_hash};}
+      if(a.state!=="V2_PREPARING")throw Error("migration_not_preparing");
+      if(checkpoint!==undefined&&(Object.keys(checkpoint??{}).sort().join(",")!=="ciphertext,nonce,version"||checkpoint.version!==1
+        ||!/^[A-Za-z0-9_-]{16}$/.test(checkpoint.nonce)||typeof checkpoint.ciphertext!=="string"||checkpoint.ciphertext.length>64*1024*1024))throw Error("invalid_migration_checkpoint");
+      await c.query("INSERT INTO vault_publication_projections(attempt_id,team_id,vault_id,projection,administrative_sidecar,header_hash) VALUES($1,$2,$3,$4,$5,$6)",[a.id,a.team_id,a.vault_id,projection,sidecar,checked.headerHash]);
+      if(checkpoint!==undefined)await c.query("UPDATE vault_migration_attempts SET checkpoint=$2 WHERE id=$1",[a.id,checkpoint]);
+      return {headerHash:checked.headerHash};
+    });
+  }
   async verify(c, a, s, manifest) {
+    const identities=(await c.query("SELECT id,kind,deleted_at FROM vault_resource_identity_reservations WHERE team_id=$1 AND vault_id=$2 AND id=ANY($3::uuid[])",[a.team_id,a.vault_id,a.resources.map(r=>r.id)])).rows;
+    if(identities.length!==a.resources.length||identities.some(i=>i.deleted_at||!a.resources.some(r=>r.id===i.id&&r.kind===i.kind)))throw Error("tombstoned_resource_identity");
     const stored = (
       await c.query(
         "SELECT id,kind,parent_folder_id,source_ordinal FROM vault_migration_resources WHERE attempt_id=$1 ORDER BY source_ordinal",
@@ -630,6 +687,11 @@ export class VaultMigrationStore {
     });
     for (const object of parts)
       await this.checkObject(object, a, s, recipients);
+    const projection=(await c.query("SELECT * FROM vault_publication_projections WHERE attempt_id=$1",[a.id])).rows[0];
+    let reader;
+    if(projection){const checked=await this.checkReader(c,a,s,projection.projection,projection.administrative_sidecar);
+      if(checked.headerHash!==projection.header_hash)throw Error("publication_invalid");reader=checked.reader;}
+    if(Boolean(manifest?.payload?.reader)!==Boolean(projection))throw Error("publication_incomplete");
     await verifyMigrationManifest({
       manifest,
       expected: {
@@ -641,6 +703,7 @@ export class VaultMigrationStore {
           part: o.part,
           sha256: o.sha256,
         })),
+        ...(reader?{reader}:{}),
       },
       rootPublicKey: s.actorRootPublicKey,
     });
@@ -734,9 +797,11 @@ export class VaultMigrationStore {
           policy: a.policy,
           resources: a.resources,
           parts: a.manifest.payload.parts,
+          ...(a.manifest.payload.reader?{reader:a.manifest.payload.reader}:{}),
         },
         rootPublicKey: s.actorRootPublicKey,
       });
+      await this.verify(c,a,s,a.manifest);
       if (typeof this.fence?.intent !== "function")
         throw Error("deployment_fence_required");
       await this.fence.intent({
@@ -744,7 +809,7 @@ export class VaultMigrationStore {
         vaultID: input.vaultID,
         attemptID: input.attemptID,
         manifestHash,
-        schemaFloor: 19,
+        schemaFloor: a.manifest.payload.reader ? 20 : 19,
       });
       await this.faultAt("pre_activation");
       await c.query(
@@ -785,6 +850,7 @@ export class VaultMigrationStore {
       await c.query("DELETE FROM vault_migration_parts WHERE attempt_id=$1", [
         input.attemptID,
       ]);
+      await c.query("DELETE FROM vault_publication_projections WHERE attempt_id=$1",[input.attemptID]);
       await c.query(
         "DELETE FROM vault_migration_resources WHERE attempt_id=$1",
         [input.attemptID],

@@ -1,0 +1,82 @@
+{
+  "testOnly": true,
+  "rootPublicKey": "BBXeUid347GvN5ac883ncwK5gr7WXRLiazYEFWBUgFVJQPNlWSfuOagrz4V60IidrS8JbkhpAaKWuwMqINeviBg",
+  "teamID": "697b0f1c-3204-4d44-8eb6-a0bfac21e11c",
+  "vaultID": "8df64646-0a9b-4261-92bd-e8077c4a196f",
+  "header": {
+    "payload": {
+      "version": 1,
+      "teamID": "697b0f1c-3204-4d44-8eb6-a0bfac21e11c",
+      "vaultID": "8df64646-0a9b-4261-92bd-e8077c4a196f",
+      "generationID": "73357e21-e056-414d-afa8-1a68c71dfe38",
+      "sequence": 1,
+      "previousHash": null,
+      "descriptorCommitment": "98f15890c42bd8e894fd26d83db137d8f54e5d713695fbf0c332f2d6f43f002f",
+      "publisherAccountID": "b2ee01c1-9d3c-4bba-906c-528b24e5ceb6",
+      "publisherDeviceID": "d523ea7f-63c7-42e1-ba07-3be304d55098",
+      "publisherKeyVersion": 1
+    },
+    "signature": "gomd5JBnaAV5MEX8y6SZ9M1vS37CQ-SqjilKOvYUTXR21h8gYBnqc3aXEpOAjI3v9CozqpVXdIvICSSulKPvvQ"
+  },
+  "inventory": {
+    "payload": {
+      "headerHash": "0c18d68efc4a43f50604f108d026bde214288cdbdf6dde72f1a32b2184998986",
+      "accountID": "b2ee01c1-9d3c-4bba-906c-528b24e5ceb6",
+      "deviceID": "d523ea7f-63c7-42e1-ba07-3be304d55098",
+      "membershipID": "b4ae054e-a2ea-4750-b327-ef65c364af39",
+      "membershipEpoch": 1,
+      "count": 0,
+      "digest": "7ad172a2de9ee1428f4fe557f25a9c09f46b876040166fa3125dea71daaaaece"
+    },
+    "signature": "I4GLui8OwUjrUReVW163CPbM7liUfrRT319hBi0C_eO61Civ9xNa_gCB9un6AZrB4PzJEjOea8YsI_Lmv94ong"
+  },
+  "subject": {
+    "membershipID": "b4ae054e-a2ea-4750-b327-ef65c364af39",
+    "membershipEpoch": 1,
+    "deviceID": "d523ea7f-63c7-42e1-ba07-3be304d55098",
+    "accountID": "b2ee01c1-9d3c-4bba-906c-528b24e5ceb6",
+    "publicKey": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "8XiGaLiSh0mcRtDyLUp4VJjHYcaQKGtgdPB0b8QvFzE",
+      "y": "exkLKVjQ6fH740Kc9F6tF4zUIo8NX32mv963yrdye18",
+      "ext": true,
+      "key_ops": []
+    },
+    "rootPublicKey": "BBXeUid347GvN5ac883ncwK5gr7WXRLiazYEFWBUgFVJQPNlWSfuOagrz4V60IidrS8JbkhpAaKWuwMqINeviBg",
+    "certificate": {
+      "payload": {
+        "accountID": "b2ee01c1-9d3c-4bba-906c-528b24e5ceb6",
+        "deviceID": "d523ea7f-63c7-42e1-ba07-3be304d55098",
+        "publicKey": {
+          "kty": "EC",
+          "crv": "P-256",
+          "x": "8XiGaLiSh0mcRtDyLUp4VJjHYcaQKGtgdPB0b8QvFzE",
+          "y": "exkLKVjQ6fH740Kc9F6tF4zUIo8NX32mv963yrdye18",
+          "ext": true,
+          "key_ops": []
+        },
+        "keyVersion": 1,
+        "issuerFingerprint": "6c29703b11b6fed23200fc78d280dc0c6ac155e5b21655295fabb129fac6ba2b",
+        "issuedAt": 1800000000,
+        "serial": "84b5620b-673a-457b-a405-b4550b731847"
+      },
+      "signature": "r9cbgdCXlzZWmYlQ1mUq_RLUJg5Ch2IsKg6V5lQfT4tZNZAvw3tiF7RZT7DLocBFU-QNR5Q0vhl1NFfCM9pP5w"
+    },
+    "checkpoint": {
+      "payload": {
+        "accountID": "b2ee01c1-9d3c-4bba-906c-528b24e5ceb6",
+        "version": 1,
+        "entries": [
+          {
+            "deviceID": "d523ea7f-63c7-42e1-ba07-3be304d55098",
+            "keyVersion": 1,
+            "certificateDigest": "44NppmNb-wp5YqeQl47G6-wgEwjHC9Oqquk7Hmv_0kY"
+          }
+        ]
+      },
+      "signature": "SOqwSvQlZS3SBefe9g3c8sEq6DiQ1h_b9bbzDAwn6a0C5uhh5wCSvNLexLdRknr0TIvkV0UzZCjjdDT79-0tlQ"
+    },
+    "deviceKeyVersion": 1
+  }
+}

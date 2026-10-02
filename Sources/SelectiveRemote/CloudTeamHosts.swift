@@ -11,6 +11,8 @@ struct SelectiveRemoteTeamVaultMaterializedSnapshot: Equatable, Sendable {
     let revision: Int
     let keyGeneration: Int
     let payload: Data
+    var publication: SelectiveRemotePublicationCache? = nil
+    var publicationSession: SelectiveRemotePublicationSession? = nil
 }
 
 struct SelectiveRemoteTeamHost: Identifiable, Equatable {
@@ -27,6 +29,7 @@ struct SelectiveRemoteTeamHost: Identifiable, Equatable {
     let address: String
     let profile: ConnectionProfile
     let credentials: SelectiveRemoteTeamHostCredentials
+    var publication: SelectiveRemotePublishedModelReference? = nil
 }
 
 struct SelectiveRemoteTeamHostCredentials: Equatable, Sendable {
@@ -116,7 +119,7 @@ enum SelectiveRemoteTeamHostMaterializer {
             } else {
                 throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
             }
-            input = try applyingOrganization(data, to: input)
+            input = try applyingOrganization(data, to: input, published: snapshot.publication != nil)
 
             return SelectiveRemoteTeamHost(
                 id: scopedID(
@@ -141,9 +144,11 @@ enum SelectiveRemoteTeamHostMaterializer {
                         teamID: snapshot.teamID,
                         vaultID: snapshot.vaultID,
                         recordID: record.id
-                    )
+                    ),
+                    published: snapshot.publication != nil
                 ),
-                credentials: credentials[record.id] ?? .empty
+                credentials: credentials[record.id] ?? .empty,
+                publication: try snapshot.publication?.reference(recordID: record.id, kind: .host)
             )
         }
     }
@@ -264,7 +269,8 @@ enum SelectiveRemoteTeamHostMaterializer {
     private static func sanitized(
         _ input: ConnectionProfile,
         title: String,
-        runtimeID: UUID
+        runtimeID: UUID,
+        published: Bool = false
     ) throws -> ConnectionProfile {
         guard input.id.isSelectiveRemoteCloudUUID,
               input.username.count <= 256,
@@ -273,7 +279,7 @@ enum SelectiveRemoteTeamHostMaterializer {
               input.gatewayUsername.utf8.count <= 256,
               !input.gatewayHost.contains(where: { $0.isNewline }),
               !input.gatewayUsername.contains(where: { $0.isNewline }),
-              validOptionalName(input.group),
+              validFolder(input.group, published: published),
               input.folderOrderPath.count <= SelectiveRemoteHostFolderPath.maximumDepth,
               input.folderOrderPath.allSatisfy({ (0 ... 10_000).contains($0) }),
               input.tags.count <= 64,
@@ -391,11 +397,12 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func applyingOrganization(
         _ data: [String: SelectiveRemoteJSONValue],
-        to input: ConnectionProfile
+        to input: ConnectionProfile,
+        published: Bool = false
     ) throws -> ConnectionProfile {
         var result = input
         if let value = data["folder"] {
-            guard let folder = string(value), validOptionalName(folder) else {
+            guard let folder = string(value), validFolder(folder, published: published) else {
                 throw SelectiveRemoteTeamHostMaterializationError.invalidHostRecord
             }
             result.group = folder
@@ -433,6 +440,9 @@ enum SelectiveRemoteTeamHostMaterializer {
 
     private static func validOptionalName(_ value: String) -> Bool {
         value.isEmpty || validName(value)
+    }
+    private static func validFolder(_ value: String, published: Bool) -> Bool {
+        value.isEmpty || (published ? (try? SelectiveRemoteLegacyResourceMapper.folderComponents(value)) != nil : validOptionalName(value))
     }
 
     private static func validTag(_ value: String) -> Bool {
@@ -645,6 +655,10 @@ final class SelectiveRemoteTeamHostStore: ObservableObject {
     ) {
         snapshots[scopeKey(teamID: snapshot.teamID, vaultID: snapshot.vaultID)] = snapshot
         rebuild(now: now)
+    }
+
+    func removeVault(teamID: UUID, vaultID: UUID) {
+        snapshots.removeValue(forKey: scopeKey(teamID: teamID, vaultID: vaultID)); rebuild(now: Date())
     }
 
     func clear() {
@@ -1115,6 +1129,7 @@ private struct SelectiveRemoteTeamHostWarningDetailsView: View {
 }
 
 struct SelectiveRemoteTeamHostsView: View {
+    @ObservedObject private var publication = SelectiveRemotePublicationPresentation.shared
     @ObservedObject var store: SelectiveRemoteTeamHostStore
     @ObservedObject var model: AppModel
     @ObservedObject private var language = AppLanguageStore.shared
@@ -1190,7 +1205,7 @@ struct SelectiveRemoteTeamHostsView: View {
 
     private var writableVaults: [SelectiveRemoteTeamHostVaultContext] {
         store.vaults.filter {
-            SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
+            !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: $0.teamID, vaultID: $0.vaultID) && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: $0.role)
         }
     }
 
@@ -1460,6 +1475,9 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
           }
+        }
+        .safeAreaInset(edge: .bottom) {
+            SelectiveRemotePublishedFolderStrip(type: "host", selectedVaultKeys: SelectiveRemoteTeamHostVaultFilter.effectiveKeys(raw: selectedVaultsRaw, available: store.vaults))
         }
         .onAppear {
             normalizeSelection()
@@ -1768,7 +1786,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 Label(name, systemImage: path.isEmpty ? "tray" : "folder")
                                     .contextMenu {
                                         Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-                                            AccessResourceEntry.showLegacy(kind: .folder)
+                                            AccessResourceEntry.showPublishedFolder(teamID: teamID, path: path, type: "host")
                                         }
                                     }
                                     .draggable(teamFolderDragValue(teamID: teamID, path: path))
@@ -1943,7 +1961,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 }
             }
             if let host = selectedHost,
-               SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+               host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 Button(UpdateLocalization.text(ru: "Новая папка", en: "New Folder"), systemImage: "folder.badge.plus") {
                     newFolderName = ""
                     showsFolderCreator = true
@@ -2023,7 +2041,7 @@ struct SelectiveRemoteTeamHostsView: View {
                 editorRequest = .newDraft(in: host.profile.group, context: context)
             }
         case .createFolder:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 newFolderName = ""
                 showsFolderCreator = true
             }
@@ -2033,12 +2051,12 @@ struct SelectiveRemoteTeamHostsView: View {
                 editorRequest = .duplicateDraft(profile: host.profile, context: context)
             }
         case .edit:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role),
                let context = context(for: host) {
                 editorRequest = .init(context: context, host: host)
             }
         case .delete:
-            if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+            if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                 hostPendingDeletion = host
             }
         case .personalSettings:
@@ -2087,7 +2105,7 @@ struct SelectiveRemoteTeamHostsView: View {
     @ViewBuilder
     private func teamHostContextMenu(_ host: SelectiveRemoteTeamHost) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessResourceEntry.showLegacy(kind: .host)
+            AccessResourceEntry.showPublished(host.publication, title: host.profile.friendlyName, kind: .host)
         }
         Button(
             UpdateLocalization.text(ru: "Открыть карточку", en: "Open Details"),
@@ -2126,7 +2144,7 @@ struct SelectiveRemoteTeamHostsView: View {
             revealTeamHost(host)
             personalSettingsHost = host
         }
-        if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+        if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
             Button(
                 UpdateLocalization.text(ru: "Изменить", en: "Edit"),
                 systemImage: "pencil"
@@ -2161,7 +2179,26 @@ struct SelectiveRemoteTeamHostsView: View {
         return preferred.isEmpty ? host.profile.username : preferred
     }
 
+    private func connectPublished(_ host: SelectiveRemoteTeamHost, sftp: Bool = false) {
+        Task { @MainActor in
+            do {
+                try await publication.performHostConnection(host) { credentials in
+                    let user = contextMenuUsername(for: host)
+                    if sftp { onOpenSFTP(host, user, credentials.password) }
+                    else if host.profile.connectionType == .rdp {
+                        var profile = personalSettingsStore.appliedProfile(for: host, endpoint: endpoint); profile.username = user
+                        model.connectTeamHost(profile, password: credentials.password!, gatewayPassword: credentials.gatewayPassword ?? "")
+                    } else { onOpenTerminal(host, user, credentials.password) }
+                }
+            } catch {
+                let alert = NSAlert(); alert.messageText = CloudAccessLocalization.text("Подключение требует доступной части SECRET", "Connecting requires an available SECRET part")
+                alert.informativeText = CloudAccessLocalization.text("Обновите публикацию и проверьте право раскрытия учётных данных для этого Mac.", "Refresh the publication and verify this Mac's permission to reveal the required credentials."); alert.runModal()
+            }
+        }
+    }
+
     private func connectFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host); return }
         let resolvedUsername = contextMenuUsername(for: host)
         if host.profile.connectionType == .rdp {
             var profile = personalSettingsStore.appliedProfile(
@@ -2180,6 +2217,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func openSFTPFromContextMenu(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host, sftp: true); return }
         onOpenSFTP(
             host,
             contextMenuUsername(for: host),
@@ -2259,7 +2297,7 @@ struct SelectiveRemoteTeamHostsView: View {
                     ) {
                         personalSettingsHost = host
                     }
-                    if SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
+                    if host.publication == nil && SelectiveRemoteTeamHostDocumentMutation.isWritable(role: host.role) {
                         Button(
                             UpdateLocalization.text(ru: "Изменить", en: "Edit"),
                             systemImage: "pencil"
@@ -2326,6 +2364,13 @@ struct SelectiveRemoteTeamHostsView: View {
                                 value: "\(host.profile.sshPort)"
                             )
                         }
+                        if host.publication != nil {
+                            if host.profile.connectionType == .rdp || host.profile.connectionType == .ssh {
+                                LabeledContent(UpdateLocalization.text(ru: "Пользователь", en: "Username"), value: contextMenuUsername(for: host))
+                                Text(UpdateLocalization.text(ru: "При подключении Mac проверит текущее право и расшифрует требуемую часть SECRET.", en: "On connect, this Mac checks current authorization and decrypts the required SECRET part."))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        } else {
                         if host.profile.connectionType == .rdp
                             || host.profile.connectionType == .ssh {
                             TextField(
@@ -2361,6 +2406,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             )
                             .textFieldStyle(.roundedBorder)
                         }
+                        }
 
                         HStack {
                             if host.profile.connectionType == .rdp,
@@ -2382,8 +2428,7 @@ struct SelectiveRemoteTeamHostsView: View {
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(
-                                    host.profile.connectionType == .rdp
-                                        && password.isEmpty
+                                    !publication.connectionEnabled(host, temporaryPassword: password)
                                 )
                             }
                             if host.profile.connectionType == .ssh {
@@ -2391,11 +2436,8 @@ struct SelectiveRemoteTeamHostsView: View {
                                     UpdateLocalization.text(ru: "Открыть SFTP", en: "Open SFTP"),
                                     systemImage: "folder.badge.gearshape"
                                 ) {
-                                    onOpenSFTP(
-                                        host,
-                                        username,
-                                        password.isEmpty ? nil : password
-                                    )
+                                    if host.publication != nil { connectPublished(host, sftp: true) }
+                                    else { onOpenSFTP(host, username, password.isEmpty ? nil : password) }
                                     password = host.credentials.password ?? ""
                                     gatewayPassword = host.credentials.gatewayPassword ?? ""
                                 }
@@ -2403,7 +2445,7 @@ struct SelectiveRemoteTeamHostsView: View {
                             Spacer()
                         }
 
-                        Label(
+                        if host.publication == nil { Label(
                             UpdateLocalization.text(
                                 ru: "Общие пароли приходят из зашифрованного Team Vault. Изменить или удалить их могут Owner, Admin и Editor через карточку Host; временно введённое значение не сохраняется.",
                                 en: "Shared passwords come from the encrypted Team Vault. Owners, Admins, and Editors can change or remove them in the Host editor; a temporary override is not saved."
@@ -2412,6 +2454,7 @@ struct SelectiveRemoteTeamHostsView: View {
                         )
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(6)
                 }
@@ -2435,6 +2478,7 @@ struct SelectiveRemoteTeamHostsView: View {
         selectedRecordID: UUID?,
         changesAncestry: Bool = false
     ) {
+        guard !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: context.teamID, vaultID: context.vaultID) else { SelectiveRemotePublicationPresentation.shared.showReadOnly(); return }
         guard !isMutating else { return }
         isMutating = true
         Task { @MainActor in
@@ -2635,6 +2679,7 @@ struct SelectiveRemoteTeamHostsView: View {
     }
 
     private func connect(_ host: SelectiveRemoteTeamHost) {
+        if host.publication != nil { connectPublished(host); return }
         var profile = personalSettingsStore.appliedProfile(
             for: host,
             endpoint: endpoint

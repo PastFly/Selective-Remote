@@ -17,12 +17,13 @@ struct SelectiveRemoteTeamCredential: Identifiable, Equatable, Sendable {
     let modifiedDate: Date
     let title: String
     let username: String
-    let secret: String
+    let secret: String?
     let folder: String
     let tags: [String]
     let sourceHostID: UUID?
     let sourceHostTitle: String?
     let kind: KeychainCredentialKind?
+    var publication: SelectiveRemotePublishedModelReference? = nil
 }
 
 enum SelectiveRemoteTeamCredentialMaterializationError: Error, Equatable {
@@ -42,6 +43,7 @@ enum SelectiveRemoteTeamCredentialMaterializer {
     static func materialize(
         _ snapshot: SelectiveRemoteTeamVaultMaterializedSnapshot
     ) throws -> [SelectiveRemoteTeamCredential] {
+        if let publication = snapshot.publication { return try publication.credentials() }
         guard snapshot.teamID.isSelectiveRemoteCloudUUID,
               snapshot.vaultID.isSelectiveRemoteCloudUUID,
               snapshot.revision > 0,
@@ -458,6 +460,10 @@ final class SelectiveRemoteTeamCredentialStore: ObservableObject {
         rebuild(now: now)
     }
 
+    func removeVault(teamID: UUID, vaultID: UUID) {
+        snapshots.removeValue(forKey: scopeKey(teamID: teamID, vaultID: vaultID)); rebuild(now: Date())
+    }
+
     func clear() {
         snapshots = [:]
         credentials = []
@@ -539,6 +545,7 @@ private struct SelectiveRemoteTeamCredentialVaultGroup: Identifiable {
 @MainActor
 struct SelectiveRemoteTeamCredentialsView: View {
     @ObservedObject var store: SelectiveRemoteTeamCredentialStore
+    @ObservedObject private var publicationPresentation = SelectiveRemotePublicationPresentation.shared
 
     @State private var query = ""
     @State private var selectedCredentialID: UUID?
@@ -803,20 +810,19 @@ struct SelectiveRemoteTeamCredentialsView: View {
                     )
                 VStack(alignment: .leading, spacing: 4) {
                     Text(credential.title).font(.title2.bold())
+                    if let reference = credential.publication { Text(reference.stale ? CloudAccessLocalization.text("Офлайн · актуальность не подтверждена", "Offline · current access unconfirmed") : CloudAccessLocalization.text("Метаданные проверены на этом Mac", "Metadata verified on this Mac")).font(.caption).foregroundStyle(.secondary) }
                     Text("\(credential.teamName) / \(credential.vaultName)")
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button {
-                    copy(credential.secret, message: UpdateLocalization.text(
-                        ru: "Пароль скопирован",
-                        en: "Password copied"
-                    ))
+                    copySecret(credential)
                 } label: {
                     Label(UpdateLocalization.text(ru: "Копировать пароль", en: "Copy Password"), systemImage: "doc.on.doc")
                 }
                 .buttonStyle(.borderedProminent)
-                if credential.sourceHostID == nil,
+                .disabled(credential.publication.map { !publicationPresentation.canReveal($0) } ?? false)
+                if credential.publication == nil, credential.sourceHostID == nil,
                    SelectiveRemoteTeamCredentialDocumentMutation.isWritable(role: credential.role) {
                     Button {
                         organizationEditorCredential = credential
@@ -887,7 +893,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
             GroupBox(UpdateLocalization.text(ru: "Пароль", en: "Password")) {
                 HStack {
                     if revealedCredentialIDs.contains(credential.id) {
-                        Text(credential.secret)
+                        Text(displayedSecret(credential) ?? "—")
                             .font(.body.monospaced())
                             .textSelection(.enabled)
                             .privacySensitive()
@@ -906,6 +912,7 @@ struct SelectiveRemoteTeamCredentialsView: View {
                             systemImage: revealedCredentialIDs.contains(credential.id) ? "eye.slash" : "eye"
                         )
                     }
+                    .disabled(credential.publication.map { !publicationPresentation.canReveal($0) } ?? false)
                 }
                 .padding(8)
             }
@@ -933,8 +940,9 @@ struct SelectiveRemoteTeamCredentialsView: View {
     @ViewBuilder
     private func credentialActions(_ credential: SelectiveRemoteTeamCredential) -> some View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
-            AccessResourceEntry.showLegacy(kind: .credential)
+            AccessResourceEntry.showPublished(credential.publication, title: credential.title, kind: .credential)
         }
+        .disabled(credential.publication.map { !publicationPresentation.valid($0) } ?? false)
         Button(UpdateLocalization.text(ru: "Копировать логин", en: "Copy Username"), systemImage: "person.crop.circle") {
             copy(credential.username, message: UpdateLocalization.text(
                 ru: "Имя пользователя скопировано",
@@ -942,11 +950,9 @@ struct SelectiveRemoteTeamCredentialsView: View {
             ))
         }
         Button(UpdateLocalization.text(ru: "Копировать пароль", en: "Copy Password"), systemImage: "doc.on.doc") {
-            copy(credential.secret, message: UpdateLocalization.text(
-                ru: "Пароль скопирован",
-                en: "Password copied"
-            ))
+            copySecret(credential)
         }
+        .disabled(credential.publication.map { !publicationPresentation.canReveal($0) } ?? false)
         Divider()
         Button(
             revealedCredentialIDs.contains(credential.id)
@@ -956,7 +962,8 @@ struct SelectiveRemoteTeamCredentialsView: View {
         ) {
             toggleReveal(credential.id)
         }
-        if credential.sourceHostID == nil,
+        .disabled(credential.publication.map { !publicationPresentation.canReveal($0) } ?? false)
+        if credential.publication == nil, credential.sourceHostID == nil,
            SelectiveRemoteTeamCredentialDocumentMutation.isWritable(role: credential.role) {
             Divider()
             Button(
@@ -1120,6 +1127,19 @@ struct SelectiveRemoteTeamCredentialsView: View {
     }
 
     private func toggleReveal(_ id: UUID) {
+        if !revealedCredentialIDs.contains(id), let credential = store.credentials.first(where: { $0.id == id }), let reference = credential.publication {
+            revealTasks[id]?.cancel()
+            revealTasks[id] = Task { @MainActor in
+                do {
+                    _ = try await SelectiveRemotePublicationPresentation.shared.reveal(reference)
+                    guard !Task.isCancelled, SelectiveRemotePublicationPresentation.shared.valid(reference) else { return }
+                    revealedCredentialIDs.insert(id)
+                    try await Task.sleep(nanoseconds: CredentialDisclosurePolicy.visibleNanoseconds)
+                    conceal(id)
+                } catch { conceal(id); feedback = error.localizedDescription }
+            }
+            return
+        }
         if revealedCredentialIDs.contains(id) {
             conceal(id)
         } else {
@@ -1143,17 +1163,36 @@ struct SelectiveRemoteTeamCredentialsView: View {
         revealTasks[id]?.cancel()
         revealTasks[id] = nil
         revealedCredentialIDs.remove(id)
+        if let reference = store.credentials.first(where: { $0.id == id })?.publication { SelectiveRemotePublicationPresentation.shared.conceal(reference) }
     }
 
     private func concealAll() {
         for task in revealTasks.values { task.cancel() }
         revealTasks.removeAll()
+        for credential in store.credentials { if let reference = credential.publication { SelectiveRemotePublicationPresentation.shared.conceal(reference) } }
         revealedCredentialIDs.removeAll()
     }
 
     private func maskedSecret(_ credential: SelectiveRemoteTeamCredential) -> String {
-        guard !revealedCredentialIDs.contains(credential.id) else { return credential.secret }
-        return String(repeating: "•", count: min(max(credential.secret.count, 8), 24))
+        guard !revealedCredentialIDs.contains(credential.id) else { return displayedSecret(credential) ?? "—" }
+        return String(repeating: "•", count: min(max((credential.secret?.count ?? 12), 8), 24))
+    }
+
+    private func displayedSecret(_ credential: SelectiveRemoteTeamCredential) -> String? {
+        if let reference = credential.publication { return SelectiveRemotePublicationPresentation.shared.secret(reference) }
+        return credential.secret
+    }
+    private func copySecret(_ credential: SelectiveRemoteTeamCredential) {
+        if let reference = credential.publication {
+            Task { @MainActor in
+                do {
+                    let secret = try await SelectiveRemotePublicationPresentation.shared.reveal(reference)
+                    guard SelectiveRemotePublicationPresentation.shared.valid(reference) else { return }
+                    copy(secret, message: UpdateLocalization.text(ru: "Пароль скопирован", en: "Password copied"))
+                    SelectiveRemotePublicationPresentation.shared.conceal(reference)
+                } catch { feedback = error.localizedDescription }
+            }
+        } else if let secret = credential.secret { copy(secret, message: UpdateLocalization.text(ru: "Пароль скопирован", en: "Password copied")) }
     }
 
     private func copy(_ value: String, message: String) {

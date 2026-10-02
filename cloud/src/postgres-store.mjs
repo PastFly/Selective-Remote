@@ -1,4 +1,5 @@
 import { VaultMigrationStore } from './vault-migration-store.mjs';
+import { VaultPublicationStore } from './vault-publication-store.mjs';
 import pg from "pg";
 import { AccessSurfaceStore } from "./access-surface-store.mjs";
 import { createHash } from "node:crypto";
@@ -105,6 +106,7 @@ export class PostgresStore {
   }
 
   migrationFoundation(stagingConfig = {}) { return new VaultMigrationStore(this.pool, stagingConfig); }
+  publication(stagingConfig = {}) { return new VaultPublicationStore(this.pool, stagingConfig); }
 
   async close() { await this.pool.end(); }
   async ready() { await this.pool.query("SELECT 1"); }
@@ -172,7 +174,7 @@ export class PostgresStore {
           resourceID, policyClass, parentFolderID, idempotencyKey,
           _retryAttempt: _retryAttempt + 1 });
       }
-      if (error?.code === "23505") throw new Error("resource_id_exists");
+      if (error?.code === "23505" || ["resource_id_collision","tombstoned_resource_identity"].includes(error?.message)) throw new Error("resource_id_exists");
       throw error;
     } finally { client.release(); }
   }
@@ -484,8 +486,9 @@ export class PostgresStore {
     } finally { client.release(); }
   }
 
-  async deleteAccount(userID) {
+  async deleteAccount(userID, _retryAttempt = 0) {
     const client = await this.pool.connect();
+    let retry = false;
     try {
       await client.query("BEGIN");
       const user = await client.query(
@@ -543,9 +546,17 @@ export class PostgresStore {
       return { deleted: true };
     } catch (error) {
       try { await client.query("ROLLBACK"); } catch {}
-      throw error;
+      if (resourceRaceSQLStates.has(error?.code) && _retryAttempt < maxResourceRaceRetries) {
+        // Deletion, membership revocation, rotation tasks and audit all rolled back.
+        // Retry only the same authenticated identity; never broaden this operation.
+        retry = true;
+      } else throw error;
     } finally {
       client.release();
+    }
+    if (retry) {
+      await new Promise(resolve => setTimeout(resolve, 20 * (_retryAttempt + 1)));
+      return this.deleteAccount(userID, _retryAttempt + 1);
     }
   }
 

@@ -5,12 +5,21 @@ protocol SelectiveRemoteCloudTokenStore: Sendable {
     func token(for endpoint: URL) throws -> String?
     func saveToken(_ token: String, for endpoint: URL) throws
     func removeToken(for endpoint: URL) throws
+    func publicationAccountBinding(key: String) throws -> Data?
+    func savePublicationAccountBinding(_ data: Data, key: String) throws
+}
+
+extension SelectiveRemoteCloudTokenStore {
+    func publicationAccountBinding(key: String) throws -> Data? { nil }
+    func savePublicationAccountBinding(_ data: Data, key: String) throws {}
 }
 
 struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
     static let legacyService = "local.selectiveremote.cloud.session.v1"
     static let service = legacyService
     private let envelopeStore = SelectiveRemoteCloudSecureEnvelopeStore()
+    func publicationAccountBinding(key: String) throws -> Data? { try UnifiedCredentialVault.shared.readProtectedData(namespace: "publication-session-account.v1", key: key) }
+    func savePublicationAccountBinding(_ data: Data, key: String) throws { try UnifiedCredentialVault.shared.saveProtectedData(data, namespace: "publication-session-account.v1", key: key) }
 
     func token(for endpoint: URL) throws -> String? {
         if let token = try envelopeStore.envelope(for: endpoint)?.sessionToken {
@@ -71,6 +80,9 @@ struct SelectiveRemoteCloudKeychainTokenStore: SelectiveRemoteCloudTokenStore {
 final class SelectiveRemoteCloudMemoryTokenStore: SelectiveRemoteCloudTokenStore, @unchecked Sendable {
     private let lock = NSLock()
     private var tokens: [String: String] = [:]
+    private var accountBindings: [String: Data] = [:]
+    func publicationAccountBinding(key: String) -> Data? { lock.withLock { accountBindings[key] } }
+    func savePublicationAccountBinding(_ data: Data, key: String) { lock.withLock { accountBindings[key] = data } }
 
     func token(for endpoint: URL) -> String? {
         lock.withLock { tokens[endpoint.absoluteString] }

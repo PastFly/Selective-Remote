@@ -6,9 +6,9 @@ import { loadMigrations, applyMigrations } from "../src/migrations.mjs";
 export const migrationDirectory = fileURLToPath(
   new URL("../migrations/", import.meta.url),
 );
-test("migration publication schema exists and latest version is 19", async () => {
+test("migration publication schema exists and latest version is 20", async () => {
   const m = await loadMigrations(migrationDirectory);
-  assert.equal(m.at(-1).version, 19);
+  assert.equal(m.at(-1).version, 20);
 });
 test(
   "PG16 applies publication foundation without activating existing Vaults",
@@ -618,12 +618,12 @@ test("RR snapshots cannot reuse cross-generation identities in either order", {s
         const registry = c => c.query("INSERT INTO vault_resource_registry(id,team_id,vault_id,policy_class,policy_kind) VALUES($1,$2,$3,'general','HOST')",[id,g.input.teamID,g.input.vaultID]);
         if (!registryFirst) {
           await store.start({...f.input,resources});
-          await assert.rejects(registry(old), /resource_id_collision|duplicate key|serialization/);
+          await assert.rejects(registry(old), e=>e.code==='40001'||/resource_id_collision|duplicate key/.test(e.message));
         } else {
           await registry(pool);
           // The competing migration INSERT uses the old snapshot too.
           await old.query("INSERT INTO vault_migration_attempts(id,team_id,vault_id,actor_user_id,actor_device_id,source_revision,source_hash,snapshot_hash,snapshot,policy,resources,scope) VALUES($1,$2,$3,$4,$5,1,'source',$6,'{}','[]',$7,'{}')",[f.input.attemptID,f.input.teamID,f.input.vaultID,f.accountID,f.deviceID,"a".repeat(64),JSON.stringify(resources)]);
-          await assert.rejects(old.query("INSERT INTO vault_migration_resources(id,attempt_id,team_id,vault_id,kind,source_ordinal) VALUES($1,$2,$3,$4,'HOST',0)",[id,f.input.attemptID,f.input.teamID,f.input.vaultID]), /resource_id_collision|duplicate key|serialization/);
+          await assert.rejects(old.query("INSERT INTO vault_migration_resources(id,attempt_id,team_id,vault_id,kind,source_ordinal) VALUES($1,$2,$3,$4,'HOST',0)",[id,f.input.attemptID,f.input.teamID,f.input.vaultID]), e=>e.code==='40001'||/resource_id_collision|duplicate key/.test(e.message));
         }
       } finally {await old.query("ROLLBACK");old.release();}
       const counts = (await pool.query("SELECT (SELECT count(*) FROM vault_resource_registry WHERE id=$1)::int+(SELECT count(*) FROM vault_migration_resources WHERE id=$1)::int AS total",[id])).rows[0];

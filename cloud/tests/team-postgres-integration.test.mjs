@@ -209,7 +209,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
         `INSERT INTO vault_resource_registry
          (id, team_id, vault_id, policy_class) VALUES ($1, $2, $3, 'folder')`,
         [folderResourceID, team, vault],
-      ), /duplicate key value/u);
+      ), /duplicate key value|resource_id_collision/u);
     }
     await pool.query("DELETE FROM shared_vaults WHERE id IN ($1, $2)",
       [siblingVault.rows[0].id, otherVault.rows[0].id]);
@@ -281,7 +281,7 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
         `INSERT INTO vault_resource_registry (id, team_id, vault_id, policy_class)
          VALUES ($1, $2, $3, 'general')`,
         [tombstoneRaceID, created.team.id, shared.vault.id],
-      ), /duplicate key value/u);
+      ), /tombstoned_resource_identity/u);
       await tombstoneClient.query("COMMIT");
       await recreate;
     } finally {

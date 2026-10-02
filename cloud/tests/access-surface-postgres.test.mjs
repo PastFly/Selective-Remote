@@ -760,7 +760,9 @@ test(
           const empty = (await commit(create, await preview(create))).group;
           await fixtureQuery(
             `INSERT INTO vault_access_grants(team_id,vault_id,principal_kind,principal_id,target_kind,target_id,permission_mask,created_by_user_id)
-          SELECT $1,$2,'GROUP',$3,'RESOURCE',id,5,$4 FROM vault_resource_registry WHERE vault_id=$2 ORDER BY id LIMIT 51`,
+          SELECT $1,$2,'GROUP',$3,'RESOURCE',id,5,$4 FROM vault_resource_registry
+          WHERE vault_id=$2 AND deleted_at IS NULL AND policy_kind IS NOT NULL AND policy_kind <> 'FOLDER'
+          ORDER BY id LIMIT 51`,
             [team, vault, empty.id, user],
           );
           const request = {

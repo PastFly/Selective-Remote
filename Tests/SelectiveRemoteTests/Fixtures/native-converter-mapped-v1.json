@@ -1,0 +1,440 @@
+{
+  "provenance": "actual prepareLegacyMigration + WebCrypto unwrap/decrypt; synthetic, no application runtime",
+  "scope": {
+    "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+    "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d",
+    "attemptID": "a60c56ce-af34-4470-959f-b9497da0354b",
+    "sourceRevision": 1,
+    "sourceHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "snapshotHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "policyVersion": 1
+  },
+  "document": {
+    "schemaVersion": 1,
+    "records": [
+      {
+        "id": "legacy-id",
+        "type": "host",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 2
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Opaque host",
+          "address": "ssh://host.example",
+          "folder": " A "
+        }
+      },
+      {
+        "id": "legacy-id",
+        "type": "host",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 3
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Duplicate ordinal host",
+          "address": "telnet://host2.example",
+          "folder": "é"
+        }
+      },
+      {
+        "type": "snippet",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 4
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Missing snippet",
+          "body": "echo exact",
+          "folder": "é"
+        }
+      },
+      {
+        "type": "snippet",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 5
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Second missing snippet",
+          "body": "echo long",
+          "folder": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        }
+      },
+      {
+        "id": "opaque-credential",
+        "type": "credential",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 6
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Mapped secret",
+          "username": "alice",
+          "kind": "ssh",
+          "secret": "CONVERTER-SYNTHETIC-SECRET",
+          "sourceID": "legacy-id"
+        }
+      },
+      {
+        "id": "opaque-forwarding",
+        "type": "forwarding",
+        "version": {
+          "01234567-89ab-4cde-8fab-0123456789ab": 7
+        },
+        "modifiedAt": "2026-10-01T01:00:00.125Z",
+        "data": {
+          "title": "Mapped forwarding",
+          "destination": "localhost:5432",
+          "kind": "local"
+        }
+      }
+    ],
+    "tombstones": [],
+    "vectorClock": {}
+  },
+  "resources": [
+    {
+      "id": "d45e9d6e-acba-454f-b015-e5bc0cb5e74e",
+      "kind": "HOST",
+      "parentFolderID": "8516aa0d-7058-420b-a37c-95f315802221",
+      "sourceOrdinal": 0
+    },
+    {
+      "id": "346705f6-0279-48c6-82f4-e2e9dae95378",
+      "kind": "HOST",
+      "parentFolderID": "9eb866ed-7204-4862-b5a8-8d09dda59d84",
+      "sourceOrdinal": 1
+    },
+    {
+      "id": "de010136-8545-4a64-9b32-b2b3f86a6740",
+      "kind": "SNIPPET",
+      "parentFolderID": "8fedfce0-70f6-46b3-b1a3-755b5274b67f",
+      "sourceOrdinal": 2
+    },
+    {
+      "id": "c77ee3b1-52c1-48b5-958b-acd0583ece87",
+      "kind": "SNIPPET",
+      "parentFolderID": "f2b0c934-7141-4707-814e-b7ab70777ab1",
+      "sourceOrdinal": 3
+    },
+    {
+      "id": "62dfe792-653e-440a-8ba9-012d5aa844ca",
+      "kind": "CREDENTIAL",
+      "parentFolderID": null,
+      "sourceOrdinal": 4
+    },
+    {
+      "id": "6deaf32a-22b9-45f5-98f7-f6745edddaf2",
+      "kind": "FORWARDING",
+      "parentFolderID": null,
+      "sourceOrdinal": 5
+    },
+    {
+      "id": "8516aa0d-7058-420b-a37c-95f315802221",
+      "kind": "FOLDER",
+      "parentFolderID": null,
+      "sourceOrdinal": 6
+    },
+    {
+      "id": "9eb866ed-7204-4862-b5a8-8d09dda59d84",
+      "kind": "FOLDER",
+      "parentFolderID": null,
+      "sourceOrdinal": 7
+    },
+    {
+      "id": "8fedfce0-70f6-46b3-b1a3-755b5274b67f",
+      "kind": "FOLDER",
+      "parentFolderID": null,
+      "sourceOrdinal": 8
+    },
+    {
+      "id": "f2b0c934-7141-4707-814e-b7ab70777ab1",
+      "kind": "FOLDER",
+      "parentFolderID": null,
+      "sourceOrdinal": 9
+    }
+  ],
+  "parts": [
+    {
+      "resourceID": "d45e9d6e-acba-454f-b015-e5bc0cb5e74e",
+      "kind": "HOST",
+      "part": "GENERAL",
+      "parentFolderID": "8516aa0d-7058-420b-a37c-95f315802221",
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "HOST",
+          "part": "GENERAL",
+          "resourceID": "d45e9d6e-acba-454f-b015-e5bc0cb5e74e",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "address": "ssh://host.example",
+            "folder": " A ",
+            "title": "Opaque host"
+          },
+          "id": "legacy-id",
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "host",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 2
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "346705f6-0279-48c6-82f4-e2e9dae95378",
+      "kind": "HOST",
+      "part": "GENERAL",
+      "parentFolderID": "9eb866ed-7204-4862-b5a8-8d09dda59d84",
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "HOST",
+          "part": "GENERAL",
+          "resourceID": "346705f6-0279-48c6-82f4-e2e9dae95378",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "address": "telnet://host2.example",
+            "folder": "é",
+            "title": "Duplicate ordinal host"
+          },
+          "id": "legacy-id",
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "host",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 3
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "de010136-8545-4a64-9b32-b2b3f86a6740",
+      "kind": "SNIPPET",
+      "part": "GENERAL",
+      "parentFolderID": "8fedfce0-70f6-46b3-b1a3-755b5274b67f",
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "SNIPPET",
+          "part": "GENERAL",
+          "resourceID": "de010136-8545-4a64-9b32-b2b3f86a6740",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "body": "echo exact",
+            "folder": "é",
+            "title": "Missing snippet"
+          },
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "snippet",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 4
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "c77ee3b1-52c1-48b5-958b-acd0583ece87",
+      "kind": "SNIPPET",
+      "part": "GENERAL",
+      "parentFolderID": "f2b0c934-7141-4707-814e-b7ab70777ab1",
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "SNIPPET",
+          "part": "GENERAL",
+          "resourceID": "c77ee3b1-52c1-48b5-958b-acd0583ece87",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "body": "echo long",
+            "folder": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "title": "Second missing snippet"
+          },
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "snippet",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 5
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "62dfe792-653e-440a-8ba9-012d5aa844ca",
+      "kind": "CREDENTIAL",
+      "part": "METADATA",
+      "parentFolderID": null,
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "CREDENTIAL",
+          "part": "METADATA",
+          "resourceID": "62dfe792-653e-440a-8ba9-012d5aa844ca",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "metadata": {
+          "kind": "ssh",
+          "title": "Mapped secret",
+          "username": "alice"
+        }
+      }
+    },
+    {
+      "resourceID": "62dfe792-653e-440a-8ba9-012d5aa844ca",
+      "kind": "CREDENTIAL",
+      "part": "SECRET",
+      "parentFolderID": null,
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "CREDENTIAL",
+          "part": "SECRET",
+          "resourceID": "62dfe792-653e-440a-8ba9-012d5aa844ca",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "kind": "ssh",
+            "secret": "CONVERTER-SYNTHETIC-SECRET",
+            "sourceID": "legacy-id",
+            "title": "Mapped secret",
+            "username": "alice"
+          },
+          "id": "opaque-credential",
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "credential",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 6
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "6deaf32a-22b9-45f5-98f7-f6745edddaf2",
+      "kind": "FORWARDING",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "payload": {
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "FORWARDING",
+          "part": "GENERAL",
+          "resourceID": "6deaf32a-22b9-45f5-98f7-f6745edddaf2",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        },
+        "record": {
+          "data": {
+            "destination": "localhost:5432",
+            "kind": "local",
+            "title": "Mapped forwarding"
+          },
+          "id": "opaque-forwarding",
+          "modifiedAt": "2026-10-01T01:00:00.125Z",
+          "type": "forwarding",
+          "version": {
+            "01234567-89ab-4cde-8fab-0123456789ab": 7
+          }
+        }
+      }
+    },
+    {
+      "resourceID": "8516aa0d-7058-420b-a37c-95f315802221",
+      "kind": "FOLDER",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "payload": {
+        "folder": {
+          "component": " A ",
+          "path": " A ",
+          "type": "host"
+        },
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "FOLDER",
+          "part": "GENERAL",
+          "resourceID": "8516aa0d-7058-420b-a37c-95f315802221",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        }
+      }
+    },
+    {
+      "resourceID": "9eb866ed-7204-4862-b5a8-8d09dda59d84",
+      "kind": "FOLDER",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "payload": {
+        "folder": {
+          "component": "é",
+          "path": "é",
+          "type": "host"
+        },
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "FOLDER",
+          "part": "GENERAL",
+          "resourceID": "9eb866ed-7204-4862-b5a8-8d09dda59d84",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        }
+      }
+    },
+    {
+      "resourceID": "8fedfce0-70f6-46b3-b1a3-755b5274b67f",
+      "kind": "FOLDER",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "payload": {
+        "folder": {
+          "component": "é",
+          "path": "é",
+          "type": "snippet"
+        },
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "FOLDER",
+          "part": "GENERAL",
+          "resourceID": "8fedfce0-70f6-46b3-b1a3-755b5274b67f",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        }
+      }
+    },
+    {
+      "resourceID": "f2b0c934-7141-4707-814e-b7ab70777ab1",
+      "kind": "FOLDER",
+      "part": "GENERAL",
+      "parentFolderID": null,
+      "payload": {
+        "folder": {
+          "component": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "path": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "type": "snippet"
+        },
+        "link": {
+          "generationID": "a60c56ce-af34-4470-959f-b9497da0354b",
+          "kind": "FOLDER",
+          "part": "GENERAL",
+          "resourceID": "f2b0c934-7141-4707-814e-b7ab70777ab1",
+          "teamID": "7958e4d2-ad88-4efa-a419-c4674684eddb",
+          "vaultID": "5d021ba9-067d-4123-9b96-030a41d9833d"
+        }
+      }
+    }
+  ]
+}

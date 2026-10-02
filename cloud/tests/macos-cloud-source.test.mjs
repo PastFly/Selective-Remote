@@ -327,7 +327,7 @@ test("macOS accepts encrypted browser organization without weakening Host struct
   const hosts = await readFile(new URL("CloudTeamHosts.swift", sourceRoot), "utf8");
   assert.match(hosts, /organizationKeys: Set<String> = \["folder", "tags", "description"\]/u);
   assert.match(hosts, /let structuralKeys = keys\.subtracting\(organizationKeys\)/u);
-  assert.match(hosts, /input = try applyingOrganization\(data, to: input\)/u);
+  assert.match(hosts, /input = try applyingOrganization\(data, to: input, published: snapshot\.publication != nil\)/u);
 });
 
 test("macOS projects Team Hosts separately and connects without Personal persistence", async () => {
@@ -390,7 +390,7 @@ test("macOS Team Host controls expose writes only through the encrypted role-awa
     readFile(new URL("CloudTeamHostMutation.swift", sourceRoot), "utf8"),
   ]);
   assert.match(hosts, /writableVaults[\s\S]*isWritable\(role:/u);
-  assert.match(hosts, /if SelectiveRemoteTeamHostDocumentMutation\.isWritable\(role: host\.role\)/u);
+  assert.match(hosts, /if host\.publication == nil && SelectiveRemoteTeamHostDocumentMutation\.isWritable\(role: host\.role\)/u);
   assert.match(hosts, /\.create\(profile, credentials\)/u);
   assert.match(hosts, /\.update\(recordID:/u);
   assert.match(hosts, /\.delete\(recordID:/u);

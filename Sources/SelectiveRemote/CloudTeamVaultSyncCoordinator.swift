@@ -1,6 +1,7 @@
 import Foundation
 
 enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
+    case publicationRequired
     case rotationRequired
     case missingDeviceWrapper
     case noLocalSnapshot
@@ -16,6 +17,8 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .publicationRequired:
+            CloudAccessLocalization.text("Для изменения опубликованного Vault требуется новая публикация. Доступен только просмотр.", "Changing a published Vault requires a new publication. Read-only access is available.")
         case .rotationRequired:
             UpdateLocalization.text(
                 ru: "Для Team Vault требуется ротация ключа. Завершите её в Cloud и повторите операцию.",
@@ -76,6 +79,7 @@ enum SelectiveRemoteTeamVaultSyncError: LocalizedError, Equatable {
 }
 
 protocol SelectiveRemoteTeamVaultRemote: Sendable {
+    func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState
     func teamKeyDevices(
         endpoint: URL,
         teamID: UUID,
@@ -106,6 +110,10 @@ protocol SelectiveRemoteTeamVaultRemote: Sendable {
     ) async throws -> SelectiveRemoteCloudTeamVaultWriteResult
 }
 
+// Explicit legacy defaults keep existing synthetic V1 remotes compatible. Production implements real access-context.
+extension SelectiveRemoteTeamVaultRemote {
+    func vaultFormat(endpoint: URL, teamID: UUID, vaultID: UUID) async throws -> CloudAccessFormatState { .v1Active }
+}
 extension SelectiveRemoteCloudAPIClient: SelectiveRemoteTeamVaultRemote {}
 
 struct SelectiveRemoteTeamVaultDecryptedSnapshot: Equatable, Sendable {
@@ -153,11 +161,17 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         self.snapshots = snapshots
     }
 
+    private func requireLegacy(teamID: UUID, vaultID: UUID) async throws {
+        guard try await remote.vaultFormat(endpoint: endpoint, teamID: teamID, vaultID: vaultID) == .v1Active else { throw SelectiveRemoteTeamVaultSyncError.publicationRequired }
+        try Task.checkCancellation()
+    }
+
     func provisionMissingWrappers(
         teamID: UUID,
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
     ) async throws -> Int {
+        try await requireLegacy(teamID: teamID, vaultID: vaultID)
         let remoteEnvelope = try await remote.sharedVault(
             endpoint: endpoint,
             teamID: teamID,
@@ -332,6 +346,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
     ) async throws -> SelectiveRemoteTeamVaultRefreshOutcome {
+        try await requireLegacy(teamID: teamID, vaultID: vaultID)
         let remoteEnvelope = try await remote.sharedVault(
             endpoint: endpoint,
             teamID: teamID,
@@ -416,7 +431,8 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         teamID: UUID,
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
-    ) throws -> SelectiveRemoteTeamVaultDecryptedSnapshot {
+    ) async throws -> SelectiveRemoteTeamVaultDecryptedSnapshot {
+        try await requireLegacy(teamID: teamID, vaultID: vaultID)
         guard let current = try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) else {
             throw SelectiveRemoteTeamVaultSyncError.noLocalSnapshot
         }
@@ -461,6 +477,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
     ) async throws -> SelectiveRemoteTeamVaultPushOutcome {
+        try await requireLegacy(teamID: teamID, vaultID: vaultID)
         guard let local = try snapshots.load(endpoint: endpoint, teamID: teamID, vaultID: vaultID) else {
             throw SelectiveRemoteTeamVaultSyncError.noLocalSnapshot
         }
@@ -527,6 +544,7 @@ actor SelectiveRemoteTeamVaultSyncCoordinator {
         vaultID: UUID,
         identity: SelectiveRemoteTeamDeviceIdentity
     ) async throws -> SelectiveRemoteTeamVaultPushOutcome {
+        try await requireLegacy(teamID: teamID, vaultID: vaultID)
         guard let current = try snapshots.load(
             endpoint: endpoint,
             teamID: teamID,

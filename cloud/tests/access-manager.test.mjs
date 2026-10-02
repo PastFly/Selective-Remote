@@ -307,3 +307,12 @@ test("READY and ACTIVE remain immutable even if capability flags are inconsisten
   }
   assert.equal(previews, 0);
 });
+test("verified published contextual reference queries exact resource and keeps publication changes blocked", async () => {
+  const resourceID="cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+  let requested=null;
+  const f=fixture({getContext:async()=>({formatState:"V2_ACTIVE",policyMutationAvailable:false,groupMutationAvailable:false,blockers:["crypto_publication_required"]}),whoHas:async(scope,id)=>{requested={scope,id};return {rows:[],nextCursor:null};}});
+  const manager=createAccessManager({...f,context});
+  await manager.openResource({teamID,vaultID,resourceID,kind:"CREDENTIAL",role:"owner"},"share");
+  assert.equal(requested.id,resourceID);assert.equal(requested.scope.teamID,teamID);assert.equal(requested.scope.vaultID,vaultID);
+  manager.setDraft({type:"GROUP_CREATE",name:"Frozen"});await assert.rejects(manager.preview(),/crypto_publication_required/);manager.destroy();
+});

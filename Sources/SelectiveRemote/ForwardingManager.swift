@@ -374,6 +374,7 @@ private struct ForwardingConnectionRequest: Identifiable {
 
 struct ForwardingManagerView: View {
     @ObservedObject var model: AppModel
+    @ObservedObject private var publications = SelectiveRemotePublicationPresentation.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onOpenTerminal: (TerminalTabConnection) -> Void
     let onOpenProfile: (UUID) -> Void
@@ -501,6 +502,7 @@ struct ForwardingManagerView: View {
     ) -> some View {
         VStack(alignment: .leading, spacing: compact ? 12 : 16) {
             header
+            publishedForwardingSection
             summary(snapshot, compact: compact)
             if compact {
                 toolbar(items: items)
@@ -513,6 +515,35 @@ struct ForwardingManagerView: View {
         }
         .padding(compact ? 16 : 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    @ViewBuilder
+    private var publishedForwardingSection: some View {
+        if !publications.forwardings.isEmpty {
+            GroupBox(CloudAccessLocalization.text("Опубликованные командные туннели", "Published Team tunnels")) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(publications.forwardings) { item in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(item.title).font(.headline)
+                                    if let data = try? item.record.data.publicationObject(), let destination = try? data["destination"]?.publicationString() { Text(destination).font(.caption.monospaced()) }
+                                    Text(item.reference.stale ? CloudAccessLocalization.text("Офлайн · актуальность не подтверждена", "Offline · current access unconfirmed") : CloudAccessLocalization.text("Проверено на этом Mac · только просмотр", "Verified on this Mac · read-only")).font(.caption).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…")) {
+                                    AccessResourceEntry.showPublished(item.reference, title: item.title, kind: .forwarding)
+                                }.disabled(!publications.valid(item.reference))
+                            }
+                            .contextMenu {
+                                Button(CloudAccessLocalization.text("Кто имеет доступ…", "Who has access…")) { AccessResourceEntry.showPublished(item.reference, title: item.title, kind: .forwarding) }
+                                Text(SelectiveRemotePublicationPresentation.readOnlyMessage)
+                            }
+                        }
+                    }.padding(8)
+                }.frame(maxHeight: 170)
+            }
+        }
     }
 
     private var header: some View {

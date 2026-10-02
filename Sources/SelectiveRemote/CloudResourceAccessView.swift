@@ -10,6 +10,7 @@ struct SelectiveRemoteCloudResourceAccessView: View {
     @State private var recipientGroups = false
     @State private var search = ""
     @State private var confirmation = false
+    @ObservedObject private var publication = SelectiveRemotePublicationPresentation.shared
     @FocusState private var searchFocused: Bool
 
     init(reference: SelectiveRemoteCloudAccessReference, client: SelectiveRemoteCloudAccessClient, session: CloudAccessSession, initialSection: CloudAccessSection = .share, onCommitted: @escaping (CloudAccessCommit) -> Void = { _ in }) {
@@ -51,7 +52,9 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                 .accessibilityLabel(CloudAccessLocalization.text("Раздел доступа", "Access view"))
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    if model.context?.formatState == .preparing {
+                    if model.context?.formatState == .active {
+                        publishedReadOnlyBody
+                    } else if model.context?.formatState == .preparing {
                         switch tab {
                         case 0: shareBody
                         case 1: whoBody
@@ -99,6 +102,23 @@ struct SelectiveRemoteCloudResourceAccessView: View {
             }.disabled(!model.canCommit)
         } message: {
             Text(CloudAccessLocalization.text("Сервер повторно проверит разрешения, состав команды и срок просмотра. Возможность открыть ресурс проверяется отдельно для выбранного устройства.", "The server rechecks permissions, team membership and preview expiry. Whether the resource can be opened is checked separately for the selected device."))
+        }
+    }
+    private var publishedReadOnlyBody: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(SelectiveRemotePublicationPresentation.readOnlyMessage).foregroundStyle(.secondary)
+            if let verified = publication.verificationReference(reference: model.reference) {
+                let scope = verified.scope
+                Text(CloudAccessLocalization.text("Проверено для текущего участника и этого Mac", "Verified for the current member and this Mac")).font(.headline)
+                Text(scope.accountID.canonicalCloudString + " · " + scope.deviceID.canonicalCloudString).font(.caption.monospaced()).textSelection(.enabled)
+                Text(CloudAccessLocalization.text("Публикация", "Publication") + " " + verified.generationID).font(.caption.monospaced()).textSelection(.enabled)
+                ForEach(publication.verifiedParts(reference: model.reference, accountID: scope.accountID, deviceID: scope.deviceID), id: \.rawValue) { part in
+                    Label("\(part.rawValue): " + CloudAccessLocalization.text("Да — проверено и расшифровано", "Yes — verified and decrypted"), systemImage: "checkmark.shield").font(.caption)
+                }
+            }
+            Label(CloudAccessLocalization.text("Доступ других участников: недоступно в этом формате", "Other members' access: unavailable in this format"), systemImage: "person.crop.circle.badge.questionmark").font(.caption)
+            Text(CloudAccessLocalization.text("Изменение доступа требует новой публикации. Отдельная часть SECRET проверяется при раскрытии или использовании учётных данных.", "Changing access requires a new publication. The separate SECRET part is checked when credentials are revealed or used."))
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
     private var shareBody: some View {
@@ -221,6 +241,10 @@ struct SelectiveRemoteCloudResourceAccessView: View {
                         }
                         ForEach(device.blockedReasons, id: \.self) { Text(CloudAccessLocalization.deviceGuidance($0)).font(.caption).foregroundStyle(.secondary) }
                     }
+                }
+                ForEach(publication.verifiedParts(reference: model.reference, accountID: model.subjectUserID, deviceID: model.subjectDeviceID), id: \.rawValue) { part in
+                    Label("\(part.rawValue): " + CloudAccessLocalization.text("Да — проверено и расшифровано на этом устройстве", "Yes — verified and decrypted on this device"), systemImage: "checkmark.shield")
+                        .font(.caption)
                 }
                 Text(CloudAccessLocalization.text("Разрешения участника и доступность на устройстве проверяются отдельно. «Не подтверждено» означает, что возможность открыть ресурс пока не проверена.", "Member permissions and device availability are checked separately. Unverified means the ability to open the resource has not been confirmed."))
                     .font(.caption).foregroundStyle(.secondary)

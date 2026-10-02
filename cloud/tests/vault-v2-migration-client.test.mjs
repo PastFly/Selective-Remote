@@ -26,6 +26,21 @@ const prepare = (f, document, extra = {}) =>
     cryptoValue: webcrypto,
     ...extra,
   });
+test("separated embedded private-key names reject the entire attempt before producing View delivery", async () => {
+  const f = await migrationFixture();
+  for (const type of ["host", "forwarding"]) for (const field of ["private_key", "private-key", "PRIVATE_KEY"]) {
+    for (const data of [{ [field]: "SYNTHETIC-NOT-A-KEY" }, { nested: [{ [field]: "SYNTHETIC-NOT-A-KEY" }] },
+      { profile: JSON.stringify({ nested: { [field]: "SYNTHETIC-NOT-A-KEY" } }) },
+      { configuration: JSON.stringify({ nested: { [field]: "SYNTHETIC-NOT-A-KEY" } }) }]) {
+      let persisted = false, selected = false;
+      await assert.rejects(prepare(f, legacy([record("snippet", { title: "Safe", body: "safe" }), record(type, data)]), {
+        persistCheckpoint: async () => { persisted = true; }, recipientTargets: () => { selected = true; return [f.recipient]; },
+        readerPublication: { publisherAccountID: f.accountID, publisherKeyVersion: 1, custodianDeviceIDs: [f.deviceID], custodianTargets: [{ ...f.recipient, deviceKeyVersion: 1 }], verifyIdentityReservations: async () => {} },
+      }), /embedded_secret/);
+      assert.equal(persisted, false); assert.equal(selected, false);
+    }
+  }
+});
 test("inventory preserves exact logical records, folder ancestry and tombstones without side effects", () => {
   const doc = legacy([
     record("host", { folder: "A/B" }),

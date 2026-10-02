@@ -6,6 +6,8 @@ import {
   unwrapResourceCEK,
 } from "./resource-crypto-v2.js";
 import { wrapForVerifiedDevice } from "./device-trust-v1.js";
+import { inspectLegacyResources, mapLegacyResources, legacyAdministrativeMetadata } from "./legacy-resource-mapping.js";
+import { prepareReaderProjection, publicationHash, validateReaderProjection } from "./vault-publication-v1.js";
 export const canonicalMigrationJSON = (value) => {
   if (value === null || typeof value === "string" || typeof value === "boolean")
     return JSON.stringify(value);
@@ -85,91 +87,11 @@ function embeddedSecret(value) {
   );
 }
 function inventory(document, existingIDs = []) {
-  const blockers = [],
-    seen = new Set(),
-    folders = new Map(),
-    items = [];
-  let missingIDs = 0;
-  if (
-    document?.schemaVersion !== 1 ||
-    !Array.isArray(document.records) ||
-    !Array.isArray(document.tombstones) ||
-    document.records.length > 1000 ||
-    enc.encode(JSON.stringify(document)).length > 24 * 1024 * 1024
-  )
-    throw Error("invalid_legacy_document");
-  for (const [ordinal, r] of document.records.entries()) {
-    if (
-      !r ||
-      !kinds[r.type] ||
-      !r.data ||
-      typeof r.data !== "object" ||
-      Array.isArray(r.data)
-    ) {
-      blockers.push("unsupported_record");
-      continue;
-    }
-    if (r.id && seen.has(String(r.id).toLowerCase()))
-      blockers.push("duplicate_source_id");
-    seen.add(String(r.id).toLowerCase());
-    const valid = idPattern.test(String(r.id).toLowerCase());
-    if (!valid) missingIDs++;
-    else if (existingIDs.includes(r.id.toLowerCase()))
-      blockers.push("resource_id_collision");
-    if (["host", "forwarding"].includes(r.type)) {
-      if (embeddedSecret(r.data))
-        blockers.push("embedded_secret_requires_conversion");
-      for (const key of ["profile", "configuration"]) {
-        if (r.data[key] === undefined) continue;
-        try {
-          if (typeof r.data[key] !== "string") throw Error();
-          const decoded = JSON.parse(r.data[key]);
-          if (!decoded || typeof decoded !== "object" || Array.isArray(decoded))
-            throw Error();
-          if (embeddedSecret(decoded))
-            blockers.push("embedded_secret_requires_conversion");
-        } catch {
-          blockers.push("opaque_profile_requires_conversion");
-        }
-      }
-    }
-    let parentKey = null;
-    if (["host", "snippet"].includes(r.type) && r.data.folder) {
-      if (
-        typeof r.data.folder !== "string" ||
-        r.data.folder.split("/").some((p) => !p.trim()) ||
-        r.data.folder.split("/").length > 32
-      ) {
-        blockers.push("invalid_folder");
-        continue;
-      }
-      const pieces = r.data.folder.split("/");
-      for (let n = 1; n <= pieces.length; n++) {
-        const path = pieces.slice(0, n).join("/"),
-          key = r.type + ":" + path;
-        if (!folders.has(key))
-          folders.set(key, { key, path, type: r.type, parentKey });
-        parentKey = key;
-      }
-    }
-    items.push({
-      key: "record:" + ordinal,
-      ordinal,
-      kind: kinds[r.type],
-      parentKey,
-      record: r,
-      id: valid ? r.id.toLowerCase() : null,
-    });
-  }
-  if (items.length + folders.size > 1000) blockers.push("resource_limit");
-  const parts = items.reduce((n,r) => n + (r.kind === "CREDENTIAL" ? 2 : 1), folders.size);
-  if (migrationCheckpointBudget(document, parts, 0, [...folders.values()]) > MIGRATION_CHECKPOINT_LIMIT) blockers.push("checkpoint_size_limit");
-  return {
-    items,
-    folders: [...folders.values()],
-    blockers: [...new Set(blockers)],
-    missingIDs,
-  };
+  const result = inspectLegacyResources(document, existingIDs);
+  const parts = result.items.reduce((n,r) => n + (r.kind === "CREDENTIAL" ? 2 : 1), result.folders.length);
+  if (migrationCheckpointBudget(document, parts, 0, result.folders) > MIGRATION_CHECKPOINT_LIMIT)
+    result.blockers.push("checkpoint_size_limit");
+  return result;
 }
 export function previewLegacyMigration({ document, existingIDs = [] }) {
   const i = inventory(document, existingIDs);
@@ -252,37 +174,10 @@ export async function openMigrationCheckpoint({
     ),
   );
 }
-function createInventoryState(
-  i,
-  document,
-  documentHash,
-  policyHash,
-  cryptoValue,
-) {
-  const mapping = {};
-  for (const f of i.folders) mapping[f.key] = cryptoValue.randomUUID();
-  for (const r of i.items) mapping[r.key] = r.id || cryptoValue.randomUUID();
-  return {
-    documentHash,
-    policyHash,
-    mapping,
-    document,
-    resources: [
-      ...i.folders.map((f, n) => ({
-        id: mapping[f.key],
-        kind: "FOLDER",
-        parentFolderID: f.parentKey ? mapping[f.parentKey] : null,
-        sourceOrdinal: document.records.length + n,
-      })),
-      ...i.items.map((r) => ({
-        id: mapping[r.key],
-        kind: r.kind,
-        parentFolderID: r.parentKey ? mapping[r.parentKey] : null,
-        sourceOrdinal: r.ordinal,
-      })),
-    ],
-    objects: [],
-  };
+function createInventoryState(i, document, documentHash, policyHash, crypto, scope) {
+  const identities = mapLegacyResources({document, scope, cryptoValue: crypto});
+  return {documentHash, policyHash, mapping: identities.mapping, mappingState: identities,
+    document, resources: identities.resources, objects: []};
 }
 export async function prepareMigrationInventory({
   document,
@@ -306,7 +201,7 @@ export async function prepareMigrationInventory({
         scope,
         cryptoValue,
       })
-    : createInventoryState(i, document, hash, null, cryptoValue);
+    : createInventoryState(i, document, hash, null, cryptoValue, scope);
   if (state.documentHash !== hash) throw Error("migration_source_changed");
   const sealed = await seal(state, checkpointKey, scope, cryptoValue);
   await persistCheckpoint(sealed);
@@ -325,6 +220,7 @@ export async function prepareLegacyMigration({
   checkpointKey,
   checkpoint,
   persistCheckpoint,
+  readerPublication = null,
   faultAt = () => {},
   cryptoValue = globalThis.crypto,
 }) {
@@ -355,8 +251,30 @@ export async function prepareLegacyMigration({
       documentHash,
       policyHash,
       cryptoValue,
+      scope,
     );
   }
+  if (readerPublication) {
+    if (!state.mappingState || typeof readerPublication.verifyIdentityReservations !== "function")
+      throw Error("identity_reservation_verification_required");
+    if (readerPublication.publisherAccountID !== root.accountID
+      || !Number.isSafeInteger(readerPublication.publisherKeyVersion) || readerPublication.publisherKeyVersion < 1
+      || !Array.isArray(readerPublication.custodianDeviceIDs) || !readerPublication.custodianDeviceIDs.length
+      || readerPublication.custodianDeviceIDs.length > 100
+      || !readerPublication.custodianDeviceIDs.includes(deviceID)
+      || new Set(readerPublication.custodianDeviceIDs).size !== readerPublication.custodianDeviceIDs.length
+      || readerPublication.custodianDeviceIDs.some(id => !idPattern.test(id))) throw Error("invalid_publishing_custodian");
+    const options = { publisherAccountID: readerPublication.publisherAccountID,
+      publisherKeyVersion: readerPublication.publisherKeyVersion,
+      custodianDeviceIDs: [...readerPublication.custodianDeviceIDs].sort() };
+    if (state.readerOptions && canonicalMigrationJSON(state.readerOptions) !== canonicalMigrationJSON(options))
+      throw Error("migration_reader_options_changed");
+    if (!state.readerOptions && state.objects.length) throw Error("reader_checkpoint_upgrade_required");
+    state.readerOptions = options;
+    legacyAdministrativeMetadata({ document, mapping: state.mappingState, sourceFingerprint: documentHash });
+    await readerPublication.verifyIdentityReservations(state.resources);
+    await faultAt("identities_reserved");
+  } else if (state.readerOptions) throw Error("migration_reader_options_changed");
   const targetCache = new Map();
   let wrapperCount = 0, partCount = 0;
   for (const r of state.resources) for (const part of (r.kind === "CREDENTIAL" ? ["METADATA","SECRET"] : ["GENERAL"])) {
@@ -366,7 +284,11 @@ export async function prepareLegacyMigration({
     targetCache.set(r.id + ":" + part, targets);
     wrapperCount += targets.length; partCount++;
   }
-  if (migrationCheckpointBudget(document, partCount, wrapperCount, i.folders) > MIGRATION_CHECKPOINT_LIMIT) throw Error("checkpoint_size_limit");
+  if (readerPublication && wrapperCount + readerPublication.custodianDeviceIDs.length > 10000)
+    throw Error("publication_limit");
+  if (migrationCheckpointBudget(document, partCount + (readerPublication ? 1 : 0),
+    wrapperCount + (readerPublication ? readerPublication.custodianDeviceIDs.length : 0), i.folders) > MIGRATION_CHECKPOINT_LIMIT)
+    throw Error("checkpoint_size_limit");
   state.policyHash = policyHash;
   let saved;
   const persist = async () => {
@@ -378,7 +300,7 @@ export async function prepareLegacyMigration({
   for (const resource of state.resources) {
     const r = i.items.find((r) => state.mapping[r.key] === resource.id),
       folder = i.folders.find((f) => state.mapping[f.key] === resource.id);
-    const payloads =
+    let payloads =
       r?.kind === "CREDENTIAL"
         ? {
             METADATA: Object.fromEntries([
@@ -394,6 +316,16 @@ export async function prepareLegacyMigration({
               ? { record: r.record }
               : { folder, resourceID: resource.id },
           };
+    if (readerPublication) {
+      const link = part => ({ teamID: scope.teamID, vaultID: scope.vaultID,
+        generationID: scope.attemptID, resourceID: resource.id, kind: resource.kind, part });
+      payloads = r?.kind === "CREDENTIAL" ? {
+        METADATA: { link: link("METADATA"), metadata: Object.fromEntries(["title", "kind", "username"]
+          .filter(k => typeof r.record.data[k] === "string").map(k => [k, r.record.data[k]])) },
+        SECRET: { link: link("SECRET"), record: r.record },
+      } : { GENERAL: { link: link("GENERAL"), ...(r ? { record: r.record } :
+        { folder: { type: folder.type, path: folder.path, component: folder.component } }) } };
+    }
     for (const [part, payload] of Object.entries(payloads)) {
       if (
         state.objects.some(
@@ -471,6 +403,8 @@ export async function prepareLegacyMigration({
         }
         const object = { resourceID: resource.id, part, envelope, wrappers };
         object.sha256 = await migrationHash(object, cryptoValue);
+        if (readerPublication && enc.encode(canonicalMigrationJSON(object)).length > 1024 * 1024)
+          throw Error("publication_limit");
         state.objects.push(object);
         await persist();
         await faultAt("part_persisted");
@@ -478,6 +412,68 @@ export async function prepareLegacyMigration({
         cek.fill(0);
       }
     }
+  }
+  if (readerPublication) {
+    const targets = new Map();
+    for (const list of [...targetCache.values(), readerPublication.custodianTargets ?? []]) for (const target of list) {
+      requireRecipientAccount(target);
+      const key = target.membershipID + "/" + target.deviceID;
+      if (targets.has(key) && canonicalMigrationJSON(targets.get(key)) !== canonicalMigrationJSON(target))
+        throw Error("migration_recipient_changed");
+      targets.set(key, target);
+    }
+    const recipients = [...targets.values()].map(target => ({ accountID: target.accountID,
+      membershipID: target.membershipID, membershipEpoch: target.membershipEpoch,
+      deviceID: target.deviceID, deviceKeyVersion: target.certificate.payload.keyVersion }));
+    const publisher = [...targets.values()].find(t => t.deviceID === deviceID && t.accountID === root.accountID);
+    if (!publisher || publisher.rootPublicKey !== root.publicKey
+      || publisher.certificate.payload.keyVersion !== readerPublication.publisherKeyVersion)
+      throw Error("invalid_publishing_custodian");
+    if (!state.administrativeSidecar) {
+      const custodians = state.readerOptions.custodianDeviceIDs.map(id => {
+        const target = [...targets.values()].find(t => t.deviceID === id);
+        if (!target) throw Error("publication_custodian_unavailable"); return target;
+      });
+      if (!state.sidecarID) { state.sidecarID = cryptoValue.randomUUID(); await persist(); }
+      const context = { teamID: scope.teamID, vaultID: scope.vaultID, resourceID: state.sidecarID,
+        part: "SECRET", keyVersion: 1, policyVersion: scope.policyVersion, registryVersion: 1,
+        resourceVersion: 1, manifestVersion: 1 };
+      const cek = generateResourceCEK(cryptoValue);
+      try {
+        const metadata = { ...legacyAdministrativeMetadata({ document, mapping: state.mappingState,
+          sourceFingerprint: documentHash }), generationID: scope.attemptID };
+        const envelope = await encryptResourcePart({ plaintext: enc.encode(canonicalMigrationJSON(metadata)),
+          cek, context, cryptoValue });
+        const wrappers = [];
+        for (const target of custodians) {
+          const prepared = await wrapForVerifiedDevice({ cek, context: { teamID: scope.teamID,
+            vaultID: scope.vaultID, resourceID: state.sidecarID, part: "SECRET", keyVersion: 1,
+            membershipID: target.membershipID, membershipEpoch: target.membershipEpoch, deviceID: target.deviceID },
+            rootPublicKey: target.rootPublicKey, certificate: target.certificate, checkpoint: target.checkpoint,
+            endpoint, pinRepository: pinnedTrust, cryptoValue });
+          wrappers.push(prepared.wrapper);
+        }
+        state.administrativeSidecar = { resourceID: state.sidecarID, part: "SECRET", envelope, wrappers };
+        if (enc.encode(canonicalMigrationJSON(state.administrativeSidecar)).length > 1024 * 1024)
+          throw Error("publication_limit");
+        const self = wrappers.find(w => w.context.deviceID === deviceID);
+        const openedKey = await unwrapResourceCEK({ wrapper: self, context: self.context,
+          privateKey: identity.privateKey, cryptoValue });
+        try {
+          const opened = await decryptResourcePart({ envelope, context, cek: openedKey, cryptoValue });
+          if (dec.decode(opened) !== canonicalMigrationJSON(metadata)) throw Error("migration_roundtrip_failed");
+        } finally { openedKey.fill(0); }
+        await persist(); await faultAt("sidecar_persisted");
+      } finally { cek.fill(0); }
+    }
+    if (!state.readerProjection) {
+      state.readerProjection = await prepareReaderProjection({ scope, resources: state.resources,
+        objects: state.objects, recipients, root, publisherAccountID: root.accountID,
+        publisherDeviceID: deviceID, publisherKeyVersion: readerPublication.publisherKeyVersion, cryptoValue });
+      await persist(); await faultAt("projection_persisted");
+    }
+    await validateReaderProjection({ projection: state.readerProjection, scope, resources: state.resources,
+      objects: state.objects, recipients, rootPublicKey: root.publicKey, cryptoValue });
   }
   const payload = {
     version: 2,
@@ -490,8 +486,13 @@ export async function prepareLegacyMigration({
       sha256: o.sha256,
     })),
   };
+  if (readerPublication) payload.reader = {
+    projectionHash: await publicationHash("projection", state.readerProjection, cryptoValue),
+    sidecarHash: await publicationHash("sidecar", state.administrativeSidecar, cryptoValue),
+    custodianDeviceIDs: state.readerOptions.custodianDeviceIDs,
+  };
   await faultAt("manifest");
-  const signature = toBase64(
+  const signature = state.signedReaderManifest?.signature ?? toBase64(
     new Uint8Array(
       await cryptoValue.subtle.sign(
         { name: "ECDSA", hash: "SHA-256" },
@@ -500,10 +501,18 @@ export async function prepareLegacyMigration({
       ),
     ),
   );
+  if (readerPublication) {
+    if (state.signedReaderManifest && canonicalMigrationJSON(state.signedReaderManifest.payload) !== canonicalMigrationJSON(payload))
+      throw Error("migration_replay_conflict");
+    state.signedReaderManifest = { payload, signature };
+    await persist(); await faultAt("signed_projection_persisted");
+  }
   return {
     resources: state.resources,
     objects: state.objects,
     checkpoint: saved,
     manifest: { payload, signature },
+    ...(readerPublication ? { readerProjection: state.readerProjection,
+      administrativeSidecar: state.administrativeSidecar } : {}),
   };
 }

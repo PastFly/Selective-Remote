@@ -6,7 +6,7 @@ import Testing
 struct CloudMacOSFoundationTests {
     @Test("login keeps the bearer token in the session store and authenticates later requests")
     func authenticatedFoundation() async throws {
-        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://authenticated-foundation.example.invalid")
         let deviceID = try #require(UUID(uuidString: "44444444-4444-4444-8444-444444444444"))
         let userID = try #require(UUID(uuidString: "66666666-6666-4666-8666-666666666666"))
         let membershipID = try #require(UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
@@ -350,7 +350,7 @@ struct CloudMacOSFoundationTests {
 
     @Test("a 401 response deletes the stored macOS Cloud session")
     func unauthorizedClearsSession() async throws {
-        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
+        let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://unauthorized-foundation.example.invalid")
         let store = SelectiveRemoteCloudMemoryTokenStore()
         store.saveToken(String(repeating: "t", count: 43), for: endpoint)
         let client = SelectiveRemoteCloudAPIClient(

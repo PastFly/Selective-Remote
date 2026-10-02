@@ -44,6 +44,13 @@ export class CloudService {
     this.backgroundTasks = new Set();
     this.outboxClaimOwner = randomUUID();
   }
+  async getPublication(session,teamID,vaultID,operation,input={}) {
+    if(!session?.user_id||!session?.device_id||!session?.session_id)throw Error("team_not_found");
+    if(!["header","publisher","directory","part"].includes(operation)||!isUUID(teamID)||!isUUID(vaultID))throw Error("invalid_access_request");
+    const publication=this.store.publication(this.config.publication);
+    return publication[operation]({...input,actorUserID:session.user_id,actorDeviceID:session.device_id,
+      sessionID:session.session_id,teamID,vaultID});
+  }
 
   sessionExpiry() {
     return new Date(Date.now() + this.config.sessionTTLDays * 86_400_000);
