@@ -2,11 +2,22 @@
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const kinds={host:'HOST',credential:'CREDENTIAL',snippet:'SNIPPET',forwarding:'FORWARDING'};
 const encoder=new TextEncoder();
-const byteKey=value=>{let s='';for(const b of encoder.encode(value))s+=String.fromCharCode(b);return btoa(s).replaceAll('+','-').replaceAll('/','_').replace(/=+$/u,'');};
+function requireUnicodeScalars(value) {
+  if(typeof value!=='string')throw Error('invalid_folder');
+  for(let i=0;i<value.length;i++){
+    const code=value.charCodeAt(i);
+    if(code>=0xd800&&code<=0xdbff){
+      const next=value.charCodeAt(++i);
+      if(!(next>=0xdc00&&next<=0xdfff))throw Error('invalid_folder');
+    }else if(code>=0xdc00&&code<=0xdfff)throw Error('invalid_folder');
+  }
+}
+const byteKey=value=>{requireUnicodeScalars(value);let s='';for(const b of encoder.encode(value))s+=String.fromCharCode(b);return btoa(s).replaceAll('+','-').replaceAll('/','_').replace(/=+$/u,'');};
 export const folderSourceKey=(type,path)=>'folder:'+type+':'+byteKey(path);
-function folderPath(key,prefix){const value=key.slice(prefix.length);return new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')+'='.repeat((4-value.length%4)%4)),x=>x.charCodeAt(0)));}
+function folderPath(key,prefix){const value=key.slice(prefix.length);return new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Uint8Array.from(atob(value.replaceAll('-','+').replaceAll('_','/')+'='.repeat((4-value.length%4)%4)),x=>x.charCodeAt(0)));}
 export function canonicalFolderComponents(path) {
   if(typeof path!=='string'||path.length===0)throw Error('invalid_folder');
+  requireUnicodeScalars(path);
   const pieces=path.split('/');
   if(pieces.length>32||pieces.some(p=>!p.trim()||p==='.'||p==='..'||/[\u0000-\u001f\u007f]/u.test(p)))throw Error('invalid_folder');
   return pieces; // Never normalize Unicode, case or surrounding spaces.

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto as c } from 'node:crypto';
-import { mapLegacyResources, legacyAdministrativeMetadata } from '../public/legacy-resource-mapping.js';
+import { mapLegacyResources, legacyAdministrativeMetadata, canonicalFolderComponents, folderSourceKey,
+  inspectLegacyResources } from '../public/legacy-resource-mapping.js';
 import { legacy, record, uuid } from './vault-v2-migration-fixtures.mjs';
 import {readFile} from 'node:fs/promises';
 
@@ -27,6 +28,30 @@ test('canonical original UUID mapping survives record reorder; exact case and Un
   assert.equal(first.resources.find(r=>r.kind==='HOST').id,a.id);
   assert.deepEqual(next.mapping,first.mapping);
   assert.equal(first.resources.filter(r=>r.kind==='FOLDER').length,4);
+});
+test('malformed Unicode folder input fails closed before identity allocation',()=>{
+  const scope={teamID:uuid(),vaultID:uuid()};
+  for(const folder of ['\ud800','\ud801','\udc00','A/\ud800B','\ud800\ud800','\udc00\ud800']){
+    assert.throws(()=>canonicalFolderComponents(folder),/invalid_folder/);
+    assert.throws(()=>folderSourceKey('host',folder),/invalid_folder/);
+    const document=legacy([record('host',{folder})]);
+    assert.deepEqual(inspectLegacyResources(document).blockers,['invalid_folder']);
+    assert.throws(()=>mapLegacyResources({document,scope,cryptoValue:c}),/invalid_folder/);
+  }
+});
+test('well-formed Unicode remains byte-exact, including supplementary characters and a leading BOM',()=>{
+  const paths=['\ufffd','😀','\ufeffA','A','é','e\u0301',' A ','a'];
+  const scope={teamID:uuid(),vaultID:uuid()};
+  const first=mapLegacyResources({document:legacy(paths.map(folder=>record('host',{folder}))),scope,cryptoValue:c});
+  assert.equal(first.resources.filter(r=>r.kind==='FOLDER').length,paths.length);
+  assert.equal(new Set(paths.map(path=>folderSourceKey('host',path))).size,paths.length);
+  for(const path of paths) assert.deepEqual(canonicalFolderComponents(path),[path]);
+  const recordBOM=record('host',{folder:'\ufeffA/😀'});
+  const before=mapLegacyResources({document:legacy([recordBOM]),scope,cryptoValue:c});
+  const after=mapLegacyResources({document:legacy([{...recordBOM,data:{folder:'B/😀'}}]),scope,
+    previous:before,folderMoves:[{type:'host',from:'\ufeffA',to:'B'}],cryptoValue:c});
+  assert.equal(after.mapping[folderSourceKey('host','B')],before.mapping[folderSourceKey('host','\ufeffA')]);
+  assert.equal(after.mapping[folderSourceKey('host','B/😀')],before.mapping[folderSourceKey('host','\ufeffA/😀')]);
 });
 test('invalid source IDs get one persisted ID; duplicate valid IDs, tombstones and cross-scope reservations block',()=>{
   const scope={teamID:uuid(),vaultID:uuid()},a=record('snippet',{text:'exact'},'legacy-id');
