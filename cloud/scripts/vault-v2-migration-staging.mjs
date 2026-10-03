@@ -4,8 +4,12 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { VaultMigrationStore } from "../src/vault-migration-store.mjs";
 import { MigrationFence } from "../src/migration-fence.mjs";
+import { reduceFenceEvents, fenceIntentDigest } from "../src/migration-fence-journal.mjs";
+import { PublicationFenceCoordinator, readCommittedPublicationOutcome } from "../src/publication-fence-coordinator.mjs";
+import { createStagingActivationGuard, readStagingControllerIdentity } from "../src/staging-activation-policy.mjs";
+import { verifyMigrationCompatibility } from "../src/migration-compatibility.mjs";
 export async function runStagingMigration(
-  { environment, enabled, allowedVaultIDs, databaseURL, fencePath },
+  { environment, enabled, allowedVaultIDs, databaseURL, fencePath, policyPath, controllerIdentityPath },
   request,
 ) {
   if (
@@ -22,10 +26,13 @@ export async function runStagingMigration(
       "preview",
       "start",
       "upload",
+      "upload-reader",
+      "verify-identities",
       "validate",
       "discard",
       "activate",
       "check-compatibility",
+      "reconcile-fence",
     ].includes(request?.operation) ||
     Object.keys(request).some(
       (k) =>
@@ -33,39 +40,55 @@ export async function runStagingMigration(
           "operation",
           "input",
           "object",
+          "projection",
+          "sidecar",
           "checkpoint",
           "manifest",
           "manifestHash",
+          "intentID",
         ].includes(k),
     )
   )
     throw Error("invalid_migration_operation");
+  if (request.operation === "reconcile-fence" &&
+      (typeof request.intentID !== "string" || !/^(?:[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}|legacy:[a-f0-9]{64})$/.test(request.intentID)
+       || Object.keys(request).some(key => !["operation", "intentID"].includes(key))))
+    throw Error("invalid_migration_operation");
+  if (request.operation === "activate" && (!policyPath || !controllerIdentityPath))
+    throw Error("staging_activation_policy_required");
+  const fence = new MigrationFence(fencePath);
+  const activationGuard = request.operation === "activate"
+    ? createStagingActivationGuard({policyPath, fence, controllerIdentity: await readStagingControllerIdentity(controllerIdentityPath)})
+    : undefined;
   const pool = new pg.Pool({ connectionString: databaseURL, max: 2 }),
-    fence = new MigrationFence(fencePath),
     store = new VaultMigrationStore(pool, {
       environment,
       enabled,
       allowedVaultIDs,
       fence,
+      activationGuard,
     });
   try {
-    if (request.operation === "check-compatibility") {
-      const schema = (
-        await pool.query(
-          "SELECT max(version) AS version FROM schema_migrations",
-        )
-      ).rows[0];
-      const publications = (
-        await pool.query(
-          'SELECT a.team_id AS "teamID",a.vault_id AS "vaultID",a.id AS "attemptID",a.manifest_hash AS "manifestHash" FROM vault_migration_attempts a JOIN shared_vaults v ON v.active_publication_attempt_id=a.id WHERE a.state=\'V2_ACTIVE\' AND v.format_state=\'V2_ACTIVE\'',
-        )
-      ).rows;
-      await fence.verify({
-        schemaVersion: Number(schema.version),
-        publications,
-      });
-      return { compatible: true };
+    if (request.operation === "reconcile-fence") {
+      const rawIntent = (await fence.readRecords()).find(event =>
+        event.type === "PENDING_INTENT" ? event.intentID === request.intentID :
+          !event.version && "legacy:" + fenceIntentDigest(event) === request.intentID);
+      const intent = rawIntent && reduceFenceEvents([rawIntent]).pending[0];
+      if (!intent || intent.vaults.some(vault => !allowedVaultIDs.includes(vault.vaultID)))
+        throw Error("migration_staging_only");
+      return await new PublicationFenceCoordinator({fence}).reconcile({intentID: request.intentID,
+        readCommittedOutcome: pending => readCommittedPublicationOutcome({query: (text, values) => pool.query(text, values), intent: pending})});
     }
+    if (request.operation === "check-compatibility") {
+      return await verifyMigrationCompatibility({
+        query: (text, values) => pool.query(text, values),
+        fence,
+      });
+    }
+    if (request.operation === "verify-identities")
+      return await store.verifyIdentityReservations(request.input);
+    if (request.operation === "upload-reader")
+      return await store.putReaderProjection(request.input, request.projection, request.sidecar, request.checkpoint);
     if (request.operation === "upload")
       return await store.putPart(
         request.input,
@@ -108,6 +131,8 @@ if (
           .filter(Boolean),
         databaseURL: process.env.MIGRATION_STAGING_DATABASE_URL,
         fencePath: process.env.MIGRATION_FENCE_PATH,
+        policyPath: process.env.MIGRATION_ACTIVATION_POLICY_PATH,
+        controllerIdentityPath: process.env.MIGRATION_CONTROLLER_IDENTITY_PATH,
       },
       JSON.parse(bytes),
     );

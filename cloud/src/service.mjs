@@ -137,6 +137,8 @@ export class CloudService {
 
   async register(input) {
     const email = normalizeEmail(input.email);
+    if (this.config.registrationEmailAllowlist && !this.config.registrationEmailAllowlist.includes(email))
+      throw new Error("registration_disabled");
     if (!this.config.allowRegistration) {
       const invitationToken = String(input?.invitationToken ?? "").trim();
       if (!invitationToken) throw new Error("registration_disabled");
