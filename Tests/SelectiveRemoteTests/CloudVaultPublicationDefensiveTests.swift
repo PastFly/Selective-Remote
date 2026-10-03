@@ -152,7 +152,9 @@ struct CloudVaultPublicationDefensiveTests {
             #expect(try store.highWater(scope: value.scope) == waters[index])
         }
         #expect(try store.cachedScopes(session: checking).isEmpty)
-        #expect(try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).isEmpty)
+        let remaining = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+        #expect(remaining.allSatisfy { $0.pathExtension == "history" })
+        for marker in remaining { #expect(try Data(contentsOf: marker) == Data("selective-remote/publication-history/v1".utf8)) }
     }
 
     @Test("delayed old 401 preserves newer login and all durable scopes", arguments: ["me", "publication"])

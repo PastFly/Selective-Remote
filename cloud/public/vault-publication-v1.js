@@ -186,12 +186,21 @@ export async function prepareReaderProjection({scope,resources,objects,recipient
     inventories.push({inventory,proofs:row.proofs});}
   return {version:1,header,descriptors,recipients:inventories};
 }
+export async function prepareAdministrativeSidecarCommitment(sidecar,targets,cryptoValue=globalThis.crypto){
+  const entries=sidecar.wrappers.map(wrapper=>{
+    const target=targets.find(t=>t.deviceID===wrapper.context.deviceID&&t.membershipID===wrapper.context.membershipID&&t.membershipEpoch===wrapper.context.membershipEpoch);
+    if(!target)fail('publication_custodian_unavailable');
+    return {accountID:target.accountID,deviceKeyVersion:target.certificate?.payload?.keyVersion??target.deviceKeyVersion,wrapper};
+  });
+  const result=await wrapperCommitment(entries,cryptoValue);
+  return {commitment:{resourceID:sidecar.resourceID,envelopeHash:await publicationHash('ciphertext',sidecar.envelope,cryptoValue),wrapperRoot:result.root},items:result.items};
+}
 export async function validateReaderProjection({projection,scope,resources,objects,recipients,rootPublicKey,
-  cryptoValue=globalThis.crypto}) {
+  sequence=1,previousHash=null,cryptoValue=globalThis.crypto}) {
   exact(projection,['version','header','descriptors','recipients']);if(projection.version!==1)fail();
   const headerHash=await verifyReaderHeader({header:projection.header,rootPublicKey,teamID:scope.teamID,vaultID:scope.vaultID,cryptoValue});
-  if(projection.header.payload.generationID!==scope.attemptID||projection.header.payload.sequence!==1
-    ||projection.header.payload.previousHash!==null)fail('publication_scope_mismatch');
+  if(projection.header.payload.generationID!==scope.attemptID||projection.header.payload.sequence!==sequence
+    ||projection.header.payload.previousHash!==previousHash)fail('publication_scope_mismatch');
   if(!Array.isArray(projection.descriptors)||projection.descriptors.length!==objects.length
     ||!Array.isArray(projection.recipients)||projection.recipients.length>10000)fail('publication_incomplete');
   const expected=new Map(objects.map(o=>[identity(o),o])),resourceMap=new Map(resources.map(r=>[r.id,r]));

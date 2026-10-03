@@ -1232,6 +1232,14 @@ struct SelectiveRemoteTeamSnippetsView: View {
         Button(CloudAccessLocalization.text("Поделиться / Кто имеет доступ…", "Share / Who has access…"), systemImage: "person.crop.circle.badge.checkmark") {
             AccessResourceEntry.showPublished(snippet.publication, title: snippet.title, kind: .snippet)
         }
+        if snippet.publication != nil {
+            Button(CloudAccessLocalization.text("Изменить…", "Edit…"), systemImage: "pencil") {
+                AccessResourceEntry.showPublished(snippet.publication, title: snippet.title, kind: .snippet, section: .edit)
+            }
+            Button(CloudAccessLocalization.text("Переместить…", "Move…"), systemImage: "folder") {
+                AccessResourceEntry.showPublished(snippet.publication, title: snippet.title, kind: .snippet, section: .move)
+            }
+        }
         if snippet.publication == nil && SelectiveRemoteTeamSnippetDocumentMutation.isWritable(role: snippet.role) {
             Button(UpdateLocalization.text(ru: "Изменить…", en: "Edit…"), systemImage: "pencil") {
                 if let context = context(for: snippet) {

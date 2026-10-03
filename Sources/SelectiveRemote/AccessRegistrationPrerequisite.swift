@@ -37,11 +37,11 @@ enum AccessResourceEntry {
 }
 
 extension AccessResourceEntry {
-    static func showPublished(_ published: SelectiveRemotePublishedModelReference?, title: String, kind: CloudAccessKind) {
+    static func showPublished(_ published: SelectiveRemotePublishedModelReference?, title: String, kind: CloudAccessKind, section: SelectiveRemoteWholePublicationSection = .access) {
         guard let published else { showLegacy(kind: kind); return }
         guard published.kind == kind, SelectiveRemotePublicationPresentation.shared.valid(published),
               let reference = try? published.access(displayName: title) else { return }
-        let view = SelectiveRemoteCloudResourceAccessView(reference: reference, client: .init(client: SelectiveRemoteCloudAPIClient()), session: .init(endpoint: published.scope.endpoint), initialSection: .who)
+        let view = SelectiveRemoteWholePublicationView(reference: published, access: reference, section: section)
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 760, height: 640), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = reference.title; window.contentView = NSHostingView(rootView: view); window.isReleasedWhenClosed = false
         window.center(); window.makeKeyAndOrderFront(nil)

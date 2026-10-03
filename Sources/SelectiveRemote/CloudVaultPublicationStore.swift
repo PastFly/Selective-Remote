@@ -21,14 +21,56 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
     private struct Receipt: Codable { var scope: SelectiveRemotePublicationScope; var key: Data; var highWater: SelectiveRemotePublicationHighWater?; var file: String?; var owner: UUID?; var generation: String?; var authorization: String?; var authorizationVersion: Int? }
     private func digest(_ value: String) -> String { SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined() }
     private func receiptKey(_ scope: SelectiveRemotePublicationScope) -> String { "receipt/" + digest(scope.key) }
+    private func historyMarker(_ scope: SelectiveRemotePublicationScope) -> URL { directory.appending(path: digest(scope.key) + ".history") }
+    private func markHistory(_ scope: SelectiveRemotePublicationScope) throws {
+        let marker = historyMarker(scope)
+        if !FileManager.default.fileExists(atPath: marker.path) {
+            try Data("selective-remote/publication-history/v1".utf8).write(to: marker, options: .atomic)
+            try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: marker.path)
+        }
+    }
     private func receipt(_ scope: SelectiveRemotePublicationScope) throws -> Receipt? {
-        guard let data = try protected.read(receiptKey(scope)) else { return nil }
+        guard let data = try protected.read(receiptKey(scope)) else {
+            guard !FileManager.default.fileExists(atPath: historyMarker(scope).path) else { throw SelectiveRemotePublicationError.invalid }
+            return nil
+        }
         let result = try JSONDecoder().decode(Receipt.self, from: data)
         guard result.scope == scope, result.key.count == 32 else { throw SelectiveRemotePublicationError.scope }
+        if result.highWater != nil { try markHistory(scope) }
         return result
+    }
+    private func prepareHistory(_ scope: SelectiveRemotePublicationScope, baseline: Receipt, session: SelectiveRemotePublicationSession) throws {
+        try checkScope(scope, session: session)
+        if let current = try receipt(scope) {
+            guard current.highWater == baseline.highWater else { throw SelectiveRemotePublicationError.fork }
+        } else {
+            // Establish protected first-use state before the marker, so a transient first save can retry.
+            try protected.save(JSONEncoder().encode(baseline), key: receiptKey(scope))
+        }
+        try checkScope(scope, session: session); try markHistory(scope); try checkScope(scope, session: session)
     }
     func highWater(scope: SelectiveRemotePublicationScope) throws -> SelectiveRemotePublicationHighWater? {
         try Self.lock.withLock { try receipt(scope)?.highWater }
+    }
+    /// Remember an authenticated generation even when no current plaintext cache is available.
+    func advanceHighWater(_ next: SelectiveRemotePublicationHighWater, expected: SelectiveRemotePublicationHighWater?, scope: SelectiveRemotePublicationScope, session: SelectiveRemotePublicationSession) throws {
+        try Self.lock.withLock {
+            try checkScope(scope, session: session)
+            var state = try receipt(scope) ?? Receipt(scope: scope, key: SelectiveRemoteResourceCryptoV2.generateCEK(), highWater: nil, file: nil, owner: nil, generation: nil, authorization: nil, authorizationVersion: nil)
+            guard state.highWater == expected else { throw SelectiveRemotePublicationError.fork }
+            guard next.sequence > 0, next.hash.count == 64, next.hash.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { throw SelectiveRemotePublicationError.invalid }
+            if let old = state.highWater {
+                guard next.sequence >= old.sequence else { throw SelectiveRemotePublicationError.rollback }
+                guard next.sequence != old.sequence || next.hash == old.hash else { throw SelectiveRemotePublicationError.fork }
+            }
+            // The marker carries no keys or generation data; its presence distinguishes lost protection from first use.
+            try prepareHistory(scope, baseline: state, session: session)
+            if state.highWater == next { return }
+            state.highWater = next
+            // Keep the encrypted payload/index until an ordinary cache commit replaces it. Its old AAD cannot be accepted under a newer high-water.
+            try protected.save(JSONEncoder().encode(state), key: receiptKey(scope))
+            try checkScope(scope, session: session)
+        }
     }
     func commit(_ cache: SelectiveRemotePublicationCache, expected: SelectiveRemotePublicationHighWater?, session: SelectiveRemotePublicationSession) throws {
         try Self.lock.withLock {
@@ -56,6 +98,7 @@ final class SelectiveRemoteVaultPublicationStore: @unchecked Sendable {
                 try box.combined!.write(to: path, options: .atomic)
                 try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
                 try session.check()
+                try prepareHistory(cache.scope, baseline: state, session: session)
                 state.highWater = next; state.file = filename; state.owner = session.id; state.generation = generation; state.authorization = session.authorizationStamp; state.authorizationVersion = 2
                 try protected.save(JSONEncoder().encode(state), key: receiptKey(cache.scope))
                 receiptCommitted = true

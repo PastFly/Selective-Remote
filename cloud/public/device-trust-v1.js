@@ -324,6 +324,19 @@ export async function signDeviceDirectory({ root, accountID, version: directoryV
   return { payload, signature };
 }
 
+// Authentication of an already signed predecessor only. This result must never
+// authorize wrapping or admission, and never advances a directory checkpoint.
+export async function verifyHistoricalDeviceCertificate({rootPublicKey,certificate,trust,
+  expectedAccountID,expectedDeviceID,expectedKeyVersion,cryptoValue=globalThis.crypto}){
+  const crypto=cryptoAPI(cryptoValue),accountID=id(expectedAccountID),deviceID=id(expectedDeviceID);
+  if(!trust||trust.accountID!==accountID||trust.rootFingerprint!==await fingerprint(rootPublicKey,crypto)
+    ||!Number.isSafeInteger(trust.highWater)||trust.highWater<1||normalizedEndpoint(trust.endpoint)!==trust.endpoint
+    ||certificate?.payload?.accountID!==accountID||certificate.payload.deviceID!==deviceID
+    ||certificate.payload.keyVersion!==version(expectedKeyVersion)||certificate.payload.issuerFingerprint!==trust.rootFingerprint)fail();
+  bytes(trust.checkpointDigest,32);
+  await verifySignature(rootPublicKey,certificateBytes(certificate.payload),certificate.signature,crypto);
+  return {accountID,deviceID,keyVersion:certificate.payload.keyVersion,historical:true};
+}
 export async function verifyDeviceForWrapping({ rootPublicKey, certificate, checkpoint,
   trust, expectedDeviceID, cryptoValue = globalThis.crypto }) {
   const crypto = cryptoAPI(cryptoValue);

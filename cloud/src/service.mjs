@@ -51,6 +51,35 @@ export class CloudService {
     return publication[operation]({...input,actorUserID:session.user_id,actorDeviceID:session.device_id,
       sessionID:session.session_id,teamID,vaultID});
   }
+  async wholePublication(session,teamID,operation,body={},args={}){
+    if(!session?.user_id||!session?.device_id||!session?.session_id)throw Error('team_not_found');
+    if(!isUUID(teamID)||!body||typeof body!=='object'||Array.isArray(body))throw Error('invalid_access_request');
+    if(args.publicationVersion!==1||args.schemaVersion!==2||args.capability!=='resource_acl_v2')throw Error('vault_upgrade_required');
+    const shapes={context:[],preview:['request'],start:['request','token'],receipt:[],readback:[],discard:[],validate:['manifests'],commit:['request','token'],
+      putPart:['object'],putProjection:['projection','sidecar'],putProjectionChunk:['version','index','count','sha256','data'],
+      repairDirectory:['token','request','vaultID'],repairPart:['token','request','vaultID','resourceID','part']};
+    const optional={preview:['token','cursor'],putProjection:['checkpoint'],repairDirectory:['cursor']};
+    if(!shapes[operation]||shapes[operation].some(k=>!Object.hasOwn(body,k))||Object.keys(body).some(k=>![...shapes[operation],...(optional[operation]??[])].includes(k)))throw Error('invalid_access_request');
+    if(['receipt','readback','discard','validate','commit','putPart','putProjection','putProjectionChunk'].includes(operation)&&!isUUID(args.operationID)
+      ||['readback','putPart','putProjection','putProjectionChunk'].includes(operation)&&!isUUID(args.vaultID))throw Error('invalid_access_request');
+    const input={teamID,actorUserID:session.user_id,actorDeviceID:session.device_id,sessionID:session.session_id,schemaVersion:args.schemaVersion,capability:args.capability};
+    const s=this.store.wholePublication(this.config.wholePublication);
+    switch(operation){
+      case 'context':if(args.operationID!==undefined&&!isUUID(args.operationID))throw Error('invalid_access_request');return s.context(input,args.operationID??null);
+      case 'preview':return s.preview(input,body.request,{token:body.token??null,cursor:body.cursor??null});
+      case 'start':return s.start(input,body.token,body.request);
+      case 'receipt':return s.receipt(input,args.operationID);
+      case 'readback':return s.readback(input,args.operationID,args.vaultID);
+      case 'discard':return s.discard(input,args.operationID);
+      case 'validate':return s.validate(input,args.operationID,body.manifests);
+      case 'commit':return s.commit(input,args.operationID,body.token,body.request);
+      case 'putPart':return s.putPart(input,args.operationID,args.vaultID,body.object);
+      case 'putProjection':return s.putProjection(input,args.operationID,args.vaultID,body.projection,body.sidecar,body.checkpoint);
+      case 'putProjectionChunk':return s.putProjectionChunk(input,args.operationID,args.vaultID,body);
+      case 'repairDirectory':return s.repairDirectory(input,body.token,{request:body.request,vaultID:body.vaultID,cursor:body.cursor??null});
+      case 'repairPart':return s.repairPart(input,body.token,{request:body.request,vaultID:body.vaultID,resourceID:body.resourceID,part:body.part});
+    }
+  }
 
   sessionExpiry() {
     return new Date(Date.now() + this.config.sessionTTLDays * 86_400_000);

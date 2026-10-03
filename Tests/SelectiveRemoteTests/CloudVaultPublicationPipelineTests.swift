@@ -74,9 +74,10 @@ final class PublicationProtectedMemory: SelectiveRemotePublicationProtectedStora
     private var failingKey: String?
     var fail = false
     var saveHook: (@Sendable (String) -> Void)?
+    var saveValueHook: (@Sendable (String, Data) -> Void)?
     func read(_ key: String) -> Data? { lock.withLock { data[key] } }
     func failOnce(_ key: String) { lock.withLock { failingKey = key } }
-    func save(_ value: Data, key: String) throws { try lock.withLock { if fail || key == failingKey { failingKey = nil; throw CocoaError(.fileWriteUnknown) }; saveHook?(key); data[key] = value } }
+    func save(_ value: Data, key: String) throws { try lock.withLock { if fail || key == failingKey { failingKey = nil; throw CocoaError(.fileWriteUnknown) }; saveHook?(key); saveValueHook?(key, value); data[key] = value } }
 }
 
 @Suite("protected publication durability")
@@ -201,10 +202,14 @@ struct CloudVaultPublicationDurabilityTests {
         let directory = FileManager.default.temporaryDirectory.appending(path: "task5-cas-session-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
         let memory = PublicationProtectedMemory(), store = try SelectiveRemoteVaultPublicationStore(directory: directory, protected: memory)
-        memory.saveHook = { key in if key.hasPrefix("receipt/") { sourceSession.invalidate() } }
+        memory.saveValueHook = { key, bytes in
+            if key.hasPrefix("receipt/"), let fields = try? JSONDecoder().decode(SelectiveRemoteJSONValue.self, from: bytes).publicationObject(), fields["highWater"] != nil {
+                sourceSession.invalidate()
+            }
+        }
         #expect(throws: CancellationError.self) { try store.commit(cache, expected: nil, session: sourceSession) }
         let highWater = try #require(try store.highWater(scope: fixture.scope))
-        memory.saveHook = nil
+        memory.saveValueHook = nil
         let tokens = SelectiveRemoteCloudMemoryTokenStore(); tokens.saveToken(String(repeating: "n", count: 40), for: fixture.scope.endpoint)
         let newer = SelectiveRemotePublicationSession(endpoint: fixture.scope.endpoint, accountID: fixture.scope.accountID, deviceID: fixture.scope.deviceID, token: String(repeating: "n", count: 40), tokenStore: tokens)
         #expect(try store.load(scope: fixture.scope, session: newer) == nil)
@@ -213,7 +218,7 @@ struct CloudVaultPublicationDurabilityTests {
         try store.removePayload(scope: fixture.scope, session: sourceSession, expectedStamp: oldStamp)
         #expect(try store.load(scope: fixture.scope, session: newer) == cache)
         #expect(try store.highWater(scope: fixture.scope) == highWater)
-        let path = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        let path = try #require(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "sealed" }))
         var bytes = try Data(contentsOf: path); bytes[bytes.count - 1] ^= 1; try bytes.write(to: path)
         #expect(throws: Error.self) { try store.load(scope: fixture.scope, session: newer) }
         #expect(try store.highWater(scope: fixture.scope) == highWater)

@@ -110,6 +110,11 @@ export function loadConfig(env = process.env) {
   if(publicationEnabled&&(publicationEnvironment!=="staging"||!publicationVaultIDs.length))throw Error("PUBLICATION_READER_ENABLED requires staging and an explicit Vault allowlist");
   if(publicationCursorSecret&&[sessionPepper,emailVerificationPepper,passwordResetTokenPepper,teamInvitationTokenPepper,
     teamOutboxEncryptionKey,abuseTokenPepper,proxySharedSecret].includes(publicationCursorSecret))throw Error("PUBLICATION_CURSOR_SECRET must be independent");
+  const wholePublicationEnabled=boolean(env,'WHOLE_PUBLICATION_ENABLED',false);
+  const wholePublicationSecret=validateSecret('WHOLE_PUBLICATION_PREVIEW_SECRET',env.WHOLE_PUBLICATION_PREVIEW_SECRET,wholePublicationEnabled);
+  if(wholePublicationEnabled&&(!publicationEnabled||publicationEnvironment!=='staging'||!publicationVaultIDs.length))throw Error('WHOLE_PUBLICATION_ENABLED requires the staging reader and explicit Vault allowlist');
+  if(wholePublicationSecret&&[sessionPepper,emailVerificationPepper,passwordResetTokenPepper,teamInvitationTokenPepper,
+    teamOutboxEncryptionKey,abuseTokenPepper,proxySharedSecret,publicationCursorSecret].includes(wholePublicationSecret))throw Error('WHOLE_PUBLICATION_PREVIEW_SECRET must be independent');
 
   return Object.freeze({
     host: env.CLOUD_HOST ?? "0.0.0.0",
@@ -118,6 +123,8 @@ export function loadConfig(env = process.env) {
     databaseURL,
     publication:Object.freeze({environment:publicationEnvironment,enabled:publicationEnabled,
       allowedVaultIDs:Object.freeze(publicationVaultIDs),cursorSecret:publicationCursorSecret}),
+    wholePublication:Object.freeze({environment:publicationEnvironment,enabled:wholePublicationEnabled,
+      allowedVaultIDs:Object.freeze(publicationVaultIDs),previewSecret:wholePublicationSecret}),
     sessionPepper,
     abuseTokenPepper,
     proxySharedSecret,

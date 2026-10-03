@@ -14,8 +14,8 @@ import {
   validateResourceKeyWrapper,
 } from "../public/resource-crypto-v2.js";
 import { requireAccessMutation } from "./team-policy.mjs";
-import { publicationHash, validateReaderProjection } from "../public/vault-publication-v1.js";
-const lockTables = [
+import { publicationHash, validateReaderProjection, prepareAdministrativeSidecarCommitment } from "../public/vault-publication-v1.js";
+export const migrationLockTables = [
   "devices",
   "device_trust_certificates_v1",
   "device_trust_directories_v1",
@@ -78,7 +78,7 @@ export class VaultMigrationStore {
         );
         if (write)
           await c.query(
-            `LOCK TABLE ${lockTables.join(",")} IN SHARE ROW EXCLUSIVE MODE`,
+            `LOCK TABLE ${migrationLockTables.join(",")} IN SHARE ROW EXCLUSIVE MODE`,
           );
         const result = await work(c);
         await c.query("COMMIT");
@@ -492,7 +492,7 @@ export class VaultMigrationStore {
         "registryVersion",
         "resourceVersion",
         "manifestVersion",
-      ].some((k) => ctx[k] !== 1)
+      ].some((k) => ctx[k] !== (a.generationSequence??1))
     )
       throw Error("invalid_migration_object");
     const recipients = (expectedRecipients ??
@@ -518,7 +518,7 @@ export class VaultMigrationStore {
         t.vaultID !== a.vault_id ||
         t.resourceID !== r.id ||
         t.part !== object.part ||
-        t.keyVersion !== 1 ||
+        t.keyVersion !== (a.generationSequence??1) ||
         seen.has(t.deviceID) ||
         !recipients.some(
           (d) =>
@@ -614,7 +614,7 @@ export class VaultMigrationStore {
     validateResourceCipherEnvelope(sidecar.envelope);
     const context=sidecar.envelope.context;
     if(context.teamID!==a.team_id||context.vaultID!==a.vault_id||context.resourceID!==sidecar.resourceID||context.part!=="SECRET"
-      ||context.policyVersion!==a.scope.policyVersion||[context.keyVersion,context.registryVersion,context.resourceVersion,context.manifestVersion].some(n=>n!==1))throw Error("publication_scope_mismatch");
+      ||context.policyVersion!==a.scope.policyVersion||[context.keyVersion,context.registryVersion,context.resourceVersion,context.manifestVersion].some(n=>n!==(a.generationSequence??1)))throw Error("publication_scope_mismatch");
     if(!Array.isArray(sidecar.wrappers)||sidecar.wrappers.length<1||sidecar.wrappers.length>100)throw Error("publication_custodian_unavailable");
     const custody=[],seen=new Set();
     for(const w of sidecar.wrappers){validateResourceKeyWrapper(w);const t=s.devices.find(d=>d.deviceID===w.context.deviceID);
@@ -629,13 +629,15 @@ export class VaultMigrationStore {
     for(const lists of Object.values(recipients))for(const list of Object.values(lists))for(const t of list)targets.set(t.membershipID+"/"+t.deviceID,t);
     if(a.resources.length===0)for(const t of custody)targets.set(t.membershipID+"/"+t.deviceID,t);
     const {headerHash}=await validateReaderProjection({projection,scope:a.scope,resources:a.resources,objects:parts,
-      recipients:[...targets.values()].map(t=>({...t,deviceKeyVersion:t.certificate.payload.keyVersion})),rootPublicKey:publisher.rootPublicKey});
+      recipients:[...targets.values()].map(t=>({...t,deviceKeyVersion:t.certificate.payload.keyVersion})),rootPublicKey:publisher.rootPublicKey,
+      sequence:a.generationSequence??1,previousHash:a.generationPreviousHash??null});
     const wrapperCount=parts.reduce((n,p)=>n+p.wrappers.length,sidecar.wrappers.length);
     if(wrapperCount>10000||Buffer.byteLength(canonicalMigrationJSON(projection))>64*1024*1024
       ||Buffer.byteLength(canonicalMigrationJSON(sidecar))>1024*1024
       ||parts.some(p=>Buffer.byteLength(canonicalMigrationJSON(p))>1024*1024)
       ||Buffer.byteLength(canonicalMigrationJSON({parts,sidecar}))>128*1024*1024)throw Error("publication_limit");
-    return {headerHash,reader:{projectionHash:await publicationHash("projection",projection),sidecarHash:await publicationHash("sidecar",sidecar),custodianDeviceIDs:[...seen].sort()}};
+    return {headerHash,reader:{projectionHash:await publicationHash("projection",projection),sidecarHash:await publicationHash("sidecar",sidecar),
+      sidecarCommitment:(await prepareAdministrativeSidecarCommitment(sidecar,custody)).commitment,custodianDeviceIDs:[...seen].sort()}};
   }
   async putReaderProjection(input,projection,sidecar,checkpoint) {
     return this.transaction(input,async c=>{
