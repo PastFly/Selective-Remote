@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { VaultMigrationStore } from "../src/vault-migration-store.mjs";
 import { MigrationFence } from "../src/migration-fence.mjs";
+import { verifyMigrationCompatibility } from "../src/migration-compatibility.mjs";
 export async function runStagingMigration(
   { environment, enabled, allowedVaultIDs, databaseURL, fencePath },
   request,
@@ -50,21 +51,10 @@ export async function runStagingMigration(
     });
   try {
     if (request.operation === "check-compatibility") {
-      const schema = (
-        await pool.query(
-          "SELECT max(version) AS version FROM schema_migrations",
-        )
-      ).rows[0];
-      const publications = (
-        await pool.query(
-          'SELECT a.team_id AS "teamID",a.vault_id AS "vaultID",a.id AS "attemptID",a.manifest_hash AS "manifestHash" FROM vault_migration_attempts a JOIN shared_vaults v ON v.active_publication_attempt_id=a.id WHERE a.state=\'V2_ACTIVE\' AND v.format_state=\'V2_ACTIVE\'',
-        )
-      ).rows;
-      await fence.verify({
-        schemaVersion: Number(schema.version),
-        publications,
+      return await verifyMigrationCompatibility({
+        query: (text, values) => pool.query(text, values),
+        fence,
       });
-      return { compatible: true };
     }
     if (request.operation === "upload")
       return await store.putPart(

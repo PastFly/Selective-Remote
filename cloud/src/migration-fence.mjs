@@ -9,11 +9,21 @@ function validate(record) {
     Object.keys(record).sort().join(",") !==
       "attemptID,manifestHash,schemaFloor,teamID,vaultID" ||
     !["teamID", "vaultID", "attemptID"].every((k) => uuid.test(record[k])) ||
-    record.schemaFloor !== 19 ||
+    ![19, 20].includes(record.schemaFloor) ||
     !/^[a-f0-9]{64}$/.test(record.manifestHash)
   )
     throw Error("invalid_deployment_fence");
   return record;
+}
+function verifySchemaFloor(schemaVersion, records) {
+  // Publication tables first exist at19, even if no intent has been recorded.
+  if (
+    !Number.isSafeInteger(schemaVersion) ||
+    schemaVersion < 19 ||
+    records.some((record) => schemaVersion < record.schemaFloor)
+  )
+    throw Error("deployment_schema_floor");
+  return true;
 }
 export class MigrationFence {
   constructor(path, { openFile = open } = {}) {
@@ -95,20 +105,24 @@ export class MigrationFence {
       });
     }
   }
-  async verify({ schemaVersion, publications }) {
+  async readRecords() {
     const file = await this.openFile(
       this.path,
       constants.O_RDONLY | constants.O_NOFOLLOW,
     );
-    let records;
     try {
-      records = await this.records(file);
+      return await this.records(file);
     } finally {
       await file.close();
     }
+  }
+  async verifySchemaFloor(schemaVersion) {
+    return verifySchemaFloor(schemaVersion, await this.readRecords());
+  }
+  async verify({ schemaVersion, publications }) {
+    const records = await this.readRecords();
+    verifySchemaFloor(schemaVersion, records);
     for (const r of records) {
-      if (!Number.isSafeInteger(schemaVersion) || schemaVersion < r.schemaFloor)
-        throw Error("deployment_schema_floor");
       if (
         !publications.some(
           (p) =>

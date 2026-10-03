@@ -77,6 +77,7 @@ jobs:
           node --test tests/access-scale-postgres.test.mjs
           node --test tests/access-surface-postgres.test.mjs
           node --test tests/vault-v2-migration-postgres.test.mjs
+          node --test tests/migration-compatibility-postgres.test.mjs
           node --test tests/vault-publication-identities-postgres.test.mjs
           node --test tests/vault-publication-store.test.mjs
           node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs tests/whole-publication-browser-postgres.test.mjs

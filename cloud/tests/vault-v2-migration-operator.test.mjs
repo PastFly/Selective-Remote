@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, readFile, writeFile, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, symlink, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { uuid } from "./vault-v2-migration-fixtures.mjs";
@@ -113,4 +113,55 @@ for (const failure of ["file", "directory"]) test(`fence retries durability afte
   assert.ok(fileSyncs > previous);
   assert.ok(dirSyncs >= 1);
   assert.equal(await f.verify({schemaVersion:19,publications:[intent]}), true);
+});
+
+for (const floor of [19, 20]) test(`fence retains supported schema floor ${floor} and exact replay`, async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "migration-floor-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "fence"), fence = new MigrationFence(path);
+  const intent = { teamID: uuid(), vaultID: uuid(), attemptID: uuid(), manifestHash: "c".repeat(64), schemaFloor: floor };
+  await fence.intent(intent);
+  const before = await readFile(path, "utf8");
+  await fence.intent(intent);
+  assert.equal(await readFile(path, "utf8"), before);
+  await assert.rejects(fence.verifySchemaFloor(floor - 1), /deployment_schema_floor/);
+  assert.equal(await fence.verifySchemaFloor(floor), true);
+  assert.equal(await fence.verify({ schemaVersion: floor, publications: [intent] }), true);
+  await assert.rejects(fence.verify({ schemaVersion: floor, publications: [{ ...intent, manifestHash: "d".repeat(64) }] }), /deployment_fence_mismatch/);
+});
+
+test("unsupported record floors cannot create or change the retained fence", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "migration-floor-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "fence"), fence = new MigrationFence(path);
+  await writeFile(path, "");
+  const intent = { teamID: uuid(), vaultID: uuid(), attemptID: uuid(), manifestHash: "a".repeat(64) };
+  for (const schemaFloor of [18, 21, 22, "19", "20", null, NaN, Infinity, 19.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(fence.intent({ ...intent, schemaFloor }), /invalid_deployment_fence/);
+    assert.equal(await readFile(path, "utf8"), "");
+  }
+});
+
+test("an empty fence still rejects old or invalid schema versions", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "migration-floor-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "fence"), fence = new MigrationFence(path);
+  await writeFile(path, "");
+  for (const schemaVersion of [0, 12, 18, "19", null, NaN, Infinity, 19.5, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects(fence.verify({ schemaVersion, publications: [] }), /deployment_schema_floor/);
+    await assert.rejects(fence.verifySchemaFloor(schemaVersion), /deployment_schema_floor/);
+  }
+  assert.equal(await fence.verifySchemaFloor(19), true);
+});
+
+test("schema-only validation refuses missing, malformed and symlink fences", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "migration-floor-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, "fence"), fence = new MigrationFence(path);
+  await assert.rejects(fence.verifySchemaFloor(20));
+  await writeFile(path, "broken\n");
+  await assert.rejects(fence.verifySchemaFloor(20));
+  const link = join(dir, "link");
+  await symlink(path, link);
+  await assert.rejects(new MigrationFence(link).verifySchemaFloor(20));
 });
