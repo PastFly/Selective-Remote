@@ -51,6 +51,14 @@ async function withFreshDatabase(work) {
   }
 }
 
+async function confirmedFixture(path, record) {
+  await writeFile(path, "", {mode: 0o600});
+  const fence = new MigrationFence(path);
+  await fence.intent(record);
+  const pending = (await fence.snapshot()).pending[0];
+  await fence.append({version: 2, type: 'CONFIRMED_COMMIT', intentID: pending.intentID, intentDigest: pending.intentDigest});
+}
+
 async function runOperator({databaseURL, fencePath, vaultID}) {
   const options = {
     env: {
@@ -154,9 +162,9 @@ test('PG16 normal migrations 12→18→19→20 enforce fence floor before public
             floor19 = join(directory, 'floor19.fence');
             floor20 = join(directory, 'floor20.fence');
             fork20 = join(directory, 'fork20.fence');
-            await new MigrationFence(floor19).intent({...tuple, schemaFloor: 19});
-            await new MigrationFence(floor20).intent({...tuple, schemaFloor: 20});
-            await new MigrationFence(fork20).intent({...tuple, manifestHash: 'c'.repeat(64), schemaFloor: 20});
+            await confirmedFixture(floor19, {...tuple, schemaFloor: 19});
+            await confirmedFixture(floor20, {...tuple, schemaFloor: 20});
+            await confirmedFixture(fork20, {...tuple, manifestHash: 'c'.repeat(64), schemaFloor: 20});
             await check({pool, databaseURL, fencePath: floor19, vaultID: tuple.vaultID, publicationQueries: 1});
             await check({pool, databaseURL, fencePath: floor20, vaultID: tuple.vaultID,
               errorCode: 'deployment_schema_floor', publicationQueries: 0});

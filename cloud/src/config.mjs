@@ -1,3 +1,5 @@
+import { stagingRegistrationEmails } from "./staging-registration.mjs";
+import { isAbsolute } from "node:path";
 function integer(env, name, fallback, minimum, maximum) {
   const raw = env[name];
   const value = raw === undefined ? fallback : Number(raw);
@@ -66,6 +68,7 @@ export function loadConfig(env = process.env) {
   const publicOrigin = env.CLOUD_PUBLIC_ORIGIN ?? "http://localhost:8080";
   const databaseURL = String(env.DATABASE_URL ?? "").trim();
   const allowRegistration = boolean(env, "ALLOW_REGISTRATION", false);
+  const registrationEmailAllowlist = stagingRegistrationEmails(env.STAGING_REGISTRATION_EMAIL_ALLOWLIST, env.PUBLICATION_ENVIRONMENT);
   const sessionPepper = validateSecret("SESSION_TOKEN_PEPPER", env.SESSION_TOKEN_PEPPER);
   const abuseTokenPepper = validateSecret("ABUSE_TOKEN_PEPPER", env.ABUSE_TOKEN_PEPPER);
   const proxySharedSecret = validateProxySecret(env.PROXY_SHARED_SECRET);
@@ -116,7 +119,13 @@ export function loadConfig(env = process.env) {
   if(wholePublicationSecret&&[sessionPepper,emailVerificationPepper,passwordResetTokenPepper,teamInvitationTokenPepper,
     teamOutboxEncryptionKey,abuseTokenPepper,proxySharedSecret,publicationCursorSecret].includes(wholePublicationSecret))throw Error('WHOLE_PUBLICATION_PREVIEW_SECRET must be independent');
 
+  const fencePath = env.PUBLICATION_FENCE_PATH ?? null;
+  if ((publicationEnabled || wholePublicationEnabled) && !fencePath
+      || fencePath !== null && (typeof fencePath !== "string" || !isAbsolute(fencePath)))
+    throw Error("PUBLICATION_FENCE_PATH must name the independent absolute fence");
+
   return Object.freeze({
+    deployment: Object.freeze({ fencePath }),
     host: env.CLOUD_HOST ?? "0.0.0.0",
     port: integer(env, "CLOUD_PORT", 8080, 1, 65535),
     publicOrigin: origin.origin,
@@ -134,6 +143,7 @@ export function loadConfig(env = process.env) {
     emailVerificationPepper,
     smtp: loadSMTPConfig(env, allowRegistration),
     allowRegistration,
+    registrationEmailAllowlist,
     sessionTTLDays: integer(env, "SESSION_TTL_DAYS", 30, 1, 365),
     emailVerificationTTLHours: integer(env, "EMAIL_VERIFICATION_TTL_HOURS", 24, 1, 168),
     passwordResetTTLHours: integer(env, "PASSWORD_RESET_TTL_HOURS", 1, 1, 24),

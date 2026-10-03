@@ -13,11 +13,22 @@ import { DeviceTrustStore } from "./device-trust-store.mjs";
 import { DeviceTrustService } from "./device-trust-service.mjs";
 import { publicOperationError } from "./service-error.mjs";
 import {wholePublicationRoute,runWholePublicationRoute} from './whole-publication-http.mjs';
+import { MigrationFence } from './migration-fence.mjs';
+import { currentCapabilities, verifyDeploymentCompatibility } from './deployment-compatibility.mjs';
 
 const config = loadConfig();
 const store = new PostgresStore(config.databaseURL);
 const mailer = config.smtp ? createVerificationMailer(config) : null;
-const service = new CloudService(store, config, mailer);
+const deploymentFence = config.deployment.fencePath ? new MigrationFence(config.deployment.fencePath) : null;
+const runtimeConfig = deploymentFence ? Object.freeze({ ...config,
+  publication: Object.freeze({ ...config.publication, fence: deploymentFence }),
+  wholePublication: Object.freeze({ ...config.wholePublication, fence: deploymentFence }),
+}) : config;
+const service = new CloudService(store, runtimeConfig, mailer);
+async function checkDeployment() {
+  if (deploymentFence) return verifyDeploymentCompatibility({ query: (text, values) => store.pool.query(text, values),
+    fence: deploymentFence, candidate: currentCapabilities });
+}
 const deviceTrust = new DeviceTrustService(new DeviceTrustStore(store.pool),
   (session, password) => service.requirePasswordReauthentication(session, password));
 const authRateLimiter = new AuthRateLimiter(store, config);
@@ -46,6 +57,8 @@ async function route(request, response) {
   const url = new URL(request.url, config.publicOrigin);
   const method = request.method ?? "GET";
   if (method === "GET" && url.pathname === "/healthz") return sendJSON(response, 200, { status: "ok" });
+  try { await checkDeployment(); }
+  catch { return sendError(response, 503, "publication_guard_unavailable"); }
   if (method === "GET" && url.pathname === "/readyz") {
     await store.ready();
     return sendJSON(response, 200, { status: "ready" });
@@ -113,6 +126,7 @@ async function route(request, response) {
     if(wholeRoute)return handleOperation(response,()=>runWholePublicationRoute(request,url,session,service,wholeRoute));
     const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|resources\/([^/]+)\/parts\/([^/]+))$/u);
     if(publicationRoute&&method==="GET")return handleOperation(response,async()=>{
+      if(request.headers['x-vault-schema-version']!=='2'||request.headers['x-vault-capability']!=='resource_acl_v2'||request.headers['x-publication-version']!=='1')throw Error('vault_upgrade_required');
       const operation=publicationRoute[3].startsWith("resources/")?"part":publicationRoute[3];
       const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:[])]);
       const input={};
@@ -883,6 +897,7 @@ function sendError(response, status, code) { sendJSON(response, status, { error:
 function empty(response, status) { response.writeHead(status); response.end(); }
 
 async function start() {
+  await checkDeployment();
   if (config.allowRegistration) {
     try {
       await mailer.verifyConnection();
@@ -892,6 +907,7 @@ async function start() {
       process.exit(1);
     }
   }
+  await checkDeployment();
   server.listen(config.port, config.host, () => {
     console.log(JSON.stringify({ level: "info", message: "Selective Remote Cloud listening", host: config.host, port: config.port }));
   });
@@ -901,7 +917,12 @@ async function start() {
 let outboxPumpRunning = false;
 let outboxTimer = null;
 
-await start();
+try { await start(); }
+catch {
+  console.error(JSON.stringify({ level: "error", message: "Deployment compatibility preflight failed" }));
+  await store.close();
+  process.exit(1);
+}
 
 outboxTimer = mailer ? setInterval(scheduleOutboxPump, 5_000) : null;
 outboxTimer?.unref();
@@ -909,7 +930,7 @@ outboxTimer?.unref();
 function scheduleOutboxPump() {
   if (!mailer || outboxPumpRunning) return;
   outboxPumpRunning = true;
-  service.queueTeamInvitationOutboxDispatch()
+  checkDeployment().then(() => service.queueTeamInvitationOutboxDispatch())
     .catch(() => console.error(JSON.stringify({ level: "error", message: "Team outbox dispatch failed" })))
     .finally(() => { outboxPumpRunning = false; });
 }

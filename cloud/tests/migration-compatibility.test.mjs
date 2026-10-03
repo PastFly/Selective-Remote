@@ -14,6 +14,11 @@ async function fixture(t, floor) {
   const intent = { teamID: randomUUID(), vaultID: randomUUID(), attemptID: randomUUID(), manifestHash: "a".repeat(64), schemaFloor: floor };
   // Retained on-disk evidence can come from an earlier process.
   await writeFile(path, floor === undefined ? "" : JSON.stringify(intent) + "\n");
+  if (floor !== undefined) {
+    // Explicit positive fixture evidence, never production auto-confirmation.
+    const pending = (await fence.snapshot()).pending[0];
+    await fence.append({version: 2, type: 'CONFIRMED_COMMIT', intentID: pending.intentID, intentDigest: pending.intentDigest});
+  }
   return { fence, intent };
 }
 
@@ -101,6 +106,8 @@ test("a newly appended requirement also needs its exact publication even above i
   await assert.rejects(verifyMigrationCompatibility({ fence, query: async (sql) => {
     if (sql.includes("schema_migrations")) return { rows: [{ version: 22 }] };
     await fence.intent(intent);
+    const pending = (await fence.snapshot()).pending[0];
+    await fence.append({version: 2, type: 'CONFIRMED_COMMIT', intentID: pending.intentID, intentDigest: pending.intentDigest});
     return { rows: [] };
   } }), /deployment_fence_mismatch/);
 });

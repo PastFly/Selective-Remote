@@ -71,6 +71,8 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://selective_remote_test:integration-only-password@127.0.0.1:5432/selective_remote_test
         run: |
+          pg_dump --version
+          pg_restore --version
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/groups-grants-postgres.test.mjs
@@ -78,6 +80,7 @@ jobs:
           node --test tests/access-surface-postgres.test.mjs
           node --test tests/vault-v2-migration-postgres.test.mjs
           node --test tests/migration-compatibility-postgres.test.mjs
+          node --test --test-concurrency=1 tests/publication-fence-postgres.test.mjs tests/non-test-vault-snapshot-postgres.test.mjs tests/staging-controller-fence.test.mjs tests/staging-migration-command-postgres.test.mjs tests/staging-vault-inventory.test.mjs
           node --test tests/vault-publication-identities-postgres.test.mjs
           node --test tests/vault-publication-store.test.mjs
           node --test --test-concurrency=1 tests/whole-publication-schema-postgres.test.mjs tests/whole-publication-preview-postgres.test.mjs tests/whole-publication-preparation-postgres.test.mjs tests/whole-publication-commit-postgres.test.mjs tests/whole-publication-concurrency-postgres.test.mjs tests/whole-publication-cancellation-postgres.test.mjs tests/whole-publication-delta-postgres.test.mjs tests/whole-publication-http.test.mjs tests/whole-publication-browser-postgres.test.mjs

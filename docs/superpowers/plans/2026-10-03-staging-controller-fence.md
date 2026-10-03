@@ -25,6 +25,43 @@
 - Local tests use disposable PG databases and synthetic keys. Do not log credentials, plaintext, private keys, production environment values or real account PII.
 - Source work and PR C test-staging deployment/test-only migration are explicitly authorized by the current Owner instruction. Task6 prepares/reviews the exact candidate/controller/backup, then proceeds under that standing authorization; ask only for genuinely missing external permission/credentials or an action beyond test-only scope. Task1 performs no runtime mutation; subsequent tasks retain the full approved PR C scope.
 
+## Owner activation and real lifecycle requirements — 2026-10-03
+
+The Owner explicitly extended execution beyond staging proof to **actual V2 activation** of freshly created test-only Vaults. Complete Tasks2–8 and the full real HTTPS staging lifecycle; do not stop at local fixtures or another partial unit. Existing ordinary Vaults are excluded. No production Cloud deploy, real-user Vault activation, main merge, tag/release/feed update is authorized.
+
+Activation is permitted only when the actual Vault ID and actual name match the explicit test allowlist, the name begins `TEST-ONLY-CODEX-`, the operator explicitly confirms that exact activation, a protected backup exists, the independent controller fence is writable, preview has no blockers, every recipient wrapper is complete, current trusted devices and epoch are valid, the old-client gate is armed, and the signed generation validates. Any mismatch fails closed. The operator guard is checked under the activation transaction locks immediately before durable intent/cutover; no untrusted request boolean can stand in for backup, trust or signature validation.
+
+Mandatory real E2E, with sensitive evidence kept outside Git:
+1. Create a fresh test user.
+2. Create a Team.
+3. Invite a second user/device.
+4. Approve the device.
+5. Create an explicitly allowlisted `TEST-ONLY-CODEX-*` V1 Vault.
+6. Add Host, Credential, Snippet, Forwarding and folders.
+7. Create groups/grants.
+8. Run migration preview.
+9. Prepare the complete candidate.
+10. Validate it.
+11. Activate to `V2_ACTIVE`.
+12. Mac decrypt/materialize.
+13. Browser decrypt/materialize.
+14. Second-device decrypt/materialize.
+15. Check Effective Access.
+16. Revoke one grant.
+17. Verify alternate-path semantics.
+18. Revoke a device.
+19. Verify wrapper/key denial.
+20. Rotate/publish a new generation.
+21. Reject old0.31, old0.32 and no-capability read/write/wrapper attempts; never fall back to V1.
+22. Restart Mac/browser and verify preserved protections and materialization.
+23. Reload the actual server.
+24. Back up and restore into an isolated database.
+25. Prove the independent controller fence blocks rollback before traffic.
+
+Before the run, enumerate all pre-existing non-test Vaults and protect a snapshot of their rows, state/pointers, resource-publication rows and wrapper inventory. After every mutation phase and the complete run, require exact equality: still V1, no current V2 pointer, no resource publication, no new wrappers, no mutation. Report sanitized counts/digests only. Record actual CEK/wrapper delivery and device-specific decryption without logging keys/plaintext. Local fixture PASS is regression evidence only and cannot satisfy acceptance.
+
+Task6 includes immutable controller/candidate review, protected backup/isolated-restore preflight, explicit activation policy and ordinary-Vault snapshot. Task7 executes all25 real steps plus activation failure injection. Task8 closes the exact-head technical gates and produces a production-activation readiness report; final real-user activation still belongs to the Owner.
+
 ## Review Focus
 
 1. Pre019/restored schema: typed floor denial before querying nonexistent migration tables, even with an otherwise plausible publication list — Task1.
@@ -61,44 +98,44 @@
 
 **Files:** create `cloud/src/migration-fence-journal.mjs`, `cloud/tests/migration-fence-journal.test.mjs`; modify `cloud/src/migration-fence.mjs`, `cloud/tests/vault-v2-migration-operator.test.mjs`.
 **Interfaces:** `validateFenceEvent(event)`, `reduceFenceEvents(events) -> {schemaFloor,committed,pending}`. Version2 `PENDING_INTENT` record binds unique `intentID`, `operationID`, `kind:'MIGRATION'|'PUBLICATION'`, sorted complete `vaults:[{teamID,vaultID,generationID,sequence,headerHash,manifestHash}]`, and `schemaFloor`; terminal records reference exact `intentID`+canonical intent digest and carry `CONFIRMED_COMMIT` or `PROVEN_ABORT`. `MigrationFence.append(event)` performs durable append; `snapshot()` returns validated reduced state. Journal schema supports actual emitted19legacy/20reader/22whole-publication floors; unknown versions/outcomes fail closed.
-- [ ] Write `pending multiVault intent blocks all guarded traffic until one exact outcome`: one append covers the whole sorted set; no per-Vault prefix confirmation (Focus2). `confirmed commit advances all minima`, `proven abort preserves prior minima`, `later pending does not erase prior committed history` must assert exact maps.
-- [ ] Write `outcome replay is idempotent and contradictory replay conflicts`; reject duplicate Vaults, altered membership/order-normalized digest, rollback/same-sequence fork, invalid IDs/hashes/floors, orphan resolution and commit-after-abort.
-- [ ] Write real-file tests `torn tail and short writes fail closed`, `replay repeats both fsync barriers`, `interrupted lock never resets itself`, `journal capacity exhaustion never truncates prior events`. Preserve the existing4MiB limit unless measured scope requires a reviewed bounded change.
-- [ ] Define legacy compatibility explicitly: strict old records remain conservative unresolved requirements until exact original activation read-back appends a v2 resolution binding their complete old tuple; never silently relabel old intent bytes as confirmed/aborted or erase them. Legacy19 records remain exact attemptID/manifestHash requirements: do not invent a reader headerHash/sequence when no signed reader projection exists. Test byte-preserving upgrade and failed upgrade replay.
-- [ ] Run `node --test cloud/tests/migration-fence-journal.test.mjs cloud/tests/vault-v2-migration-operator.test.mjs` RED, implement pure reducer then durable append adapter, rerun GREEN.
-- [ ] Review state transitions/disk-failure matrix and commit `feat: retain append-only publication fence outcomes`; no controller or runtime claim yet.
+- [x] Write `pending multiVault intent blocks all guarded traffic until one exact outcome`: one append covers the whole sorted set; no per-Vault prefix confirmation (Focus2). `confirmed commit advances all minima`, `proven abort preserves prior minima`, `later pending does not erase prior committed history` must assert exact maps.
+- [x] Write `outcome replay is idempotent and contradictory replay conflicts`; reject duplicate Vaults, altered membership/order-normalized digest, rollback/same-sequence fork, invalid IDs/hashes/floors, orphan resolution and commit-after-abort.
+- [x] Write real-file tests `torn tail and short writes fail closed`, `replay repeats both fsync barriers`, `interrupted lock never resets itself`, `journal capacity exhaustion never truncates prior events`. Preserve the existing4MiB limit unless measured scope requires a reviewed bounded change.
+- [x] Define legacy compatibility explicitly: strict old records remain conservative unresolved requirements until exact original activation read-back appends a v2 resolution binding their complete old tuple; never silently relabel old intent bytes as confirmed/aborted or erase them. Legacy19 records remain exact attemptID/manifestHash requirements: do not invent a reader headerHash/sequence when no signed reader projection exists. Test byte-preserving upgrade and failed upgrade replay.
+- [x] Run `node --test cloud/tests/migration-fence-journal.test.mjs cloud/tests/vault-v2-migration-operator.test.mjs` RED, implement pure reducer then durable append adapter, rerun GREEN.
+- [x] Review state transitions/disk-failure matrix and commit `feat: retain append-only publication fence outcomes`; no controller or runtime claim yet.
 
 ### Task 3: Wire initial migration and whole publication to exact transaction outcomes
 
 **Files:** create `cloud/src/publication-fence-coordinator.mjs`, `cloud/tests/publication-fence-coordinator.test.mjs`, `cloud/tests/publication-fence-postgres.test.mjs`; modify `cloud/src/vault-migration-store.mjs`, `cloud/src/whole-publication-store.mjs`, `cloud/scripts/vault-v2-migration-staging.mjs`, migration/whole-publication fixture configuration.
 **Interfaces:** `PublicationFenceCoordinator({fence})`; `beforeCommit(intent) -> Promise<void>`, `confirmCommit({intentID,receipt,readback})`, `reconcile({intentID,readCommittedOutcome})`; internal `proveAbort({intentID,proof})` accepts only an opaque provenance-bound AbortProof minted by the trusted transaction adapter while tracking whether COMMIT was dispatched. AbortProof is not an operator JSON or public caller boolean. Read-back returns exact immutable signed manifest/header plus stored receipt; missing/timeout is unresolved, never abort proof. A positive abort in this scope requires acknowledged rollback before any COMMIT was attempted; no after-restart pointer-absence shortcut. Successful ROLLBACK after an unknown COMMIT, arbitrary operator JSON, timeout, receipt absence or older restored DB never suffices. Process-loss ambiguity remains `PENDING_INTENT` without exact committed receipt/manifest; do not claim pg_xact_status alone is restore-proof.
-- [ ] Write `lost COMMIT reply retains pending then resolves exact receipt`, `failed confirm fsync retains pending and retries`, `rollback acknowledged before COMMIT appends abort`, `COMMIT dispatched then connection failure can never prove abort`, `operator JSON cannot mint abort proof`, and `post-restart absent receipt remains pending despite rollback acknowledgement` (Focus3).
-- [ ] Write actualPG tests for migration and two-Vault publication: inject faults before intent, after intent, each policy/pointer/outbox/receipt stage, before/after COMMIT and terminal append; assert old-or-new atomic DB set and complete fence minima. Preserve bounded SQL40P01/40001 retry, use a distinct intent per actual transaction attempt and exact same authorized operation.
-- [ ] Run coordinator tests RED. Bind migration activation and whole-publication commit immediately before durable cutover/COMMIT, retaining complete generation/manifest data; require durable intent before COMMIT. Full fence failure aborts DB mutation.
-- [ ] Add an operator-only `reconcile-fence` command to existing staging CLI; read exact receipt and immutable manifest/header without mutating policy or inventing consent. Positive terminal outcomes append; unresolved stays blocking. No new public endpoint.
-- [ ] Run unit+serialPG tests GREEN; replace activation fixture no-op fences in the end-to-end proof with actual temp-file fences. Keep deliberately isolated unit seams labelled.
-- [ ] Review ambiguous-outcome source/control/sink trace and commit `feat: reconcile durable fence with publication transaction outcomes`.
+- [x] Write `lost COMMIT reply retains pending then resolves exact receipt`, `failed confirm fsync retains pending and retries`, `rollback acknowledged before COMMIT appends abort`, `COMMIT dispatched then connection failure can never prove abort`, `operator JSON cannot mint abort proof`, and `post-restart absent receipt remains pending despite rollback acknowledgement` (Focus3).
+- [x] Write actualPG tests for migration and two-Vault publication: inject faults before intent, after intent, each policy/pointer/outbox/receipt stage, before/after COMMIT and terminal append; assert old-or-new atomic DB set and complete fence minima. Preserve bounded SQL40P01/40001 retry, use a distinct intent per actual transaction attempt and exact same authorized operation.
+- [x] Run coordinator tests RED. Bind migration activation and whole-publication commit immediately before durable cutover/COMMIT, retaining complete generation/manifest data; require durable intent before COMMIT. Full fence failure aborts DB mutation.
+- [x] Add an operator-only `reconcile-fence` command to existing staging CLI; read exact receipt and immutable manifest/header without mutating policy or inventing consent. Positive terminal outcomes append; unresolved stays blocking. No new public endpoint.
+- [x] Run unit+serialPG tests GREEN; replace activation fixture no-op fences in the end-to-end proof with actual temp-file fences. Keep deliberately isolated unit seams labelled.
+- [x] Review ambiguous-outcome source/control/sink trace and commit `feat: reconcile durable fence with publication transaction outcomes`.
 
 ### Task 4: Independent old-code/schema gate and actual startup wiring
 
 **Files:** create `cloud/src/deployment-compatibility.mjs`, `cloud/scripts/check-deployment-compatibility.mjs`, `cloud/deployment-compatibility.json`, `cloud/tests/deployment-compatibility.test.mjs`; modify `cloud/src/migration-compatibility.mjs`, `cloud/src/config.mjs`, `cloud/src/server.mjs`, `cloud/scripts/start-staging-guarded.sh`, `cloud/Dockerfile`, `cloud/compose.yaml` and applicable storage overlay.
 **Interfaces:** `verifyDeploymentCompatibility({query,fence,candidate}) -> Promise<{compatible:true}>`; candidate is a controller-pinned reviewed source/image identity plus static capabilities `{fenceVersion:2,maxSchemaVersion:22,readerProjectionVersion:1,wholePublicationVersion:1}` extracted from the selected image, not a free caller version claim. Reuse Task1 query ordering and Task2 snapshot; pending/unsupported capability/schema/missing Vault/lower generation/hash mismatch deny.
-- [ ] Write `old image missing fence capability cannot open traffic`, `schema floor rejects before migrations or publication queries`, `missing/corrupt fence never initializes silently`, `new pending intent closes guarded traffic` (Focus4).
-- [ ] Run tests RED; implement independent gate before selecting/starting an image and before current Docker entrypoint migrations, and repeat before `server.listen`. Explicit first provisioning creates an empty fence only through reviewed operator action, never on absence during startup.
-- [ ] Require configured independent host fence path and strict journal support whenever migration/read/publication is enabled; shipped feature defaults remain off. The check executable can run without binding HTTP; rejected startups do not report ready or pump outbox.
-- [ ] During service operation, block new guarded requests/readiness while any intent is unresolved; in-flight already-authorized reads retain the existing spec semantics. Reconcile through local operator channel, reopen only after verified terminal state; no fail-open polling window.
-- [ ] Run startup process tests with injected DB/controller adapters and assert zero listen/up/migrate side effects after denial. Verify Compose mounts preserve independent fence across DB restore and pin source/image metadata.
-- [ ] Review alternate start paths and commit `feat: enforce publication compatibility before guarded traffic`.
+- [x] Write `old image missing fence capability cannot open traffic`, `schema floor rejects before migrations or publication queries`, `missing/corrupt fence never initializes silently`, `new pending intent closes guarded traffic` (Focus4).
+- [x] Run tests RED; implement independent gate before selecting/starting an image and before current Docker entrypoint migrations, and repeat before `server.listen`. Explicit first provisioning creates an empty fence only through reviewed operator action, never on absence during startup.
+- [x] Require configured independent host fence path and strict journal support whenever migration/read/publication is enabled; shipped feature defaults remain off. The check executable can run without binding HTTP; rejected startups do not report ready or pump outbox.
+- [x] During service operation, block new guarded requests/readiness while any intent is unresolved; in-flight already-authorized reads retain the existing spec semantics. Reconcile through local operator channel, reopen only after verified terminal state; no fail-open polling window.
+- [x] Run startup process tests with injected DB/controller adapters and assert zero listen/up/migrate side effects after denial. Verify Compose mounts preserve independent fence across DB restore and pin source/image metadata.
+- [x] Review alternate start paths and commit `feat: enforce publication compatibility before guarded traffic`.
 
 ### Task 5: Controller/restore negative acceptance before any staging change
 
 **Files:** create `cloud/tests/staging-controller-fence.test.mjs`, `cloud/scripts/verify-staging-controller.mjs`; update `docs/architecture/vault-v2-migration-publication.md` and new `docs/security/pr-c-staging-acceptance.md` with local evidence only.
 **Interfaces:** `verifyControllerFixture({candidate,query,fence,runCommand,report})` exercises the actual start script/check executable, substituting command transport only; reports redacted stage/outcome and observed traffic exposure.
-- [ ] Write `restored DB12 cannot reach post019 query or compose up`, `restored lower generation cannot serve`, `missing fenced Vault and same-sequence fork deny`, `old code with a modern schema denies`, `pending multiVault intent refuses startup`.
-- [ ] Run tests RED; add only necessary controller adapters/guard fixes. Preserve source/image pinning, Compose storage validation and backup independence; never bypass the real checked script with a test-only controller.
-- [ ] Run actual local disposable PG restore tests: capture newer external fence, restore an older DB into a different database, prove rejection before traffic and preserve external bytes. Restore both DB+fence remains explicitly outside the proof.
-- [ ] Run `node --test --test-concurrency=1 cloud/tests/staging-controller-fence.test.mjs` with disposable PG; require all negative cases rejected at their expected boundary and no ordinary Vault mutation.
-- [ ] Review evidence and commit `test: prove controller rejects incompatible database restores`.
+- [x] Write `restored DB12 cannot reach post019 query or compose up`, `restored lower generation cannot serve`, `missing fenced Vault and same-sequence fork deny`, `old code with a modern schema denies`, `pending multiVault intent refuses startup`.
+- [x] Run tests RED; add only necessary controller adapters/guard fixes. Preserve source/image pinning, Compose storage validation and backup independence; never bypass the real checked script with a test-only controller.
+- [x] Run actual local disposable PG restore tests: capture newer external fence, restore an older DB into a different database, prove rejection before traffic and preserve external bytes. Restore both DB+fence remains explicitly outside the proof.
+- [x] Run `node --test --test-concurrency=1 cloud/tests/staging-controller-fence.test.mjs` with disposable PG; require all negative cases rejected at their expected boundary and no ordinary Vault mutation.
+- [x] Review evidence and commit `test: prove controller rejects incompatible database restores`.
 
 ### Task 6: Prepare and perform the authorized candidate test-staging rollout
 
@@ -126,7 +163,7 @@
 
 **Files:** update PR C implementation ledger and `docs/security/pr-c-staging-acceptance.md`; changed source tests/docs only; Continuity STATE/HANDOFF/PROJECT_CONTEXT/README/ROADMAP/VERIFIED_HISTORY/LESSONS/checkpoint and affected ops evidence per UPDATE_PROTOCOL.
 - [ ] Run final targeted fence/controller/PG/Browser/native matrices, PG16 fresh and12→latest migrations, direct-SQL concurrency/fault injection and isolated restore negatives with no unintended skips.
-- [ ] Run full Cloud serialPG suite, full Swift regression and Release on supported Swift6 CI toolchain, actual Browser durable/restart tests, Pages/packaging guards; report existing rewrap TODO and inherited Nodemailer advisory accurately.
+- [ ] Run full Cloud serialPG suite, full Swift regression and Release on supported Swift6 CI toolchain, actual Browser durable/restart tests, Pages/packaging guards; report the existing rewrap TODO and dependency audit accurately.
 - [ ] Re-run required100/1000resource and10Vault/10000wrapper scale/fanout boundaries with complete prepare/encrypt/upload/commit/read-back/decrypt, client+server RSS/bytes/query plans; distinguish memory seams from native/IndexedDB/real HTTPS cost.
 - [ ] Complete fresh independent whole-branch review; resolve findings with meaningful RED→GREEN and freeze exact head/tree. Obtain sealed formal Codex Security diff scan with canonical coverage/deferred accounting; prior PR223 scan is not PR C evidence.
 - [ ] Push permitted feature branch/Draft PR, require exact-head CI and TestDMG; download/check digests, read-only mount and deep-strict signature. No ad-hoc artifact is official signing/notarization or actual upgrade acceptance.
@@ -135,7 +172,7 @@
 
 ## Execution/Self-review Handoff
 
-- Task1 is the immediate small deliverable; Tasks2–8 remain unchecked and must not be summarized as complete when Task1 passes.
+- Tasks1–5 are locally implemented and independently reviewed. Tasks6–8 remain open until actual staging, real lifecycle, and final exact-head gates have evidence. Separate task commits were batched after cross-task regression and review fixes; no runtime acceptance is inferred.
 - Spec§6 maps to Tasks1–5; explicit staging scope/ordinary-Vault invariant and §117 map to Tasks6–7; every-PR proofs and retained RC boundaries map to Task8.
 - Five Review Focus cases are pinned to named test steps above; journal, coordinator and verifier interface names agree across tasks.
 - User/Continuity authority overrides the skill's generic plan-review pause: root self-reviews this plan and proceeds with the already-authorized Task1 after post-merge CI/Continuity, without another architecture confirmation.
@@ -143,3 +180,15 @@
 ## Task 1 verified implementation evidence
 
 Meaningful pre-fix regressions reproduced floor20 rejection, empty-fence old-schema acceptance, and real guarded CLI schema12 returning a generic operator failure. The corrected unit passes25targeted tests, including unchanged migration prefixes12→18→19→20 on a separate PostgreSQL16 database and both helper/CLI. Full serial Cloud suite with actual Edge/IndexedDB:829total,828PASS,0FAIL,0SKIP,1existing password-rewrapTODO. Initial sandbox-only Edge launch failed; the complete permitted-browser rerun passed. Independent Task1 review found no actionable issues. Existing file/directory fsync replay tests pass. `.github/workflows/ci.yml` now includes the new PG integration test. This is Task1 evidence only; Tasks2–8, real staging execution and final exact-head PR C gates remain pending.
+
+## Tasks 2–5 local integration evidence
+
+The append-only journal, transaction outcome coordinator, runtime gate and independently retained controller are implemented. Independent reviews found and corrected missing-journal recreation, legacy positive reconciliation, the SMTP await/startup race, effective Compose environment mismatch, Compose project drift, and normalized bind-option handling. The ordinary-Vault baseline now covers retained authorization context as well as encrypted resources. Publication GET requires all three V2 capability headers. New regressions demonstrated each corrected boundary before passing.
+
+Local baseline plus reviewed core Cloud suite: 942 tests, 941 PASS, zero failures/skips, one pre-existing password-rewrap TODO. Full Swift:796 tests in73 suites PASS. Release build PASS. Actual local PostgreSQL16 custom-format dump/isolated restore and guarded checker negatives:25/25 PASS; ordinary inventory CLI11/11 PASS; journal32/32 PASS; coordinator19/19 PASS. These are local evidence, not staging acceptance.
+
+Dependency audit detected Nodemailer9.0.6 advisories. A public sendMail regression reproduced malformed-address parser blocking beyond a10-second killable child budget. Pinned Nodemailer10.0.14 processes the same input in97ms; application mail compilation and existing mailer tests6/6 PASS; npm audit zero known vulnerabilities. Node22 satisfies its Node20 minimum. Application email normalization already caps input at254characters; no externally reachable application DoS is claimed solely from the dependency PoC.
+
+Post-dependency regression covered all944 core cases:943PASS and one existingTODO. The same invocation also discovered a new uncommitted installer test during parallel development; that extra file failed because its new module did not yet exist. It is excluded from the core commit, and the overall945-case invocation is recorded as failed, not a full-suite pass. The final all-file gate remains open. Migration scale100/1000 passes after explicit temporary-journal provisioning in the disposable benchmark.
+
+Actual staging remains at source516ce1b3361a2561bafdd1ed3b1bfba760328b53/schema12 with registration closed and no controller provisioned. Task6 installer and Task7 real Browser/native runners are in progress. Real Owner-controlled fresh account addresses and interactive secure input remain required. Production, main, tags, releases and feeds remain unchanged.

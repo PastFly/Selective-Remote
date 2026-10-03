@@ -672,7 +672,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         const parameters=new URLSearchParams();
         for(const [key,value] of Object.entries(query ?? {})) if(value!==null && value!==undefined && key!=='header' && key!=='inventory') parameters.set(key,String(value));
         let response;
-        try { response=await authorizedRequest(`/v1/teams/${teamID}/vaults/${vaultID}/publication/${route}${parameters.size?'?'+parameters:''}`); }
+        try { response=await authorizedRequest(`/v1/teams/${teamID}/vaults/${vaultID}/publication/${route}${parameters.size?'?'+parameters:''}`, {headers:{'x-vault-schema-version':'2','x-vault-capability':'resource_acl_v2','x-publication-version':'1'}}); }
         catch(error) { if(error instanceof TypeError) throw new Error('publication_network_unavailable'); throw error; }
         const result=await responseJSON(response,'publication_response_invalid');
         if(!response.ok) { const error=new Error(typeof result.error==='string'?result.error:'publication_request_failed');error.status=response.status;throw error; }

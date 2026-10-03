@@ -123,7 +123,8 @@ extension SelectiveRemoteCloudAPIClient: SelectiveRemoteVaultPublicationRemote {
         if let hash { query.append(.init(name: "headerHash", value: hash)) }
         if let cursor { query.append(.init(name: "cursor", value: cursor)) }
         let (data, response) = try await authorizedResponse(endpoint: scope.endpoint,
-            path: "v1/teams/\(scope.teamID.canonicalCloudString)/vaults/\(scope.vaultID.canonicalCloudString)/publication/\(route)", queryItems: query)
+            path: "v1/teams/\(scope.teamID.canonicalCloudString)/vaults/\(scope.vaultID.canonicalCloudString)/publication/\(route)",
+            headers: ["X-Vault-Schema-Version": "2", "X-Vault-Capability": "resource_acl_v2", "X-Publication-Version": "1"], queryItems: query)
         guard (200..<300).contains(response.statusCode) else {
             let code = (try? JSONSerialization.jsonObject(with: data) as? [String: String])?["error"]
             throw SelectiveRemoteCloudError.serviceError(response.statusCode, code)

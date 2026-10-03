@@ -12,7 +12,7 @@ function schemaVersion(result) {
   return version;
 }
 
-export async function verifyMigrationCompatibility({ query, fence }) {
+export async function readMigrationSchemaVersion(query) {
   let schema;
   try {
     schema = await query("SELECT max(version) AS version FROM schema_migrations");
@@ -21,13 +21,32 @@ export async function verifyMigrationCompatibility({ query, fence }) {
     if (error.code === "42P01") throw Error("deployment_schema_floor");
     throw error;
   }
-  const version = schemaVersion(schema);
+  return schemaVersion(schema);
+}
+
+export async function readActivePublications(query, version) {
+  const sql = version < 20
+    ? 'SELECT v.team_id AS "teamID",v.id AS "vaultID",v.active_publication_attempt_id AS "attemptID",a.manifest_hash AS "manifestHash" FROM shared_vaults v LEFT JOIN vault_migration_attempts a ON a.id=v.active_publication_attempt_id AND a.team_id=v.team_id AND a.vault_id=v.id AND a.state=\'V2_ACTIVE\' WHERE v.format_state=\'V2_ACTIVE\''
+    : `SELECT v.team_id AS "teamID",v.id AS "vaultID",v.active_publication_attempt_id AS "attemptID",v.active_publication_attempt_id AS "generationID",
+        a.manifest_hash AS "manifestHash",p.header_hash AS "headerHash",p.projection->'header'->'payload'->>'sequence' AS sequence
+       FROM shared_vaults v LEFT JOIN vault_migration_attempts a ON a.id=v.active_publication_attempt_id AND a.team_id=v.team_id AND a.vault_id=v.id AND a.state='V2_ACTIVE'
+       LEFT JOIN vault_publication_projections p ON p.attempt_id=a.id AND p.team_id=a.team_id AND p.vault_id=a.vault_id
+       WHERE v.format_state='V2_ACTIVE'`;
+  const result = await query(sql);
+  if (!Array.isArray(result?.rows)) throw Error("deployment_fence_mismatch");
+  return result.rows.map((row) => {
+    if (!row || typeof row !== "object") throw Error("deployment_fence_mismatch");
+    if (row.sequence == null) return row;
+    return { ...row, sequence: schemaVersion({ rows: [{ version: row.sequence }] }) };
+  });
+}
+
+export async function verifyMigrationCompatibility({ query, fence }) {
+  const version = await readMigrationSchemaVersion(query);
   await fence.verifySchemaFloor(version);
-  const publications = await query(
-    'SELECT a.team_id AS "teamID",a.vault_id AS "vaultID",a.id AS "attemptID",a.manifest_hash AS "manifestHash" FROM vault_migration_attempts a JOIN shared_vaults v ON v.active_publication_attempt_id=a.id WHERE a.state=\'V2_ACTIVE\' AND v.format_state=\'V2_ACTIVE\'',
-  );
+  const publications = await readActivePublications(query, version);
   // Reread retained evidence after the DB await: a new requirement must not be
   // skipped just because the earlier schema check passed.
-  await fence.verify({ schemaVersion: version, publications: publications.rows });
+  await fence.verify({ schemaVersion: version, publications });
   return { compatible: true };
 }
