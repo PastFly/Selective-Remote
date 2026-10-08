@@ -13,6 +13,13 @@ const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
 const validIdentity=value=>object(value)&&/^[a-f0-9]{40}$/.test(value.sourceSHA)&&/^sha256:[a-f0-9]{64}$/.test(value.imageDigest)&&/^[a-f0-9]{64}$/.test(value.controllerDigest);
 const sameIdentity=(a,b)=>validIdentity(a)&&validIdentity(b)&&['sourceSHA','imageDigest','controllerDigest'].every(key=>a[key]===b[key]);
+// Command arguments are the only fault source; never accept a point in request JSON.
+export function operatorActivationFault(args,request){
+ if(args.length===0)return undefined;
+ if(args.length!==2||args[0]!=='--activation-fault'||!['before_commit','after_commit'].includes(args[1]))fail('arguments');
+ if(request!==undefined&&request?.operation!=='activate')fail('activation_fault_operation');
+ return args[1];
+}
 function validateContext(context,identity){
  if(!object(context)||context.version!==1||!sameIdentity(context.controllerIdentity,identity)||!/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(context.runID)
   ||context.activationPolicyPath!==operator+'/'+context.runID+'-activation-policy.json'
@@ -167,10 +174,13 @@ async function provision(args,request,settings,identity){
 
 async function main(){
  if(process.getuid?.()!==0||resolve(dirname(fileURLToPath(import.meta.url)),'..')!==root)fail('owner');
- const args=process.argv.slice(2);if(args.length&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration'].includes(args[0]))fail('arguments');
+ const args=process.argv.slice(2);
+ const activationFault=args[0]==='--activation-fault'?operatorActivationFault(args):undefined;
+ if(args.length&&activationFault===undefined&&!['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration'].includes(args[0]))fail('arguments');
  const settings=JSON.parse(await protectedBytes(root+'/settings.json')),identity=JSON.parse(await protectedBytes(operator+'/controller-identity.json'));
  if(!sameIdentity(settings,identity)||digest(await readFile(root+'/bundle.sha256'))!==identity.controllerDigest)fail('identity');
  const request=await input();
+ if(activationFault!==undefined)operatorActivationFault(args,request);
  if(['--bind-attempt','--enroll','--confirm','--enable-scoped','--enable-publication','--disable-registration'].includes(args[0]))return provision(args,request,settings,identity);
  const contextPath=operator+'/operator-context.json',context=JSON.parse(await protectedBytes(contextPath));
  validateContext(context,identity);
@@ -185,7 +195,8 @@ async function main(){
    'MIGRATION_ENVIRONMENT=staging','MIGRATION_SYNTHETIC_ENABLED=YES','MIGRATION_SYNTHETIC_VAULT_IDS='+context.scopes.map(scope=>scope.vaultID).join(','),
    'MIGRATION_FENCE_PATH='+fenceDirectory+'/journal','MIGRATION_ACTIVATION_POLICY_PATH='+context.activationPolicyPath,'MIGRATION_CONTROLLER_IDENTITY_PATH='+operator+'/controller-identity.json',
   ].join('\n')+'\n',{mode:0o600});
-  const code="process.env.MIGRATION_STAGING_DATABASE_URL=process.env.DATABASE_URL;process.argv[1]='/app/scripts/vault-v2-migration-staging.mjs';await import('/app/scripts/vault-v2-migration-staging.mjs');";
+  // Same bounded stdin/env adapter as the CLI; only root selects a fixed option.
+  const code="process.env.MIGRATION_STAGING_DATABASE_URL=process.env.DATABASE_URL;try{const {runStagingMigrationInput}=await import('/app/scripts/vault-v2-migration-staging.mjs');await runStagingMigrationInput("+JSON.stringify(activationFault===undefined?{}:{activationFault})+");}catch(error){process.stderr.write(/^[a-z_]+$/.test(error?.message??'')?error.message+'\\n':'migration_operator_failed\\n');process.exitCode=1;}";
   const running=execute('/usr/bin/docker',['run','--rm','-i','--pull=never','--network','cloud_private','--read-only','--user','0:0','--cap-drop','ALL','--security-opt','no-new-privileges',
    '--env-file',settings.envPath,'--env-file',envFile,'--mount',`type=bind,src=${fenceDirectory},dst=${fenceDirectory}`,
    '--mount',`type=bind,src=${operator},dst=${operator},readonly`,'--mount',`type=bind,src=${settings.backupDirectory},dst=${settings.backupDirectory},readonly`,

@@ -11,7 +11,11 @@ import { verifyMigrationCompatibility } from "../src/migration-compatibility.mjs
 export async function runStagingMigration(
   { environment, enabled, allowedVaultIDs, databaseURL, fencePath, policyPath, controllerIdentityPath },
   request,
+  options = {},
 ) {
+  const activationFault = activationFaultOption(options);
+  if (activationFault !== undefined && request?.operation !== "activate")
+    throw Error("invalid_migration_activation_fault");
   if (
     environment !== "staging" ||
     enabled !== true ||
@@ -67,6 +71,9 @@ export async function runStagingMigration(
       allowedVaultIDs,
       fence,
       activationGuard,
+      faultAt: point => {
+        if (point === activationFault) throw Error("migration_activation_fault_" + point);
+      },
     });
   try {
     if (request.operation === "reconcile-fence") {
@@ -104,40 +111,58 @@ export async function runStagingMigration(
     await pool.end();
   }
 }
+function activationFaultOption(options) {
+  // Import-only operator option. Neither browser JSON nor the ordinary CLI can set it.
+  if (!options || typeof options !== "object" || Object.getPrototypeOf(options) !== Object.prototype
+      || Object.keys(options).some(key => key !== "activationFault")
+      || Object.hasOwn(options, "activationFault") &&
+        !["before_commit", "after_commit"].includes(options.activationFault))
+    throw Error("invalid_migration_activation_fault");
+  return options.activationFault;
+}
+
+// Shared bounded stdin adapter. Only the installed root helper supplies options.
+export async function runStagingMigrationInput(options = {}) {
+  activationFaultOption(options);
+  // Guard before reading stdin or opening any database connection.
+  if (
+    process.env.MIGRATION_ENVIRONMENT !== "staging" ||
+    process.env.MIGRATION_SYNTHETIC_ENABLED !== "YES"
+  )
+    throw Error("migration_staging_only");
+  const chunks = []; let length = 0;
+  for await (const chunk of process.stdin) {
+    length += chunk.length;
+    if (length > 96 * 1024 * 1024) throw Error("migration_input_limit");
+    chunks.push(chunk);
+  }
+  const bytes = Buffer.concat(chunks);
+  const result = await runStagingMigration(
+    {
+      environment: "staging",
+      enabled: true,
+      allowedVaultIDs: (process.env.MIGRATION_SYNTHETIC_VAULT_IDS ?? "")
+        .split(",")
+        .filter(Boolean),
+      databaseURL: process.env.MIGRATION_STAGING_DATABASE_URL,
+      fencePath: process.env.MIGRATION_FENCE_PATH,
+      policyPath: process.env.MIGRATION_ACTIVATION_POLICY_PATH,
+      controllerIdentityPath: process.env.MIGRATION_CONTROLLER_IDENTITY_PATH,
+    },
+    JSON.parse(bytes),
+    options,
+  );
+  // Output contains opaque public descriptors, signed records or encrypted parts only.
+  process.stdout.write(JSON.stringify(result) + "\n");
+}
 if (
   process.argv[1] &&
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   try {
-    // Guard before reading stdin or opening any database connection.
-    if (
-      process.env.MIGRATION_ENVIRONMENT !== "staging" ||
-      process.env.MIGRATION_SYNTHETIC_ENABLED !== "YES"
-    )
-      throw Error("migration_staging_only");
-    const chunks = []; let length = 0;
-    for await (const chunk of process.stdin) {
-      length += chunk.length;
-      if (length > 96 * 1024 * 1024) throw Error("migration_input_limit");
-      chunks.push(chunk);
-    }
-    const bytes = Buffer.concat(chunks);
-    const result = await runStagingMigration(
-      {
-        environment: "staging",
-        enabled: true,
-        allowedVaultIDs: (process.env.MIGRATION_SYNTHETIC_VAULT_IDS ?? "")
-          .split(",")
-          .filter(Boolean),
-        databaseURL: process.env.MIGRATION_STAGING_DATABASE_URL,
-        fencePath: process.env.MIGRATION_FENCE_PATH,
-        policyPath: process.env.MIGRATION_ACTIVATION_POLICY_PATH,
-        controllerIdentityPath: process.env.MIGRATION_CONTROLLER_IDENTITY_PATH,
-      },
-      JSON.parse(bytes),
-    );
-    // Output contains opaque public descriptors, signed records or encrypted parts only.
-    process.stdout.write(JSON.stringify(result) + "\n");
+    // Fault injection is available only through the retained root host adapter.
+    if (process.argv.length !== 2) throw Error("invalid_migration_arguments");
+    await runStagingMigrationInput();
   } catch (e) {
     process.stderr.write(
       /^[a-z_]+$/.test(e.message)
