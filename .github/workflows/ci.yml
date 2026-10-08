@@ -128,6 +128,9 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Test native host evidence validation
+        run: python3 -m unittest discover -s scripts/tests -p 'test_staging_native_gui_host.py' -v
+
       - name: Test terminal web interactions
         run: node --test Tests/TerminalResourcesTests/*.test.js
 

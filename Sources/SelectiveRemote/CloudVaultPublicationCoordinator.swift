@@ -17,14 +17,23 @@ actor SelectiveRemoteVaultPublicationCoordinator {
     private let store: SelectiveRemoteVaultPublicationStore
     private let ownPin: @Sendable (URL, UUID) throws -> SelectiveRemoteDeviceTrustPin?
     private let advanceOwnPin: @Sendable (URL, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void
+    private let detachPresentation: @MainActor @Sendable (SelectiveRemotePublicationScope, SelectiveRemotePublicationSession, Bool) -> Void
     private var current: SelectiveRemotePublicationCache?
     init(scope: SelectiveRemotePublicationScope, session: SelectiveRemotePublicationSession,
          remote: any SelectiveRemoteVaultPublicationRemote, identity: SelectiveRemoteTeamDeviceIdentity,
          store: SelectiveRemoteVaultPublicationStore,
          ownPin: @escaping @Sendable (URL, UUID) throws -> SelectiveRemoteDeviceTrustPin? = { try SelectiveRemoteDeviceTrustLocalStore().pin(endpoint: $0, accountID: $1) },
-         advanceOwnPin: @escaping @Sendable (URL, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void = { try SelectiveRemoteDeviceTrustLocalStore().advance(endpoint: $0, expected: $1, next: $2) }) {
+         advanceOwnPin: @escaping @Sendable (URL, SelectiveRemoteDeviceTrustPin, SelectiveRemoteDeviceTrustPin) throws -> Void = { try SelectiveRemoteDeviceTrustLocalStore().advance(endpoint: $0, expected: $1, next: $2) },
+         detachPresentation: @escaping @MainActor @Sendable (SelectiveRemotePublicationScope, SelectiveRemotePublicationSession, Bool) -> Void = { scope, session, all in
+             let presentation = SelectiveRemotePublicationPresentation.shared
+             if all {
+                 for cache in presentation.caches where cache.scope.endpoint == session.endpoint && cache.scope.accountID == session.accountID && cache.scope.deviceID == session.deviceID {
+                     presentation.detach(scope: cache.scope, expectedSession: session)
+                 }
+             } else { presentation.detach(scope: scope, expectedSession: session) }
+         }) {
         self.scope = scope; self.session = session; self.remote = remote; self.identity = identity; self.store = store
-        self.ownPin = ownPin; self.advanceOwnPin = advanceOwnPin
+        self.ownPin = ownPin; self.advanceOwnPin = advanceOwnPin; self.detachPresentation = detachPresentation
     }
     private func read(_ route: String, generation: String? = nil, hash: String? = nil, cursor: String? = nil) async throws -> SelectiveRemoteJSONValue {
         try session.check()
@@ -131,15 +140,10 @@ actor SelectiveRemoteVaultPublicationCoordinator {
     private func retire(_ error: Error, payloadStamp: SelectiveRemotePublicationPayloadStamp, retirementSession: SelectiveRemotePublicationSession) async {
         if Self.authenticationLoss(error) {
             do { try retirementSession.prepareAuthenticationLossRetirement(); _ = try store.retireScopes(session: retirementSession, selection: .all) } catch {}
-            await MainActor.run {
-                let presentation = SelectiveRemotePublicationPresentation.shared
-                for cache in presentation.caches where cache.scope.endpoint == session.endpoint && cache.scope.accountID == session.accountID && cache.scope.deviceID == session.deviceID {
-                    presentation.detach(scope: cache.scope, expectedSession: session)
-                }
-            }
+            await detachPresentation(scope, session, true)
         } else if Self.authoritative(error) {
             try? store.removePayload(scope: scope, session: session, expectedStamp: payloadStamp)
-            await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
+            await detachPresentation(scope, session, false)
         }
     }
     static func authoritative(_ error: Error) -> Bool {
@@ -203,7 +207,7 @@ actor SelectiveRemoteVaultPublicationCoordinator {
             current = nil
             await retire(error, payloadStamp: payloadStamp, retirementSession: retirementSession)
             if Self.transient(error) { return try offline() }
-            await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
+            await detachPresentation(scope, session, false)
             throw error
         }
     }
@@ -250,7 +254,7 @@ actor SelectiveRemoteVaultPublicationCoordinator {
         } catch {
             current = nil
             await retire(error, payloadStamp: payloadStamp, retirementSession: retirementSession)
-            await MainActor.run { SelectiveRemotePublicationPresentation.shared.detach(scope: scope, expectedSession: session) }
+            await detachPresentation(scope, session, false)
             throw error
         }
     }
