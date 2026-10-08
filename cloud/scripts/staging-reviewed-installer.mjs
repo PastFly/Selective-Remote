@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
-import {createReadStream,createWriteStream} from 'node:fs';
+import {createReadStream,createWriteStream,constants as fsConstants} from 'node:fs';
 import {readFile,writeFile,lstat,realpath,mkdir,readdir,copyFile,cp,chmod,chown,rename,open} from 'node:fs/promises';
 import {dirname,join,resolve,isAbsolute} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -80,6 +80,17 @@ export async function streamProcess(file,args,{input,output,env={PATH:'/usr/bin:
  catch{child.kill('SIGTERM');fail('command_failed');}
 }
 const streamDocker=(args,options)=>streamProcess('/usr/bin/docker',args,options);
+export async function verifyRootRuntimeBinary(path,{inspect=lstat}={}){
+ let st;try{st=await inspect(path);}catch{fail('runtime_owner');}
+ if(!st.isFile()||st.isSymbolicLink()||st.uid!==0||st.gid!==0||(st.mode&0o777)!==0o755)fail('runtime_owner');
+}
+export async function installRuntimeBinary(source,path,{inspect=lstat,setOwner=chown,setMode=chmod}={}){
+ try{await copyFile(source,path,fsConstants.COPYFILE_EXCL);}catch{fail('runtime_owner');}
+ let st;try{st=await inspect(path);}catch{fail('runtime_owner');}
+ if(!st.isFile()||st.isSymbolicLink())fail('runtime_owner');
+ try{await setOwner(path,0,0);await setMode(path,0o755);}catch{fail('runtime_owner');}
+ await verifyRootRuntimeBinary(path,{inspect});
+}
 async function bundleManifest(directory){
  const files=[];
  const walk=async path=>{for(const entry of await readdir(path,{withFileTypes:true})){const full=join(path,entry.name);if(entry.isSymbolicLink())fail('bundle_symlink');if(entry.isDirectory())await walk(full);else if(entry.isFile())files.push(full);else fail('bundle_file');}};
@@ -177,7 +188,7 @@ async function runHost(phase,planPath,archivePath,dryRun){
    delete env.STAGING_REGISTRATION_EMAIL_ALLOWLIST;delete env.PUBLICATION_ALLOWED_VAULT_IDS;
    await save(join(run,'effective.env'),envText(env));const envDigest=hash(await privateFile(join(run,'effective.env')));
    const account=passwd.split('\n').find(line=>line.startsWith('cloud:'))?.split(':');if(!account||!/^[0-9]+$/.test(account[2])||!/^[0-9]+$/.test(account[3]))fail('runtime_user');
-   const runtime='runtime/node-v22.18.0-linux-x64/bin/node';await mkdir(dirname(join(bundle,runtime)),{recursive:true,mode:0o755});await copyFile(process.execPath,join(bundle,runtime));await chmod(join(bundle,runtime),0o755);
+   const runtime='runtime/node-v22.18.0-linux-x64/bin/node';await mkdir(dirname(join(bundle,runtime)),{recursive:true,mode:0o755});await installRuntimeBinary(process.execPath,join(bundle,runtime));
    await writeFile(join(bundle,'runtime-node.sha256'),hash(await readFile(join(bundle,runtime)))+'  '+runtime+'\n',{mode:0o600});
    const manifest=await bundleManifest(bundle);await save(join(bundle,'bundle.sha256'),manifest);
    const candidateIdentity={sourceSHA:plan.sourceSHA,tree:plan.tree,imageDigest,controllerDigest:hash(manifest)};
@@ -216,7 +227,7 @@ async function runHost(phase,planPath,archivePath,dryRun){
    if(await exists(root)||await exists(state))fail('already_installed');await closed();
    await git(['-C','/opt/selective-remote','fetch','origin',plan.ref]);if((await git(['-C','/opt/selective-remote','rev-parse','FETCH_HEAD'])).stdout.trim()!==plan.sourceSHA)fail('candidate_source');
    await git(['-C','/opt/selective-remote','checkout','--detach',plan.sourceSHA]);if((await git(['-C','/opt/selective-remote','rev-parse','HEAD^{tree}'])).stdout.trim()!==plan.tree)fail('candidate_source');
-   await cp(bundle,root,{recursive:true,errorOnExist:true,force:false});await chmod(root,0o700);
+   await cp(bundle,root,{recursive:true,errorOnExist:true,force:false});await chmod(root,0o700);await verifyRootRuntimeBinary(join(root,'runtime/node-v22.18.0-linux-x64/bin/node'));
    const staged=cloud+'/.env.pr-c-new';await save(staged,(await privateFile(join(run,'effective.env'))).toString());await rename(staged,cloud+'/.env');
    await mkdir(state,{mode:0o700});await mkdir(state+'/publication',{mode:0o770});await chmod(state+'/publication',0o770);await chown(state+'/publication',0,prepared.gid);
    await save(state+'/publication/journal','');await chown(state+'/publication/journal',0,prepared.gid);await chmod(state+'/publication/journal',0o660);

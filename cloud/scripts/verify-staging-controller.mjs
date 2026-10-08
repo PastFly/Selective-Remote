@@ -116,6 +116,14 @@ export function validateControllerCompose(model,settings,environment){
   return effectiveEnvironment(cloud,environment);
 }
 
+export async function readControllerComposeEnvironment(docker,compose,settings,environment){
+  // Compose 2.40 can drop env_file even with --no-env-resolution; inspect the raw model.
+  const unresolved=JSON.parse((await docker([...compose,'config','--no-env-resolution','--no-interpolate','--format','json'])).stdout);
+  if(['postgres','caddy'].some(service=>unresolved.services?.[service]?.env_file?.length))fail('deployment_environment_mismatch');
+  const model=JSON.parse((await docker([...compose,'config','--format','json'])).stdout);
+  return validateControllerCompose(model,settings,{...environment,envFiles:unresolved.services?.cloud?.env_file});
+}
+
 // Production uses this exact orchestration. Tests substitute command transport,
 // then run the retained compatibility checker against a real disposable DB.
 export async function verifyControllerFixture({candidate,runCommand,report=()=>{},maintenance=false}){
@@ -205,10 +213,7 @@ export async function runController({maintenance=false}={}){
       if(stage==='storage'){
         await invoke('/bin/bash',[join(controllerRoot,'scripts/validate-postgres-storage.sh'),'--check'],{env});
         await invoke(process.execPath,[join(controllerRoot,'scripts/validate-postgres-bind-source.mjs'),...settings.composeFiles.map(f=>f.path)],{env});
-        const unresolved=JSON.parse((await docker([...compose,'config','--no-env-resolution','--format','json'])).stdout);
-        if(['postgres','caddy'].some(service=>unresolved.services?.[service]?.env_file?.length))fail('deployment_environment_mismatch');
-        const model=JSON.parse((await docker([...compose,'config','--format','json'])).stdout);
-        const effective=validateControllerCompose(model,settings,{imageEnvironment,dockerEnvironment,envFiles:unresolved.services?.cloud?.env_file});
+        const effective=await readControllerComposeEnvironment(docker,compose,settings,{imageEnvironment,dockerEnvironment});
         await writeFile(join(temp,'effective.env'),Object.entries(effective).map(([key,value])=>key+'='+value).join('\n')+'\n',{mode:0o600,flag:'wx'});return;
       }
       if(stage==='assert-project')return inspectProject();
