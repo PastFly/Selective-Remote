@@ -1,3 +1,4 @@
+import {createTestPool} from './postgres-pool-teardown.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -19,7 +20,7 @@ const database=process.env.TEST_DATABASE_URL;
 async function withIsolatedDatabase(work){
   const target=new URL(database);
   assert.ok(['127.0.0.1','localhost','[::1]'].includes(target.hostname));
-  const admin=new pg.Pool({connectionString:database,max:1});
+  const admin=createTestPool({connectionString:database,max:1});
   const name=`prc_task3_${randomUUID().replaceAll('-','')}`;
   let pool,created=false;
   const directory=await mkdtemp(join(tmpdir(),'publication-fence-pg-'));
@@ -27,12 +28,12 @@ async function withIsolatedDatabase(work){
     assert.match((await admin.query('SHOW server_version')).rows[0].server_version,/^16\./);
     await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created=true;
     target.pathname=`/${name}`;
-    pool=new pg.Pool({connectionString:target.href,max:5});
+    pool=createTestPool({connectionString:target.href,max:5});
     await applyMigrations(pool,fileURLToPath(new URL('../migrations/',import.meta.url)),{info(){}});
     const path=join(directory,'fence');await writeFile(path,'',{mode:0o600});
     await work({pool,path,fence:new MigrationFence(path)});
   }finally{
-    try{await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);}
+    try{await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}"`);}
     finally{await admin.end();await rm(directory,{recursive:true,force:true});}
   }
 }

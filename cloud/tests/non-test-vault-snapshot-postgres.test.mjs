@@ -1,3 +1,4 @@
+import {createTestPool} from './postgres-pool-teardown.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -12,7 +13,7 @@ import {captureNonTestVaultSnapshot,verifyNonTestVaultSnapshot} from '../src/non
 const database=process.env.TEST_DATABASE_URL;
 const migrations=fileURLToPath(new URL('../migrations/',import.meta.url));
 async function fresh(work){
-  const admin=new pg.Pool({connectionString:database,max:1});
+  const admin=createTestPool({connectionString:database,max:1});
   const name=`prc_task6_${randomUUID().replaceAll('-','')}_test`;
   const directory=await realpath(await mkdtemp(join(tmpdir(),'ordinary-vaults-')));
   let created=false,pool;
@@ -20,12 +21,12 @@ async function fresh(work){
     assert.match((await admin.query('SHOW server_version')).rows[0].server_version,/^16\./);
     assert.equal((await admin.query('SELECT rolcreatedb OR rolsuper AS allowed FROM pg_roles WHERE rolname=current_user')).rows[0].allowed,true);
     await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created=true;
-    const url=new URL(database);url.pathname=`/${name}`;pool=new pg.Pool({connectionString:url.href,max:2});
+    const url=new URL(database);url.pathname=`/${name}`;pool=createTestPool({connectionString:url.href,max:2});
     const prefix=join(directory,'prefix');await mkdir(prefix);
     for(const migration of (await loadMigrations(migrations)).filter(m=>m.version<=12))await copyFile(join(migrations,migration.name),join(prefix,migration.name));
     await applyMigrations(pool,prefix,{info(){}});
     await work({pool,directory,path:join(directory,'ordinary.json')});
-  } finally {await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);await admin.end();await rm(directory,{recursive:true,force:true});}
+  } finally {await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}"`);await admin.end();await rm(directory,{recursive:true,force:true});}
 }
 async function transaction(pool,work){
   const client=await pool.connect();

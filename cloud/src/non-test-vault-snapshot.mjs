@@ -132,7 +132,7 @@ export async function captureNonTestVaultSnapshot({query,path}){
   const scope={};
   for(const [kind,table] of [['shared','shared_vaults'],['personal','personal_vaults'],['users','users']])
     scope[kind]=(await query(`SELECT id FROM public.${table} ORDER BY id`)).rows.map(row=>row.id);
-  scope.teams=(await query('SELECT DISTINCT team_id FROM public.shared_vaults ORDER BY team_id')).rows.map(row=>row.team_id);
+  scope.teams=(await query('SELECT id FROM public.teams ORDER BY id')).rows.map(row=>row.id);
   const snapshot={formatVersion:1,scope,tables:await inspect(query,scope)};
   await save(path,snapshot);
   return summary(snapshot);

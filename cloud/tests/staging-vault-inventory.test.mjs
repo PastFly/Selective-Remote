@@ -1,3 +1,4 @@
+import {createTestPool} from './postgres-pool-teardown.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {execFile} from 'node:child_process';
@@ -29,13 +30,13 @@ test('inventory CLI rejects environment, arguments and non-allowlist stdin befor
  for(const c of cases){const result=await cli(c.args,c);assert.equal(result.status,1);assert.equal(result.stdout,'');assert.equal(result.stderr.trim(),c.error);assert.doesNotMatch(result.stderr,/never-print|sensitive-password|127\.0\.0\.1/);}
 });
 async function fresh(work){
- const admin=new pg.Pool({connectionString:database,max:1}),name='prc_inventory_'+randomUUID().replaceAll('-','');
+ const admin=createTestPool({connectionString:database,max:1}),name='prc_inventory_'+randomUUID().replaceAll('-','');
  const directory=await realpath(await mkdtemp(join(tmpdir(),'prc-inventory-cli-')));let created=false,pool;
  try{assert.match((await admin.query('SHOW server_version')).rows[0].server_version,/^16\./);await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created=true;
-  const url=new URL(database);url.pathname='/'+name;pool=new pg.Pool({connectionString:url.href,max:2});const prefix=join(directory,'prefix');await mkdir(prefix);
+  const url=new URL(database);url.pathname='/'+name;pool=createTestPool({connectionString:url.href,max:2});const prefix=join(directory,'prefix');await mkdir(prefix);
   for(const m of (await loadMigrations(migrations)).filter(m=>m.version<=12))await copyFile(join(migrations,m.name),join(prefix,m.name));
   await applyMigrations(pool,prefix,{info(){}});await work({pool,url:url.href,path:join(directory,'baseline.json')});
- }finally{try{await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);}finally{await admin.end();await rm(directory,{recursive:true,force:true});}}
+ }finally{try{await pool?.end();if(created)await admin.query(`DROP DATABASE "${name}"`);}finally{await admin.end();await rm(directory,{recursive:true,force:true});}}
 }
 async function seed(pool){
  const user=randomUUID(),device=randomUUID(),team=randomUUID(),member=randomUUID(),vault=randomUUID();

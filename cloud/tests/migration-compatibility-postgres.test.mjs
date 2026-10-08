@@ -1,3 +1,4 @@
+import {createTestPool} from './postgres-pool-teardown.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {randomUUID} from 'node:crypto';
@@ -22,7 +23,7 @@ const operatorPath = fileURLToPath(new URL('../scripts/vault-v2-migration-stagin
 // PostgreSQL's CI service role has CREATEDB through its initial superuser role.
 // No temporary-schema fallback: initialSchemaState deliberately inspects public.*.
 async function withFreshDatabase(work) {
-  const admin = new pg.Pool({connectionString: database, max: 1});
+  const admin = createTestPool({connectionString: database, max: 1});
   const name = `prc_compat_${process.pid}_${randomUUID().replaceAll('-', '')}`;
   assert.match(name, /^prc_compat_[0-9]+_[a-f0-9]{32}$/);
   assert.ok(name.length <= 63);
@@ -39,12 +40,12 @@ async function withFreshDatabase(work) {
     created = true;
     const connection = new URL(database);
     connection.pathname = `/${name}`;
-    pool = new pg.Pool({connectionString: connection.href, max: 2});
+    pool = createTestPool({connectionString: connection.href, max: 2});
     await work({pool, databaseURL: connection.href});
   } finally {
     try {
       await pool?.end();
-      if (created) await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);
+      if (created) await admin.query(`DROP DATABASE "${name}"`);
     } finally {
       await admin.end();
     }

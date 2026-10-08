@@ -1,3 +1,4 @@
+import {createTestPool} from './postgres-pool-teardown.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {readFile} from 'node:fs/promises';
@@ -77,13 +78,13 @@ test('failure to close traffic, second attestation or post-migration pending pre
 });
 async function withDatabases(work){
  const base=new URL(database);assert.ok(['127.0.0.1','localhost','[::1]'].includes(base.hostname));
- const admin=new pg.Pool({connectionString:database,max:1}),created=[],pools=[],directory=await mkdtemp(join(tmpdir(),'prc-controller-restore-'));
- const make=async()=>{const name='prc_ctrl_'+randomUUID().replaceAll('-','');await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created.push(name);const url=new URL(base);url.pathname='/'+name;const pool=new pg.Pool({connectionString:url.href,max:4});pools.push(pool);return {pool,url};};
+ const admin=createTestPool({connectionString:database,max:1}),created=[],pools=[],directory=await mkdtemp(join(tmpdir(),'prc-controller-restore-'));
+ const make=async()=>{const name='prc_ctrl_'+randomUUID().replaceAll('-','');await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created.push(name);const url=new URL(base);url.pathname='/'+name;const pool=createTestPool({connectionString:url.href,max:4});pools.push(pool);return {pool,url};};
  const pgEnv=url=>({...process.env,PGHOST:url.hostname,PGPORT:url.port,PGUSER:decodeURIComponent(url.username),PGPASSWORD:decodeURIComponent(url.password),PGDATABASE:url.pathname.slice(1)});
  const dump=async(url,file)=>execute(process.env.PG_DUMP_PATH??'pg_dump',['--format=custom','--file',file],{env:pgEnv(url),maxBuffer:1024*1024});
  const restore=async file=>{const target=await make();await execute(process.env.PG_RESTORE_PATH??'pg_restore',['--exit-on-error','--dbname',target.url.pathname.slice(1),file],{env:pgEnv(target.url),maxBuffer:1024*1024});return target;};
  try{assert.match((await admin.query('SHOW server_version')).rows[0].server_version,/^16\./);await work({make,dump,restore,directory});}
- finally{try{await Promise.all(pools.map(pool=>pool.end()));for(const name of created)await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);}finally{await admin.end();await rm(directory,{recursive:true,force:true});}}
+ finally{try{await Promise.all(pools.map(pool=>pool.end()));for(const name of created)await admin.query(`DROP DATABASE "${name}"`);}finally{await admin.end();await rm(directory,{recursive:true,force:true});}}
 }
 async function checkerCLI(databaseURL,fencePath,maintenance=false){
  const candidateFile=join(dirname(fencePath),'candidate-'+randomUUID()+'.json');
