@@ -1,10 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink,chmod,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {lifecycleModules,redactedEvidence} from '../scripts/staging-publication-acceptance.mjs';
+import {captureNonTestVaultSnapshot} from '../src/non-test-vault-snapshot.mjs';
+import {canonicalMigrationJSON} from '../public/vault-v2-migration.js';
+import {lifecycleModules,redactedEvidence,validateOperatorProof} from '../scripts/staging-publication-acceptance.mjs';
 const api=()=>import('../scripts/staging-bootstrap-continuation.mjs');
 const id=()=>randomUUID(),hash=v=>createHash('sha256').update(v).digest('hex'),digest='a'.repeat(64);
 const config=runID=>({version:1,runID,origin:'https://cloud.pastfly.ru',emails:['one@example.test','two@example.test'],expectedSourceSHA:'a'.repeat(40),approvedVaultIDs:[],moduleHashes:Object.fromEntries(lifecycleModules.map(v=>['/'+v+'.js',digest])),operator:{sshHost:'root@142.252.220.33',remoteWrapperPath:'/opt/selective-remote-controller/scripts/staging-migration-operator.sh',identityFile:'/Users/kadaevleonid/.ssh/id_ed25519_selectiveremote'}});
@@ -105,4 +107,113 @@ test('diagnostic lock admission rechecks a claim that appeared after initial ins
   await writeFile(join(f.original,'continuation-claim.json'),'{}\n',{mode:0o600,flag:'wx'});await acquireLifecycleLock(lock);
  }),/continuation_already_claimed/);
  await assert.rejects(readFile(join(f.original,'runner.lock','owner.json')),{code:'ENOENT'});
+});
+
+// Synthetic database-side hashes; the real capture serializer defines the raw identity.
+async function successorFixture(t){
+ const f=await fixture(t),a=await api(),scopes={shared_vaults:[id(),id()].sort(),personal_vaults:[id(),id(),id()].sort(),users:[id(),id(),id(),id()].sort(),teams:[id()]};
+ const originalName='ordinary-original-snapshot.json',successorName='ordinary-successor-snapshot.json',authorizationName='ordinary-successor-authorization.json';
+ const summary=await captureNonTestVaultSnapshot({path:join(f.runDirectory,originalName),query:async(sql)=>{
+  if(sql==='SHOW transaction_isolation')return {rows:[{transaction_isolation:'repeatable read'}]};
+  if(sql==='SHOW transaction_read_only')return {rows:[{transaction_read_only:'on'}]};
+  if(sql.startsWith('SET LOCAL'))return {rows:[]};
+  if(sql.includes('information_schema.columns'))return {rows:[{column_name:'id'}]};
+  const table=/^SELECT id FROM public\.(\w+) ORDER BY id$/.exec(sql)?.[1];if(table)return {rows:scopes[table].map(id=>({id}))};
+  if(sql.startsWith('SELECT encode(digest'))return {rows:/FROM public\.(vault_resource_ciphertext_versions|vault_resource_key_wrappers_v2|vault_resource_manifest_pointers_v2|vault_publication_projections|team_publication_generations|team_publication_outbox) t/.test(sql)?[]:[{hash:digest}]};
+  throw Error('unexpected synthetic query');
+ }});
+ f.baseline={unchanged:true,...summary};
+ for(const name of ['baseline.json','journal.json']){
+  const path=join(f.original,name),value=JSON.parse(await readFile(path));if(name==='journal.json')value.baseline=f.baseline;
+  const bytes=JSON.stringify(name==='baseline.json'?f.baseline:value)+'\n';await writeFile(path,bytes);f.manifest.originalFiles[name]=hash(bytes);
+ }
+ const originalSnapshot=JSON.parse(await readFile(join(f.runDirectory,originalName))),successorSnapshot=structuredClone(originalSnapshot);successorSnapshot.tables.users.sha256='f'.repeat(64);
+ const successorBytes=JSON.stringify(successorSnapshot);await writeFile(join(f.runDirectory,successorName),successorBytes,{mode:0o600,flag:'wx'});
+ const successorBaseline={...f.baseline,sha256:hash(successorBytes)},failedPath=join(f.dir,'failed-comparison.json');
+ const failureBytes=JSON.stringify({outcome:'DENIED',code:'ordinary_baseline_changed',expected:f.baseline,observed:successorBaseline})+'\n';await writeFile(failedPath,failureBytes,{mode:0o600,flag:'wx'});
+ const now=Date.now(),authorization={version:1,kind:'OWNER_AUTHORIZED_SUCCESSOR_ORDINARY_BASELINE',approved:true,approvalID:id(),approvedAt:new Date(now-60000).toISOString(),interval:{startsAt:new Date(now-30000).toISOString(),endsAt:new Date(now+3600000).toISOString()},originalRunID:'prc20261009-original',originalSourceSHA:'a'.repeat(40),successorRunID:f.config.runID,successorSourceSHA:f.config.expectedSourceSHA,configIdentitySHA256:f.manifest.configIdentitySHA256,originalFiles:f.manifest.originalFiles,deployment:f.manifest.deployment,runnerHashes:f.manifest.runnerHashes,originalSnapshotSHA256:f.baseline.sha256,successorSnapshotSHA256:successorBaseline.sha256,failedComparisons:[{path:failedPath,sha256:hash(failureBytes)}]};
+ const transition={version:1,originalSnapshot:{name:originalName,sha256:f.baseline.sha256},successorSnapshot:{name:successorName,sha256:successorBaseline.sha256},ownerAuthorization:{name:authorizationName,sha256:hash(JSON.stringify(authorization)+'\n')},failedComparisons:authorization.failedComparisons};
+ f.manifest.successorBaseline=transition;await writeFile(join(f.runDirectory,authorizationName),JSON.stringify(authorization)+'\n',{mode:0o600,flag:'wx'});await writeFile(join(f.runDirectory,'continuation.json'),JSON.stringify(f.manifest)+'\n');
+ f.oldBytes=await Promise.all(Object.keys(f.manifest.originalFiles).map(n=>readFile(join(f.original,n))));
+ return {...f,a,originalSnapshot,successorSnapshot,successorBaseline,authorization,transition,failedPath,failureBytes};
+}
+async function successorAdmission(t){
+ const f=await successorFixture(t),link=await f.a.readContinuationLink(f),request=f.a.createContinuationRequest({config:f.config,link,launchNonce:id(),processID:id(),identities:f.identities});
+ const proof=proofFor(request,f.successorBaseline);proof.successorBaseline={authorizationSHA256:f.transition.ownerAuthorization.sha256,approvalID:f.authorization.approvalID,originalSnapshotSHA256:f.baseline.sha256,observedSnapshotSHA256:f.successorBaseline.sha256,scopeSHA256:hash(canonicalMigrationJSON(f.originalSnapshot.scope)),observedAt:new Date().toISOString()};
+ return {...f,link,request,proof};
+}
+async function rewriteSuccessor(f,{snapshot=f.successorSnapshot,authorization=f.authorization}={}){
+ const bytes=JSON.stringify(snapshot);await writeFile(join(f.runDirectory,f.transition.successorSnapshot.name),bytes);f.transition.successorSnapshot.sha256=hash(bytes);authorization.successorSnapshotSHA256=hash(bytes);
+ const approval=JSON.stringify(authorization)+'\n';await writeFile(join(f.runDirectory,f.transition.ownerAuthorization.name),approval);f.transition.ownerAuthorization.sha256=hash(approval);await writeFile(join(f.runDirectory,'continuation.json'),JSON.stringify(f.manifest)+'\n');
+}
+
+test('authorized successor admits new raw snapshot and preserves original bytes failed comparison and profiles',async t=>{
+ const f=await successorAdmission(t);assert.deepEqual(f.link.baseline,f.successorBaseline);assert.notEqual(f.link.baseline.sha256,f.baseline.sha256);
+ assert.deepEqual(f.a.validateContinuationProof(f.proof,f.request,f.link.baseline),f.proof);
+ const {acquireLifecycleLock}=await import('./browser/staging-real-lifecycle.mjs');await acquireLifecycleLock(join(f.original,'runner.lock'));await f.a.claimContinuation(f);await f.a.assertContinuationClaim(f);
+ await assert.rejects(f.a.claimContinuation(f),/continuation_already_claimed/);
+ for(const[n,i]of Object.keys(f.manifest.originalFiles).map((n,i)=>[n,i]))assert.deepEqual(await readFile(join(f.original,n)),f.oldBytes[i]);
+ assert.equal(await readFile(f.failedPath,'utf8'),f.failureBytes);for(const i of [0,1])assert.equal((await lstat(join(f.original,'edge-'+i))).isDirectory(),true);
+});
+test('ordinary drift remains denied without explicit successor transition',async t=>{
+ const f=await admission(t),proof=structuredClone(f.proof);proof.operator.ordinary.sha256='f'.repeat(64);assert.throws(()=>f.a.validateContinuationProof(proof,f.request,f.baseline),/ordinary_baseline_changed/);
+});
+test('successor fails closed for missing false fabricated cross-run or source approval',async t=>{
+ const f=await successorFixture(t);await f.a.readContinuationLink(f);
+ for(const mutate of [a=>delete a.approved,a=>a.approved=false,a=>a.kind='APPROVED',a=>a.originalRunID='foreign-original',a=>a.successorRunID='foreign-continued',a=>a.originalSourceSHA='f'.repeat(40),a=>a.successorSourceSHA='f'.repeat(40),a=>a.originalSnapshotSHA256='f'.repeat(64),a=>a.deployment.imageDigest='sha256:'+'b'.repeat(64),a=>a.configIdentitySHA256='f'.repeat(64),a=>a.runnerHashes={},a=>a.originalFiles={},a=>a.failedComparisons=[],a=>a.interval.endsAt=a.interval.startsAt]){
+  const approval=structuredClone(f.authorization);mutate(approval);await rewriteSuccessor(f,{authorization:approval});await assert.rejects(f.a.readContinuationLink(f));
+ }
+ await rewriteSuccessor(f);await rm(join(f.runDirectory,f.transition.ownerAuthorization.name));await assert.rejects(f.a.readContinuationLink(f));
+});
+test('successor compares every scope ID set even when all counts match',async t=>{
+ const f=await successorFixture(t);await f.a.readContinuationLink(f);
+ for(const kind of ['shared','personal','users','teams']){const snapshot=structuredClone(f.successorSnapshot);snapshot.scope[kind][0]=id();await rewriteSuccessor(f,{snapshot});await assert.rejects(f.a.readContinuationLink(f),/successor_scope_mismatch/);}
+ const snapshot=structuredClone(f.successorSnapshot);snapshot.scope.users.push(f.identities[0].accountID);await rewriteSuccessor(f,{snapshot});await assert.rejects(f.a.readContinuationLink(f),/successor_scope_mismatch/);
+});
+test('successor checks exact raw digests both snapshot structures and protected artifacts',async t=>{
+ const f=await successorFixture(t);await f.a.readContinuationLink(f);
+ for(const file of [f.transition.originalSnapshot.name,f.transition.successorSnapshot.name,f.transition.ownerAuthorization.name]){
+  const path=join(f.runDirectory,file),bytes=await readFile(path);await writeFile(path,Buffer.concat([bytes,Buffer.from(' ')]));await assert.rejects(f.a.readContinuationLink(f));await writeFile(path,bytes);await chmod(path,0o644);await assert.rejects(f.a.readContinuationLink(f));await chmod(path,0o600);
+ }
+ const originalPath=join(f.runDirectory,f.transition.originalSnapshot.name),bytes=await readFile(originalPath);f.transition.originalSnapshot.sha256='f'.repeat(64);await rewriteSuccessor(f);await assert.rejects(f.a.readContinuationLink(f));f.transition.originalSnapshot.sha256=hash(bytes);
+ const snapshot=structuredClone(f.successorSnapshot);delete snapshot.tables.users;await rewriteSuccessor(f,{snapshot});await assert.rejects(f.a.readContinuationLink(f));
+ await rewriteSuccessor(f);await writeFile(f.failedPath,f.failureBytes+' ');await assert.rejects(f.a.readContinuationLink(f));
+});
+test('successor proof requires fresh observed state and binds approval snapshot launch source and run',async t=>{
+ const f=await successorAdmission(t);f.a.validateContinuationProof(f.proof,f.request,f.link.baseline);
+ for(const mutate of [p=>delete p.successorBaseline,p=>p.successorBaseline.approvalID=id(),p=>p.successorBaseline.authorizationSHA256='f'.repeat(64),p=>p.successorBaseline.originalSnapshotSHA256='f'.repeat(64),p=>p.successorBaseline.observedSnapshotSHA256=f.baseline.sha256,p=>p.successorBaseline.scopeSHA256='f'.repeat(64),p=>p.successorBaseline.observedAt=f.authorization.approvedAt,p=>p.successorBaseline.observedAt=f.authorization.interval.endsAt,p=>p.operator.ordinary=f.baseline,p=>p.operator.launchNonce=id(),p=>p.operator.runID='foreign-continued',p=>p.operator.sourceSHA='f'.repeat(40)]){
+  const proof=structuredClone(f.proof);mutate(proof);assert.throws(()=>f.a.validateContinuationProof(proof,f.request,f.link.baseline));
+ }
+ const request=f.a.createContinuationRequest({config:f.config,link:f.link,launchNonce:id(),processID:id(),identities:f.identities});assert.throws(()=>f.a.validateContinuationProof(f.proof,request,f.link.baseline));
+});
+test('successor cannot be changed or added again after profile claim and admission is bound to link',async t=>{
+ const f=await successorAdmission(t),{acquireLifecycleLock}=await import('./browser/staging-real-lifecycle.mjs');await acquireLifecycleLock(join(f.original,'runner.lock'));
+ const foreign=structuredClone(f.request);foreign.runID='foreign-continued';const {checkpointSHA256,...body}=foreign;foreign.checkpointSHA256=hash(canonicalMigrationJSON(body));const foreignProof=proofFor(foreign,f.successorBaseline);foreignProof.successorBaseline=f.proof.successorBaseline;
+ await assert.rejects(f.a.claimContinuation({...f,request:foreign,proof:foreignProof}));await f.a.claimContinuation(f);
+ await writeFile(join(f.runDirectory,f.transition.successorSnapshot.name),JSON.stringify({...f.successorSnapshot,extra:true}));await assert.rejects(f.a.readContinuationLink(f));
+ await rewriteSuccessor(f,{snapshot:f.originalSnapshot});await assert.rejects(f.a.assertContinuationClaim({...f,link:await f.a.readContinuationLink(f)}));
+});
+test('successor initializes new baseline journal and later phase rejects baseline substitution before browser work',async t=>{
+ const f=await successorFixture(t),{runStagingBrowserLifecycle,acquireLifecycleLock}=await import('./browser/staging-real-lifecycle.mjs'),oldMode=process.env.TEST_SESSION_MODE,oldModule=process.env.PLAYWRIGHT_MODULE;
+ process.env.TEST_SESSION_MODE='PRESERVE_TRUSTED_STATE';delete process.env.PLAYWRIGHT_MODULE;t.after(()=>{if(oldMode===undefined)delete process.env.TEST_SESSION_MODE;else process.env.TEST_SESSION_MODE=oldMode;if(oldModule!==undefined)process.env.PLAYWRIGHT_MODULE=oldModule;});
+ await assert.rejects(runStagingBrowserLifecycle({...f,phase:'continue-bootstrap'}),/real_phase_failed/);
+ assert.deepEqual(JSON.parse(await readFile(join(f.runDirectory,'baseline.json'))),f.successorBaseline);const journal=JSON.parse(await readFile(join(f.runDirectory,'journal.json')));assert.deepEqual(journal.baseline,f.successorBaseline);
+ const g=await successorAdmission(t);await acquireLifecycleLock(join(g.original,'runner.lock'));await g.a.claimContinuation(g);await rm(join(g.original,'runner.lock'),{recursive:true});
+ await writeFile(join(g.runDirectory,'baseline.json'),JSON.stringify(g.baseline),{mode:0o600});await writeFile(join(g.runDirectory,'journal.json'),JSON.stringify({baseline:g.baseline}),{mode:0o600});
+ await assert.rejects(runStagingBrowserLifecycle({...g,phase:'protocol-before'}),/continuation_baseline_changed/);
+ const checkpoint={...g.request,phase:'protocol-before'};assert.doesNotThrow(()=>validateOperatorProof(proofFor(checkpoint,g.successorBaseline).operator,checkpoint,g.link.baseline));assert.throws(()=>validateOperatorProof(proofFor(checkpoint,g.baseline).operator,checkpoint,g.link.baseline),/ordinary_baseline_changed/);
+});
+
+test('successor rejects expired approval future observations wrong new digest and a second linked origin',async t=>{
+ const f=await successorAdmission(t);f.a.validateContinuationProof(f.proof,f.request,f.link.baseline);
+ const future=structuredClone(f.proof);future.successorBaseline.observedAt=new Date(Date.now()+30000).toISOString();assert.throws(()=>f.a.validateContinuationProof(future,f.request,f.link.baseline),/successor_proof_mismatch/);
+ const originalApproval=structuredClone(f.authorization),expired=structuredClone(f.authorization);expired.approvedAt='2026-01-01T00:00:00.000Z';expired.interval={startsAt:'2026-01-01T00:00:01.000Z',endsAt:'2026-01-01T01:00:00.000Z'};await rewriteSuccessor(f,{authorization:expired});
+ const link=await f.a.readContinuationLink(f);assert.throws(()=>f.a.createContinuationRequest({config:f.config,link,launchNonce:id(),processID:id(),identities:f.identities}),/successor_authorization_expired/);
+ await rewriteSuccessor(f,{authorization:originalApproval});f.transition.successorSnapshot.sha256='e'.repeat(64);await writeFile(join(f.runDirectory,'continuation.json'),JSON.stringify(f.manifest)+'\n');await assert.rejects(f.a.readContinuationLink(f),/successor_artifact_changed/);
+ await rewriteSuccessor(f,{authorization:originalApproval});await writeFile(join(f.original,'continuation.json'),'{}',{mode:0o600});await assert.rejects(f.a.readContinuationLink(f),/continuation_partial_scope/);
+});
+test('successor reordering retains exactly the same scope and admits only its raw authorized digest',async t=>{
+ const f=await successorFixture(t),snapshot=structuredClone(f.successorSnapshot);snapshot.scope.users.reverse();await rewriteSuccessor(f,{snapshot});
+ const link=await f.a.readContinuationLink(f);assert.equal(link.baseline.sha256,hash(JSON.stringify(snapshot)));assert.notEqual(link.baseline.sha256,f.successorBaseline.sha256);
+ const unauthorized=structuredClone(f.authorization);unauthorized.successorSnapshotSHA256='e'.repeat(64);const bytes=JSON.stringify(unauthorized)+'\n';await writeFile(join(f.runDirectory,f.transition.ownerAuthorization.name),bytes);f.transition.ownerAuthorization.sha256=hash(bytes);await writeFile(join(f.runDirectory,'continuation.json'),JSON.stringify(f.manifest)+'\n');await assert.rejects(f.a.readContinuationLink(f),/successor_authorization_required/);
 });

@@ -9,7 +9,7 @@ import {createServer} from 'node:net';
 import {canonicalMigrationJSON} from '../../public/vault-v2-migration.js';
 import {lifecycleFailure,lifecycleDiagnosticCodes,diagnosticRequestAllowed,inspectBrowserLifecycleDiagnostic,validateDiagnosticRun,runSequentialDiagnosticProfiles} from '../../scripts/staging-lifecycle-diagnostics.mjs';
 import {validateRunConfig,readProtectedJSON,redactedEvidence,createOperatorBridge,assertProtectedDirectory,createProtectedRunDirectory,validateOperatorProof,validateOrdinaryBaseline,validateNegativeInvariantProof} from '../../scripts/staging-publication-acceptance.mjs';
-import {readContinuationLink,createContinuationRequest,validateContinuationProof,claimContinuation,assertContinuationClaim,assertContinuationUnclaimed,acquireUnclaimedLifecycleLock,writeContinuationExclusive,runContinuationReadiness,assertContinuationIdentity,continuationEvidenceClass} from '../../scripts/staging-bootstrap-continuation.mjs';
+import {readContinuationLink,createContinuationRequest,validateContinuationProof,claimContinuation,assertContinuationClaim,assertContinuationRunBaseline,assertContinuationUnclaimed,acquireUnclaimedLifecycleLock,writeContinuationExclusive,runContinuationReadiness,assertContinuationIdentity,continuationEvidenceClass} from '../../scripts/staging-bootstrap-continuation.mjs';
 
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
@@ -611,7 +611,7 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
  try{
   const link=await readContinuationLink({config,configPath,runDirectory});if(link.manifestSHA256!==before.manifestSHA256)throw Error('continuation_original_changed');
   const starting=phase==='continue-bootstrap';let admission;
-  if(starting)await assertContinuationUnclaimed(link.manifest.originalRunDirectory);else admission=await assertContinuationClaim({link,runDirectory});
+  if(starting)await assertContinuationUnclaimed(link.manifest.originalRunDirectory);else{admission=await assertContinuationClaim({link,runDirectory});await assertContinuationRunBaseline({link,runDirectory});}
   return await runLifecycleCore({configPath,runDirectory,phase:starting?'bootstrap':phase,continuation:{link,starting,admission}});
  }finally{await rm(lock,{recursive:true});}
 }
@@ -630,7 +630,7 @@ async function admitContinuation({config,configPath,runDirectory,link,chromium,t
  const request=createContinuationRequest({config,link,launchNonce,processID,identities});
  await writeContinuationExclusive(join(runDirectory,'continuation-request-'+launchNonce+'.json'),request);
  await emit({phase:'continuation_operator_proof_pending',evidenceClass:continuationEvidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce:link.originalLaunchNonce,launchNonce,checkpointID:request.checkpointID,checkpointSHA256:request.checkpointSHA256,outcome:'PENDING'});
- await pause('Root must publish the exact protected continuation-proof-'+launchNonce+'.json from actual read-only server observations and the unchanged original baseline. This does not claim an observed registration response.');
+ await pause('Root must publish the exact protected continuation-proof-'+launchNonce+'.json from fresh read-only server verification against the linked ordinary snapshot. If successorBaseline is present, bind its approved interval and actual current snapshot digest; never copy an expected digest as an observation. This does not claim an observed registration response.');
  const proof=await readProtectedJSON(join(runDirectory,'continuation-proof-'+launchNonce+'.json'));validateContinuationProof(proof,request,link.baseline);
  const current=await readContinuationLink({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error('continuation_original_changed');
  await claimContinuation({link:current,request,proof,runDirectory});
@@ -668,6 +668,7 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
  let baseline,diagnosticStage='lifecycle_operation',diagnosticIndex;
  const checkpoint=async(result={})=>{
   if(!baseline)baseline=validateOrdinaryBaseline(await readProtectedJSON(join(runDirectory,'baseline.json')));
+  if(continuation&&canonicalMigrationJSON(baseline)!==canonicalMigrationJSON(continuation.link.baseline))throw Error('continuation_baseline_changed');
   if(!journal.baseline||canonicalMigrationJSON(journal.baseline)!==canonicalMigrationJSON(baseline))throw Error('original_baseline_changed');
   let pending=journal.pending;
   if(!pending){
