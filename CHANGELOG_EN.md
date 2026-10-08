@@ -1,10 +1,12 @@
 ## 0.32.0
 
-- **Selective Remote Cloud** — in a public release for the first time: work with connections on Mac and in the browser; local use without an account remains available.
+- **Selective Remote Cloud** — 0.32 candidate: work with connections on Mac and in the browser; local use without an account remains available.
 - **Personal Vault** — Hosts, Credentials, and Snippets are encrypted on the device and synced across trusted devices.
 - **Team Vaults** — share Hosts, Credentials, and Snippets with roles, invitations, and device admission.
 - **Find Hosts faster** — use the persistent Host Shelf, nested folders, search, sorting, and scope aware Host moves.
-- **More reliable daily work** — SSH password entry, Jump Host, Snippets, and compact layouts improved; Keychain deletion and backup migration failures are handled safely.
+- **More reliable daily work** — Sync Center and notifications, improved SSH password entry, Jump Host, Snippets, and layouts; Keychain deletion and backup migration failures are handled safely.
+
+0.32 is not released. V2 remains test-only; real-workflow and official-DMG acceptance are pending. v0.31.0 is available now.
 
 ## 0.31.0
 

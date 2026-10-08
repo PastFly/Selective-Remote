@@ -539,23 +539,10 @@ struct ContentView: View {
     }
 
     private var notificationBell: some View {
-        Button { showsNotifications.toggle() } label: {
-            HStack(spacing: 3) {
-                Image(systemName: "bell")
-                if notificationCenter.attentionCount > 0 {
-                    Text(notificationCenter.attentionCount > 9 ? "9+" :
-                         "\(notificationCenter.attentionCount)")
-                        .font(.caption2.bold())
-                        .foregroundStyle(Color.accentColor)
-                }
-            }
+        NotificationBellButton(attentionCount: notificationCenter.attentionCount,
+                               english: language.selection.usesEnglish) {
+            showsNotifications.toggle()
         }
-        .buttonStyle(.borderless)
-        .help(UpdateLocalization.text(ru: "Уведомления", en: "Notifications"))
-        .accessibilityLabel(UpdateLocalization.text(
-            ru: "Уведомления: требуют внимания \(notificationCenter.attentionCount)",
-            en: "Notifications: \(notificationCenter.attentionCount) need attention"
-        ))
         .popover(isPresented: $showsNotifications, arrowEdge: .top) {
             NotificationCenterView(center: notificationCenter, onOpen: openNotification)
         }

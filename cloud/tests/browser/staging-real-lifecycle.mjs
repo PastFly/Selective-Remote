@@ -7,7 +7,9 @@ import {randomUUID,createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:net';
 import {canonicalMigrationJSON} from '../../public/vault-v2-migration.js';
+import {lifecycleFailure,lifecycleDiagnosticCodes,diagnosticRequestAllowed,inspectBrowserLifecycleDiagnostic,validateDiagnosticRun,runSequentialDiagnosticProfiles} from '../../scripts/staging-lifecycle-diagnostics.mjs';
 import {validateRunConfig,readProtectedJSON,redactedEvidence,createOperatorBridge,assertProtectedDirectory,createProtectedRunDirectory,validateOperatorProof,validateOrdinaryBaseline,validateNegativeInvariantProof} from '../../scripts/staging-publication-acceptance.mjs';
+import {readContinuationLink,createContinuationRequest,validateContinuationProof,claimContinuation,assertContinuationClaim,assertContinuationUnclaimed,acquireUnclaimedLifecycleLock,writeContinuationExclusive,runContinuationReadiness,assertContinuationIdentity,continuationEvidenceClass} from '../../scripts/staging-bootstrap-continuation.mjs';
 
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
@@ -520,11 +522,134 @@ export async function acquireLifecycleLock(path){
  throw Error('runner_lock_unresolved');
 }
 
+// Separate, opt-in diagnostics for an interrupted pre-Team bootstrap. This never
+// repairs the original registration receipt or advances its journal/checkpoint.
+export async function diagnoseStagingBrowserLifecycle({configPath,runDirectory}){
+ const config=validateRunConfig(await readProtectedJSON(configPath));
+ if(!isAbsolute(runDirectory))throw Error('diagnostic_run_mismatch');
+ await assertContinuationUnclaimed(runDirectory);
+ await assertProtectedDirectory(dirname(runDirectory));await assertProtectedDirectory(runDirectory);
+ const marker=await readProtectedJSON(join(runDirectory,'owner.json')),journal=await readProtectedJSON(join(runDirectory,'journal.json'));
+ const baseline=validateOrdinaryBaseline(await readProtectedJSON(join(runDirectory,'baseline.json'))),prior=(await readProtectedJSON(join(runDirectory,'evidence.json'))).map(redactedEvidence);
+ const previousLaunchNonce=validateDiagnosticRun({config,mode:process.env.TEST_SESSION_MODE,marker,journal,baseline,evidence:prior});
+ // No directory creation or profile replacement is permitted on this path.
+ const profiles=[join(runDirectory,'edge-0'),join(runDirectory,'edge-1')];for(const profile of profiles)await assertProtectedDirectory(profile);
+ try{await lstat(join(runDirectory,'scope.json'));throw Error('diagnostic_run_mismatch');}catch(error){if(error.code!=='ENOENT')throw error;}
+ if(!process.env.PLAYWRIGHT_MODULE||process.env.CHROMIUM_PATH&&process.env.CHROMIUM_PATH!==EDGE)throw Error('headed_edge_required');
+ const lock=await acquireUnclaimedLifecycleLock(runDirectory,acquireLifecycleLock);
+ const launchNonce=randomUUID(),processID=randomUUID(),events=[],contexts=new Map(),terminal=createInterface({input:process.stdin,output:process.stdout});
+ const metadata={evidenceClass:'DIAGNOSTIC_ONLY_NO_ACCEPTANCE',runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,launchNonce,processID,previousLaunchNonce};
+ const output=join(runDirectory,'diagnostic-'+launchNonce+'.json');let stage='diagnostic_preflight',index;
+ const emit=async event=>{const safe=redactedEvidence({...metadata,...event});events.push(safe);await save(output,events);process.stdout.write(JSON.stringify(safe)+'\n');};
+ const readonlyRoute=route=>diagnosticRequestAllowed(route.request().url(),route.request().method(),config.origin)?route.continue():route.abort();
+ const stopController=new AbortController();let quitRequested=false;
+ const stop=()=>{quitRequested=true;stopController.abort();};process.once('SIGINT',stop);terminal.on('SIGINT',stop);
+ const prompt=async i=>{
+  for(;;){
+   if(quitRequested)return 'quit';
+   try{
+    const answer=(await terminal.question(`Only TEST profile ${i} is open. Do not register again. Owner: sign into this profile's expected test account if needed; Devices → Device trust → acknowledge root-loss consequences → account password → Create trust root. Enter rechecks this same profile; type quit or press Ctrl-C to close. Never enter credentials here.\n`,{signal:stopController.signal})).trim().toLowerCase();
+    if(['q','quit','exit'].includes(answer)){quitRequested=true;return 'quit';}
+    if(answer==='')return 'recheck';
+   }catch(error){if(quitRequested||error.name==='AbortError'||error.code==='ERR_USE_AFTER_CLOSE'){quitRequested=true;return 'quit';}throw error;}
+  }
+ };
+ const close=async(profile,i)=>{try{await profile.browser.close();}finally{contexts.delete(i);}await emit({phase:'process_closed',browserIndex:i,pid:profile.browser.pid,outcome:'PASS'});};
+ try{
+  const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));
+  await emit({phase:'diagnostic_started',stage,outcome:'NOT_RUN',testSessionMode:'PRESERVE_TRUSTED_STATE'});
+  const result=await runSequentialDiagnosticProfiles({
+   open:async i=>{
+    index=i;stage='browser_launch';if(quitRequested)throw Error('diagnostic_cancelled');
+    const browser=await launchLifecycleBrowser({chromium,profile:profiles[i]}),profile={browser,page:null};contexts.set(i,profile);
+    await browser.context.route('**/*',readonlyRoute);
+    for(const oldPage of browser.context.pages())await oldPage.close();
+    profile.page=await browser.context.newPage();await emit({phase:'process_started',browserIndex:i,pid:browser.pid,outcome:'PASS'});return profile;
+   },
+   inspect:async({browser,page},i,count)=>{
+    index=i;stage=count?'diagnostic_recheck':'diagnostic_modules';let result;
+    try{
+     await browser.context.unroute('**/*');await browser.context.route('**/*',readonlyRoute);
+     await page.goto(config.origin+'/healthz',{waitUntil:'domcontentloaded'});
+     result=await page.evaluate(inspectBrowserLifecycleDiagnostic,{origin:config.origin,email:config.emails[i],approvedEmails:config.emails,moduleHashes:config.moduleHashes,failureCodes:lifecycleDiagnosticCodes});
+    }catch(error){result={outcome:'DENIED',accountMatch:'unknown',...lifecycleFailure({stage,index:i,error})};}
+    await emit({phase:'diagnostic_metadata',browserIndex:i,count,...result});return result;
+   },
+   showGUI:async({browser,page},i)=>{
+    index=i;stage='owner_trust_setup';await emit({phase:'owner_trust_setup_pending',browserIndex:i,stage,outcome:'PENDING'});
+    try{
+     await browser.context.unroute('**/*');await browser.context.route('**/*',route=>new URL(route.request().url()).origin===config.origin?route.continue():route.abort());
+     await page.goto(config.origin,{waitUntil:'domcontentloaded'});
+    }catch(error){await emit({phase:'diagnostic_gui_pending',outcome:'DENIED',...lifecycleFailure({stage,index:i,error})});}
+   },prompt,close,
+  });
+  await emit({phase:result.quit?'diagnostic_cancelled':'diagnostic_completed',outcome:'NOT_RUN'});
+ }catch(error){
+  await emit({phase:'diagnostic_stopped',outcome:'DENIED',...lifecycleFailure({stage,index,error})});
+  // An unexpected diagnostic failure is not permission to close the Owner's active
+  // test window. Keep it available until the Owner explicitly quits or interrupts.
+  while(contexts.size&&!quitRequested)await prompt(index??0);
+  throw Error('real_diagnostic_failed');
+ }finally{
+  process.removeListener('SIGINT',stop);terminal.off('SIGINT',stop);terminal.close();
+  if(quitRequested)for(const[i,profile]of contexts)await close(profile,i);
+  await rm(lock,{recursive:true});
+ }
+}
+
+async function exists(path){try{await lstat(path);return true;}catch(error){if(error.code==='ENOENT')return false;throw error;}}
+
+// Linked runs reuse only the two original profiles. All phases hold their original
+// lock as well as the new run lock, and never rewrite the failed run's evidence.
 export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}){
+ if(phase==='diagnose-bootstrap')return diagnoseStagingBrowserLifecycle({configPath,runDirectory});
+ const linked=await exists(join(runDirectory,'continuation.json'));
+ if(!linked){if(phase==='continue-bootstrap')throw Error('continuation_manifest_required');return runLifecycleCore({configPath,runDirectory,phase});}
+ if(process.env.TEST_SESSION_MODE!=='PRESERVE_TRUSTED_STATE')throw Error('continuation_preserved_session_required');
+ const config=validateRunConfig(await readProtectedJSON(configPath)),before=await readContinuationLink({config,configPath,runDirectory}),lock=join(before.manifest.originalRunDirectory,'runner.lock');
+ await acquireLifecycleLock(lock);
+ try{
+  const link=await readContinuationLink({config,configPath,runDirectory});if(link.manifestSHA256!==before.manifestSHA256)throw Error('continuation_original_changed');
+  const starting=phase==='continue-bootstrap';let admission;
+  if(starting)await assertContinuationUnclaimed(link.manifest.originalRunDirectory);else admission=await assertContinuationClaim({link,runDirectory});
+  return await runLifecycleCore({configPath,runDirectory,phase:starting?'bootstrap':phase,continuation:{link,starting,admission}});
+ }finally{await rm(lock,{recursive:true});}
+}
+
+async function admitContinuation({config,configPath,runDirectory,link,chromium,terminal,emit,pause,launchNonce,processID}){
+ const readonly=async profile=>{
+  await profile.context.unroute('**/*');await profile.context.route('**/*',route=>diagnosticRequestAllowed(route.request().url(),route.request().method(),config.origin)?route.continue():route.abort());
+ };
+ const identities=await runContinuationReadiness({
+  open:async index=>{const browser=await launchLifecycleBrowser({chromium,profile:link.profiles[index]});try{await readonly(browser);for(const p of browser.context.pages())await p.close();browser.page=await browser.context.newPage();await emit({phase:'process_started',browserIndex:index,pid:browser.pid,processID,launchNonce,outcome:'PASS'});return browser;}catch(error){await browser.close();throw error;}},
+  inspect:async(profile,index)=>{await readonly(profile);await profile.page.goto(config.origin+'/healthz',{waitUntil:'domcontentloaded'});const result=await profile.page.evaluate(inspectBrowserLifecycleDiagnostic,{...config,email:config.emails[index],approvedEmails:config.emails,failureCodes:lifecycleDiagnosticCodes});await emit({phase:'continuation_readiness',browserIndex:index,launchNonce,...result});return result;},
+  showGUI:async profile=>{await profile.context.unroute('**/*');await profile.context.route('**/*',route=>new URL(route.request().url()).origin===config.origin?route.continue():route.abort());await profile.page.goto(config.origin,{waitUntil:'domcontentloaded'});},
+  prompt:async index=>{await emit({phase:'owner_input_pending',browserIndex:index,outcome:'PENDING'});const answer=await terminal.question(`Existing TEST profile ${index}: sign into its approved account and finish existing first-device trust in the product GUI. Do not register again. Enter rechecks; q quits. Never type credentials here.\n`);return /^(q|quit|exit)$/i.test(answer.trim())?'quit':'recheck';},
+  close:async(profile,index)=>{await profile.close();await emit({phase:'process_closed',browserIndex:index,pid:profile.pid,processID,launchNonce,outcome:'PASS'});},
+ });
+ const request=createContinuationRequest({config,link,launchNonce,processID,identities});
+ await writeContinuationExclusive(join(runDirectory,'continuation-request-'+launchNonce+'.json'),request);
+ await emit({phase:'continuation_operator_proof_pending',evidenceClass:continuationEvidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce:link.originalLaunchNonce,launchNonce,checkpointID:request.checkpointID,checkpointSHA256:request.checkpointSHA256,outcome:'PENDING'});
+ await pause('Root must publish the exact protected continuation-proof-'+launchNonce+'.json from actual read-only server observations and the unchanged original baseline. This does not claim an observed registration response.');
+ const proof=await readProtectedJSON(join(runDirectory,'continuation-proof-'+launchNonce+'.json'));validateContinuationProof(proof,request,link.baseline);
+ const current=await readContinuationLink({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error('continuation_original_changed');
+ await claimContinuation({link:current,request,proof,runDirectory});
+ await emit({phase:'continuation_registration_admitted',evidenceClass:continuationEvidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce:link.originalLaunchNonce,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
+ return {request,proof};
+}
+
+async function runLifecycleCore({configPath,runDirectory,phase,continuation=null}){
  const config=validateRunConfig(await readProtectedJSON(configPath)),mode=process.env.TEST_SESSION_MODE;
+ const continuationStart=continuation?.starting===true;let continuationAdmission=continuation?.admission;
  if(!isAbsolute(runDirectory))throw Error('invalid_real_phase');
  let existing=false;try{await lstat(runDirectory);existing=true;}catch(error){if(error.code!=='ENOENT')throw error;}
- if(phase==='bootstrap'&&!existing){
+ if(continuationStart){
+  for(const name of ['owner.json','journal.json','evidence.json','baseline.json','scope.json','continuation-admission.json'])if(await exists(join(runDirectory,name)))throw Error('continuation_fresh_link_required');
+  if(config.approvedVaultIDs.length)throw Error('continuation_partial_scope');
+  await writeContinuationExclusive(join(runDirectory,'owner.json'),{version:1,runID:config.runID,sourceSHA:config.expectedSourceSHA});
+  await writeContinuationExclusive(join(runDirectory,'baseline.json'),continuation.link.baseline);
+  await writeContinuationExclusive(join(runDirectory,'journal.json'),{version:1,completed:[],pending:null,processes:[],baseline:continuation.link.baseline});await writeContinuationExclusive(join(runDirectory,'evidence.json'),[]);
+ }else if(phase==='bootstrap'&&!existing){
   validateLifecyclePhase(phase,mode,[]);runDirectory=await createProtectedRunDirectory(runDirectory);
   await save(join(runDirectory,'owner.json'),{version:1,runID:config.runID,sourceSHA:config.expectedSourceSHA});
   await save(join(runDirectory,'journal.json'),{version:1,completed:[],pending:null,processes:[]});await save(join(runDirectory,'evidence.json'),[]);
@@ -533,14 +658,14 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
   if(marker.version!==1||marker.runID!==config.runID||marker.sourceSHA!==config.expectedSourceSHA)throw Error('fresh_run_profile_required');
  }
  const journal=await readProtectedJSON(join(runDirectory,'journal.json')),pendingResume=journal.pending?.phase===phase;
- if(phase==='bootstrap'&&existing&&!pendingResume)throw Error('incomplete_bootstrap_requires_operator_recovery');
- validateLifecyclePhase(phase,mode,journal.completed,{pendingResume});
+ if(phase==='bootstrap'&&existing&&!pendingResume&&!continuationStart)throw Error('incomplete_bootstrap_requires_operator_recovery');
+ if(!continuationStart)validateLifecyclePhase(phase,mode,journal.completed,{pendingResume});
  const lock=join(runDirectory,'runner.lock');await acquireLifecycleLock(lock);
  const contexts=[],terminal=createInterface({input:process.stdin,output:process.stdout}),launchNonce=randomUUID(),processID=randomUUID(),evidence=(await readProtectedJSON(join(runDirectory,'evidence.json'))).map(redactedEvidence);
  const emit=async value=>{const checked=redactedEvidence(value);evidence.push(checked);process.stdout.write(JSON.stringify(checked)+'\n');await save(join(runDirectory,'evidence.json'),evidence);};
  const persist=()=>save(join(runDirectory,'journal.json'),journal);
  const pause=async text=>{await emit({phase:'owner_input_pending',outcome:'PENDING'});await terminal.question(text+' Press Enter after the visible GUI/action is complete. Never enter credentials here.\n');};
- let baseline;
+ let baseline,diagnosticStage='lifecycle_operation',diagnosticIndex;
  const checkpoint=async(result={})=>{
   if(!baseline)baseline=validateOrdinaryBaseline(await readProtectedJSON(join(runDirectory,'baseline.json')));
   if(!journal.baseline||canonicalMigrationJSON(journal.baseline)!==canonicalMigrationJSON(baseline))throw Error('original_baseline_changed');
@@ -566,22 +691,26 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
  try{
   if(!process.env.PLAYWRIGHT_MODULE||process.env.CHROMIUM_PATH&&process.env.CHROMIUM_PATH!==EDGE)throw Error('headed_edge_required');
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));
+  if(continuationStart)continuationAdmission=await admitContinuation({config,configPath,runDirectory,link:continuation.link,chromium,terminal,emit,pause,launchNonce,processID});
   const pages=[],registered=[],{indexes,authenticated}=lifecycleBrowserPlan(phase,pendingResume);
   for(const index of indexes){
-   const profile=join(runDirectory,'edge-'+index);if(!pendingResume&&(phase==='bootstrap'||phase==='enroll'&&index===2))try{await mkdir(profile,{mode:0o700});}catch(error){if(error.code!=='EEXIST'||phase==='bootstrap')throw error;await assertProtectedDirectory(profile);}
+   diagnosticStage='browser_launch';diagnosticIndex=index;
+   const profile=continuation&&index<2?continuation.link.profiles[index]:join(runDirectory,'edge-'+index);if(!pendingResume&&(!continuation&&phase==='bootstrap'||phase==='enroll'&&index===2))try{await mkdir(profile,{mode:0o700});}catch(error){if(error.code!=='EEXIST'||phase==='bootstrap')throw error;await assertProtectedDirectory(profile);}
    const browser=await launchLifecycleBrowser({chromium,profile});contexts.push(browser);await emit({phase:'process_started',pid:browser.pid,processID,launchNonce,outcome:'PASS'});
    const context=browser.context;await context.route('**/*',route=>{const url=new URL(route.request().url());return url.origin===config.origin&&(phase!=='restart-offline'||!url.pathname.startsWith('/v1/'))?route.continue():route.abort();});
    const page=await context.newPage();pages[index]=page;
-   if(phase==='bootstrap')page.on('response',async response=>{if(response.url()===config.origin+'/v1/auth/register'&&response.ok()){try{const v=await response.json();if(v?.verificationRequired===true&&Object.keys(v).length===1)registered[index]=true;}catch{}}});
+   if(phase==='bootstrap'&&!continuationStart)page.on('response',async response=>{if(response.url()===config.origin+'/v1/auth/register'&&response.ok()){try{const v=await response.json();if(v?.verificationRequired===true&&Object.keys(v).length===1)registered[index]=true;}catch{}}});
    await page.goto(config.origin,{waitUntil:'domcontentloaded'});
-   if(phase==='bootstrap'&&!pendingResume){
+   if(phase==='bootstrap'&&!pendingResume&&!continuationStart){
     const anonymous=await page.evaluate(async()=>{const r=await fetch('/v1/me',{credentials:'same-origin',cache:'no-store'});return r.status===401;});if(!anonymous)throw Error('fresh_anonymous_session_required');
    }
   }
-  await emit({phase:'session_gate',testSessionMode:mode,browserOrigin:config.origin,localhost:'NO',fileURL:'NO',apiMode:'REAL_STAGING',...(phase==='restart-offline'?{}:{authSession:phase==='bootstrap'&&!pendingResume?'ANONYMOUS':'REAL_STAGING'}),launchNonce,outcome:'PASS'});
-  if(phase==='bootstrap'&&!pendingResume){
+  await emit({phase:'session_gate',testSessionMode:mode,browserOrigin:config.origin,localhost:'NO',fileURL:'NO',apiMode:'REAL_STAGING',...(phase==='restart-offline'?{}:{authSession:phase==='bootstrap'&&!pendingResume&&!continuationStart?'ANONYMOUS':'REAL_STAGING'}),launchNonce,outcome:'PASS',...(continuation?{evidenceClass:continuationEvidenceClass}:{})});
+  if(phase==='bootstrap'&&!pendingResume&&!continuationStart){
    await pause('Root must place the original protected baseline.json in this run directory before any registration.');baseline=validateOrdinaryBaseline(await readProtectedJSON(join(runDirectory,'baseline.json')));journal.baseline=baseline;await persist();
+   diagnosticStage='owner_registration';diagnosticIndex=undefined;
    await pause('Register/verify/login in the two fresh isolated app windows, and establish each account signed first-device trust. Password input only in app GUI.');
+   diagnosticStage='bootstrap_registration_observation';
    if(![0,1].every(i=>registered[i]===true))throw Error('fresh_registration_not_observed');
   }else if(phase==='enroll'&&!pendingResume)await pause('Sign into the secondary TEST account in the third isolated app window; do not create a new account/root. Native onboarding proceeds through its separate isolated GUI.');
   const invoke=(index,command,arg={})=>pages[index].evaluate(({command,arg})=>globalThis.__prcLifecycle(command,arg),{command,arg});
@@ -593,7 +722,9 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
    }
   }else{
    for(const i of authenticated){
+    diagnosticStage='browser_fixture_install';diagnosticIndex=i;
     await pages[i].evaluate(stagingV1Records,{installOnly:true});
+    diagnosticStage='browser_lifecycle_install';
     await pages[i].evaluate(installBrowserLifecycle,{...config,email:config.emails[i===0?0:1]});
     if(phase!=='bootstrap'&&!(phase==='enroll'&&i===2)){
      const actual=await invoke(i,'identity',{custodian:i<2}),expected=i===0?state.owner:i===1?state.member:state.extra;
@@ -616,7 +747,11 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
    let result={};
    if(pendingResume){await checkpoint({operationID:journal.pending.operationID});
    }else if(phase==='bootstrap'){
-    const owner=await invoke(0,'identity',{custodian:true}),member=await invoke(1,'identity',{custodian:true}),created=await invoke(0,'bootstrap',{memberEmail:config.emails[1]});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
+    diagnosticStage='owner_identity';diagnosticIndex=0;const owner=await invoke(0,'identity',{custodian:true});
+    diagnosticStage='member_identity';diagnosticIndex=1;const member=await invoke(1,'identity',{custodian:true});
+    if(continuationStart){assertContinuationIdentity(owner,continuationAdmission.request.accounts[0]);assertContinuationIdentity(member,continuationAdmission.request.accounts[1]);}
+    diagnosticStage='team_bootstrap';diagnosticIndex=0;const created=await invoke(0,'bootstrap',{memberEmail:config.emails[1]});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
+    diagnosticStage='lifecycle_operation';diagnosticIndex=undefined;
     await pause('Accept the genuine Team invitation in the secondary account app window.');
     Object.assign(state.member,await invoke(1,'join-check',{teamID:state.teamID}));Object.assign(state.owner,await invoke(0,'join-check',{teamID:state.teamID}));await saveState();
     for(const i of [0,1]){const who=i===0?state.owner:state.member;state.enrollments[i]={accountID:who.accountID,deviceID:who.deviceID,membershipID:who.membershipID,membershipEpoch:who.membershipEpoch,teamID:state.teamID,vaults:state.vaults};await invoke(i,'enroll-reader',enrollArg(i));}await saveState();await checkpoint();
@@ -676,7 +811,7 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
     await readAll();await nativeGate();await emit({phase:'revoked_restart_denied',...await pages[2].evaluate(installRevokedBrowserProbes,{origin:config.origin,runID:config.runID,accountID:state.extra.accountID,deviceID:state.extra.deviceID,teamID:state.teamID,vaultID:populated().vaultID,current:state.current[populated().vaultID]}),outcome:'DENIED'});await pause('Root completes native separate-process offline/HTTPS gate on exact current generation and independent server reload/older isolated restore/fence checks. These are separate evidence, never Browser PASS.');await checkpoint();
    }else throw Error('unhandled_phase');
   }
-  journal.completed.push(phase);journal.processes.push({phase,processID,launchNonce,pids:contexts.map(c=>c.pid)});await persist();await emit({phase:'phase_completed',outcome:'PASS',launchNonce,processID});
- }catch(error){await emit({phase:'stopped_without_acceptance',outcome:'DENIED',launchNonce});throw Error('real_phase_failed');}
+  journal.completed.push(phase);journal.processes.push({phase,processID,launchNonce,pids:contexts.map(c=>c.pid)});await persist();await emit({phase:'phase_completed',outcome:'PASS',launchNonce,processID,...(continuation?{evidenceClass:continuationEvidenceClass}:{})});
+ }catch(error){await emit({phase:'stopped_without_acceptance',outcome:'DENIED',launchNonce,...lifecycleFailure({stage:diagnosticStage,index:diagnosticIndex,error})});throw Error('real_phase_failed');}
  finally{terminal.close();for(const context of contexts){await context.close();await emit({phase:'process_closed',pid:context.pid,processID,launchNonce,outcome:'PASS'});}await rm(lock,{recursive:true});}
 }

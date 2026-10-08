@@ -498,6 +498,40 @@ export async function registerWithDeviceConflictRetry({
   throw new Error("registration_failed");
 }
 
+export async function loginWithDeviceConflictRetry({
+  input,
+  accountDevices,
+  ensureIdentity,
+  login,
+} = {}) {
+  if (!input || typeof accountDevices?.deviceID !== "function"
+      || typeof accountDevices?.remember !== "function"
+      || typeof accountDevices?.accepted !== "function"
+      || typeof accountDevices?.replaceAfterConflict !== "function"
+      || typeof ensureIdentity !== "function" || typeof login !== "function") {
+    throw new Error("invalid_login_device_flow");
+  }
+  const email = String(input.email ?? "").trim();
+  let deviceID = await accountDevices.remember(email, await accountDevices.deviceID(email));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let identity = null;
+    try { identity = await ensureIdentity(deviceID); } catch {
+      // Team keys remain optional for Personal Vault login.
+    }
+    try {
+      const user = await login({ ...input, deviceID, publicKey: identity?.publicKey ?? null });
+      try { await accountDevices.accepted(email, deviceID); } catch {}
+      return { user, identity };
+    } catch (error) {
+      if (attempt !== 0 || error?.message !== "device_conflict") throw error;
+      const replacement = await accountDevices.replaceAfterConflict(email, deviceID);
+      if (replacement === null || replacement === deviceID) throw error;
+      deviceID = replacement;
+    }
+  }
+  throw new Error("login_failed");
+}
+
 export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch } = {}) {
   if (typeof fetchValue !== "function") throw new Error("invalid_fetch");
   let token = null;
@@ -621,7 +655,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       });
       const result = await responseJSON(response, "login_failed");
       if (!response.ok) {
-        const code = ["invalid_credentials", "email_not_verified", "rate_limited"].includes(result.error)
+        const deviceError = response.status === 409 && result.error === "device_conflict"
+          || response.status === 400 && result.error === "invalid_device";
+        const code = deviceError || ["invalid_credentials", "email_not_verified", "rate_limited"].includes(result.error)
           ? result.error : "login_failed";
         throw new Error(code);
       }

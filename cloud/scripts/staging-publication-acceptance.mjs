@@ -5,17 +5,19 @@ import {tmpdir} from 'node:os';
 import {isAbsolute,resolve,dirname,join,relative,sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawn} from 'node:child_process';
+import {lifecycleDiagnosticStages,lifecycleDiagnosticCodes,lifecycleRootStatuses} from './staging-lifecycle-diagnostics.mjs';
 
 export const STAGING_ORIGIN='https://cloud.pastfly.ru';
 const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const hash=/^[a-f0-9]{64}$/,sha=/^[a-f0-9]{40}$/;
+const runIDPattern=/^[a-z0-9][a-z0-9-]{5,39}$/;
 export const lifecycleModules=['vault-sync','team-vault-crypto','team-vault-sync','device-trust-flow','device-trust-v1','vault-v2-migration','vault-publication-client','whole-publication-flow','whole-publication-client','whole-publication-api','vault-publication-v1','resource-crypto-v2','access-model','legacy-resource-mapping'];
 const fail=code=>{throw Error(code);};
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const exact=(value,keys)=>object(value)&&Object.keys(value).every(key=>keys.includes(key));
 export function validateRunConfig(value){
  if(!exact(value,['version','runID','origin','emails','expectedSourceSHA','approvedVaultIDs','moduleHashes','operator'])||value.version!==1
-  ||typeof value.runID!=='string'||!/^[a-z0-9][a-z0-9-]{5,39}$/.test(value.runID)||value.origin!==STAGING_ORIGIN||typeof value.expectedSourceSHA!=='string'||!sha.test(value.expectedSourceSHA)
+  ||typeof value.runID!=='string'||!runIDPattern.test(value.runID)||value.origin!==STAGING_ORIGIN||typeof value.expectedSourceSHA!=='string'||!sha.test(value.expectedSourceSHA)
   ||!Array.isArray(value.emails)||value.emails.length!==2||new Set(value.emails.map(email=>typeof email==='string'?email.toLowerCase():email)).size!==2
   ||value.emails.some(email=>typeof email!=='string'||email.length>254||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
   ||!Array.isArray(value.approvedVaultIDs)||value.approvedVaultIDs.some(id=>typeof id!=='string'||!uuid.test(id))||new Set(value.approvedVaultIDs).size!==value.approvedVaultIDs.length
@@ -43,14 +45,15 @@ export async function createProtectedRunDirectory(path){
  await assertProtectedDirectory(dirname(path));
  await mkdir(path,{mode:0o700});await assertProtectedDirectory(path);return path;
 }
-export async function readProtectedJSON(path){
+export async function readProtectedBytes(path){
  if(!isAbsolute(path)||resolve(path)!==path)fail('protected_config_required');
  await assertProtectedDirectory(dirname(path));
  if(await realpath(path)!==path)fail('protected_config_required');
  const file=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
- try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||(stat.mode&0o777)!==0o600||stat.uid!==process.getuid()||stat.size>1024*1024)fail('protected_config_required');return JSON.parse(await file.readFile('utf8'));}
+ try{const stat=await file.stat();if(!stat.isFile()||stat.nlink!==1||(stat.mode&0o777)!==0o600||stat.uid!==process.getuid()||stat.size>1024*1024)fail('protected_config_required');return await file.readFile();}
  finally{await file.close();}
 }
+export async function readProtectedJSON(path){return JSON.parse((await readProtectedBytes(path)).toString('utf8'));}
 function publicBundle(value,scope,depth=0,budget={nodes:0}){
  if(++budget.nodes>250000||depth>32)fail('operator_bundle_limit');
  if(value===null||typeof value==='boolean'||typeof value==='number')return;
@@ -141,11 +144,20 @@ export function redactedEvidence(value){
  const out={};
  for(const [key,item]of Object.entries(value)){
   if(key==='phase'){if(typeof item!=='string'||!/^[a-z][a-z0-9_-]{0,63}$/.test(item))fail('invalid_evidence');out[key]=item;}
-  else if(['accountID','deviceID','teamID','vaultID','attemptID','resourceID','invitationID','generationID','operationID','launchNonce','checkpointID','processID','previousProcessID'].includes(key)){if(!uuid.test(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='stage'){if(!lifecycleDiagnosticStages.includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='failureCode'){if(!lifecycleDiagnosticCodes.includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='rootStatus'){if(!lifecycleRootStatuses.includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='accountMatch'){if(!['expected','other_approved','unknown'].includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='browserIndex'){if(item!==0&&item!==1)fail('invalid_evidence');out[key]=item;}
+  else if(key==='evidenceClass'){if(!['DIAGNOSTIC_ONLY_NO_ACCEPTANCE','REGISTERED_BY_OWNER_SERVER_VERIFIED'].includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='runID'){if(typeof item!=='string'||!runIDPattern.test(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='expectedSourceSHA'){if(!sha.test(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='publicKeyFingerprint'){if(typeof item!=='string'||!/^[a-f0-9]{4}(?:-[a-f0-9]{4}){15}$/.test(item))fail('invalid_evidence');out[key]=item;}
+  else if(['accountID','deviceID','teamID','vaultID','attemptID','resourceID','invitationID','generationID','operationID','launchNonce','previousLaunchNonce','checkpointID','processID','previousProcessID'].includes(key)){if(!uuid.test(item))fail('invalid_evidence');out[key]=item;}
   else if(['manifestHash','headerHash','rootFingerprint','checkpointSHA256','sha256','sourceDigest'].includes(key)){if(!hash.test(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='checkpointDigest'){if(typeof item!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(item)||Buffer.from(item,'base64url').toString('base64url')!==item)fail('invalid_evidence');out[key]=item;}
   else if(['count','sequence','revision','pid','checkCount','effectiveMask','pathCount','effectiveDeltaCount','revocationRows'].includes(key)){if(!Number.isSafeInteger(item)||item<0)fail('invalid_evidence');out[key]=item;}
-  else if(['offlineVerified','networkReloadVerified','ordinaryUnchanged','allVaults','secretVerified','responseDiscarded','refreshRecovered'].includes(key)){if(typeof item!=='boolean')fail('invalid_evidence');out[key]=item;}
+  else if(['offlineVerified','networkReloadVerified','ordinaryUnchanged','allVaults','secretVerified','responseDiscarded','refreshRecovered','hasRoot','hasPin','signedDirectoryVerified','certificateVerified'].includes(key)){if(typeof item!=='boolean')fail('invalid_evidence');out[key]=item;}
   else if(key==='outcome'){if(!['PASS','DENIED','NOT_RUN','PENDING'].includes(item))fail('invalid_evidence');out[key]=item;}
   else if(['testSessionMode','browserOrigin','localhost','fileURL','apiMode','authSession'].includes(key)){
    const allowed={testSessionMode:['FRESH_ANONYMOUS','PRESERVE_TRUSTED_STATE'],browserOrigin:[STAGING_ORIGIN],localhost:['NO'],fileURL:['NO'],apiMode:['REAL_STAGING'],authSession:['REAL_STAGING','ANONYMOUS']};

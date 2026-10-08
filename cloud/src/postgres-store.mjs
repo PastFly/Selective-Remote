@@ -923,7 +923,7 @@ export class PostgresStore {
          VALUES ($1, $2, $3, $4, $5, $6,
            CASE WHEN $6::text IS NULL THEN NULL ELSE 'p256-ecdh-v1' END,
            CASE WHEN $6::text IS NULL THEN NULL ELSE now() END)
-         ON CONFLICT (user_id, id) DO UPDATE SET
+         ON CONFLICT (id) DO UPDATE SET
            name = EXCLUDED.name, platform = EXCLUDED.platform,
            app_version = EXCLUDED.app_version,
            public_key = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
@@ -933,13 +933,20 @@ export class PostgresStore {
            key_registered_at = CASE WHEN devices.public_key_algorithm IS NULL AND EXCLUDED.public_key IS NOT NULL
              THEN EXCLUDED.key_registered_at ELSE devices.key_registered_at END,
            last_seen_at = now()
-         WHERE devices.revoked_at IS NULL
+         WHERE devices.user_id = EXCLUDED.user_id
+           AND devices.revoked_at IS NULL
            AND (devices.public_key_algorithm IS NULL OR EXCLUDED.public_key IS NULL
              OR devices.public_key = EXCLUDED.public_key)
          RETURNING id`,
         [device.id, userID, device.name, device.platform, device.appVersion, device.publicKey],
       );
-      if (!deviceResult.rows[0]) throw new Error("invalid_device");
+      if (!deviceResult.rows[0]) {
+        const owner = await client.query("SELECT user_id FROM devices WHERE id = $1", [device.id]);
+        // Only a confirmed cross-account ID collision permits the browser's bounded retry.
+        // Revocation and key mismatches within this account remain invalid_device.
+        if (owner.rows[0] && owner.rows[0].user_id !== userID) throw new Error("device_conflict");
+        throw new Error("invalid_device");
+      }
       await client.query(
         `WITH admitted AS (
            INSERT INTO team_membership_device_admissions

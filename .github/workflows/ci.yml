@@ -76,6 +76,7 @@ jobs:
           node --test tests/staging-installer-archive-stream.test.mjs
           sudo "$(command -v node)" --test tests/staging-installer-runtime-owner.test.mjs
           node --test tests/team-postgres-integration.test.mjs
+          node --test tests/account-switch-login-postgres.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs
           node --test tests/active-publication-inspection.test.mjs
