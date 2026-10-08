@@ -72,12 +72,14 @@ async function command(file,args,options={}){
  try{return await execute(file,args,{encoding:'utf8',timeout:300000,maxBuffer:4*1024*1024,env:{PATH:'/usr/bin:/bin'},...options});}
  catch{fail('command_failed');}
 }
-async function streamDocker(args,{input,output}){
- const child=spawn('/usr/bin/docker',args,{env:{PATH:'/usr/bin:/bin'},stdio:['pipe',output?'pipe':'ignore','ignore']});
+export const archiveListShell='pg_restore --list; cat >/dev/null';
+export async function streamProcess(file,args,{input,output,env={PATH:'/usr/bin:/bin'}}){
+ const child=spawn(file,args,{env,stdio:['pipe',output?'pipe':'ignore','ignore']});
  const done=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>code===0?resolve():reject(Error('staging_install_command_failed')));});
  try{await Promise.all([done,input?pipeline(createReadStream(input),child.stdin):Promise.resolve(child.stdin.end()),output?pipeline(child.stdout,createWriteStream(output,{flags:'wx',mode:0o600})):Promise.resolve()]);}
  catch{child.kill('SIGTERM');fail('command_failed');}
 }
+const streamDocker=(args,options)=>streamProcess('/usr/bin/docker',args,options);
 async function bundleManifest(directory){
  const files=[];
  const walk=async path=>{for(const entry of await readdir(path,{withFileTypes:true})){const full=join(path,entry.name);if(entry.isSymbolicLink())fail('bundle_symlink');if(entry.isDirectory())await walk(full);else if(entry.isFile())files.push(full);else fail('bundle_file');}};
@@ -191,7 +193,7 @@ async function runHost(phase,planPath,archivePath,dryRun){
    const baseline=await inventory('capture');const backup=join(run,'backup.dump');
    await streamDocker(['exec','cloud-postgres-1','sh','-ceu','exec pg_dump --format=custom --no-owner --no-privileges --username="$POSTGRES_USER" --dbname="$POSTGRES_DB"'],{output:backup});
    const durableBackup=await open(backup,'r');try{await durableBackup.sync();}finally{await durableBackup.close();}
-   await streamDocker(['exec','-i','cloud-postgres-1','pg_restore','--list'],{input:backup});const backupSHA256=hash(await privateFile(backup));await save(backup+'.sha256',backupSHA256+'  backup.dump\n');
+   await streamDocker(['exec','-i','cloud-postgres-1','sh','-ceu',archiveListShell],{input:backup});const backupSHA256=hash(await privateFile(backup));await save(backup+'.sha256',backupSHA256+'  backup.dump\n');
    const restoreName='prc_restore_'+plan.runID.replaceAll('-','_').toLowerCase();if(!/^prc_restore_[a-z0-9_]{1,60}$/.test(restoreName)||restoreName.length>63)fail('restore_scope');
    const env=parseEnvironment((await privateFile(join(run,'effective.env'))).toString().trimEnd().split('\n')),url=new URL(env.DATABASE_URL);if(url.pathname.slice(1)===restoreName)fail('restore_scope');
    await docker(['exec','cloud-postgres-1','sh','-ceu','exec createdb --template=template0 --username="$POSTGRES_USER" "$1"','sh',restoreName]);

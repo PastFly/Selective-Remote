@@ -73,6 +73,7 @@ jobs:
         run: |
           pg_dump --version
           pg_restore --version
+          node --test tests/staging-installer-archive-stream.test.mjs
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs
