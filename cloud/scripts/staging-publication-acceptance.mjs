@@ -172,11 +172,11 @@ export function createOperatorBridge({config,scope,activation=false,spawnValue=s
   });
  };
 }
-if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+async function runCLI(args){
  try{
-  const args=process.argv.slice(2);
   if(args.length!==7||args[0]!=='--execute'||args[1]!=='--config'||args[3]!=='--run-directory'||args[5]!=='--phase')fail('real_run_opt_in_required');
   const {runStagingBrowserLifecycle}=await import('../tests/browser/staging-real-lifecycle.mjs');
   await runStagingBrowserLifecycle({configPath:resolve(args[2]),runDirectory:resolve(args[4]),phase:args[6]});
  }catch{process.stderr.write('staging_real_lifecycle_stopped; inspect redacted phase evidence and prerequisites\n');process.exitCode=1;}
 }
+if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))void runCLI(process.argv.slice(2));
