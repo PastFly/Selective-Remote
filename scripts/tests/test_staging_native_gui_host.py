@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 from pathlib import Path
 import unittest
+import tempfile
 import uuid
 
 spec = importlib.util.spec_from_file_location('native_host_launcher', Path(__file__).parents[1] / 'staging-native-gui-host.py')
@@ -74,5 +75,40 @@ class NativeEvidenceTests(unittest.TestCase):
         for field in ['deviceID','generationID','manifestSHA256','headerHash']:
             bad=copy.deepcopy(resumed); bad[field]=str(uuid.uuid4()) if field.endswith('ID') else 'f'*64
             with self.subTest(field=field), self.assertRaises(ValueError): launcher.validate_pair(first,bad)
+
+class NativeBundleDiscoveryTests(unittest.TestCase):
+    layouts = ['out/Products/Debug/SelectiveRemoteTests.xctest/Contents/MacOS/SelectiveRemoteTests',
+               'arm64-apple-macosx/debug/SelectiveRemotePackageTests.xctest/Contents/MacOS/SelectiveRemotePackageTests']
+    def make_binary(self, build, layout):
+        binary=build/layout; binary.parent.mkdir(parents=True,exist_ok=True); binary.write_bytes(b'synthetic test image'); binary.chmod(0o700)
+        return binary
+    def test_both_verified_swiftpm_layouts(self):
+        for layout in self.layouts:
+            with self.subTest(layout=layout), tempfile.TemporaryDirectory() as directory:
+                build=Path(directory).resolve()/'.build'
+                binary=self.make_binary(build,layout)
+                self.assertEqual(launcher.discover_test_binary(build),binary)
+    def test_missing_ambiguous_unknown_and_non_executable_rejected(self):
+        for fault in ['missing','ambiguous','unknown','non_executable']:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                build=Path(directory).resolve()/'.build'; build.mkdir()
+                if fault=='ambiguous':
+                    for layout in self.layouts: self.make_binary(build,layout)
+                if fault=='unknown': self.make_binary(build,'debug/ArbitraryTests.xctest/Contents/MacOS/ArbitraryTests')
+                if fault=='non_executable': self.make_binary(build,self.layouts[0]).chmod(0o600)
+                with self.assertRaises(ValueError): launcher.discover_test_binary(build)
+    def test_executable_symlink_escape_and_directory_rejected(self):
+        for fault in ['symlink','escaped_parent','directory']:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory).resolve(); build=root/'.build'; build.mkdir()
+                outside=self.make_binary(root/'outside',self.layouts[0])
+                target=build/self.layouts[0]
+                if fault=='escaped_parent':
+                    (build/'out').symlink_to(root/'outside'/'out',target_is_directory=True)
+                else:
+                    target.parent.mkdir(parents=True)
+                    if fault=='symlink': target.symlink_to(outside)
+                    else: target.mkdir()
+                with self.assertRaises(ValueError): launcher.discover_test_binary(build)
 
 if __name__=='__main__': unittest.main()

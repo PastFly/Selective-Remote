@@ -129,10 +129,28 @@ struct StagingNativeGUIHostRevisionTests {
         }
         #expect(throws: Error.self) { try StagingNativeCheckpoint.recover(manifest: manifest, storage: storage) }
     }
+    @Test("only verified canonical executable SwiftPM test images inside build directory are accepted", arguments: ["SelectiveRemoteTests", "SelectiveRemotePackageTests"])
+    func verifiedBundleLayouts(_ name: String) throws {
+        let root = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appending(path: UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let build = root.appending(path: ".build")
+        let executable = build.appending(path: "debug/" + name + ".xctest/Contents/MacOS/" + name)
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("synthetic test image".utf8).write(to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        #expect(try StagingNativeExecutableIdentity.validatedTestBundle(executable.path, buildDirectory: build) == executable)
+        #expect(throws: Error.self) { try StagingNativeExecutableIdentity.validatedTestBundle(executable.path, buildDirectory: root.appending(path: "other")) }
+        let link = build.appending(path: "link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: executable)
+        #expect(throws: Error.self) { try StagingNativeExecutableIdentity.validatedTestBundle(link.path, buildDirectory: build) }
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: executable.path)
+        #expect(throws: Error.self) { try StagingNativeExecutableIdentity.validatedTestBundle(executable.path, buildDirectory: build) }
+    }
     @Test("executable identity comes from the running process and loaded test image")
     func actualBinary() throws {
         let actual = try StagingNativeExecutableIdentity.current()
-        #expect(actual.testBundlePath.contains("SelectiveRemoteTests.xctest/Contents/MacOS/SelectiveRemoteTests"))
+        #expect(try StagingNativeExecutableIdentity.validatedTestBundle(actual.testBundlePath,
+            buildDirectory: StagingNativeExecutableIdentity.buildDirectory).path == actual.testBundlePath)
         #expect(StagingRealProbeConfig.hash(actual.executableSHA256))
         #expect(StagingRealProbeConfig.hash(actual.testBundleSHA256))
     }

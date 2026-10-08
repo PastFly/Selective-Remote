@@ -119,6 +119,22 @@ def validate_pair(first, resumed):
             and all(first[k]==resumed[k] for k in ['runID','accountID','teamID','vaultID','generationID','sequence','headerHash','manifestSHA256','counts','secretsVerified']), 'restart_identity_mismatch')
 
 
+def discover_test_binary(build_directory):
+    build=Path(build_directory).resolve()
+    candidates=set()
+    for name in ['SelectiveRemoteTests','SelectiveRemotePackageTests']:
+        for candidate in build.glob('**/'+name+'.xctest/Contents/MacOS/'+name):
+            resolved=candidate.resolve()
+            require(build in resolved.parents and not candidate.is_symlink()
+                    and stat.S_ISREG(candidate.stat().st_mode) and os.access(candidate,os.X_OK), 'invalid_test_binary')
+            # Resolve build aliases, but require the actual canonical image to retain the verified bundle shape.
+            require(resolved.name==name and resolved.parent.name=='MacOS' and resolved.parent.parent.name=='Contents'
+                    and resolved.parents[2].name==name+'.xctest', 'invalid_test_bundle_layout')
+            candidates.add(resolved)
+    require(len(candidates)==1,'one_stable_test_binary_required')
+    return next(iter(candidates))
+
+
 def main():
     parser=argparse.ArgumentParser(description='Public protected TEST-only native GUI manifest; password only in SecureField')
     parser.add_argument('manifest'); parser.add_argument('--recover-first',action='store_true',help='Explicitly reopen same persisted native lifecycle after interruption')
@@ -129,8 +145,7 @@ def main():
                  'SELECTIVE_REMOTE_NATIVE_GUI_LOCAL_SMOKE','SELECTIVE_REMOTE_NATIVE_GUI_LOCAL_KEYCHAIN','SELECTIVE_REMOTE_STAGING_REAL_CONFIG']:
         environment.pop(name,None)
     subprocess.run(['swift','test','--filter','StagingNativeGUIHostTests'],cwd=root,env=environment,check=True)
-    binaries=sorted({p.resolve() for p in (root/'.build').glob('**/SelectiveRemoteTests.xctest/Contents/MacOS/SelectiveRemoteTests')})
-    require(len(binaries)==1,'one_stable_test_binary_required'); bundle_binary=binaries[0]
+    bundle_binary=discover_test_binary(root/'.build')
     executable=Path(subprocess.check_output(['xcrun','--find','xctest'],text=True).strip()).resolve()
     developer=Path(subprocess.check_output(['xcode-select','-p'],text=True).strip())
     binary=dict(executablePath=str(executable),executableSHA256=hashlib.sha256(executable.read_bytes()).hexdigest(),

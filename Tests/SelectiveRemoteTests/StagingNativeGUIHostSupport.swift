@@ -422,6 +422,23 @@ struct StagingNativeExecutableIdentity: Codable, Equatable {
     let executableSHA256: String
     let testBundlePath: String
     let testBundleSHA256: String
+    static var buildDirectory: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().appending(path: ".build").resolvingSymlinksInPath()
+    }
+    static func validatedTestBundle(_ path: String, buildDirectory: URL) throws -> URL {
+        let file = URL(fileURLWithPath: path), build = buildDirectory.resolvingSymlinksInPath()
+        let name = file.lastPathComponent
+        var info = stat()
+        guard path.hasPrefix("/"), file.standardizedFileURL.path == path, file.resolvingSymlinksInPath().path == path,
+              path.hasPrefix(build.path + "/"), ["SelectiveRemoteTests", "SelectiveRemotePackageTests"].contains(name),
+              file.deletingLastPathComponent().lastPathComponent == "MacOS",
+              file.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == "Contents",
+              file.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().lastPathComponent == name + ".xctest",
+              lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              FileManager.default.isExecutableFile(atPath: path) else { throw StagingRealProbeError.protection }
+        return file
+    }
     static func current() throws -> Self {
         var size: UInt32 = 0
         _ = _NSGetExecutablePath(nil, &size)
@@ -431,7 +448,8 @@ struct StagingNativeExecutableIdentity: Codable, Equatable {
         var info = Dl_info()
         let pointer = unsafeBitCast(stagingNativeGUIBinaryMarker as @convention(c) () -> Void, to: UnsafeRawPointer.self)
         guard dladdr(pointer, &info) != 0, let name = info.dli_fname else { throw StagingRealProbeError.protection }
-        let bundle = URL(fileURLWithPath: String(cString: name)).resolvingSymlinksInPath()
+        let loaded = URL(fileURLWithPath: String(cString: name)).resolvingSymlinksInPath()
+        let bundle = try validatedTestBundle(loaded.path, buildDirectory: buildDirectory)
         return .init(executablePath: executable.path, executableSHA256: StagingRealProbe.sha256(try Data(contentsOf: executable)),
                      testBundlePath: bundle.path, testBundleSHA256: StagingRealProbe.sha256(try Data(contentsOf: bundle)))
     }
