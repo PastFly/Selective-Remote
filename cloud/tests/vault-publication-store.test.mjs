@@ -12,7 +12,7 @@ import { PostgresStore } from '../src/postgres-store.mjs';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { hashSessionToken } from '../src/security.mjs';
-import { publicationRuntimeFixture, isolatedPublicationDatabase } from './publication-runtime-fixture.mjs';
+import { publicationRuntimeFixture, isolatedPublicationDatabase, stopPublicationRuntime } from './publication-runtime-fixture.mjs';
 import { loadConfig } from '../src/config.mjs';
 import { defaultMigrationPolicy } from '../src/migration-policy.mjs';
 const directory=fileURLToPath(new URL('../migrations/',import.meta.url));
@@ -127,15 +127,14 @@ async function launch(env) {
  const socket=createServer();await new Promise(r=>socket.listen(0,'127.0.0.1',r));const port=socket.address().port;
  await new Promise(r=>socket.close(r));
  const child=spawn(process.execPath,['src/server.mjs'],{cwd:fileURLToPath(new URL('../',import.meta.url)),env:{...process.env,...runtimeEnv,...env,CLOUD_HOST:'127.0.0.1',CLOUD_PORT:String(port)}});
- child.once('exit',()=>fixture?.cleanup());
  let output='';child.stdout.on('data',d=>output+=d);child.stderr.on('data',d=>output+=d);
  const origin='http://127.0.0.1:'+port;
  for(let n=0;n<100;n++){
-  if(child.exitCode!==null)throw Error('synthetic server failed: '+output);
-  try{if((await fetch(origin+'/healthz')).ok)return {child,origin,fencePath:env.PUBLICATION_FENCE_PATH};}catch{}
+  if(child.exitCode!==null){await fixture?.cleanup();throw Error('synthetic server failed: '+output);}
+  try{if((await fetch(origin+'/healthz')).ok)return {child,origin,fencePath:env.PUBLICATION_FENCE_PATH,cleanup:()=>fixture?.cleanup()};}catch{}
   await new Promise(r=>setTimeout(r,20));
  }
- child.kill();throw Error('synthetic server readiness timeout');
+ await stopPublicationRuntime({child,cleanup:()=>fixture?.cleanup()});throw Error('synthetic server readiness timeout');
 }
 test('real HTTP publication routes authenticate, pin generation, deliver scoped proof, prohibit cache and enforce stage gate',{skip:!database},async()=>{
  const isolated=await isolatedPublicationDatabase(database),pool=isolated.pool;let runtime;
@@ -172,9 +171,9 @@ test('real HTTP publication routes authenticate, pin generation, deliver scoped 
   assert.equal(stale.status,409);assert.equal((await stale.json()).error,'publication_changed');
   await pool.query('DELETE FROM team_membership_device_admissions WHERE membership_id=$1',[f.recipient.membershipID]);
   assert.equal((await get(base+'/resources/'+f.out.resources[0].id+'/parts/SECRET'+query)).status,403);
-  runtime.child.kill();await new Promise(r=>runtime.child.once('exit',r));runtime=await launch({DATABASE_URL:isolated.databaseURL});
+  await stopPublicationRuntime(runtime);runtime=await launch({DATABASE_URL:isolated.databaseURL});
   assert.equal((await get(base+'/header')).status,404);
- }finally{runtime?.child.kill();await isolated.cleanup();}
+ }finally{await stopPublicationRuntime(runtime);await isolated.cleanup();}
 });
 async function addMember(pool,f,role='viewer') {
  const g=await seedMigration(pool),membershipID=uuid();
@@ -363,7 +362,7 @@ test('real HTTP viewer metadata, admin inspection, outsider, device and membersh
   assert.equal((await get(viewer,'/header')).status,404);
   await pool.query('UPDATE devices SET revoked_at=now() WHERE id=$1',[admin.deviceID]);
   assert.equal((await get(admin,'/publisher'+query)).status,401);
- }finally{runtime?.child.kill();await isolated.cleanup();}
+ }finally{await stopPublicationRuntime(runtime);await isolated.cleanup();}
 });
 test('1000-resource/10000-wrapper boundary stores and reads real cryptographic projection; boundary+1 is atomic denial',{skip:!database},async()=>{
  const pool=new pg.Pool({connectionString:database});

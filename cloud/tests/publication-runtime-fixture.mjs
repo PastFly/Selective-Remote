@@ -4,9 +4,20 @@ import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
+import {once} from 'node:events';
 import pg from 'pg';
 import {MigrationFence} from '../src/migration-fence.mjs';
 import {readActivePublications} from '../src/migration-compatibility.mjs';
+export async function stopPublicationRuntime(runtime) {
+  if(!runtime)return;
+  const {child}=runtime;
+  if(child.exitCode===null&&child.signalCode===null){
+    const closed=once(child,'close');
+    child.kill();
+    await closed;
+  }
+  await runtime.cleanup?.();
+}
 export async function publicationRuntimeFixture(databaseURL) {
   const directory=await mkdtemp(join(tmpdir(),'synthetic-http-fence-'));
   const path=join(directory,'journal'),pool=new pg.Pool({connectionString:databaseURL,max:1});
@@ -38,7 +49,7 @@ export async function isolatedPublicationDatabase(databaseURL) {
   if(!['127.0.0.1','localhost','[::1]'].includes(base.hostname)||!base.pathname.endsWith('_test'))throw Error('disposable_test_database_required');
   const name=`prc_http_${process.pid}_${randomUUID().replaceAll('-','')}_test`;
   const admin=new pg.Pool({connectionString:databaseURL,max:1});let pool,created=false;
-  const cleanup=async()=>{await pool?.end();try{if(created)await admin.query(`DROP DATABASE "${name}" WITH (FORCE)`);}finally{await admin.end();}};
+  const cleanup=async()=>{await pool?.end();try{if(created)await admin.query(`DROP DATABASE "${name}"`);}finally{await admin.end();}};
   try{
     await admin.query(`CREATE DATABASE "${name}" TEMPLATE template0`);created=true;base.pathname='/'+name;
     pool=new pg.Pool({connectionString:base.href});
