@@ -74,10 +74,19 @@ export class MigrationFence{
    // Provisioning is an explicit operator step. Missing retained history must
    // never be replaced with an empty journal after a successful earlier check.
    file=await this.openFile(this.path,constants.O_RDWR|constants.O_NOFOLLOW);
-   const records=await this.records(file);reduceFenceEvents([...records,record]);
+   const records=await this.records(file);
    if(!records.some(r=>JSON.stringify(r)===key)){
+    const snapshot=reduceFenceEvents([...records,record]);
     const line=Buffer.from(key+'\n'),size=(await file.stat()).size;
     if(size+line.length>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
+    if(!record.version||record.type==='PENDING_INTENT'){
+     // Reserve the larger terminal outcome for every pending intent, including
+     // legacy IDs. New work must not consume another intent's resolution space.
+     const reserved=snapshot.pending.reduce((bytes,pending)=>bytes+Buffer.byteLength(JSON.stringify({
+      version:2,type:'CONFIRMED_COMMIT',intentID:pending.intentID,intentDigest:pending.intentDigest,
+     })+'\n'),0);
+     if(size+line.length+reserved>FENCE_MAX_BYTES)throw Error('deployment_fence_limit');
+    }
     // A failed write or barrier leaves the lock. Only this instance's exact
     // replay can re-confirm durability; restart requires deliberate recovery.
     retain=true;

@@ -5,6 +5,7 @@ import {mkdtemp, readFile, writeFile, mkdir, rm, lstat, open as realOpen} from '
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {MigrationFence} from '../src/migration-fence.mjs';
+import {capacityFixture} from './migration-fence-capacity-fixtures.mjs';
 const id=()=>randomUUID(), hash=n=>String(n).repeat(64);
 const legacy=()=>({teamID:id(),vaultID:id(),attemptID:id(),manifestHash:hash('a'),schemaFloor:19});
 async function fixture(t,options={}){const dir=await mkdtemp(join(tmpdir(),'fence-journal-'));t.after(()=>rm(dir,{recursive:true,force:true}));const path=join(dir,'fence');await writeFile(path,'',{mode:0o600});return {dir,path,fence:new MigrationFence(path,options)};}
@@ -126,9 +127,9 @@ test('partial append is never truncated or exposed as valid history',async t=>{
  assert.equal((await readFile(path)).equals(bytes),true);await assert.rejects(new MigrationFence(path).snapshot(),/deployment_fence_locked/);
 });
 
-test('capacity guard fails before write and exact replay retains original full file',async t=>{
- const {fence,path}=await fixture(t),{FENCE_MAX_BYTES,fenceIntentDigest}=await journal(),p=pending();
- const line=JSON.stringify(p);await writeFile(path,line+' '.repeat(FENCE_MAX_BYTES-Buffer.byteLength(line)-1)+'\n');const bytes=await readFile(path);
+test('capacity guard rejects terminal at virtual physical cap and preserves exact replay',async t=>{
+ const {fenceIntentDigest}=await journal(),p=pending();
+ const {fence,path}=await capacityFixture(t,{events:[p],remaining:0}),bytes=await readFile(path);
  await assert.rejects(fence.append(terminal(p,fenceIntentDigest(p))),/deployment_fence_limit/);
  assert.equal((await readFile(path)).equals(bytes),true);await fence.append(p);assert.equal((await readFile(path)).equals(bytes),true);
  assert.equal((await fence.snapshot()).pending.length,1);
