@@ -124,11 +124,11 @@ async function route(request, response) {
     }
     const wholeRoute=wholePublicationRoute(url.pathname,method);
     if(wholeRoute)return handleOperation(response,()=>runWholePublicationRoute(request,url,session,service,wholeRoute));
-    const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|resources\/([^/]+)\/parts\/([^/]+))$/u);
+    const publicationRoute=url.pathname.match(/^\/v1\/teams\/([^/]+)\/vaults\/([^/]+)\/publication\/(header|publisher|directory|inspection|resources\/([^/]+)\/parts\/([^/]+))$/u);
     if(publicationRoute&&method==="GET")return handleOperation(response,async()=>{
       if(request.headers['x-vault-schema-version']!=='2'||request.headers['x-vault-capability']!=='resource_acl_v2'||request.headers['x-publication-version']!=='1')throw Error('vault_upgrade_required');
       const operation=publicationRoute[3].startsWith("resources/")?"part":publicationRoute[3];
-      const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:[])]);
+      const permitted=new Set(operation==="header"?[]:["generationID","headerHash",...(operation==="directory"?["cursor","limit"]:operation==="inspection"?["inspection","resourceID","subjectUserID","subjectDeviceID","principalKind","principalID","cursor","limit"]:[])]);
       const input={};
       for(const [key,value]of url.searchParams){if(!permitted.has(key)||Object.hasOwn(input,key))throw Error("invalid_access_request");input[key]=value;}
       if(input.limit!==undefined){if(!/^[1-9][0-9]{0,2}$/.test(input.limit))throw Error("invalid_access_page");input.limit=Number(input.limit);}

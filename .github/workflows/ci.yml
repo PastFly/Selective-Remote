@@ -76,6 +76,7 @@ jobs:
           node --test tests/team-postgres-integration.test.mjs
           node --test tests/device-trust-postgres.test.mjs
           node --test tests/device-revoke-publication-postgres.test.mjs
+          node --test tests/active-publication-inspection.test.mjs
           node --test tests/groups-grants-postgres.test.mjs
           node --test tests/access-scale-postgres.test.mjs
           node --test tests/access-surface-postgres.test.mjs

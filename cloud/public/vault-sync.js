@@ -678,7 +678,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         if(!response.ok) { const error=new Error(typeof result.error==='string'?result.error:'publication_request_failed');error.status=response.status;throw error; }
         return result;
       }
-      return {header:scope=>json(scope,'header'),publisher:(scope,q)=>json(scope,'publisher',q),directory:(scope,q)=>json(scope,'directory',q),part:(scope,q)=>{
+      return {header:scope=>json(scope,'header'),inspection:(scope,q)=>json(scope,'inspection',q),publisher:(scope,q)=>json(scope,'publisher',q),directory:(scope,q)=>json(scope,'directory',q),part:(scope,q)=>{
         const {resourceID,part,...pin}=q;
         if(!['GENERAL','METADATA','SECRET'].includes(part))throw new Error('invalid_resource_part');
         return json(scope,`resources/${normalizedUUID(resourceID,'invalid_resource')}/parts/${part}`,pin);
@@ -690,7 +690,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
     wholePublicationTransport(teamID) {
       return createWholePublicationTransport({ request: authorizedRequest, teamID,
-        getIdentity: () => user ? { accountID: user.id, deviceID: currentDeviceID, sessionEpoch: String(sessionEpoch) } : null });
+        getIdentity: () => user ? { accountID: user.id, deviceID: currentDeviceID, sessionEpoch: String(sessionEpoch) } : null, inspectionTransport: this.publicationTransport() });
     },
 
     session() {

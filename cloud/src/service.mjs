@@ -46,7 +46,7 @@ export class CloudService {
   }
   async getPublication(session,teamID,vaultID,operation,input={}) {
     if(!session?.user_id||!session?.device_id||!session?.session_id)throw Error("team_not_found");
-    if(!["header","publisher","directory","part"].includes(operation)||!isUUID(teamID)||!isUUID(vaultID))throw Error("invalid_access_request");
+    if(!["header","publisher","directory","part","inspection"].includes(operation)||!isUUID(teamID)||!isUUID(vaultID))throw Error("invalid_access_request");
     const publication=this.store.publication(this.config.publication);
     return publication[operation]({...input,actorUserID:session.user_id,actorDeviceID:session.device_id,
       sessionID:session.session_id,teamID,vaultID});
