@@ -122,9 +122,28 @@ private actor AccessFixtureTransport {
     }
     func captured() -> [URLRequest] { requests }
 }
+// Explicit suspension lets the test hold B inside the real authorizedResponse await.
+private actor AccessFixtureResponseGate {
+    private var request: URLRequest?
+    private var response: CheckedContinuation<(Data, URLResponse), Never>?
+    private var started: CheckedContinuation<Void, Never>?
+    func load(_ request: URLRequest) async -> (Data, URLResponse) {
+        self.request = request
+        started?.resume(); started = nil
+        return await withCheckedContinuation { response = $0 }
+    }
+    func waitUntilStarted() async {
+        if request != nil { return }
+        await withCheckedContinuation { started = $0 }
+    }
+    func release(_ data: Data) {
+        response!.resume(returning: (data, HTTPURLResponse(url: request!.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!))
+        response = nil
+    }
+}
 private struct AccessFixture {
     let reference: SelectiveRemoteCloudAccessReference
-    let session = CloudAccessSession(endpoint: URL(string: "https://access.example.test")!)
+    let session = CloudAccessSession(endpoint: URL(string: "https://access-\(UUID().uuidString.lowercased()).example.test")!)
     init(kind: CloudAccessKind = .host) throws { reference = try .init(teamID: UUID(), vaultID: UUID(), resourceID: UUID(), kind: kind) }
     var base: String { "/v1/teams/\(reference.teamID.canonicalCloudString)/vaults/\(reference.vaultID.canonicalCloudString)" }
     func data(_ object: Any) throws -> Data { try JSONSerialization.data(withJSONObject: object) }
@@ -344,6 +363,22 @@ extension CloudAccessTests {
         let t = try AccessFixtureTransport([path: [(f.data(row), 200), (f.data(["error": "access_resource_not_found"]), 404)]])
         await #expect(throws: CloudAccessError.scopeMismatch) { try await f.client(t).getResource(f.reference, session: f.session) }
         await #expect(throws: CloudAccessError.service(404, "access_resource_not_found")) { try await f.client(t).getResource(f.reference, session: f.session) }
+    }
+    @Test func authenticationLossInOneFixtureDoesNotCancelAnotherDirectoryResponse() async throws {
+        let a = try AccessFixture(), b = try AccessFixture()
+        let gate = AccessFixtureResponseGate(), tokens = SelectiveRemoteCloudMemoryTokenStore()
+        tokens.saveToken(String(repeating: "t", count: 43), for: b.session.endpoint)
+        let client = SelectiveRemoteCloudAccessClient(client: .init(tokenStore: tokens, dataLoader: { await gate.load($0) }))
+        let pending = Task { try await client.vaults(teamID: b.reference.teamID, session: b.session) }
+        await gate.waitUntilStarted()
+        let transport = try AccessFixtureTransport([a.base + "/access-context": [(a.data(["error": "authentication_required"]), 401)]])
+        await #expect(throws: SelectiveRemoteCloudError.authenticationRequired) {
+            try await a.client(transport).context(a.reference, session: a.session)
+        }
+        await gate.release(try b.data(b.emptyPage))
+        let result = try await pending.value
+        #expect(result.rows.isEmpty)
+        #expect(tokens.token(for: b.session.endpoint) != nil)
     }
     @Test func authorization401ClearsExistingSession() async throws {
         let f = try AccessFixture(); let store = SelectiveRemoteCloudMemoryTokenStore(); store.saveToken(String(repeating: "t", count: 43), for: f.session.endpoint)

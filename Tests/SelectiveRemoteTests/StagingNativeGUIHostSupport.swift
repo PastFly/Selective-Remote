@@ -74,6 +74,22 @@ struct StagingNativeManifest: Codable, Equatable, Sendable {
               let vaults = approval["approvedVaultIDs"] as? [String], vaults.compactMap(UUID.init(uuidString:)).contains(vaultID)
         else { throw StagingRealProbeError.scope }
     }
+    func authorizedTeam(client: SelectiveRemoteCloudAPIClient, stores: StagingNativeStores,
+                        identity: SelectiveRemoteTeamDeviceIdentity?, requireLegacyVault: Bool) async throws -> SelectiveRemoteCloudTeam {
+        var membership: (UUID, Int)?
+        if !requireLegacyVault {
+            guard let raw = try stores.read("admission"), let identity else { throw StagingRealProbeError.protection }
+            let expectation = try JSONDecoder().decode(StagingNativeAdmissionExpectation.self, from: raw)
+            guard expectation.runID == runID, expectation.accountID == accountID,
+                  expectation.teamID == teamID, expectation.vaultID == vaultID,
+                  expectation.deviceID == stores.deviceID, expectation.publicKey == identity.publicKey else { throw StagingRealProbeError.scope }
+            membership = (expectation.membershipID, expectation.membershipEpoch)
+        }
+        return try await StagingRealProbe.authorizedTeam(client: client, scope: scope(deviceID: stores.deviceID),
+            runID: runID, teamName: teamName, vaultName: vaultName,
+            requireLegacyVault: requireLegacyVault, membership: membership)
+    }
+
     var service: String { "org.pastfly.SelectiveRemote.NativeGUI.TEST-ONLY." + runID }
     func scope(deviceID: UUID) -> SelectiveRemotePublicationScope {
         .init(endpoint: endpoint, accountID: accountID, deviceID: deviceID, teamID: teamID, vaultID: vaultID)
@@ -356,6 +372,8 @@ struct StagingNativeCheckpoint: Codable {
     let stage: String
     let publicKey: SelectiveRemoteTeamDevicePublicKey?
     let ownPin: SelectiveRemoteDeviceTrustPin?
+
+    var recoveryRequiresLegacyVault: Bool { !["admission", "materialized"].contains(stage) }
 
     static func reserve(manifest: StagingNativeManifest, storage: any SelectiveRemotePublicationProtectedStorage, processID: UUID) throws -> Self {
         guard try storage.read("device-id") == nil, try storage.read("native-checkpoint") == nil

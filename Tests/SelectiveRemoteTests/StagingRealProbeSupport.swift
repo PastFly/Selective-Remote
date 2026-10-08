@@ -217,19 +217,33 @@ enum StagingRealProbe {
     }
     static func sha256(_ bytes: Data) -> String { SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined() }
 
+    // Shared authenticated scope boundary for the GUI host and separately labeled API probe.
+    // Legacy inventory is a preactivation requirement; ACTIVE identity comes from the signed reader.
+    static func authorizedTeam(client: SelectiveRemoteCloudAPIClient, scope: SelectiveRemotePublicationScope,
+                               runID: String, teamName: String, vaultName: String,
+                               requireLegacyVault: Bool, membership: (UUID, Int)? = nil) async throws -> SelectiveRemoteCloudTeam {
+        guard try await client.currentUser(endpoint: scope.endpoint).id == scope.accountID else { throw StagingRealProbeError.scope }
+        let teams = try await client.teams(endpoint: scope.endpoint)
+        guard teams.allSatisfy({ $0.name.hasPrefix(runID + "-") }),
+              let team = teams.first(where: { $0.id == scope.teamID && $0.name == teamName }),
+              membership.map({ team.membershipID == $0.0 && team.membershipEpoch == $0.1 }) ?? true
+        else { throw StagingRealProbeError.scope }
+        if requireLegacyVault {
+            let vaults = try await client.sharedVaults(endpoint: scope.endpoint, teamID: team.id)
+            guard vaults.allSatisfy({ $0.name.hasPrefix(runID + "-") }),
+                  vaults.contains(where: { $0.id == scope.vaultID && $0.teamID == team.id && $0.name == vaultName })
+            else { throw StagingRealProbeError.scope }
+        }
+        return team
+    }
+
     static func run(_ config: StagingRealProbeConfig, directory: URL) async throws -> Result {
         // All callers must have completed protected input validation first.
         do {
             let first = try await reader(config, directory: directory)
             defer { first.network.invalidateAndCancel() }
-            let me = try await first.client.currentUser(endpoint: config.scope.endpoint)
-            guard me.id == config.accountID else { throw StagingRealProbeError.scope }
-            let teams = try await first.client.teams(endpoint: config.scope.endpoint)
-            guard teams.allSatisfy({ $0.name.hasPrefix(config.runID + "-") }),
-                  let team = teams.first(where: { $0.id == config.teamID }), team.name == config.teamName else { throw StagingRealProbeError.scope }
-            let vaults = try await first.client.sharedVaults(endpoint: config.scope.endpoint, teamID: config.teamID)
-            guard vaults.allSatisfy({ $0.name.hasPrefix(config.runID + "-") }),
-                  vaults.contains(where: { $0.id == config.vaultID && $0.teamID == config.teamID && $0.name == config.vaultName }) else { throw StagingRealProbeError.scope }
+            let team = try await authorizedTeam(client: first.client, scope: config.scope, runID: config.runID,
+                teamName: config.teamName, vaultName: config.vaultName, requireLegacyVault: false)
             let online = try await first.coordinator.load(teamName: team.name, vaultName: config.vaultName, role: team.role)
             try check(online, config: config, stale: false)
             try verifyWater(first.store, config: config)

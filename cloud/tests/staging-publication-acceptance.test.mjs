@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,webcrypto} from 'node:crypto';
 import {mkdtemp,writeFile,chmod,rm,mkdir,symlink,realpath,access,link} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -156,8 +156,15 @@ test('protected root proof cannot be replaced by a hardlink or overwritten for t
 });
 test('native v2 metadata accepts actual Swift UUID casing and rejects stale or partial acceptance',async()=>{
  const {validateNativePublic}=await import('./browser/staging-real-lifecycle.mjs');const accountID=id(),teamID=id(),vaultID=id(),runID='20261003-a1',deviceID=id();
- const value={formatVersion:2,nativeGuiTestHost:true,productGuiAcceptance:false,runID:'TEST-ONLY-CODEX-'+runID,phase:'first',launchNonce:id().toUpperCase(),pid:123,processID:id().toUpperCase(),previousProcessID:'',accountID:accountID.toUpperCase(),teamID:teamID.toUpperCase(),vaultID:vaultID.toUpperCase(),deviceID:deviceID.toUpperCase(),generationID:id().toUpperCase(),publicKey:{kty:'EC',crv:'P-256',x:Buffer.alloc(32).toString('base64url'),y:Buffer.alloc(32).toString('base64url'),ext:true,key_ops:[]},publicKeyFingerprint:hash,status:'MATERIALIZED',sequence:1,headerHash:hash,manifestSHA256:hash,acceptedAttemptID:id(),counts:{hosts:1,snippets:1,credentials:1,forwardings:1,folders:1},binary:{executablePath:'/tmp/test',executableSHA256:hash,testBundlePath:'/tmp/bundle',testBundleSHA256:hash},ownPin:{accountID:accountID.toUpperCase(),rootFingerprint:hash,highWater:1,checkpointDigest:Buffer.alloc(32).toString('base64url')},offlineVerified:false,networkReloadVerified:true,secretsVerified:1};
- const expected={runID,accountID,teamID,vaultID,status:['MATERIALIZED']};assert.equal(validateNativePublic(value,expected).deviceID,deviceID);
+ const key=await webcrypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']),publicKey=await webcrypto.subtle.exportKey('jwk',key.publicKey);
+ const {teamDevicePublicKeyFingerprint}=await import('../public/team-vault-crypto.js');
+ const publicKeyFingerprint=await teamDevicePublicKeyFingerprint(publicKey,webcrypto);
+ assert.match(publicKeyFingerprint,/^[a-f0-9]{4}(?:-[a-f0-9]{4}){15}$/);
+ const value={formatVersion:2,nativeGuiTestHost:true,productGuiAcceptance:false,runID:'TEST-ONLY-CODEX-'+runID,phase:'first',launchNonce:id().toUpperCase(),pid:123,processID:id().toUpperCase(),previousProcessID:'',accountID:accountID.toUpperCase(),teamID:teamID.toUpperCase(),vaultID:vaultID.toUpperCase(),deviceID:deviceID.toUpperCase(),generationID:id().toUpperCase(),publicKey,publicKeyFingerprint,status:'MATERIALIZED',sequence:1,headerHash:hash,manifestSHA256:hash,acceptedAttemptID:id(),counts:{hosts:1,snippets:1,credentials:1,forwardings:1,folders:1},binary:{executablePath:'/tmp/test',executableSHA256:hash,testBundlePath:'/tmp/bundle',testBundleSHA256:hash},ownPin:{accountID:accountID.toUpperCase(),rootFingerprint:hash,highWater:1,checkpointDigest:Buffer.alloc(32).toString('base64url')},offlineVerified:false,networkReloadVerified:true,secretsVerified:1};
+ const expected={runID,accountID,teamID,vaultID,status:['MATERIALIZED']};
+ for(const phase of ['first','resume','recover'])assert.equal(validateNativePublic({...value,phase},expected).deviceID,deviceID);
+ const other=await webcrypto.subtle.generateKey({name:'ECDH',namedCurve:'P-256'},true,['deriveBits']),otherPublic=await webcrypto.subtle.exportKey('jwk',other.publicKey);
+ for(const patch of [{publicKey:otherPublic},{publicKeyFingerprint:await teamDevicePublicKeyFingerprint(otherPublic,webcrypto)},{publicKeyFingerprint:hash},{phase:'unknown'}])assert.throws(()=>validateNativePublic({...value,...patch},expected),/native_public_mismatch/);
  for(const patch of [{accountID:id()},{networkReloadVerified:false},{acceptedAttemptID:''},{formatVersion:1},{ownPin:null},{token:'forbidden'},{publicKey:{...value.publicKey,d:'forbidden'}},{counts:{...value.counts,secret:'forbidden'}}])assert.throws(()=>validateNativePublic({...value,...patch},expected));
 });
 test('runner lock denies a live invocation and recovers only an actually exited local process',async t=>{

@@ -224,7 +224,7 @@ private final class StagingNativeGUIModel: ObservableObject {
         guard try stores.token(for: manifest.endpoint) != nil else {
             status = "Original key retained. Sign in to the same approved account / Войти в тот же аккаунт"; return
         }
-        let team = try await validateScope()
+        let team = try await validateScope(requireLegacyVault: checkpoint.recoveryRequiresLegacyVault)
         loggedIn = true
         let inspection = try await trust().inspect()
         if ["admission", "materialized"].contains(checkpoint.stage) {
@@ -293,18 +293,12 @@ private final class StagingNativeGUIModel: ObservableObject {
         try write(status: "CHALLENGE_ANSWERED", name: "public.json")
         status = "Custodian: finish certificate approval and Team device admission before migration / Завершить допуск"
     }
-    private func validateScope() async throws -> SelectiveRemoteCloudTeam {
-        guard try await client.currentUser(endpoint: manifest.endpoint).id == manifest.accountID else { throw StagingRealProbeError.scope }
-        let teams = try await client.teams(endpoint: manifest.endpoint)
-        guard teams.allSatisfy({ $0.name.hasPrefix(manifest.runID + "-") }),
-              let team = teams.first(where: { $0.id == manifest.teamID && $0.name == manifest.teamName }) else { throw StagingRealProbeError.scope }
-        let vaults = try await client.sharedVaults(endpoint: manifest.endpoint, teamID: team.id)
-        guard vaults.allSatisfy({ $0.name.hasPrefix(manifest.runID + "-") }), vaults.contains(where: { $0.id == manifest.vaultID && $0.teamID == team.id && $0.name == manifest.vaultName }) else { throw StagingRealProbeError.scope }
-        return team
+    private func validateScope(requireLegacyVault: Bool = false) async throws -> SelectiveRemoteCloudTeam {
+        try await manifest.authorizedTeam(client: client, stores: stores, identity: identity, requireLegacyVault: requireLegacyVault)
     }
     func verifyAdmission() async throws {
         guard phase != "resume", let identity, try await trust().inspect().phase == .certified else { throw StagingRealProbeError.trust }
-        let team = try await validateScope()
+        let team = try await validateScope(requireLegacyVault: true)
         let expectation = try StagingNativeAdmissionExpectation.load(directory: directory, manifest: manifest,
             deviceID: deviceID, publicKey: identity.publicKey)
         guard expectation.membershipID == team.membershipID, expectation.membershipEpoch == team.membershipEpoch

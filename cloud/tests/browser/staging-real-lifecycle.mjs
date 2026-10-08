@@ -463,15 +463,18 @@ export function validateNativePublic(value,{runID,accountID,teamID,vaultID,statu
  const fields='formatVersion,nativeGuiTestHost,productGuiAcceptance,runID,phase,launchNonce,pid,processID,previousProcessID,accountID,teamID,vaultID,deviceID,generationID,publicKey,publicKeyFingerprint,status,sequence,headerHash,manifestSHA256,acceptedAttemptID,counts,binary,ownPin,offlineVerified,networkReloadVerified,secretsVerified'.split(',');
  if(!strictKeys(value,fields)||value.formatVersion!==2||value.nativeGuiTestHost!==true||value.productGuiAcceptance!==false||value.runID!=='TEST-ONLY-CODEX-'+runID
   ||value.accountID!==accountID||value.teamID!==teamID||value.vaultID!==vaultID||!idPattern.test(value.deviceID)||!idPattern.test(value.launchNonce)||!idPattern.test(value.processID)
-  ||!Number.isSafeInteger(value.pid)||value.pid<1||!['first','resume'].includes(value.phase)||!status.includes(value.status)
+  ||!Number.isSafeInteger(value.pid)||value.pid<1||!['first','resume','recover'].includes(value.phase)||!status.includes(value.status)
   ||!strictKeys(value.publicKey,['kty','crv','x','y','ext','key_ops'])||value.publicKey.kty!=='EC'||value.publicKey.crv!=='P-256'||value.publicKey.ext!==true||!Array.isArray(value.publicKey.key_ops)||value.publicKey.key_ops.length
-  ||!['x','y'].every(k=>typeof value.publicKey[k]==='string'&&/^[A-Za-z0-9_-]{43}$/.test(value.publicKey[k]))||!digestPattern.test(value.publicKeyFingerprint)
+  ||!['x','y'].every(k=>typeof value.publicKey[k]==='string'&&/^[A-Za-z0-9_-]{43}$/.test(value.publicKey[k]))||!/^[a-f0-9]{4}(?:-[a-f0-9]{4}){15}$/.test(value.publicKeyFingerprint)
   ||!strictKeys(value.binary,['executablePath','executableSHA256','testBundlePath','testBundleSHA256'])||!['executableSHA256','testBundleSHA256'].every(k=>digestPattern.test(value.binary[k]))
   ||!['executablePath','testBundlePath'].every(k=>typeof value.binary[k]==='string'&&isAbsolute(value.binary[k]))
   ||!strictKeys(value.counts,['hosts','snippets','credentials','forwardings','folders'])||Object.values(value.counts).some(n=>!Number.isSafeInteger(n)||n<0)
   ||!['offlineVerified','networkReloadVerified'].every(k=>typeof value[k]==='boolean')||!Number.isSafeInteger(value.secretsVerified)||value.secretsVerified<0
   ||!Number.isSafeInteger(value.sequence)||value.sequence<1||!idPattern.test(value.generationID)||!digestPattern.test(value.headerHash)||!digestPattern.test(value.manifestSHA256)
   ||value.acceptedAttemptID!==''&&!idPattern.test(value.acceptedAttemptID)||value.previousProcessID!==''&&!idPattern.test(value.previousProcessID))throw Error('native_public_mismatch');
+ // Match the production native/Browser domain-separated P-256 key fingerprint.
+ const fingerprint=createHash('sha256').update(`selective-remote/team-device-key/v1\0${value.publicKey.x}\0${value.publicKey.y}`).digest('hex').match(/.{4}/g).join('-');
+ if(value.publicKeyFingerprint!==fingerprint)throw Error('native_public_mismatch');
  if(value.ownPin!==null&&(!strictKeys(value.ownPin,['accountID','rootFingerprint','highWater','checkpointDigest'])||value.ownPin.accountID!==accountID||!digestPattern.test(value.ownPin.rootFingerprint)||!Number.isSafeInteger(value.ownPin.highWater)||value.ownPin.highWater<1||!/^[A-Za-z0-9_-]{43}$/.test(value.ownPin.checkpointDigest)))throw Error('native_pin_mismatch');
  if(['MATERIALIZED','PASS'].includes(value.status)&&(!value.networkReloadVerified||!idPattern.test(value.acceptedAttemptID)||!value.ownPin))throw Error('native_acceptance_missing');
  return structuredClone(value);
