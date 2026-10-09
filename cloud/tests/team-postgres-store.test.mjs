@@ -364,10 +364,17 @@ test("Team creation atomically creates its first Owner and audit receipt", async
 
   assert.deepEqual(await f.store.createTeam({
     actorUserID,
+    actorDeviceID: deviceID,
     name: "Operations",
     idempotencyKey: "request:team-create-01",
   }), { team, membership });
 
+  const admission = f.queries.find(({ sql }) => sql.includes("INSERT INTO team_membership_device_admissions"));
+  assert.deepEqual(admission.parameters, [teamID, membershipID, actorUserID, deviceID]);
+  assert.match(admission.sql, /team\.automatic_device_admission = true/u);
+  assert.match(admission.sql, /device\.user_id = membership\.user_id/u);
+  assert.match(admission.sql, /device\.revoked_at IS NULL/u);
+  assert.doesNotMatch(admission.sql, /UPDATE devices/u);
   assert.equal(f.queries[0].sql, "BEGIN");
   assert.ok(f.queries.some(({ sql }) => sql.includes("'owner'")));
   assert.ok(f.queries.some(({ sql }) => sql.includes("INSERT INTO team_audit_events")));
@@ -441,10 +448,12 @@ test("a repeated idempotency key replays the committed response without another 
 
   assert.deepEqual(await f.store.createTeam({
     actorUserID,
+    actorDeviceID: deviceID,
     name: "Ignored on replay",
     idempotencyKey: "request:team-create-01",
   }), response);
   assert.equal(f.queries.some(({ sql }) => sql.includes("INSERT INTO teams")), false);
+  assert.equal(f.queries.some(({ sql }) => sql.includes("team_membership_device_admissions")), false);
   assert.equal(f.queries.at(-2).sql, "COMMIT");
 });
 

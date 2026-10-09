@@ -149,7 +149,7 @@ export function redactedEvidence(value){
   else if(key==='rootStatus'){if(!lifecycleRootStatuses.includes(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='accountMatch'){if(!['expected','other_approved','unknown'].includes(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='browserIndex'){if(item!==0&&item!==1)fail('invalid_evidence');out[key]=item;}
-  else if(key==='evidenceClass'){if(!['DIAGNOSTIC_ONLY_NO_ACCEPTANCE','REGISTERED_BY_OWNER_SERVER_VERIFIED'].includes(item))fail('invalid_evidence');out[key]=item;}
+  else if(key==='evidenceClass'){if(!['DIAGNOSTIC_ONLY_NO_ACCEPTANCE','REGISTERED_BY_OWNER_SERVER_VERIFIED','PARTIAL_BOOTSTRAP_SOURCE_RECOVERY'].includes(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='runID'){if(typeof item!=='string'||!runIDPattern.test(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='expectedSourceSHA'){if(!sha.test(item))fail('invalid_evidence');out[key]=item;}
   else if(key==='publicKeyFingerprint'){if(typeof item!=='string'||!/^[a-f0-9]{4}(?:-[a-f0-9]{4}){15}$/.test(item))fail('invalid_evidence');out[key]=item;}

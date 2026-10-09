@@ -355,6 +355,7 @@ export class CloudService {
   async createTeam(session, input, idempotencyKey) {
     const result = await this.store.createTeam({
       actorUserID: session.user_id,
+      actorDeviceID: session.device_id,
       name: validateTeamName(input?.name),
       idempotencyKey: validateIdempotencyKey(idempotencyKey),
     });

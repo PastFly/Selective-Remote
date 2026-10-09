@@ -1210,7 +1210,7 @@ export class PostgresStore {
     return result.rows;
   }
 
-  async createTeam({ actorUserID, name, idempotencyKey }) {
+  async createTeam({ actorUserID, actorDeviceID = null, name, idempotencyKey }) {
     return this.withTeamMutation(actorUserID, "team.create", idempotencyKey, async (client) => {
       const teamResult = await client.query(
         `INSERT INTO teams (name, created_by_user_id)
@@ -1226,6 +1226,37 @@ export class PostgresStore {
         [team.id, actorUserID],
       );
       const membership = membershipResult.rows[0];
+      // Login can only admit devices to memberships that already exist. The
+      // creator's new membership needs the same policy-scoped admission here.
+      await client.query(
+        `WITH admitted AS (
+           INSERT INTO team_membership_device_admissions
+             (membership_id, membership_epoch, device_id)
+           SELECT membership.id, membership.epoch, device.id
+           FROM team_memberships AS membership
+           JOIN teams AS team
+             ON team.id = membership.team_id AND team.archived_at IS NULL
+            AND team.automatic_device_admission = true
+           JOIN devices AS device
+             ON device.id = $4 AND device.user_id = membership.user_id
+            AND device.revoked_at IS NULL AND device.public_key IS NOT NULL
+            AND device.public_key_algorithm = 'p256-ecdh-v1'
+           WHERE membership.team_id = $1 AND membership.id = $2
+             AND membership.user_id = $3 AND membership.revoked_at IS NULL
+           ON CONFLICT (membership_id, membership_epoch, device_id) DO NOTHING
+           RETURNING membership_id, membership_epoch, device_id
+         )
+         INSERT INTO team_audit_events
+           (team_id, actor_user_id, action, target_user_id, target_membership_id, metadata)
+         SELECT $1, $3, 'team.member_device_auto_admitted', $3, admitted.membership_id,
+           jsonb_build_object(
+             'membershipEpoch', admitted.membership_epoch,
+             'deviceID', admitted.device_id,
+             'source', 'team.create'
+           )
+         FROM admitted`,
+        [team.id, membership.id, actorUserID, actorDeviceID],
+      );
       await writeTeamAudit(client, {
         teamID: team.id,
         actorUserID,
