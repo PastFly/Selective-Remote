@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import pg from "pg";
 import { webcrypto } from "node:crypto";
 import { applyMigrations } from "../src/migrations.mjs";
+import { CloudService } from "../src/service.mjs";
+import { DeviceTrustStore } from "../src/device-trust-store.mjs";
+import { validateSignedDeviceBundle } from "../src/device-trust-policy.mjs";
+import { createTrustRoot, issueDeviceCertificate, signDeviceDirectory } from "../public/device-trust-v1.js";
 import { PostgresStore } from "../src/postgres-store.mjs";
 import { teamVaultWrapperContextHash } from "../src/security.mjs";
 import { generateTeamDeviceIdentity } from "../public/team-vault-crypto.js";
@@ -1077,4 +1081,95 @@ test("real PostgreSQL serializes Team authorization, invitations and revocation"
   } finally {
     await pool.end();
   }
+});
+
+
+test("new Team admits only its creator's current eligible device without global approval or replay admission", {
+  skip: databaseURL ? false : "TEST_DATABASE_URL is not configured",
+}, async () => {
+  const pool = new pg.Pool({ connectionString: databaseURL, max: 2 });
+  try {
+    await applyMigrations(pool, migrationsDirectory, { info() {} });
+    const suffix = webcrypto.randomUUID().replaceAll("-", "").slice(0, 12);
+    const users = (await pool.query(`INSERT INTO users (email, username, email_verified_at)
+      VALUES ($1, $2, now()), ($3, $4, now()) RETURNING id`,
+    [`creator-${suffix}@example.test`, `creator_${suffix}`,
+      `other-${suffix}@example.test`, `other_${suffix}`])).rows;
+    const actorUserID = users[0].id, otherUserID = users[1].id;
+    const [approved, current, pending, revoked, keyless, foreign, unknown] =
+      Array.from({ length: 7 }, () => webcrypto.randomUUID());
+    const identity = await generateTeamDeviceIdentity(webcrypto);
+    const publicKey = JSON.stringify(identity.publicKey);
+    for (const [id, userID, hasKey, isApproved, isRevoked] of [
+      [approved, actorUserID, true, true, false], [current, actorUserID, true, false, false],
+      [pending, actorUserID, true, false, false], [revoked, actorUserID, true, false, true],
+      [keyless, actorUserID, false, false, false], [foreign, otherUserID, true, false, false],
+    ]) await pool.query(`INSERT INTO devices (id, user_id, name, platform, public_key,
+      public_key_algorithm, key_registered_at, key_approved_at, revoked_at)
+      VALUES ($1, $2, 'Creator admission test', 'web', $3, $4,
+        CASE WHEN $3::text IS NULL THEN NULL ELSE now() END,
+        CASE WHEN $5 THEN now() ELSE NULL END, CASE WHEN $6 THEN now() ELSE NULL END)`,
+    [id, userID, hasKey ? publicKey : null, hasKey ? 'p256-ecdh-v1' : null, isApproved, isRevoked]);
+    const store = new PostgresStore(databaseURL, pool), service = new CloudService(store, {});
+    await assert.rejects(store.bootstrapDeviceKey({ actorUserID, actorDeviceID: current,
+      expectedPublicKey: publicKey, idempotencyKey: `creator:bootstrap:${suffix}` }), /device_approval_required/);
+
+    // A signed account custodian is deliberately independent of legacy approval.
+    const root = await createTrustRoot({ endpoint: "https://example.test", accountID: actorUserID, cryptoValue: webcrypto });
+    const certificate = await issueDeviceCertificate({ root, accountID: actorUserID,
+      deviceID: current, publicKey: identity.publicKey, keyVersion: 1,
+      issuedAt: Math.floor(Date.now() / 1000), serial: webcrypto.randomUUID(), cryptoValue: webcrypto });
+    const checkpoint = await signDeviceDirectory({ root, accountID: actorUserID, version: 1,
+      certificates: [certificate], cryptoValue: webcrypto });
+    const bundle = await validateSignedDeviceBundle({ rootPublicKey: root.publicKey, certificate,
+      checkpoint, accountID: actorUserID, deviceID: current, publicKey: identity.publicKey });
+    await new DeviceTrustStore(pool).publishRoot({ accountID: actorUserID, actorDeviceID: current,
+      bundle, expectedPublicKey: publicKey, certificate, checkpoint, idempotencyKey: `creator:trust:${suffix}` });
+
+    const session = { user_id: actorUserID, device_id: current };
+    const key = `creator:team:${suffix}`;
+    const created = await service.createTeam(session, { name: "Creator current device", actorDeviceID: foreign }, key);
+    const teamID = created.team.id, membershipID = created.team.membershipID;
+    assert.equal((await store.getTeamDeviceAdmissionPolicy(teamID, actorUserID)).automatic_device_admission, true);
+    const admissions = async () => (await pool.query(`SELECT membership_id, membership_epoch, device_id
+      FROM team_membership_device_admissions WHERE membership_id=$1 ORDER BY device_id`, [membershipID])).rows;
+    assert.deepEqual(await admissions(), [{ membership_id: membershipID, membership_epoch: "1", device_id: current }]);
+    assert.equal((await pool.query("SELECT key_approved_at FROM devices WHERE id=$1", [current])).rows[0].key_approved_at, null);
+    assert.equal((await pool.query("SELECT custodian_device_id FROM device_trust_roots_v1 WHERE account_id=$1", [actorUserID])).rows[0].custodian_device_id, current);
+    const audit = (await pool.query(`SELECT metadata FROM team_audit_events WHERE team_id=$1
+      AND action='team.member_device_auto_admitted'`, [teamID])).rows;
+    assert.deepEqual(audit, [{ metadata: { membershipEpoch: 1, deviceID: current, source: "team.create" } }]);
+
+    const shared = await store.createSharedVault({ actorUserID, teamID, name: "Empty V1",
+      idempotencyKey: `creator:vault:${suffix}` });
+    const vaultID = shared.vault.id;
+    assert.equal(Number((await store.getSharedVault(teamID, vaultID, actorUserID, current)).revision), 0);
+    const devices = await store.listTeamKeyDevices(teamID, vaultID, actorUserID, current);
+    assert.ok(devices.some(d => d.device_id === current));
+    assert.ok(!devices.some(d => d.device_id === pending));
+    await assert.rejects(store.getSharedVault(teamID, vaultID, actorUserID, pending), /device_approval_required/);
+    // Reusing a creation receipt on another device does not silently admit it.
+    assert.equal((await service.createTeam({ ...session, device_id: pending }, { name: "Replay" }, key)).team.id, teamID);
+    assert.equal((await admissions()).length, 1);
+    await pool.query("UPDATE devices SET revoked_at=now() WHERE id=$1", [current]);
+    await store.updateTeamDeviceAdmissionPolicy({ actorUserID, teamID, automaticDeviceAdmission: false,
+      idempotencyKey: `creator:policy:${suffix}` });
+    await service.createTeam(session, { name: "Revoked replay" }, key);
+    await service.createTeam({ ...session, device_id: pending }, { name: "Disabled policy replay" }, key);
+    assert.equal((await admissions()).length, 1);
+    assert.equal((await pool.query(`SELECT count(*)::int AS count FROM team_audit_events
+      WHERE team_id=$1 AND action='team.member_device_auto_admitted'`, [teamID])).rows[0].count, 1);
+    await assert.rejects(store.getSharedVault(teamID, vaultID, actorUserID, current), /team_not_found/);
+    await assert.rejects(store.listTeamKeyDevices(teamID, vaultID, actorUserID, pending), /device_approval_required/);
+
+    for (const [label, deviceID] of [["revoked", revoked], ["keyless", keyless], ["foreign", foreign], ["unknown", unknown]]) {
+      const invalid = await service.createTeam({ ...session, device_id: deviceID }, { name: `Invalid ${label}` }, `creator:${label}:${suffix}`);
+      assert.equal((await pool.query(`SELECT count(*)::int AS count FROM team_membership_device_admissions
+        WHERE membership_id=$1`, [invalid.team.membershipID])).rows[0].count, 0);
+      const empty = await store.createSharedVault({ actorUserID, teamID: invalid.team.id,
+        name: "Denied", idempotencyKey: `creator:invalid-vault:${label}:${suffix}` });
+      await assert.rejects(store.getSharedVault(invalid.team.id, empty.vault.id, actorUserID, deviceID), /team_not_found/);
+      await assert.rejects(store.listTeamKeyDevices(invalid.team.id, empty.vault.id, actorUserID, deviceID), /team_not_found/);
+    }
+  } finally { await pool.end(); }
 });

@@ -491,3 +491,15 @@ test("username availability works before registration and preserves account self
     /invalid_username/,
   );
 });
+
+test('restricted staging registration rejects unlisted users before password, invitation or mail work',async()=>{
+  let accessed=false;
+  const store={teamInvitationRegistrationTarget:async()=>{accessed=true;throw Error('unexpected access');}};
+  for(const allowRegistration of [false,true]){
+    const service=new CloudService(store,{...config,allowRegistration,registrationEmailAllowlist:['first@example.test','second@example.test']});
+    await assert.rejects(service.register({email:'outside@example.test',invitationToken:'not-a-bypass'}),/registration_disabled/);
+  }
+  assert.equal(accessed,false);
+  const allowed=new CloudService(new MemoryStore(),{...config,registrationEmailAllowlist:['first@example.test','second@example.test']});
+  await assert.rejects(allowed.register({email:'FIRST@example.test'}),/smtp_not_configured/);
+});

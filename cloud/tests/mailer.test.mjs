@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { spawnSync } from "node:child_process";
+import nodemailer from "nodemailer";
 import { createVerificationMailer } from "../src/mailer.mjs";
 
 const config = {
@@ -56,6 +58,27 @@ test("verification mail requires TLS and keeps credentials out of the message", 
 
 test("mailer refuses to start without SMTP configuration", () => {
   assert.throws(() => createVerificationMailer({ ...config, smtp: null }), /smtp_not_configured/);
+});
+
+test("installed mail transport compiles the application's verification message", async () => {
+  const mailer = createVerificationMailer(config, () => nodemailer.createTransport({ streamTransport: true, buffer: true }));
+  const result = await mailer.sendEmailVerification({ recipient: "person@example.com", token: "opaque-token" });
+  assert.deepEqual(result.envelope.to, ["person@example.com"]);
+  assert.equal(result.envelope.from, "no-reply@example.com");
+  assert.match(result.message.toString(), /MIME-Version: 1\.0/);
+  assert.doesNotMatch(result.message.toString(), /secret-secret-secret/);
+});
+
+test("installed mail transport bounds malformed address parsing (GHSA-v53p-9fqp-m79j)", () => {
+  // Exercise the public mail path in a killable child: the vulnerable parser
+  // blocks the event loop, so an in-process Promise timeout is insufficient.
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import nodemailer from "nodemailer";
+    const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });
+    await transport.sendMail({ from: "sender@example.com", to: " >" + ">[x][x]".repeat(40000), text: "bounded parser regression" });
+  `], { cwd: new URL("../", import.meta.url), encoding: "utf8", timeout: 10000, maxBuffer: 16384 });
+  assert.equal(result.error?.code, undefined, "malformed recipient processing exceeded the child process budget");
+  assert.equal(result.status, 0, result.stderr);
 });
 
 test("password reset mail keeps the opaque token in a fragment", async () => {

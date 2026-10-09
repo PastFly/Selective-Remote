@@ -13,6 +13,18 @@ COPY = {
 COPY['en'].update(tool1body='Tabs, panes and snippets stay close to the host. The demo shell shown here is intentionally stopped.', tool2body='A two-pane SFTP workspace for Mac ↔ Server and Server ↔ Server transfers. The demo shows local files with no server connected.', tool3='Reusable commands, ready when you need them', tool3body='Keep demo commands in the Snippets library, with clear targets for SSH and local terminal workflows.', terminalalt='Selective Remote 0.32 Terminal workspace with the demo shell stopped and Snippets inspector open', sftpalt='Selective Remote 0.32 SFTP workspace with local demo files and no server connected', snippetsalt='Selective Remote 0.32 Snippets library with three synthetic demo commands')
 COPY['ru'].update(tool1body='Вкладки, панели и сниппеты рядом с хостом. На демоснимке локальный shell намеренно остановлен.', tool2body='Две панели для передачи Mac ↔ Server и Server ↔ Server. На демоснимке показаны локальные файлы без подключения к серверу.', tool3='Команды под рукой', tool3body='Сохраняйте команды в библиотеке сниппетов и выбирайте, где их использовать: в SSH-сеансе или локальном терминале.', terminalalt='Рабочее пространство терминала Selective Remote 0.32: демонстрационный shell остановлен, открыта панель сниппетов', sftpalt='Рабочее пространство SFTP Selective Remote 0.32: локальные демофайлы и панель без подключения к серверу', snippetsalt='Библиотека сниппетов Selective Remote 0.32 с тремя демонстрационными командами')
 
+# Keep candidate claims aligned with the published RU/EN Pages copy.
+COPY['en'].update(
+    cloudbody='The upcoming 0.32 candidate connects Personal Vault and Team Vaults to the Mac workspace. Vault content is encrypted on the device. Sync Center and notifications help you review synchronization, invitations, and device access. Release and production Cloud acceptance are still pending. Local work remains available without an account.',
+    teamsbody='The 0.32 candidate includes Team Vaults, roles, invitations, and an encrypted copy from Personal Host to Team Vault that keeps the original. Access changes can be reviewed before confirmation; access policy and a usable key on a selected device remain separate.',
+    teamdetail='The candidate includes resource mapping and encrypted generation publication for Mac and browser readers. V2 migration and access remain limited to isolated test Vaults and are not enabled for ordinary Vaults. Real migration, second-device decryption, and old-client acceptance are still pending. Trust-root recovery is planned after 0.32.',
+)
+COPY['ru'].update(
+    cloudbody='Кандидат будущей 0.32 объединяет Personal Vault и Team Vaults с рабочим пространством Mac. Содержимое Vault шифруется на устройстве. Центр синхронизации и уведомления помогают проверить синхронизацию, приглашения и доступ устройств. Приёмка выпуска и production-развёртывания Cloud ещё не завершена. Локальная работа доступна без аккаунта.',
+    teamsbody='В кандидате 0.32 есть Team Vaults, роли, приглашения и зашифрованное копирование личного Host в Team Vault с сохранением оригинала. Влияние изменения доступа можно проверить до подтверждения; политика доступа и наличие ключа на выбранном устройстве показаны отдельно.',
+    teamdetail='В кандидате реализованы сопоставление ресурсов и публикация зашифрованного поколения для Mac и браузера. Миграция и доступ V2 ограничены изолированными тестовыми Vaults и не включены для обычных Vaults. Реальная приёмка миграции, расшифрования на втором устройстве и старых клиентов ещё не завершена. Восстановление корня доверия запланировано после 0.32.',
+)
+
 def page(d):
  p=d['prefix']; shot=lambda n: p+f"images/demo-032-{d['lang']}-{n}.webp"
  return f'''<!doctype html>

@@ -498,6 +498,40 @@ export async function registerWithDeviceConflictRetry({
   throw new Error("registration_failed");
 }
 
+export async function loginWithDeviceConflictRetry({
+  input,
+  accountDevices,
+  ensureIdentity,
+  login,
+} = {}) {
+  if (!input || typeof accountDevices?.deviceID !== "function"
+      || typeof accountDevices?.remember !== "function"
+      || typeof accountDevices?.accepted !== "function"
+      || typeof accountDevices?.replaceAfterConflict !== "function"
+      || typeof ensureIdentity !== "function" || typeof login !== "function") {
+    throw new Error("invalid_login_device_flow");
+  }
+  const email = String(input.email ?? "").trim();
+  let deviceID = await accountDevices.remember(email, await accountDevices.deviceID(email));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let identity = null;
+    try { identity = await ensureIdentity(deviceID); } catch {
+      // Team keys remain optional for Personal Vault login.
+    }
+    try {
+      const user = await login({ ...input, deviceID, publicKey: identity?.publicKey ?? null });
+      try { await accountDevices.accepted(email, deviceID); } catch {}
+      return { user, identity };
+    } catch (error) {
+      if (attempt !== 0 || error?.message !== "device_conflict") throw error;
+      const replacement = await accountDevices.replaceAfterConflict(email, deviceID);
+      if (replacement === null || replacement === deviceID) throw error;
+      deviceID = replacement;
+    }
+  }
+  throw new Error("login_failed");
+}
+
 export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch } = {}) {
   if (typeof fetchValue !== "function") throw new Error("invalid_fetch");
   let token = null;
@@ -621,7 +655,9 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
       });
       const result = await responseJSON(response, "login_failed");
       if (!response.ok) {
-        const code = ["invalid_credentials", "email_not_verified", "rate_limited"].includes(result.error)
+        const deviceError = response.status === 409 && result.error === "device_conflict"
+          || response.status === 400 && result.error === "invalid_device";
+        const code = deviceError || ["invalid_credentials", "email_not_verified", "rate_limited"].includes(result.error)
           ? result.error : "login_failed";
         throw new Error(code);
       }
@@ -672,13 +708,13 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
         const parameters=new URLSearchParams();
         for(const [key,value] of Object.entries(query ?? {})) if(value!==null && value!==undefined && key!=='header' && key!=='inventory') parameters.set(key,String(value));
         let response;
-        try { response=await authorizedRequest(`/v1/teams/${teamID}/vaults/${vaultID}/publication/${route}${parameters.size?'?'+parameters:''}`); }
+        try { response=await authorizedRequest(`/v1/teams/${teamID}/vaults/${vaultID}/publication/${route}${parameters.size?'?'+parameters:''}`, {headers:{'x-vault-schema-version':'2','x-vault-capability':'resource_acl_v2','x-publication-version':'1'}}); }
         catch(error) { if(error instanceof TypeError) throw new Error('publication_network_unavailable'); throw error; }
         const result=await responseJSON(response,'publication_response_invalid');
         if(!response.ok) { const error=new Error(typeof result.error==='string'?result.error:'publication_request_failed');error.status=response.status;throw error; }
         return result;
       }
-      return {header:scope=>json(scope,'header'),publisher:(scope,q)=>json(scope,'publisher',q),directory:(scope,q)=>json(scope,'directory',q),part:(scope,q)=>{
+      return {header:scope=>json(scope,'header'),inspection:(scope,q)=>json(scope,'inspection',q),publisher:(scope,q)=>json(scope,'publisher',q),directory:(scope,q)=>json(scope,'directory',q),part:(scope,q)=>{
         const {resourceID,part,...pin}=q;
         if(!['GENERAL','METADATA','SECRET'].includes(part))throw new Error('invalid_resource_part');
         return json(scope,`resources/${normalizedUUID(resourceID,'invalid_resource')}/parts/${part}`,pin);
@@ -690,7 +726,7 @@ export function createAuthenticatedVaultClient({ fetchValue = globalThis.fetch }
     },
     wholePublicationTransport(teamID) {
       return createWholePublicationTransport({ request: authorizedRequest, teamID,
-        getIdentity: () => user ? { accountID: user.id, deviceID: currentDeviceID, sessionEpoch: String(sessionEpoch) } : null });
+        getIdentity: () => user ? { accountID: user.id, deviceID: currentDeviceID, sessionEpoch: String(sessionEpoch) } : null, inspectionTransport: this.publicationTransport() });
     },
 
     session() {

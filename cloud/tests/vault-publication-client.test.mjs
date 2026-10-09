@@ -537,7 +537,20 @@ test("authenticated publication adapter uses no-store routes and opaque epoch ch
   assert.equal(typeof client.publicationTransport, "function");
   await client.login({ deviceID });
   const first = client.publicationIdentity("https://staging.example.test");
-  await client.publicationTransport().header(scope);
+  const transport = client.publicationTransport();
+  const pin = { generationID: uuid(), headerHash: "a".repeat(64) };
+  for (const read of [
+    () => transport.header(scope),
+    () => transport.publisher(scope, pin),
+    () => transport.directory(scope, { ...pin, cursor: "next" }),
+    () => transport.part(scope, { ...pin, resourceID: uuid(), part: "SECRET" }),
+  ]) {
+    await read();
+    assert.equal(calls.at(-1).options.headers["x-vault-schema-version"], "2");
+    assert.equal(calls.at(-1).options.headers["x-vault-capability"], "resource_acl_v2");
+    assert.equal(calls.at(-1).options.headers["x-publication-version"], "1");
+    assert.equal(calls.at(-1).options.cache, "no-store");
+  }
   assert.equal(calls.at(-1).options.cache, "no-store");
   assert.equal(
     calls.at(-1).options.headers.Authorization,

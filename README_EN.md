@@ -48,7 +48,15 @@ The command library is shared by SSH and the local terminal. The capture contain
 
 ## Coming in 0.32
 
-Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are planned for 0.32. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These are upcoming capabilities, not part of the current v0.31.0 download. Local work remains available without an account.
+Mac ↔ Cloud integration, **Personal Vault**, and **Team Vaults** are part of the 0.32 candidate. Personal Vault is designed to synchronize client-encrypted Hosts, Credentials, and Snippets across trusted Mac and browser devices. Team Vaults add shared data, roles, and invitations. These capabilities are not yet part of the current v0.31.0 download. Local work remains available without an account.
+
+**Sync Center** separates Personal and Team Vault state. Notifications lead to device, invitation, or error review; reading a notification does not resolve its source. Copying a Personal Host to a Team Vault preserves the original.
+
+The candidate implements resource mapping, publication of a complete encrypted Vault generation, and authorized resource reading on Mac and in the browser. Migration and the V2 access model remain limited to isolated test Vaults; they are not enabled for ordinary Vaults. Real migration, decryption on a second device, and old-client compatibility still require acceptance before release. Access policy and a selected device's ability to decrypt remain separate.
+
+Account password changes are temporarily unavailable to preserve access to encrypted Personal Vault data. Trust-root recovery is planned **after 0.32**.
+
+[0.32 candidate notes in Russian and English](releases/0.32.0-notes.md). The official signed and notarized DMG, upgrade acceptance, and production Cloud deployment are still pending. **v0.31.0** remains the available download.
 
 [Cloud architecture and trust model](docs/cloud-v0.32-architecture.md) · [Open Cloud](https://cloud.pastfly.ru/)
 

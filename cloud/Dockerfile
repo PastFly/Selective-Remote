@@ -8,7 +8,7 @@ ENV NODE_ENV=production
 WORKDIR /app
 RUN addgroup -S cloud && adduser -S -G cloud cloud
 COPY --from=dependencies /app/node_modules ./node_modules
-COPY package.json ./
+COPY package.json deployment-compatibility.json ./
 COPY migrations ./migrations
 COPY public ./public
 COPY scripts ./scripts
@@ -17,4 +17,4 @@ RUN chmod -R a=rX ./migrations ./public ./scripts ./src \
     && chmod a=r ./package.json
 USER cloud
 EXPOSE 8080
-CMD ["sh", "-c", "node scripts/migrate.mjs && exec node src/server.mjs"]
+CMD ["sh", "-c", "node scripts/check-deployment-compatibility.mjs --maintenance-upgrade && node scripts/migrate.mjs && exec node src/server.mjs"]

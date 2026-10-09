@@ -29,14 +29,18 @@ final class SelectiveRemoteCloudDeviceTrustCoordinator {
     let client: SelectiveRemoteCloudAPIClient
     let accountID: UUID
     let deviceID: UUID
-    private let local = SelectiveRemoteDeviceTrustLocalStore()
-    private let identities = SelectiveRemoteTeamDeviceIdentityManager()
+    private let local: any SelectiveRemoteDeviceTrustLocalStoring
+    private let identities: SelectiveRemoteTeamDeviceIdentityManager
 
-    init(endpoint: URL, client: SelectiveRemoteCloudAPIClient, accountID: UUID, deviceID: UUID) {
+    init(endpoint: URL, client: SelectiveRemoteCloudAPIClient, accountID: UUID, deviceID: UUID,
+         local: any SelectiveRemoteDeviceTrustLocalStoring = SelectiveRemoteDeviceTrustLocalStore(),
+         identities: SelectiveRemoteTeamDeviceIdentityManager = SelectiveRemoteTeamDeviceIdentityManager()) {
         self.endpoint = endpoint
         self.client = client
         self.accountID = accountID
         self.deviceID = deviceID
+        self.local = local
+        self.identities = identities
     }
 
     static func keyFingerprint(_ key: SelectiveRemoteTeamDevicePublicKey) -> String {
