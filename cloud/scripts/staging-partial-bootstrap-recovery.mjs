@@ -5,7 +5,7 @@ import {randomUUID,createHash} from 'node:crypto';
 import {canonicalMigrationJSON} from '../public/vault-v2-migration.js';
 import {readProtectedBytes,readProtectedJSON,assertProtectedDirectory,validateRunConfig,validateOrdinaryBaseline,validateOperatorProof} from './staging-publication-acceptance.mjs';
 import {continuationConfigIdentity,continuationRunnerHashes,assertContinuationClaim,writeContinuationExclusive} from './staging-bootstrap-continuation.mjs';
-import {readSuccessorBaseline} from './staging-successor-baseline.mjs';
+import {readSuccessorBaseline,validateSuccessorProof} from './staging-successor-baseline.mjs';
 import {validateDiagnosticRun,diagnosticProfileReady} from './staging-lifecycle-diagnostics.mjs';
 
 export const recoveryEvidenceClass='PARTIAL_BOOTSTRAP_SOURCE_RECOVERY';
@@ -16,6 +16,7 @@ const timestamp=v=>typeof v==='string'&&Number.isFinite(Date.parse(v))&&new Date
 const predecessorNames=['config.json','owner.json','journal.json','evidence.json','baseline.json','continuation.json','continuation-admission.json'];
 const accountKeys=['browserIndex','emailSHA256','accountID','deviceID','publicKeyFingerprint','rootFingerprint'];
 const partialKeys=['created','membershipID','membershipEpoch','automaticDeviceAdmission','revision','formatState','activated','hasCiphertext','wrapperCount','ownedTeamCount','membershipCount','vaultCount','invitationCount','publicationCount','inventorySHA256'];
+const renewalContextKeys=['predecessorRunDirectory','predecessorFilesSHA256','originalClaimSHA256','predecessorAuthorizationSHA256','predecessorSnapshotSHA256','partialSHA256','capturedAt'];
 const claimName='partial-bootstrap-recovery-claim.json';
 export async function recoveryRunnerHashes(){return {...await continuationRunnerHashes(),'scripts/staging-partial-bootstrap-recovery.mjs':sha(await readFile(new URL('./staging-partial-bootstrap-recovery.mjs',import.meta.url)))};}
 async function absent(path){try{await lstat(path);}catch(error){if(error.code==='ENOENT')return;throw error;}fail('recovery_partial_scope');}
@@ -60,13 +61,27 @@ async function readHistorical({manifest,predecessorConfig,predecessorValues}){
  await pinned(join(original,'continuation-claim.json'),manifest.originalClaimSHA256);
  const admission=await assertContinuationClaim({link:historicalLink,runDirectory:manifest.predecessorRunDirectory});
  for(const i of [0,1]){const old=events.findLast(v=>v.phase==='diagnostic_metadata'&&v.browserIndex===i&&diagnosticProfileReady(v));if(old&&(['accountID','deviceID','publicKeyFingerprint'].some(k=>old[k]!==admission.request.accounts[i][k])||old.rootFingerprint!==undefined&&old.rootFingerprint!==admission.request.accounts[i].rootFingerprint))fail('recovery_historical_admission_invalid');}
- return {originalRunDirectory:original,baseline:successor.baseline,successor,admission,originalConfig};
+ return {originalRunDirectory:original,baseline:successor.baseline,successor,admission,originalConfig,failedComparisons:prior.successorBaseline.failedComparisons};
+}
+
+// A new interval is a separate authorization over the same preserved chain. The
+// historical admission is still validated against its original snapshot/times.
+async function readRenewal({manifest,runDirectory,predecessorConfig,config,historical}){
+ const renewal=manifest.renewal;
+ if(!exact(renewal,['capturedAt','successorBaseline'])||!timestamp(renewal.capturedAt)||renewal.capturedAt>new Date().toISOString())fail('recovery_renewal_invalid');
+ const recoveryContext={predecessorRunDirectory:manifest.predecessorRunDirectory,predecessorFilesSHA256:digest(manifest.predecessorFiles),originalClaimSHA256:manifest.originalClaimSHA256,
+  predecessorAuthorizationSHA256:historical.successor.binding.authorizationSHA256,predecessorSnapshotSHA256:historical.baseline.sha256,partialSHA256:digest(manifest.partial),capturedAt:renewal.capturedAt};
+ const successor=await readSuccessorBaseline({manifest:{...manifest,originalFiles:manifest.predecessorFiles,successorBaseline:renewal.successorBaseline},runDirectory,originalConfig:predecessorConfig,config,baseline:historical.baseline,recoveryContext});
+ const {interval,approvalID}=successor.binding,failures=renewal.successorBaseline.failedComparisons;
+ if(interval.startsAt!==renewal.capturedAt||Date.parse(interval.endsAt)-Date.parse(interval.startsAt)>86400000||approvalID===historical.successor.binding.approvalID
+  ||historical.failedComparisons.some(old=>!failures.some(next=>equal(old,next)))||!failures.some(next=>!historical.failedComparisons.some(old=>old.path===next.path)))fail('recovery_renewal_invalid');
+ return {successor,baseline:successor.baseline,renewalContext:recoveryContext};
 }
 
 export async function readRecoveryLink({config,configPath,runDirectory}){
  validateRunConfig(config);await assertProtectedDirectory(dirname(runDirectory));await assertProtectedDirectory(runDirectory);
  const bytes=await readProtectedBytes(join(runDirectory,'recovery.json')),manifest=JSON.parse(bytes),configBytes=await readProtectedBytes(configPath);
- if(!exact(manifest,['version','evidenceClass','predecessorRunDirectory','predecessorConfigPath','predecessorFiles','originalClaimSHA256','configIdentitySHA256','deployment','runnerHashes','partial'])||manifest.version!==1||manifest.evidenceClass!==recoveryEvidenceClass
+ if(!exact(manifest,['version','evidenceClass','predecessorRunDirectory','predecessorConfigPath','predecessorFiles','originalClaimSHA256','configIdentitySHA256','deployment','runnerHashes','partial',...(Object.hasOwn(manifest,'renewal')?['renewal']:[])])||manifest.version!==1||manifest.evidenceClass!==recoveryEvidenceClass
   ||manifest.configIdentitySHA256!==continuationConfigIdentity(config)||!equal(manifest.runnerHashes,await recoveryRunnerHashes())||!equal(JSON.parse(configBytes),config))fail('recovery_source_mismatch');
  const deployment=manifest.deployment;if(!exact(deployment,['sourceSHA','moduleHashesSHA256','imageDigest','controllerSHA256'])||deployment.sourceSHA!==config.expectedSourceSHA||deployment.moduleHashesSHA256!==digest(config.moduleHashes)||!/^sha256:[a-f0-9]{64}$/.test(deployment.imageDigest)||!hash.test(deployment.controllerSHA256))fail('recovery_source_mismatch');
  const predecessorDirectory=manifest.predecessorRunDirectory;await assertProtectedDirectory(dirname(predecessorDirectory));await assertProtectedDirectory(predecessorDirectory);
@@ -82,7 +97,8 @@ export async function readRecoveryLink({config,configPath,runDirectory}){
  if(!failed||failed.outcome!=='DENIED'||failed.stage!=='team_bootstrap'||failed.browserIndex!==0||failed.launchNonce!==admission.request.launchNonce||evidence.some(v=>v.phase==='phase_completed')||!evidence.some(v=>v.phase==='session_gate'&&v.launchNonce===failed.launchNonce&&v.testSessionMode==='PRESERVE_TRUSTED_STATE'&&v.outcome==='PASS'))fail('recovery_partial_scope');
  const accounts=admission.request.accounts;validateAccounts(accounts,config);validatePartial(manifest.partial,config.runID,accounts);
  const profiles=[0,1].map(i=>join(historical.originalRunDirectory,'edge-'+i));for(const profile of profiles)await assertProtectedDirectory(profile);
- return {manifest,manifestSHA256:sha(bytes),configSHA256:sha(configBytes),config:structuredClone(config),configPath,runDirectory,baseline,profiles,accounts:structuredClone(accounts),partial:structuredClone(manifest.partial),predecessorDirectory,predecessorConfig,...historical};
+ const renewed=Object.hasOwn(manifest,'renewal')?await readRenewal({manifest,runDirectory,predecessorConfig,config,historical}):{};
+ return {manifest,manifestSHA256:sha(bytes),configSHA256:sha(configBytes),config:structuredClone(config),configPath,runDirectory,baseline,profiles,accounts:structuredClone(accounts),partial:structuredClone(manifest.partial),predecessorDirectory,predecessorConfig,...historical,...renewed};
 }
 
 export function createRecoveryRequest({config,link,launchNonce,processID,identities}){
@@ -91,24 +107,28 @@ export function createRecoveryRequest({config,link,launchNonce,processID,identit
  const requestedAt=new Date().toISOString(),interval=link.successor.binding.interval;if(requestedAt<interval.startsAt||requestedAt>=interval.endsAt)fail('recovery_authorization_expired');
  const body={version:1,runID:config.runID,origin:config.origin,sourceSHA:config.expectedSourceSHA,launchNonce,processID,phase:'recover-bootstrap',checkpointID:randomUUID(),operationID:null,expectedDeltaCount:null,evidenceClass:recoveryEvidenceClass,requestedAt,
   manifestSHA256:link.manifestSHA256,configSHA256:link.configSHA256,configIdentitySHA256:link.manifest.configIdentitySHA256,predecessorRunDirectory:link.predecessorDirectory,predecessorSourceSHA:link.predecessorConfig.expectedSourceSHA,predecessorFiles:link.manifest.predecessorFiles,originalClaimSHA256:link.manifest.originalClaimSHA256,
-  deployment:link.manifest.deployment,runnerHashes:link.manifest.runnerHashes,accounts:link.accounts,partial:link.partial,deviceAdmission:expectedAdmission(link.partial),successorBaseline:link.successor.binding};
+  deployment:link.manifest.deployment,runnerHashes:link.manifest.runnerHashes,accounts:link.accounts,partial:link.partial,deviceAdmission:expectedAdmission(link.partial),successorBaseline:link.successor.binding,...(link.renewalContext?{renewalContext:link.renewalContext}:{})};
  return structuredClone({...body,checkpointSHA256:digest(body)});
 }
 export function validateRecoveryProof(proof,request,baseline){
  const {checkpointSHA256,...body}=request;
- if(!exact(request,['version','runID','origin','sourceSHA','launchNonce','processID','phase','checkpointID','operationID','expectedDeltaCount','evidenceClass','requestedAt','manifestSHA256','configSHA256','configIdentitySHA256','predecessorRunDirectory','predecessorSourceSHA','predecessorFiles','originalClaimSHA256','deployment','runnerHashes','accounts','partial','deviceAdmission','successorBaseline','checkpointSHA256'])||request.version!==1||request.phase!=='recover-bootstrap'||request.evidenceClass!==recoveryEvidenceClass||request.operationID!==null||request.expectedDeltaCount!==null||!uuid.test(request.processID)||checkpointSHA256!==digest(body)||!timestamp(request.requestedAt))fail('recovery_proof_mismatch');
+ if(!exact(request,['version','runID','origin','sourceSHA','launchNonce','processID','phase','checkpointID','operationID','expectedDeltaCount','evidenceClass','requestedAt','manifestSHA256','configSHA256','configIdentitySHA256','predecessorRunDirectory','predecessorSourceSHA','predecessorFiles','originalClaimSHA256','deployment','runnerHashes','accounts','partial','deviceAdmission','successorBaseline','checkpointSHA256',...(Object.hasOwn(request,'renewalContext')?['renewalContext']:[])])||request.version!==1||request.phase!=='recover-bootstrap'||request.evidenceClass!==recoveryEvidenceClass||request.operationID!==null||request.expectedDeltaCount!==null||!uuid.test(request.processID)||checkpointSHA256!==digest(body)||!timestamp(request.requestedAt))fail('recovery_proof_mismatch');
  validatePartial(request.partial,request.runID,request.accounts);
  const binding=request.successorBaseline,interval=binding?.interval;
  if(!exact(binding,['authorizationSHA256','approvalID','originalSnapshotSHA256','successorSnapshotSHA256','scopeSHA256','interval'])||!['authorizationSHA256','originalSnapshotSHA256','successorSnapshotSHA256','scopeSHA256'].every(k=>hash.test(binding[k]))||!uuid.test(binding.approvalID)||!exact(interval,['startsAt','endsAt'])||!timestamp(interval.startsAt)||!timestamp(interval.endsAt)||interval.startsAt>request.requestedAt||request.requestedAt>=interval.endsAt||binding.successorSnapshotSHA256!==baseline.sha256)fail('recovery_proof_mismatch');
+ const renewed=Object.hasOwn(request,'renewalContext'),context=request.renewalContext;
+ if(renewed&&(!exact(context,renewalContextKeys)||context.predecessorRunDirectory!==request.predecessorRunDirectory||context.predecessorFilesSHA256!==digest(request.predecessorFiles)||context.originalClaimSHA256!==request.originalClaimSHA256
+  ||!hash.test(context.predecessorAuthorizationSHA256)||context.predecessorSnapshotSHA256!==binding.originalSnapshotSHA256||context.partialSHA256!==digest(request.partial)||context.capturedAt!==interval.startsAt||Date.parse(interval.endsAt)-Date.parse(interval.startsAt)>86400000))fail('recovery_proof_mismatch');
  const expected=expectedAdmission(request.partial),admitted=proof?.deviceAdmission;
- if(!exact(proof,['operator','evidenceClass','deployment','observedAt','partial','deviceAdmission'])||proof.evidenceClass!==recoveryEvidenceClass||!equal(proof.deployment,request.deployment)||!equal(proof.partial,request.partial)
+ if(!exact(proof,['operator','evidenceClass','deployment','observedAt','partial','deviceAdmission',...(renewed?['successorBaseline']:[])])||proof.evidenceClass!==recoveryEvidenceClass||!equal(proof.deployment,request.deployment)||!equal(proof.partial,request.partial)
   ||!exact(admitted,[...Object.keys(expected),'admissionSHA256','sessionAuditSHA256','auditSource','observedAt'])||Object.keys(expected).some(k=>admitted[k]!==expected[k])||!equal(request.deviceAdmission,expected)||!hash.test(admitted.admissionSHA256)||!hash.test(admitted.sessionAuditSHA256)||admitted.auditSource!=='session'||admitted.observedAt!==proof.observedAt
   ||!timestamp(proof.observedAt)||proof.observedAt<request.requestedAt||proof.observedAt>=interval.endsAt||proof.observedAt>new Date().toISOString())fail('recovery_proof_mismatch');
+ if(renewed){validateSuccessorProof(proof.successorBaseline,{successorBaseline:{...binding,requestedAt:request.requestedAt}},baseline);if(proof.successorBaseline.observedAt!==proof.observedAt)fail('recovery_proof_mismatch');}
  validateOperatorProof(proof.operator,request,baseline);return structuredClone(proof);
 }
 function assertRequestLink(link,request){
  if(request.runID!==link.config.runID||request.origin!==link.config.origin||request.sourceSHA!==link.config.expectedSourceSHA||request.manifestSHA256!==link.manifestSHA256||request.configIdentitySHA256!==link.manifest.configIdentitySHA256||request.predecessorRunDirectory!==link.predecessorDirectory||request.predecessorSourceSHA!==link.predecessorConfig.expectedSourceSHA||request.originalClaimSHA256!==link.manifest.originalClaimSHA256
-  ||!equal(request.predecessorFiles,link.manifest.predecessorFiles)||!equal(request.deployment,link.manifest.deployment)||!equal(request.runnerHashes,link.manifest.runnerHashes)||!equal(request.accounts,link.accounts)||!equal(request.partial,link.partial)||!equal(request.successorBaseline,link.successor.binding))fail('recovery_claim_mismatch');
+  ||!equal(request.predecessorFiles,link.manifest.predecessorFiles)||!equal(request.deployment,link.manifest.deployment)||!equal(request.runnerHashes,link.manifest.runnerHashes)||!equal(request.accounts,link.accounts)||!equal(request.partial,link.partial)||!equal(request.successorBaseline,link.successor.binding)||!equal(request.renewalContext??null,link.renewalContext??null))fail('recovery_claim_mismatch');
 }
 export async function claimRecovery({link,request,proof,runDirectory}){
  if(runDirectory!==link.runDirectory)fail('recovery_claim_mismatch');

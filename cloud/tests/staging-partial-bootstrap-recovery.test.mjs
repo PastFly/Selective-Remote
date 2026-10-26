@@ -143,3 +143,67 @@ test('partial recovery evidence exposes its separate class while dropping raw sc
 test('partial recovery claim rejects later replacement of a syntactically valid observed audit digest',async t=>{
  const f=await admitted(t);await locks(f);await f.a.claimRecovery(f);const path=join(f.runDirectory,'recovery-admission.json'),admission=JSON.parse(await readFile(path));admission.proof.deviceAdmission.sessionAuditSHA256='3'.repeat(64);await write(path,admission);await assert.rejects(f.a.assertRecoveryClaim(f),/recovery_claim_mismatch/);
 });
+
+async function renewed(t){
+ const f=await fixture(t);
+ // The historical admission is valid at its own observation time, then expires.
+ t.mock.timers.enable({apis:['Date'],now:Date.now()+2*86400000});
+ const old=await f.a.readRecoveryLink(f);
+ assert.throws(()=>f.a.createRecoveryRequest({config:f.config,link:old,launchNonce:id(),processID:id(),identities:f.identities}),/recovery_authorization_expired/);
+ const capturedAt=new Date(Date.now()-1000).toISOString(),interval={startsAt:capturedAt,endsAt:new Date(Date.now()+3600000).toISOString()};
+ const original=await readFile(join(f.predecessor,'ordinary-successor-snapshot.json')),snapshot=JSON.parse(original);snapshot.tables.personal_vaults.sha256='9'.repeat(64);snapshot.tables.vault_revisions.count+=10;
+ const successor=JSON.stringify(snapshot),failedPath=join(f.dir,'expired-interval-comparison.json');await write(failedPath,{outcome:'DENIED',expectedSnapshotSHA256:f.baseline.sha256,observedSnapshotSHA256:sha(successor)});
+ const failedComparisons=[...JSON.parse(await readFile(join(f.predecessor,'ordinary-successor-authorization.json'))).failedComparisons,{path:failedPath,sha256:sha(await readFile(failedPath))}];
+ const recoveryContext={predecessorRunDirectory:f.predecessor,predecessorFilesSHA256:digest(f.manifest.predecessorFiles),originalClaimSHA256:f.manifest.originalClaimSHA256,predecessorAuthorizationSHA256:old.successor.binding.authorizationSHA256,predecessorSnapshotSHA256:f.baseline.sha256,partialSHA256:digest(f.partial),capturedAt};
+ const authorization={version:1,kind:'OWNER_AUTHORIZED_SUCCESSOR_ORDINARY_BASELINE',approved:true,approvalID:id(),approvedAt:new Date(Date.now()-2000).toISOString(),interval,originalRunID:f.config.runID,originalSourceSHA:old.predecessorConfig.expectedSourceSHA,successorRunID:f.config.runID,successorSourceSHA:f.config.expectedSourceSHA,configIdentitySHA256:f.manifest.configIdentitySHA256,originalFiles:f.manifest.predecessorFiles,deployment:f.manifest.deployment,runnerHashes:f.manifest.runnerHashes,originalSnapshotSHA256:sha(original),successorSnapshotSHA256:sha(successor),failedComparisons,recoveryContext};
+ await writeFile(join(f.runDirectory,'ordinary-original-snapshot.json'),original,{mode:0o600});await writeFile(join(f.runDirectory,'ordinary-successor-snapshot.json'),successor,{mode:0o600});await write(join(f.runDirectory,'ordinary-successor-authorization.json'),authorization);
+ f.manifest.renewal={capturedAt,successorBaseline:{version:1,originalSnapshot:{name:'ordinary-original-snapshot.json',sha256:sha(original)},successorSnapshot:{name:'ordinary-successor-snapshot.json',sha256:sha(successor)},ownerAuthorization:{name:'ordinary-successor-authorization.json',sha256:sha(json(authorization))},failedComparisons}};
+ await write(join(f.runDirectory,'recovery.json'),f.manifest);
+ return {...f,authorization,recoveryContext,newBaseline:{...f.baseline,sha256:sha(successor)},old};
+}
+async function rewriteRenewal(f,mutate){
+ const m=structuredClone(f.manifest),a=structuredClone(f.authorization);mutate(m,a);await write(join(f.runDirectory,'ordinary-successor-authorization.json'),a);m.renewal.successorBaseline.ownerAuthorization.sha256=sha(json(a));await write(join(f.runDirectory,'recovery.json'),m);
+}
+function renewalProof(request,baseline){
+ const proof=proofFor(request,baseline),b=request.successorBaseline;
+ return {...proof,successorBaseline:{authorizationSHA256:b.authorizationSHA256,approvalID:b.approvalID,originalSnapshotSHA256:b.originalSnapshotSHA256,observedSnapshotSHA256:baseline.sha256,scopeSHA256:b.scopeSHA256,observedAt:proof.observedAt}};
+}
+test('authorized renewal admits a fresh same-scope interval after historical expiry and keeps all historical bytes',async t=>{
+ const f=await renewed(t),link=await f.a.readRecoveryLink(f),request=f.a.createRecoveryRequest({config:f.config,link,launchNonce:id(),processID:id(),identities:f.identities}),proof=renewalProof(request,f.newBaseline);
+ assert.deepEqual(link.baseline,f.newBaseline);assert.deepEqual(request.renewalContext,f.recoveryContext);assert.equal(request.successorBaseline.originalSnapshotSHA256,f.baseline.sha256);assert.deepEqual(link.profiles,f.old.profiles);assert.deepEqual(link.partial,f.partial);assert.deepEqual(f.a.validateRecoveryProof(proof,request,f.newBaseline),proof);
+ await locks(f);await f.a.claimRecovery({...f,link,request,proof});await f.a.assertRecoveryClaim({link,runDirectory:f.runDirectory});await assert.rejects(f.a.claimRecovery({...f,link,request,proof}),/recovery_already_claimed/);
+ for(const [path,bytes]of f.preserved)assert.deepEqual(await readFile(path),bytes);
+ await write(join(f.runDirectory,'baseline.json'),f.newBaseline);await write(join(f.runDirectory,'journal.json'),{baseline:f.newBaseline});await continuation.assertContinuationRunBaseline({link,runDirectory:f.runDirectory});await write(join(f.runDirectory,'baseline.json'),f.baseline);await assert.rejects(continuation.assertContinuationRunBaseline({link,runDirectory:f.runDirectory}));
+});
+test('renewal rejects missing authorization, chain tampering, source mismatch, unbounded or fabricated capture interval before claim',async t=>{
+ const f=await renewed(t);
+ const mutations=[(m,a)=>a.approved=false,(m,a)=>delete a.recoveryContext,(m,a)=>a.recoveryContext.predecessorAuthorizationSHA256='0'.repeat(64),(m,a)=>a.recoveryContext.predecessorSnapshotSHA256='0'.repeat(64),(m,a)=>a.recoveryContext.originalClaimSHA256='0'.repeat(64),(m,a)=>a.recoveryContext.partialSHA256='0'.repeat(64),(m,a)=>a.successorSourceSHA='d'.repeat(40),(m,a)=>a.successorRunID='prc-other',(m,a)=>a.deployment={...a.deployment,controllerSHA256:'0'.repeat(64)},(m,a)=>a.originalSnapshotSHA256='0'.repeat(64),(m,a)=>a.successorSnapshotSHA256='0'.repeat(64),(m,a)=>a.interval.endsAt=new Date(Date.now()+2*86400000).toISOString(),(m,a)=>m.renewal.capturedAt='2000-01-01T00:00:00.000Z',(m,a)=>m.renewal.unrecognized=true,(m,a)=>{a.failedComparisons=[];m.renewal.successorBaseline.failedComparisons=[];}];
+ for(const mutate of mutations){await rewriteRenewal(f,mutate);await assert.rejects(f.a.readRecoveryLink(f));}
+ await assert.rejects(readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json')),{code:'ENOENT'});
+});
+test('renewal rejects changed IDs in each original scope set even with matching counts and recomputed hashes',async t=>{
+ const f=await renewed(t),snapshot=JSON.parse(await readFile(join(f.runDirectory,'ordinary-successor-snapshot.json')));
+ for(const kind of ['shared','personal','users','teams']){
+  const next=structuredClone(snapshot);next.scope[kind][0]=id();const bytes=JSON.stringify(next);await writeFile(join(f.runDirectory,'ordinary-successor-snapshot.json'),bytes);
+  await rewriteRenewal(f,(m,a)=>{m.renewal.successorBaseline.successorSnapshot.sha256=sha(bytes);a.successorSnapshotSHA256=sha(bytes);});await assert.rejects(f.a.readRecoveryLink(f),/successor_scope_mismatch/);
+ }
+});
+test('renewal proof requires current observations and rejects nonce replay and every subsequent ordinary drift',async t=>{
+ const f=await renewed(t),link=await f.a.readRecoveryLink(f),request=f.a.createRecoveryRequest({config:f.config,link,launchNonce:id(),processID:id(),identities:f.identities}),proof=renewalProof(request,f.newBaseline);
+ for(const mutate of [p=>delete p.successorBaseline,p=>p.successorBaseline.authorizationSHA256=f.old.successor.binding.authorizationSHA256,p=>p.successorBaseline.observedSnapshotSHA256=f.baseline.sha256,p=>p.successorBaseline.scopeSHA256='0'.repeat(64),p=>p.operator.launchNonce=id(),p=>p.operator.ordinary.sha256=f.baseline.sha256,p=>p.successorBaseline.observedAt='2000-01-01T00:00:00.000Z']){const p=structuredClone(proof);mutate(p);assert.throws(()=>f.a.validateRecoveryProof(p,request,f.newBaseline));}
+ const changed=structuredClone(request);changed.renewalContext.partialSHA256='0'.repeat(64);const {checkpointSHA256,...body}=changed;changed.checkpointSHA256=digest(body);const changedProof=renewalProof(changed,f.newBaseline);await locks(f);await assert.rejects(f.a.claimRecovery({...f,link,request:changed,proof:changedProof}),/recovery_claim_mismatch/);
+ await writeFile(join(f.runDirectory,'ordinary-successor-snapshot.json'),'{}');await assert.rejects(f.a.claimRecovery({...f,link,request,proof}));await assert.rejects(readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json')),{code:'ENOENT'});
+});
+test('renewal preserves frozen failure artifacts and rejects their replacement or missing historical failure pins',async t=>{
+ const f=await renewed(t);await f.a.readRecoveryLink(f);
+ for(const entry of f.authorization.failedComparisons){const before=await readFile(entry.path);await writeFile(entry.path,Buffer.concat([before,Buffer.from(' ')]));await assert.rejects(f.a.readRecoveryLink(f),/successor_failed_comparison_changed/);await writeFile(entry.path,before);}
+ await rewriteRenewal(f,(m,a)=>{a.failedComparisons=a.failedComparisons.slice(1);m.renewal.successorBaseline.failedComparisons=a.failedComparisons;});await assert.rejects(f.a.readRecoveryLink(f),/recovery_renewal_invalid/);
+ await rewriteRenewal(f,(m,a)=>{a.failedComparisons=a.failedComparisons.slice(0,1);m.renewal.successorBaseline.failedComparisons=a.failedComparisons;});await assert.rejects(f.a.readRecoveryLink(f),/recovery_renewal_invalid/);
+});
+test('renewal rejects raw snapshot and authorization tampering and widened scopes before taking its one-use claim',async t=>{
+ const f=await renewed(t);await f.a.readRecoveryLink(f);
+ for(const name of ['ordinary-original-snapshot.json','ordinary-successor-snapshot.json','ordinary-successor-authorization.json']){const path=join(f.runDirectory,name),bytes=await readFile(path);await writeFile(path,Buffer.concat([bytes,Buffer.from(' ')]));await assert.rejects(f.a.readRecoveryLink(f),/successor_artifact_changed/);await writeFile(path,bytes);}
+ const snapshot=JSON.parse(await readFile(join(f.runDirectory,'ordinary-successor-snapshot.json')));
+ for(const kind of ['shared','personal','users','teams']){const next=structuredClone(snapshot);next.scope[kind].push(id());const bytes=JSON.stringify(next);await writeFile(join(f.runDirectory,'ordinary-successor-snapshot.json'),bytes);await rewriteRenewal(f,(m,a)=>{m.renewal.successorBaseline.successorSnapshot.sha256=sha(bytes);a.successorSnapshotSHA256=sha(bytes);});await assert.rejects(f.a.readRecoveryLink(f),/successor_scope_mismatch/);}
+ await assert.rejects(readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json')),{code:'ENOENT'});
+});

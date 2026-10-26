@@ -37,7 +37,7 @@ function snapshotSummary(bytes){
  const rawSHA256=sha256(bytes);if(rawSHA256!==sha256(JSON.stringify(snapshot)))fail('successor_snapshot_identity_mismatch');
  return {snapshot,baseline:{unchanged:true,vaultCount:snapshot.scope.shared.length,personalVaultCount:snapshot.scope.personal.length,userCount:snapshot.scope.users.length,sha256:rawSHA256}};
 }
-export async function readSuccessorBaseline({manifest,runDirectory,originalConfig,config,baseline}){
+export async function readSuccessorBaseline({manifest,runDirectory,originalConfig,config,baseline,recoveryContext}){
  const transition=manifest.successorBaseline;
  if(!exact(transition,['version','originalSnapshot','successorSnapshot','ownerAuthorization','failedComparisons'])||transition.version!==1)fail('successor_artifact_invalid');
  const original=snapshotSummary(await readArtifact(runDirectory,transition.originalSnapshot,'ordinary-original-snapshot.json'));
@@ -47,7 +47,8 @@ export async function readSuccessorBaseline({manifest,runDirectory,originalConfi
   ||['vaultCount','personalVaultCount','userCount'].some(k=>original.baseline[k]!==successor.baseline[k]))fail('successor_scope_mismatch');
  if(!equal(Object.keys(original.snapshot.tables).sort(),Object.keys(successor.snapshot.tables).sort()))fail('successor_snapshot_invalid');
  const authorization=JSON.parse(await readArtifact(runDirectory,transition.ownerAuthorization,'ordinary-successor-authorization.json'));
- if(!exact(authorization,['version','kind','approved','approvalID','approvedAt','interval','originalRunID','originalSourceSHA','successorRunID','successorSourceSHA','configIdentitySHA256','originalFiles','deployment','runnerHashes','originalSnapshotSHA256','successorSnapshotSHA256','failedComparisons'])
+ if(!exact(authorization,['version','kind','approved','approvalID','approvedAt','interval','originalRunID','originalSourceSHA','successorRunID','successorSourceSHA','configIdentitySHA256','originalFiles','deployment','runnerHashes','originalSnapshotSHA256','successorSnapshotSHA256','failedComparisons',...(recoveryContext===undefined?[]:['recoveryContext'])])
+  ||(recoveryContext!==undefined&&!equal(authorization.recoveryContext,recoveryContext))
   ||authorization.version!==1||authorization.kind!=='OWNER_AUTHORIZED_SUCCESSOR_ORDINARY_BASELINE'||authorization.approved!==true||typeof authorization.approvalID!=='string'||!uuid.test(authorization.approvalID)
   ||!timestamp(authorization.approvedAt)||!exact(authorization.interval,['startsAt','endsAt'])||!timestamp(authorization.interval.startsAt)||!timestamp(authorization.interval.endsAt)
   ||authorization.approvedAt>authorization.interval.startsAt||authorization.interval.startsAt>=authorization.interval.endsAt
