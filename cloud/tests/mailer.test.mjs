@@ -3,6 +3,7 @@ import test from "node:test";
 import { spawnSync } from "node:child_process";
 import nodemailer from "nodemailer";
 import { createVerificationMailer } from "../src/mailer.mjs";
+import { normalizeEmail } from "../src/security.mjs";
 
 const config = {
   publicOrigin: "https://cloud.example.com",
@@ -60,14 +61,43 @@ test("mailer refuses to start without SMTP configuration", () => {
   assert.throws(() => createVerificationMailer({ ...config, smtp: null }), /smtp_not_configured/);
 });
 
-test("installed mail transport compiles the application's verification message", async () => {
-  const mailer = createVerificationMailer(config, () => nodemailer.createTransport({ streamTransport: true, buffer: true }));
-  const result = await mailer.sendEmailVerification({ recipient: "person@example.com", token: "opaque-token" });
-  assert.deepEqual(result.envelope.to, ["person@example.com"]);
-  assert.equal(result.envelope.from, "no-reply@example.com");
-  assert.match(result.message.toString(), /MIME-Version: 1\.0/);
-  assert.doesNotMatch(result.message.toString(), /secret-secret-secret/);
-});
+// The public envelope sanitizes the quoted local-part ">" to a space;
+// the security invariant is that its domain remains good.example.
+for (const { advisory, recipient, expected } of [
+  { advisory: "GHSA-8c8m-p3m8-cjg8", recipient: "Victim (x(y) <evil@evil.example>) <v@victim.example>", expected: "v@victim.example" },
+  { advisory: "GHSA-m943-m63m-w62w", recipient: "G: (a; <evil@evil.example>) <v@victim.example>;", expected: "v@victim.example" },
+  { advisory: "GHSA-85x2-q946-cp5h", recipient: '<"a@evil.example>"@good.example>', expected: '"a@evil.example "@good.example' },
+]) {
+  test(`installed transport prevents addressparser recipient redirection (${advisory})`, async () => {
+    const transport = nodemailer.createTransport({ streamTransport: true, buffer: true });
+    const result = await transport.sendMail({ from: "sender@example.com", to: recipient, text: "parser regression" });
+    assert.deepEqual(result.envelope.to, [expected]);
+    // These upstream parser reproductions are rejected by the application's
+    // current ingress validator; they do not establish a deployed exploit.
+    assert.throws(() => normalizeEmail(recipient), /invalid_email/);
+  });
+}
+
+for (const [method, fragment] of [
+  ["sendEmailVerification", "verify-email"],
+  ["sendPasswordReset", "reset-password"],
+  ["sendTeamInvitation", "accept-team-invitation"],
+]) {
+  test(`installed transport compiles legitimate application mail: ${method}`, async () => {
+    const mailer = createVerificationMailer(config, () => nodemailer.createTransport({ streamTransport: true, buffer: true }));
+    const result = await mailer[method]({
+      recipient: normalizeEmail(" Person+Mail@Example.com "), token: "opaque-token",
+      teamID: "84f6c860-0d26-4ef5-8652-27cb8b991b70", teamName: "Operations",
+      invitedBy: "owner.name", role: "viewer", expiresAt: "2030-01-03T00:00:00.000Z",
+    });
+    assert.deepEqual(result.envelope.to, ["person+mail@example.com"]);
+    assert.equal(result.envelope.from, "no-reply@example.com");
+    const message = result.message.toString();
+    assert.match(message, /MIME-Version: 1\.0/);
+    assert.ok(message.includes(`#${fragment}?token=3Dopaque-token`));
+    assert.doesNotMatch(message, /secret-secret-secret/);
+  });
+}
 
 test("installed mail transport bounds malformed address parsing (GHSA-v53p-9fqp-m79j)", () => {
   // Exercise the public mail path in a killable child: the vulnerable parser
