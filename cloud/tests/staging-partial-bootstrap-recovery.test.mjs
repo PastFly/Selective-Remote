@@ -207,3 +207,91 @@ test('renewal rejects raw snapshot and authorization tampering and widened scope
  for(const kind of ['shared','personal','users','teams']){const next=structuredClone(snapshot);next.scope[kind].push(id());const bytes=JSON.stringify(next);await writeFile(join(f.runDirectory,'ordinary-successor-snapshot.json'),bytes);await rewriteRenewal(f,(m,a)=>{m.renewal.successorBaseline.successorSnapshot.sha256=sha(bytes);a.successorSnapshotSHA256=sha(bytes);});await assert.rejects(f.a.readRecoveryLink(f),/successor_scope_mismatch/);}
  await assert.rejects(readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json')),{code:'ENOENT'});
 });
+
+// Task 4: the consumed revision-zero claim is historical evidence, never replayable.
+async function initializedFixture(t){
+ const f=await admitted(t);await locks(f);await f.a.claimRecovery(f);
+ for(const dir of [f.original,f.predecessor,f.runDirectory])await rm(join(dir,'runner.lock'),{recursive:true});
+ const parent=f.runDirectory,parentConfigPath=f.configPath;
+ const values={'owner.json':{version:1,runID:f.config.runID,sourceSHA:f.config.expectedSourceSHA},'baseline.json':f.baseline,'journal.json':{version:1,completed:[],pending:null,processes:[],baseline:f.baseline},'evidence.json':[{phase:'session_gate',testSessionMode:'PRESERVE_TRUSTED_STATE',launchNonce:f.request.launchNonce,outcome:'PASS'},{phase:'stopped_without_acceptance',stage:'team_bootstrap',browserIndex:0,launchNonce:f.request.launchNonce,outcome:'DENIED',failureCode:'unknown_failure'}]};
+ for(const [name,value]of Object.entries(values))await write(join(parent,name),value);
+ const runDirectory=join(f.dir,'initialized'),current=config(f.config.runID,'d');await mkdir(runDirectory,{mode:0o700});const configPath=join(runDirectory,'config.json');await write(configPath,current);
+ const parentFiles={};for(const name of ['config.json','owner.json','journal.json','evidence.json','baseline.json','recovery.json','recovery-admission.json'])parentFiles[name]=sha(await readFile(join(parent,name)));
+ const recipient={membershipID:f.partial.membershipID,membershipEpoch:1,deviceID:f.identities[0].deviceID};
+ const initialized={created:f.partial.created,membershipID:f.partial.membershipID,membershipEpoch:1,automaticDeviceAdmission:true,revision:1,keyGeneration:1,rotationRequired:false,formatState:'V1_ACTIVE',activated:false,v2Pointer:null,ownedTeamCount:1,membershipCount:1,vaultCount:1,invitationCount:0,grantCount:0,publicationCount:0,inventorySHA256:'f'.repeat(64),envelopeSHA256:'1'.repeat(64),wrappers:[{...recipient,wrapperSHA256:'2'.repeat(64)}],requiredRecipients:[recipient],ownerTrust:{...Object.fromEntries(['accountID','deviceID','rootFingerprint','publicKeyFingerprint'].map(k=>[k,f.identities[0][k]])),admitted:true,revoked:false,signedDirectorySHA256:'3'.repeat(64),certificateSHA256:'4'.repeat(64)}};
+ const a=await import('../scripts/staging-initialized-bootstrap-recovery.mjs');
+ const manifest={version:1,evidenceClass:'INITIALIZED_EMPTY_BOOTSTRAP_RECOVERY',parentRunDirectory:parent,parentConfigPath,parentFiles,parentClaimSHA256:sha(await readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json'))),configIdentitySHA256:continuation.continuationConfigIdentity(current),deployment:{sourceSHA:current.expectedSourceSHA,moduleHashesSHA256:digest(current.moduleHashes),imageDigest:'sha256:'+'d'.repeat(64),controllerSHA256:'d'.repeat(64)},runnerHashes:await a.initializedRecoveryRunnerHashes(),initialized};
+ await write(join(runDirectory,'initialized-recovery.json'),manifest);
+ for(const name of Object.keys(parentFiles))f.preserved.set(join(parent,name),await readFile(join(parent,name)));
+ f.preserved.set(join(f.predecessor,'partial-bootstrap-recovery-claim.json'),await readFile(join(f.predecessor,'partial-bootstrap-recovery-claim.json')));
+ const result={...f,a,config:current,configPath,runDirectory,parent,parentConfigPath,manifest,initialized};
+ const link=await a.readInitializedRecoveryLink(result),request=a.createInitializedRecoveryRequest({...result,link,launchNonce:id(),processID:id(),identities:f.identities});
+ const observedAt=new Date().toISOString(),b=request.successorBaseline;
+ const proof={operator:{...Object.fromEntries(['version','runID','origin','sourceSHA','launchNonce','phase','checkpointID','checkpointSHA256'].map(k=>[k,request[k]])),ordinary:f.baseline,outbox:null},evidenceClass:manifest.evidenceClass,deployment:manifest.deployment,observedAt,initialized:structuredClone(initialized),successorBaseline:{authorizationSHA256:b.authorizationSHA256,approvalID:b.approvalID,originalSnapshotSHA256:b.originalSnapshotSHA256,observedSnapshotSHA256:b.successorSnapshotSHA256,scopeSHA256:b.scopeSHA256,observedAt}};
+ return {...result,link,request,proof};
+}
+test('initialized successor admits exactly the preserved revision-one empty scope and consumes a new exclusive parent claim',async t=>{
+ const f=await initializedFixture(t);assert.equal(f.request.phase,'recover-initialized-bootstrap');assert.deepEqual(f.a.validateInitializedRecoveryProof(f.proof,f.request,f.baseline),f.proof);
+ for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ await f.a.claimInitializedRecovery(f);await f.a.assertInitializedRecoveryClaim(f);await assert.rejects(f.a.claimInitializedRecovery(f),/initialized_recovery_already_claimed/);
+ for(const [path,bytes]of f.preserved)assert.deepEqual(await readFile(path),bytes);
+});
+test('initialized successor rejects altered history, consumed claim, config, source and nonce',async t=>{
+ const f=await initializedFixture(t);
+ for(const [path,bytes]of f.preserved){await writeFile(path,Buffer.concat([bytes,Buffer.from(' ')]));await assert.rejects(f.a.readInitializedRecoveryLink(f));await writeFile(path,bytes);}
+ for(const mutate of [p=>p.operator.launchNonce=id(),p=>p.operator.sourceSHA='c'.repeat(40),p=>p.operator.ordinary.sha256='0'.repeat(64),p=>p.deployment.controllerSHA256='0'.repeat(64),p=>p.successorBaseline.observedSnapshotSHA256='0'.repeat(64)]){const p=structuredClone(f.proof);mutate(p);assert.throws(()=>f.a.validateInitializedRecoveryProof(p,f.request,f.baseline));}
+ for(const mutate of [m=>m.parentRunDirectory=f.original,m=>m.parentClaimSHA256='0'.repeat(64),m=>m.configIdentitySHA256='0'.repeat(64),m=>m.runnerHashes['scripts/staging-initialized-bootstrap-recovery.mjs']='0'.repeat(64)]){const m=structuredClone(f.manifest);mutate(m);await write(join(f.runDirectory,'initialized-recovery.json'),m);await assert.rejects(f.a.readInitializedRecoveryLink(f));}
+});
+test('initialized successor refuses scope epoch trust V2 ciphertext wrapper recipient and inventory drift',async t=>{
+ const f=await initializedFixture(t);
+ for(const mutate of [v=>v.created.teamID=id(),v=>v.created.vaults[0].vaultID=id(),v=>v.membershipEpoch=2,v=>v.ownerTrust.deviceID=id(),v=>v.ownerTrust.rootFingerprint='0'.repeat(64),v=>v.ownerTrust.revoked=true,v=>v.ownerTrust.admitted=false,v=>v.vaultCount=2,v=>v.invitationCount=1,v=>v.grantCount=1,v=>v.publicationCount=1,v=>v.v2Pointer=id(),v=>v.formatState='V2_ACTIVE',v=>v.rotationRequired=true,v=>v.revision=2,v=>v.keyGeneration=2,v=>v.envelopeSHA256='0'.repeat(64),v=>v.wrappers[0].wrapperSHA256='0'.repeat(64),v=>v.requiredRecipients=[],v=>v.requiredRecipients.push({...v.requiredRecipients[0]}),v=>v.wrappers=[]]){
+  const p=structuredClone(f.proof);mutate(p.initialized);assert.throws(()=>f.a.validateInitializedRecoveryProof(p,f.request,f.baseline));
+ }
+ const expired=structuredClone(f.link);expired.successor.binding.interval.endsAt=new Date(Date.now()-1).toISOString();assert.throws(()=>f.a.createInitializedRecoveryRequest({...f,link:expired,launchNonce:id(),processID:id()}),/initialized_recovery_authorization_expired/);
+});
+test('historical recovery reader validates its consumed proof and cannot authorize old runner execution',async t=>{
+ const f=await initializedFixture(t),old=await api();
+ const manifest=JSON.parse(await readFile(join(f.parent,'recovery.json')));manifest.runnerHashes['tests/browser/staging-real-lifecycle.mjs']='9'.repeat(64);await write(join(f.parent,'recovery.json'),manifest);
+ await assert.rejects(old.readRecoveryLink({config:config(f.config.runID,'c'),configPath:f.parentConfigPath,runDirectory:f.parent}),/recovery_source_mismatch/);
+ await assert.rejects(old.readHistoricalRecovery({config:config(f.config.runID,'c'),configPath:f.parentConfigPath,runDirectory:f.parent}),/recovery_claim_mismatch/);
+});
+
+test('initialized runner rejects a missing manifest and inherited active lock without opening a browser',async t=>{
+ preserveSessionMode(t);const {runStagingBrowserLifecycle,acquireLifecycleLock}=await import('./browser/staging-real-lifecycle.mjs');
+ const f=await initializedFixture(t),lock=join(f.parent,'runner.lock');await acquireLifecycleLock(lock);
+ await assert.rejects(runStagingBrowserLifecycle({...f,phase:'recover-initialized-bootstrap'}),/runner_already_active/);await assert.rejects(readFile(join(f.runDirectory,'owner.json')),{code:'ENOENT'});
+ await rm(lock,{recursive:true});await rm(join(f.runDirectory,'initialized-recovery.json'));await assert.rejects(runStagingBrowserLifecycle({...f,phase:'recover-initialized-bootstrap'}),/initialized_recovery_manifest_required/);
+});
+test('initialized runner failure releases all four locks and never consumes the parent before actual admission',async t=>{
+ preserveSessionMode(t);const previous=process.env.PLAYWRIGHT_MODULE;delete process.env.PLAYWRIGHT_MODULE;t.after(()=>{if(previous!==undefined)process.env.PLAYWRIGHT_MODULE=previous;});
+ const f=await initializedFixture(t),{runStagingBrowserLifecycle}=await import('./browser/staging-real-lifecycle.mjs');await assert.rejects(runStagingBrowserLifecycle({...f,phase:'recover-initialized-bootstrap'}),/real_phase_failed/);
+ for(const dir of f.link.lockDirectories)await assert.rejects(readFile(join(dir,'runner.lock','owner.json')),{code:'ENOENT'});
+ await assert.rejects(readFile(join(f.parent,'initialized-bootstrap-recovery-claim.json')),{code:'ENOENT'});for(const [path,bytes]of f.preserved)assert.deepEqual(await readFile(path),bytes);
+});
+test('initialized public evidence is redacted independently from its protected scope observations',()=>{
+ const event={phase:'initialized_empty_bootstrap_admitted',evidenceClass:'INITIALIZED_EMPTY_BOOTSTRAP_RECOVERY',outcome:'PASS'};assert.deepEqual(redactedEvidence({...event,initialized:{secret:'no'},password:'no'}),event);
+});
+
+test('frozen historical runner bytes require the complete consumed admission and never enable public execution',async t=>{
+ const f=await initializedFixture(t),old=await api(),args={config:config(f.config.runID,'c'),configPath:f.parentConfigPath,runDirectory:f.parent};
+ const manifest=JSON.parse(await readFile(join(f.parent,'recovery.json'))),admission=JSON.parse(await readFile(join(f.parent,'recovery-admission.json'))),claimPath=join(f.predecessor,'partial-bootstrap-recovery-claim.json'),claim=JSON.parse(await readFile(claimPath));
+ manifest.runnerHashes['tests/browser/staging-real-lifecycle.mjs']='9'.repeat(64);await write(join(f.parent,'recovery.json'),manifest);
+ admission.request.runnerHashes=manifest.runnerHashes;admission.request.manifestSHA256=sha(json(manifest));const {checkpointSHA256,...body}=admission.request;admission.request.checkpointSHA256=digest(body);admission.proof.operator.checkpointSHA256=admission.request.checkpointSHA256;
+ await write(join(f.parent,'recovery-admission.json'),admission);Object.assign(claim,{manifestSHA256:admission.request.manifestSHA256,checkpointSHA256:admission.request.checkpointSHA256,admissionSHA256:digest(admission)});await write(claimPath,claim);
+ const historical=await old.readHistoricalRecovery(args);assert.equal(historical.consumed.request.sourceSHA,'c'.repeat(40));
+ await assert.rejects(old.readRecoveryLink({...args,historical:true,frozen:true}),/recovery_source_mismatch/);
+ await rm(claimPath);await assert.rejects(old.readHistoricalRecovery({...args,skipClaim:true}));
+});
+test('initialized claim binds request config and fresh nonce and denies replay across another target',async t=>{
+ const f=await initializedFixture(t);for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ for(const patch of [{configSHA256:'0'.repeat(64)},{parentClaimSHA256:'0'.repeat(64)},{launchNonce:id()}])await assert.rejects(f.a.claimInitializedRecovery({...f,request:{...f.request,...patch}}));
+ await assert.rejects(f.a.claimInitializedRecovery({...f,runDirectory:f.parent}));await assert.rejects(readFile(join(f.parent,'initialized-bootstrap-recovery-claim.json')),{code:'ENOENT'});
+});
+
+test('initialized admission accepts every existing required owner wrapper, including an older admitted owner device',async t=>{
+ const f=await initializedFixture(t),second={membershipID:f.initialized.membershipID,membershipEpoch:1,deviceID:id()};
+ f.manifest.initialized.requiredRecipients.push(second);f.manifest.initialized.wrappers.push({...second,wrapperSHA256:'5'.repeat(64)});await write(join(f.runDirectory,'initialized-recovery.json'),f.manifest);
+ const link=await f.a.readInitializedRecoveryLink(f),request=f.a.createInitializedRecoveryRequest({...f,link,launchNonce:id(),processID:id()});
+ const proof=structuredClone(f.proof);proof.initialized=structuredClone(link.initialized);proof.observedAt=new Date().toISOString();proof.successorBaseline.observedAt=proof.observedAt;for(const k of ['launchNonce','checkpointID','checkpointSHA256'])proof.operator[k]=request[k];
+ assert.equal(f.a.validateInitializedRecoveryProof(proof,request,f.baseline).initialized.wrappers.length,2);
+});

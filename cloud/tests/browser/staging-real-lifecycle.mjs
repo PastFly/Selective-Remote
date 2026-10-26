@@ -7,10 +7,12 @@ import {randomUUID,createHash} from 'node:crypto';
 import {spawn} from 'node:child_process';
 import {createServer} from 'node:net';
 import {canonicalMigrationJSON} from '../../public/vault-v2-migration.js';
-import {lifecycleFailure,lifecycleDiagnosticCodes,diagnosticRequestAllowed,inspectBrowserLifecycleDiagnostic,validateDiagnosticRun,runSequentialDiagnosticProfiles} from '../../scripts/staging-lifecycle-diagnostics.mjs';
+import {lifecycleFailure,lifecycleDiagnosticCodes,diagnosticRequestAllowed,continuationLoginRequestAllowed,inspectBrowserLifecycleDiagnostic,validateDiagnosticRun,runSequentialDiagnosticProfiles} from '../../scripts/staging-lifecycle-diagnostics.mjs';
 import {validateRunConfig,readProtectedJSON,redactedEvidence,createOperatorBridge,assertProtectedDirectory,createProtectedRunDirectory,validateOperatorProof,validateOrdinaryBaseline,validateNegativeInvariantProof} from '../../scripts/staging-publication-acceptance.mjs';
 import {readContinuationLink,createContinuationRequest,validateContinuationProof,claimContinuation,assertContinuationClaim,assertContinuationRunBaseline,assertContinuationUnclaimed,acquireUnclaimedLifecycleLock,writeContinuationExclusive,runContinuationReadiness,assertContinuationIdentity,continuationEvidenceClass} from '../../scripts/staging-bootstrap-continuation.mjs';
 import {readRecoveryLink,createRecoveryRequest,validateRecoveryProof,claimRecovery,assertRecoveryClaim,assertRecoveryUnclaimed,recoveryEvidenceClass} from '../../scripts/staging-partial-bootstrap-recovery.mjs';
+
+import {readInitializedRecoveryLink,createInitializedRecoveryRequest,validateInitializedRecoveryProof,claimInitializedRecovery,assertInitializedRecoveryClaim,assertInitializedRecoveryUnclaimed,initializedRecoveryEvidenceClass} from '../../scripts/staging-initialized-bootstrap-recovery.mjs';
 
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
@@ -58,6 +60,73 @@ export async function stagingPartialBootstrapGuard({installOnly=false,...options
  };
  if(installOnly){globalThis.__prcInspectPartialBootstrap=inspect;return;}
  return inspect(options);
+}
+
+// Read/decrypt only. The same guard runs again at the mutation boundary.
+export async function stagingInitializedBootstrapGuard({installOnly=false,...options}={}){
+ const inspect=async({client,team,keys,trust,pin,origin,identity,userID,runID,initialized,storage,observationOnly=false})=>{
+  const fail=()=>{throw Error('initialized_bootstrap_changed');};
+  const canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
+  const equal=(a,b)=>canonical(a)===canonical(b),digest=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical(value))))].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const created=initialized?.created,item=created?.vaults?.[0],saved=await storage('created');
+  if(!created||created.actorUserID!==userID||created.actorDeviceID!==identity.deviceID||created.vaults.length!==1||item?.name!==`TEST-ONLY-CODEX-${runID}-populated`||!equal(saved,created))fail();
+  const current=(await client.listTeams()).find(t=>t.id===created.teamID),scope={type:'team',teamID:created.teamID,vaultID:item.vaultID};
+  if(!current||current.name!==`TEST-ONLY-CODEX-${runID}-team`||current.role!=='owner'||current.membershipID!==initialized.membershipID||current.membershipEpoch!==1||initialized.membershipEpoch!==1)fail();
+  const vaults=await client.listSharedVaults(created.teamID);if(vaults.length!==1||vaults[0].id!==item.vaultID||vaults[0].name!==item.name||(await client.getTeamDeviceAdmissionPolicy(created.teamID)).automaticDeviceAdmission!==true)fail();
+  const members=await client.listTeamMembers(created.teamID);
+  if(members.length!==1||members[0].id!==initialized.membershipID||members[0].epoch!==1||members[0].userID!==userID||members[0].role!=='owner'||(await client.listTeamInvitations(created.teamID)).length)fail();
+  const expectedTrust=initialized.ownerTrust,snapshot=await client.deviceTrustSnapshot();
+  if(expectedTrust.accountID!==userID||expectedTrust.deviceID!==identity.deviceID||expectedTrust.publicKeyFingerprint!==await keys.teamDevicePublicKeyFingerprint(identity.publicKey)||pin?.rootFingerprint!==expectedTrust.rootFingerprint||snapshot.state!=='ROOT_PUBLISHED'||snapshot.rootFingerprint!==expectedTrust.rootFingerprint||snapshot.custodianDeviceID!==identity.deviceID)fail();
+  const directory=await trust.verifySignedDeviceDirectory({rootPublicKey:snapshot.rootPublicKey,checkpoint:snapshot.checkpoint,accountID:userID});
+  const next=trust.advancePinnedTrust(pin,{endpoint:origin,accountID:userID,rootFingerprint:snapshot.rootFingerprint,highWater:directory.version,checkpointDigest:directory.checkpointDigest});
+  const entry=snapshot.checkpoint.payload.entries.find(v=>v.deviceID===identity.deviceID),certificate=snapshot.certificates.find(v=>v.payload?.deviceID===identity.deviceID&&v.payload.keyVersion===entry?.keyVersion);
+  if(!certificate||await digest(snapshot.checkpoint)!==expectedTrust.signedDirectorySHA256||await digest(certificate)!==expectedTrust.certificateSHA256)fail();
+  const verified=await trust.verifyDeviceForWrapping({rootPublicKey:snapshot.rootPublicKey,certificate,checkpoint:snapshot.checkpoint,trust:next,expectedDeviceID:identity.deviceID});
+  if(!equal(verified.publicKey,identity.publicKey))fail();
+  const recipients=(await client.listTeamKeyDevices(scope)).devices,tuples=rows=>rows.map(({membershipID,membershipEpoch,deviceID})=>({membershipID,membershipEpoch,deviceID})).sort((a,b)=>a.deviceID.localeCompare(b.deviceID));
+  if(!recipients.every(r=>r.hasWrapper===true)||!equal(tuples(recipients),tuples(initialized.requiredRecipients)))fail();
+  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+  if(remote.revision!==1||remote.keyGeneration!==1||remote.rotationRequired!==false||remote.envelopeVersion!==1||!remote.wrapper||!cached||cached.deviceID!==identity.deviceID||cached.localRevision!==1||cached.serverRevision!==1||cached.syncedLocalRevision!==1||cached.keyGeneration!==1||!equal(cached.scope,scope))fail();
+  const envelope={baseRevision:0,keyGeneration:1,envelopeVersion:remote.envelopeVersion,ciphertext:remote.ciphertext,nonce:remote.nonce,authTag:remote.authTag,contentHash:remote.contentHash};
+  const wrapper=initialized.wrappers.find(v=>v.deviceID===identity.deviceID);
+  if(!wrapper||await digest(envelope)!==initialized.envelopeSHA256||await digest(remote.wrapper)!==wrapper.wrapperSHA256||!equal(cached.envelope,envelope)||!equal(cached.wrapper,remote.wrapper)||remote.wrapper.membershipID!==initialized.membershipID||remote.wrapper.membershipEpoch!==1)fail();
+  if(await storage('legacy:'+item.vaultID)||await storage('expected:'+item.vaultID))fail();
+  const key=await keys.unwrapTeamVaultKeyForDevice({privateKey:identity.privateKey,wrapper:remote.wrapper,...scope,keyGeneration:1,deviceID:identity.deviceID});
+  const document=await keys.decryptTeamVaultPayload({vaultKey:key,envelope,scope});
+  const empty=d=>d&&Object.keys(d).sort().join(',')==='records,schemaVersion,tombstones'&&d.schemaVersion===1&&Array.isArray(d.records)&&d.records.length===0&&Array.isArray(d.tombstones)&&d.tombstones.length===0;
+  if(!empty(document))fail();
+  const controller=team.createTeamVaultController({repository:team.createIndexedDBTeamVaultRepository(scope),identity,scope});
+  try{const local=await controller.unlock(),state=await controller.syncState();if(!empty(local)||!equal(local,document)||state.dirty||state.serverRevision!==1)fail();}finally{controller.lock();}
+  if(observationOnly)return {observedAt:new Date().toISOString(),teamID:scope.teamID,vaultID:scope.vaultID,accountID:userID,deviceID:identity.deviceID,membershipID:current.membershipID,membershipEpoch:current.membershipEpoch,serverRevision:remote.revision,localRevision:cached.localRevision,syncedLocalRevision:cached.syncedLocalRevision,keyGeneration:remote.keyGeneration,envelopeSHA256:await digest(envelope),ownWrapperSHA256:await digest(remote.wrapper),requiredRecipients:tuples(recipients),rootFingerprint:snapshot.rootFingerprint,signedDirectorySHA256:await digest(snapshot.checkpoint),certificateSHA256:await digest(certificate),emptyCounts:{records:document.records.length,tombstones:document.tombstones.length,vectorClock:Object.keys(document.vectorClock??{}).length}};
+  return structuredClone(saved);
+ };
+ if(installOnly){globalThis.__prcInspectInitializedBootstrap=inspect;return;}
+ return inspect(options);
+}
+
+export async function invokeLifecycleCommand(page,command,arg={}){
+ // Classify in the page before the browser transport adds its prefix/stack.
+ // Unknown messages never cross this boundary as diagnostic content.
+ const result=await page.evaluate(async({command,arg,failureCodes})=>{
+  try{return {ok:true,value:await globalThis.__prcLifecycle(command,arg)};}
+  catch(error){return {ok:false,failureCode:failureCodes.includes(error?.message)?error.message:'unknown_failure'};}
+ },{command,arg,failureCodes:lifecycleDiagnosticCodes});
+ if(result?.ok!==true)throw Error(lifecycleDiagnosticCodes.includes(result?.failureCode)?result.failureCode:'unknown_failure');
+ return result.value;
+}
+
+export async function openContinuationLoginPage(profile,origin){
+ await profile.context.unroute('**/*');
+ await profile.context.route('**/*',route=>continuationLoginRequestAllowed(route.request().url(),route.request().method(),origin)?route.continue():route.abort());
+ await profile.page.goto(origin,{waitUntil:'domcontentloaded'});
+}
+
+export async function openLifecycleExecutionPage(context,origin){
+ for(const restored of context.pages())await restored.close();
+ const page=await context.newPage();
+ // Same-origin cookies/modules remain real; app startup must not race fixtures.
+ await page.goto(origin+'/healthz',{waitUntil:'domcontentloaded'});
+ return page;
 }
 
 // This function is serialized into the actual page. Only public results cross
@@ -230,9 +299,18 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes})
    const request=(await client.deviceTrustRequests()).find(r=>r.deviceID===identity.deviceID);if(!request)fail('challenge_missing');await trustFlow.answerRequestChallenge(request);return {deviceID:identity.deviceID};
   }
   if(command==='finish-approval'){if(!pendingApproval||pendingApproval.deviceID!==arg.deviceID)fail('approval_memory_lost');await trustFlow.finishApproval(pendingApproval);pendingApproval=null;return {deviceID:arg.deviceID};}
-  if(command==='bootstrap'||command==='recover-bootstrap'){
-   await actor(true);let created;
-   if(command==='recover-bootstrap')created=await globalThis.__prcInspectPartialBootstrap({client,team,identity,userID:user.id,runID,partial:arg.partial,storage});
+  if(command==='inspect-initialized-bootstrap'){
+   const state=await actor(true);return globalThis.__prcInspectInitializedBootstrap({client,team,keys,trust,pin:state.pin,origin,identity,userID:user.id,runID,initialized:arg.initialized,storage,observationOnly:true});
+  }
+  if(command==='bootstrap'||command==='recover-bootstrap'||command==='recover-initialized-bootstrap'){
+   const actorState=await actor(true);let created;
+   const initialized=command==='recover-initialized-bootstrap';
+   const inspectInitialized=async()=>{
+    const now=new Date().toISOString();if(now<arg.interval?.startsAt||now>=arg.interval?.endsAt)fail('initialized_bootstrap_changed');
+    return globalThis.__prcInspectInitializedBootstrap({client,team,keys,trust,pin:actorState.pin,origin,identity,userID:user.id,runID,initialized:arg.initialized,storage});
+   };
+   if(initialized)created=await inspectInitialized();
+   else if(command==='recover-bootstrap')created=await globalThis.__prcInspectPartialBootstrap({client,team,identity,userID:user.id,runID,partial:arg.partial,storage});
    else{
     if(await storage('created'))fail('bootstrap_already_recorded');
     const createdTeam=await client.createTeam({name:`TEST-ONLY-CODEX-${runID}-team`,idempotencyKey:`prc:${runID}:team`});
@@ -240,12 +318,14 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes})
    }
    for(const kind of ['populated','empty']){
     const name=`TEST-ONLY-CODEX-${runID}-${kind}`;let item;
-    if(command==='recover-bootstrap'&&kind==='populated')item=created.vaults[0];
+    if((command==='recover-bootstrap'||initialized)&&kind==='populated')item=created.vaults[0];
     else{const vault=await client.createSharedVault({teamID:created.teamID,name,idempotencyKey:`prc:${runID}:${kind}`});item={vaultID:vault.id,name,attemptID:crypto.randomUUID()};created.vaults.push(item);await storage('created',created);}
     const vault={id:item.vaultID};
     const scope={type:'team',teamID:created.teamID,vaultID:vault.id},controller=team.createTeamVaultController({repository:team.createIndexedDBTeamVaultRepository(scope),identity,scope});
     try{
-     await team.synchronizeTeamVault({client,controller,role:'owner'});if(kind==='populated')for(const r of globalThis.__prcCreateV1Records())await controller.upsert(r);
+     if(initialized&&kind==='populated'){await controller.unlock();await inspectInitialized();}
+     else await team.synchronizeTeamVault({client,controller,role:'owner'});
+     if(kind==='populated')for(const r of globalThis.__prcCreateV1Records())await controller.upsert(r);
      await team.synchronizeTeamVault({client,controller,role:'owner'});
      const remote=await client.getTeamVault(scope),state=await controller.syncState(),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
      if(state.dirty||remote.revision!==state.serverRevision||controller.document().records.length!==(kind==='populated'?4:0)||['ciphertext','nonce','authTag','contentHash'].some(k=>remote[k]!==cached.envelope[k]))fail('legacy_roundtrip_failed');
@@ -634,6 +714,19 @@ async function exists(path){try{await lstat(path);return true;}catch(error){if(e
 // lock as well as the new run lock, and never rewrite the failed run's evidence.
 export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}){
  if(phase==='diagnose-bootstrap')return diagnoseStagingBrowserLifecycle({configPath,runDirectory});
+ const initialized=await exists(join(runDirectory,'initialized-recovery.json'));
+ if(initialized){
+  if(process.env.TEST_SESSION_MODE!=='PRESERVE_TRUSTED_STATE'||await exists(join(runDirectory,'continuation.json'))||await exists(join(runDirectory,'recovery.json')))throw Error('initialized_recovery_preserved_session_required');
+  const config=validateRunConfig(await readProtectedJSON(configPath)),before=await readInitializedRecoveryLink({config,configPath,runDirectory}),locks=[];
+  try{
+   for(const directory of before.lockDirectories.slice(0,-1)){const lock=join(directory,'runner.lock');await acquireLifecycleLock(lock);locks.push(lock);}
+   const link=await readInitializedRecoveryLink({config,configPath,runDirectory});if(link.manifestSHA256!==before.manifestSHA256)throw Error('initialized_recovery_history_changed');
+   const starting=phase==='recover-initialized-bootstrap';let admission;
+   if(starting)await assertInitializedRecoveryUnclaimed(link);else{admission=await assertInitializedRecoveryClaim({link,runDirectory});await assertContinuationRunBaseline({link,runDirectory});}
+   return await runLifecycleCore({configPath,runDirectory,phase:starting?'bootstrap':phase,recovery:{link,starting,admission,initialized:true}});
+  }finally{for(const lock of locks.reverse())await rm(lock,{recursive:true});}
+ }
+ if(phase==='recover-initialized-bootstrap')throw Error('initialized_recovery_manifest_required');
  const recovering=await exists(join(runDirectory,'recovery.json'));
  if(recovering){
   if(process.env.TEST_SESSION_MODE!=='PRESERVE_TRUSTED_STATE'||await exists(join(runDirectory,'continuation.json')))throw Error('recovery_preserved_session_required');
@@ -661,36 +754,36 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
 }
 
 async function admitContinuation({config,configPath,runDirectory,link,chromium,terminal,emit,pause,launchNonce,processID,recovery=false}){
- const evidenceClass=recovery?recoveryEvidenceClass:continuationEvidenceClass,prefix=recovery?'recovery':'continuation',previousLaunchNonce=recovery?link.admission.request.launchNonce:link.originalLaunchNonce;
+ const initialized=recovery==='initialized',evidenceClass=initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass,prefix=initialized?'initialized-recovery':recovery?'recovery':'continuation',previousLaunchNonce=recovery?link.admission.request.launchNonce:link.originalLaunchNonce;
  const readonly=async profile=>{
   await profile.context.unroute('**/*');await profile.context.route('**/*',route=>diagnosticRequestAllowed(route.request().url(),route.request().method(),config.origin)?route.continue():route.abort());
  };
  const identities=await runContinuationReadiness({
   open:async index=>{const browser=await launchLifecycleBrowser({chromium,profile:link.profiles[index]});try{await readonly(browser);for(const p of browser.context.pages())await p.close();browser.page=await browser.context.newPage();await emit({phase:'process_started',browserIndex:index,pid:browser.pid,processID,launchNonce,outcome:'PASS'});return browser;}catch(error){await browser.close();throw error;}},
   inspect:async(profile,index)=>{await readonly(profile);await profile.page.goto(config.origin+'/healthz',{waitUntil:'domcontentloaded'});const result=await profile.page.evaluate(inspectBrowserLifecycleDiagnostic,{...config,email:config.emails[index],approvedEmails:config.emails,failureCodes:lifecycleDiagnosticCodes});await emit({phase:'continuation_readiness',browserIndex:index,launchNonce,...result});return result;},
-  showGUI:async profile=>{await profile.context.unroute('**/*');await profile.context.route('**/*',route=>new URL(route.request().url()).origin===config.origin?route.continue():route.abort());await profile.page.goto(config.origin,{waitUntil:'domcontentloaded'});},
-  prompt:async index=>{await emit({phase:'owner_input_pending',browserIndex:index,outcome:'PENDING'});const answer=await terminal.question(`Existing TEST profile ${index}: sign into its approved account and finish existing first-device trust in the product GUI. Do not register again. Enter rechecks; q quits. Never type credentials here.\n`);return /^(q|quit|exit)$/i.test(answer.trim())?'quit':'recheck';},
+  showGUI:profile=>openContinuationLoginPage(profile,config.origin),
+  prompt:async index=>{await emit({phase:'owner_input_pending',browserIndex:index,outcome:'PENDING'});const answer=await terminal.question(`Existing TEST profile ${index}: sign into its approved account using its existing trusted device identity. Do not register or change device trust. Enter rechecks; q quits. Never type credentials here.\n`);return /^(q|quit|exit)$/i.test(answer.trim())?'quit':'recheck';},
   close:async(profile,index)=>{await profile.close();await emit({phase:'process_closed',browserIndex:index,pid:profile.pid,processID,launchNonce,outcome:'PASS'});},
  });
- const request=(recovery?createRecoveryRequest:createContinuationRequest)({config,link,launchNonce,processID,identities});
+ const request=(initialized?createInitializedRecoveryRequest:recovery?createRecoveryRequest:createContinuationRequest)({config,link,launchNonce,processID,identities});
  await writeContinuationExclusive(join(runDirectory,prefix+'-request-'+launchNonce+'.json'),request);
  await emit({phase:prefix+'_operator_proof_pending',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,checkpointID:request.checkpointID,checkpointSHA256:request.checkpointSHA256,outcome:'PENDING'});
  await pause('Root must publish the exact protected '+prefix+'-proof-'+launchNonce+'.json from fresh read-only server verification against the unchanged linked ordinary snapshot and approved interval. Recovery also requires the exact retained partial graph and actual same-device sign-in admission/audit. Never copy expected hashes as observations or claim an observed registration response.');
- const proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));(recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
- const current=await(recovery?readRecoveryLink:readContinuationLink)({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error(prefix+'_original_changed');
- await(recovery?claimRecovery:claimContinuation)({link:current,request,proof,runDirectory});
- await emit({phase:recovery?'partial_bootstrap_admitted':'continuation_registration_admitted',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
+ const proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));(initialized?validateInitializedRecoveryProof:recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
+ const current=await(initialized?readInitializedRecoveryLink:recovery?readRecoveryLink:readContinuationLink)({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error(prefix+'_original_changed');
+ await(initialized?claimInitializedRecovery:recovery?claimRecovery:claimContinuation)({link:current,request,proof,runDirectory});
+ await emit({phase:initialized?'initialized_empty_bootstrap_admitted':recovery?'partial_bootstrap_admitted':'continuation_registration_admitted',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
  return {request,proof};
 }
 
 async function runLifecycleCore({configPath,runDirectory,phase,continuation=null,recovery=null}){
  const config=validateRunConfig(await readProtectedJSON(configPath)),mode=process.env.TEST_SESSION_MODE;
  const linked=continuation??recovery,recoveryStart=recovery?.starting===true,continuationStart=continuation?.starting===true||recoveryStart;let continuationAdmission=linked?.admission;
- const linkedEvidenceClass=recovery?recoveryEvidenceClass:continuationEvidenceClass;
+ const linkedEvidenceClass=recovery?.initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass;
  if(!isAbsolute(runDirectory))throw Error('invalid_real_phase');
  let existing=false;try{await lstat(runDirectory);existing=true;}catch(error){if(error.code!=='ENOENT')throw error;}
  if(continuationStart){
-  for(const name of ['owner.json','journal.json','evidence.json','baseline.json','scope.json','continuation-admission.json','recovery-admission.json'])if(await exists(join(runDirectory,name)))throw Error('continuation_fresh_link_required');
+  for(const name of ['owner.json','journal.json','evidence.json','baseline.json','scope.json','continuation-admission.json','recovery-admission.json','initialized-recovery-admission.json'])if(await exists(join(runDirectory,name)))throw Error('continuation_fresh_link_required');
   if(config.approvedVaultIDs.length)throw Error('continuation_partial_scope');
   await writeContinuationExclusive(join(runDirectory,'owner.json'),{version:1,runID:config.runID,sourceSHA:config.expectedSourceSHA});
   await writeContinuationExclusive(join(runDirectory,'baseline.json'),linked.link.baseline);
@@ -738,18 +831,21 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
  try{
   if(!process.env.PLAYWRIGHT_MODULE||process.env.CHROMIUM_PATH&&process.env.CHROMIUM_PATH!==EDGE)throw Error('headed_edge_required');
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));
-  if(continuationStart)continuationAdmission=await admitContinuation({config,configPath,runDirectory,link:linked.link,chromium,terminal,emit,pause,launchNonce,processID,recovery:recoveryStart});
-  const pages=[],registered=[],{indexes,authenticated}=lifecycleBrowserPlan(phase,pendingResume);
+  if(continuationStart)continuationAdmission=await admitContinuation({config,configPath,runDirectory,link:linked.link,chromium,terminal,emit,pause,launchNonce,processID,recovery:recoveryStart?(recovery.initialized?'initialized':true):false});
+  const pages=[],guiPages=[],registered=[],{indexes,authenticated}=lifecycleBrowserPlan(phase,pendingResume);
   for(const index of indexes){
    diagnosticStage='browser_launch';diagnosticIndex=index;
    const profile=linked&&index<2?linked.link.profiles[index]:join(runDirectory,'edge-'+index);if(!pendingResume&&(!linked&&phase==='bootstrap'||phase==='enroll'&&index===2))try{await mkdir(profile,{mode:0o700});}catch(error){if(error.code!=='EEXIST'||phase==='bootstrap')throw error;await assertProtectedDirectory(profile);}
    const browser=await launchLifecycleBrowser({chromium,profile});contexts.push(browser);await emit({phase:'process_started',pid:browser.pid,processID,launchNonce,outcome:'PASS'});
    const context=browser.context;await context.route('**/*',route=>{const url=new URL(route.request().url());return url.origin===config.origin&&(phase!=='restart-offline'||!url.pathname.startsWith('/v1/'))?route.continue():route.abort();});
-   const page=await context.newPage();pages[index]=page;
-   if(phase==='bootstrap'&&!continuationStart)page.on('response',async response=>{if(response.url()===config.origin+'/v1/auth/register'&&response.ok()){try{const v=await response.json();if(v?.verificationRequired===true&&Object.keys(v).length===1)registered[index]=true;}catch{}}});
-   await page.goto(config.origin,{waitUntil:'domcontentloaded'});
+   const page=await openLifecycleExecutionPage(context,config.origin);pages[index]=page;
    if(phase==='bootstrap'&&!pendingResume&&!continuationStart){
     const anonymous=await page.evaluate(async()=>{const r=await fetch('/v1/me',{credentials:'same-origin',cache:'no-store'});return r.status===401;});if(!anonymous)throw Error('fresh_anonymous_session_required');
+   }
+   if(!pendingResume&&(phase==='bootstrap'&&!continuationStart||phase==='enroll'&&index===2)){
+    const gui=await context.newPage();guiPages.push(gui);
+    if(phase==='bootstrap')gui.on('response',async response=>{if(response.url()===config.origin+'/v1/auth/register'&&response.ok()){try{const v=await response.json();if(v?.verificationRequired===true&&Object.keys(v).length===1)registered[index]=true;}catch{}}});
+    await gui.goto(config.origin,{waitUntil:'domcontentloaded'});
    }
   }
   await emit({phase:'session_gate',testSessionMode:mode,browserOrigin:config.origin,localhost:'NO',fileURL:'NO',apiMode:'REAL_STAGING',...(phase==='restart-offline'?{}:{authSession:phase==='bootstrap'&&!pendingResume&&!continuationStart?'ANONYMOUS':'REAL_STAGING'}),launchNonce,outcome:'PASS',...(linked?{evidenceClass:linkedEvidenceClass}:{})});
@@ -760,7 +856,8 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
    diagnosticStage='bootstrap_registration_observation';
    if(![0,1].every(i=>registered[i]===true))throw Error('fresh_registration_not_observed');
   }else if(phase==='enroll'&&!pendingResume)await pause('Sign into the secondary TEST account in the third isolated app window; do not create a new account/root. Native onboarding proceeds through its separate isolated GUI.');
-  const invoke=(index,command,arg={})=>pages[index].evaluate(({command,arg})=>globalThis.__prcLifecycle(command,arg),{command,arg});
+  for(const gui of guiPages)await gui.close();
+  const invoke=(index,command,arg={})=>invokeLifecycleCommand(pages[index],command,arg);
   if(phase==='restart-offline'){
    const last=journal.processes.at(-1);if(!last||last.processID===processID||last.pids.some(pid=>contexts.some(c=>c.pid===pid)))throw Error('separate_browser_process_required');
    for(const i of authenticated){
@@ -772,6 +869,7 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
     diagnosticStage='browser_fixture_install';diagnosticIndex=i;
     await pages[i].evaluate(stagingV1Records,{installOnly:true});
     await pages[i].evaluate(stagingPartialBootstrapGuard,{installOnly:true});
+    if(recovery?.initialized)await pages[i].evaluate(stagingInitializedBootstrapGuard,{installOnly:true});
     diagnosticStage='browser_lifecycle_install';
     await pages[i].evaluate(installBrowserLifecycle,{...config,email:config.emails[i===0?0:1]});
     if(phase!=='bootstrap'&&!(phase==='enroll'&&i===2)){
@@ -798,9 +896,13 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
     diagnosticStage='owner_identity';diagnosticIndex=0;const owner=await invoke(0,'identity',{custodian:true});
     diagnosticStage='member_identity';diagnosticIndex=1;const member=await invoke(1,'identity',{custodian:true});
     if(continuationStart){assertContinuationIdentity(owner,continuationAdmission.request.accounts[0]);assertContinuationIdentity(member,continuationAdmission.request.accounts[1]);}
-    diagnosticStage='team_bootstrap';diagnosticIndex=0;const created=await invoke(0,recoveryStart?'recover-bootstrap':'bootstrap',{memberEmail:config.emails[1],...(recoveryStart?{partial:recovery.link.partial}:{})});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
+    diagnosticStage='team_bootstrap';diagnosticIndex=0;
+    if(recoveryStart&&recovery.initialized){const observation=await invoke(0,'inspect-initialized-bootstrap',{initialized:continuationAdmission.proof.initialized});await writeContinuationExclusive(join(runDirectory,'initialized-browser-observation-'+launchNonce+'.json'),{version:1,evidenceClass:initializedRecoveryEvidenceClass,launchNonce,processID,checkpointSHA256:continuationAdmission.request.checkpointSHA256,observation});await emit({phase:'initialized_empty_browser_verified',evidenceClass:initializedRecoveryEvidenceClass,sha256:continuationAdmission.request.checkpointSHA256,outcome:'PASS'});}
+    const created=await invoke(0,recoveryStart?(recovery.initialized?'recover-initialized-bootstrap':'recover-bootstrap'):'bootstrap',{memberEmail:config.emails[1],...(recoveryStart?(recovery.initialized?{initialized:continuationAdmission.proof.initialized,interval:continuationAdmission.request.successorBaseline.interval}:{partial:recovery.link.partial}):{})});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
     diagnosticStage='lifecycle_operation';diagnosticIndex=undefined;
-    await pause('Accept the genuine Team invitation in the secondary account app window.');
+    const invitationGUI=await contexts[1].context.newPage();
+    try{await invitationGUI.goto(config.origin,{waitUntil:'domcontentloaded'});await pause('Accept the genuine Team invitation in the secondary account app window.');}
+    finally{await invitationGUI.close();}
     Object.assign(state.member,await invoke(1,'join-check',{teamID:state.teamID}));Object.assign(state.owner,await invoke(0,'join-check',{teamID:state.teamID}));await saveState();
     for(const i of [0,1]){const who=i===0?state.owner:state.member;state.enrollments[i]={accountID:who.accountID,deviceID:who.deviceID,membershipID:who.membershipID,membershipEpoch:who.membershipEpoch,teamID:state.teamID,vaults:state.vaults};await invoke(i,'enroll-reader',enrollArg(i));}await saveState();await checkpoint();
    }else if(phase==='enroll'){

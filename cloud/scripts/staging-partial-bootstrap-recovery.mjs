@@ -78,11 +78,11 @@ async function readRenewal({manifest,runDirectory,predecessorConfig,config,histo
  return {successor,baseline:successor.baseline,renewalContext:recoveryContext};
 }
 
-export async function readRecoveryLink({config,configPath,runDirectory}){
+async function readRecovery({config,configPath,runDirectory},frozen=false){
  validateRunConfig(config);await assertProtectedDirectory(dirname(runDirectory));await assertProtectedDirectory(runDirectory);
  const bytes=await readProtectedBytes(join(runDirectory,'recovery.json')),manifest=JSON.parse(bytes),configBytes=await readProtectedBytes(configPath);
  if(!exact(manifest,['version','evidenceClass','predecessorRunDirectory','predecessorConfigPath','predecessorFiles','originalClaimSHA256','configIdentitySHA256','deployment','runnerHashes','partial',...(Object.hasOwn(manifest,'renewal')?['renewal']:[])])||manifest.version!==1||manifest.evidenceClass!==recoveryEvidenceClass
-  ||manifest.configIdentitySHA256!==continuationConfigIdentity(config)||!equal(manifest.runnerHashes,await recoveryRunnerHashes())||!equal(JSON.parse(configBytes),config))fail('recovery_source_mismatch');
+  ||manifest.configIdentitySHA256!==continuationConfigIdentity(config)||!(frozen?exact(manifest.runnerHashes,Object.keys(await recoveryRunnerHashes()))&&Object.values(manifest.runnerHashes).every(v=>hash.test(v)):equal(manifest.runnerHashes,await recoveryRunnerHashes()))||!equal(JSON.parse(configBytes),config))fail('recovery_source_mismatch');
  const deployment=manifest.deployment;if(!exact(deployment,['sourceSHA','moduleHashesSHA256','imageDigest','controllerSHA256'])||deployment.sourceSHA!==config.expectedSourceSHA||deployment.moduleHashesSHA256!==digest(config.moduleHashes)||!/^sha256:[a-f0-9]{64}$/.test(deployment.imageDigest)||!hash.test(deployment.controllerSHA256))fail('recovery_source_mismatch');
  const predecessorDirectory=manifest.predecessorRunDirectory;await assertProtectedDirectory(dirname(predecessorDirectory));await assertProtectedDirectory(predecessorDirectory);
  if(predecessorDirectory===runDirectory||!exact(manifest.predecessorFiles,predecessorNames))fail('recovery_predecessor_changed');
@@ -99,6 +99,15 @@ export async function readRecoveryLink({config,configPath,runDirectory}){
  const profiles=[0,1].map(i=>join(historical.originalRunDirectory,'edge-'+i));for(const profile of profiles)await assertProtectedDirectory(profile);
  const renewed=Object.hasOwn(manifest,'renewal')?await readRenewal({manifest,runDirectory,predecessorConfig,config,historical}):{};
  return {manifest,manifestSHA256:sha(bytes),configSHA256:sha(configBytes),config:structuredClone(config),configPath,runDirectory,baseline,profiles,accounts:structuredClone(accounts),partial:structuredClone(manifest.partial),predecessorDirectory,predecessorConfig,...historical,...renewed};
+}
+
+export async function readRecoveryLink(options){return readRecovery(options);}
+// This reader can only return a consumed, validated historical admission. There
+// is no public switch to skip the claim or execute frozen runner hashes.
+export async function readHistoricalRecovery(options){
+ const link=await readRecovery(options,true);
+ const consumed=await assertRecoveryClaim({link,runDirectory:options.runDirectory});
+ return {...link,consumed};
 }
 
 export function createRecoveryRequest({config,link,launchNonce,processID,identities}){

@@ -1,12 +1,22 @@
 // Diagnostic metadata only. No registration receipt or lifecycle acceptance is produced.
 export const lifecycleDiagnosticStages=['lifecycle_operation','browser_launch','owner_registration','bootstrap_registration_observation','browser_fixture_install','browser_lifecycle_install','owner_identity','member_identity','team_bootstrap','diagnostic_preflight','diagnostic_modules','diagnostic_session','diagnostic_identity','diagnostic_trust','owner_trust_setup','diagnostic_recheck'];
-export const lifecycleDiagnosticCodes=['unknown_failure','fresh_registration_not_observed','fresh_anonymous_session_required','real_origin_required','deployed_module_unavailable','deployed_module_mismatch','authentication_required','test_account_mismatch','test_account_changed','product_device_setup_required','product_trust_required','device_trust_invalid','device_trust_recovery_required','device_trust_root_conflict','device_trust_key_substitution','device_trust_download_failed','device_trust_unsupported','run_storage_failed','readonly_storage_required','diagnostic_run_mismatch','preserved_identity_changed'];
+export const lifecycleDiagnosticCodes=['unknown_failure','fresh_registration_not_observed','fresh_anonymous_session_required','real_origin_required','deployed_module_unavailable','deployed_module_mismatch','authentication_required','test_account_mismatch','test_account_changed','product_device_setup_required','product_trust_required','device_trust_invalid','device_trust_recovery_required','device_trust_root_conflict','device_trust_key_substitution','device_trust_download_failed','device_trust_unsupported','run_storage_failed','readonly_storage_required','diagnostic_run_mismatch','preserved_identity_changed','local_team_vault_exists','team_vault_locked','partial_bootstrap_changed','legacy_roundtrip_failed','initialized_bootstrap_changed'];
 export const lifecycleRootStatuses=['FIRST_DEVICE','PUBLISH_PENDING','PAIRING_REQUIRED','LOCAL_PIN_MISSING','CUSTODIAN','CERTIFIED','REVOKED'];
 export function lifecycleFailure({stage='lifecycle_operation',index,error}){
  return {stage:lifecycleDiagnosticStages.includes(stage)?stage:'lifecycle_operation',...(index===0||index===1?{browserIndex:index}:{}),failureCode:lifecycleDiagnosticCodes.includes(error?.message)?error.message:'unknown_failure'};
 }
 export function diagnosticRequestAllowed(value,method,origin){
  try{const url=new URL(value);return method==='GET'&&url.origin===origin&&!url.search&&!url.hash&&(['/healthz','/v1/me','/v1/device-trust'].includes(url.pathname)||/^\/[a-z0-9-]+\.js$/.test(url.pathname));}catch{return false;}
+}
+// A preserved identity already owns trust keys. GUI may reauthenticate, but
+// cannot initialize Team Vaults or register/repair/replace that identity.
+export function continuationLoginRequestAllowed(value,method,origin){
+ try{const url=new URL(value);if(url.origin!==origin||url.hash)return false;
+  if(method==='GET'&&/^\/[a-z0-9-]+\.(js|css|svg|png|ico)$/.test(url.pathname))return !url.search||/^\?v=[0-9]+$/.test(url.search);
+  if(url.search)return false;
+  if(method==='POST')return url.pathname==='/v1/auth/login';
+  return method==='GET'&&['/','/healthz','/v1/me','/v1/device-trust'].includes(url.pathname);
+ }catch{return false;}
 }
 export function diagnosticProfileReady(value){
  return value?.outcome==='PASS'&&value.accountMatch==='expected'&&value.rootStatus==='CUSTODIAN'

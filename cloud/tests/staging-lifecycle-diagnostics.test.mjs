@@ -6,8 +6,37 @@ import {redactedEvidence} from '../scripts/staging-publication-acceptance.mjs';
 import * as keys from '../public/team-vault-crypto.js';
 import * as trust from '../public/device-trust-v1.js';
 import * as diagnostic from '../scripts/staging-lifecycle-diagnostics.mjs';
+import * as lifecycle from './browser/staging-real-lifecycle.mjs';
 
 const ready=()=>({outcome:'PASS',accountMatch:'expected',rootStatus:'CUSTODIAN',hasRoot:true,hasPin:true,signedDirectoryVerified:true,certificateVerified:true});
+test('browser lifecycle preserves safe failure codes before browser transport adds a stack',async()=>{
+ const previous=globalThis.__prcLifecycle;
+ // Model the browser boundary: uncaught page errors acquire transport context.
+ const page={evaluate:async(fn,arg)=>{try{return await fn(arg);}catch(error){throw Error('page.evaluate: '+error.message+'\n    at browser fixture');}}};
+ try{
+  assert.equal(typeof lifecycle.invokeLifecycleCommand,'function');
+  for(const code of ['local_team_vault_exists','team_vault_locked','partial_bootstrap_changed','legacy_roundtrip_failed']){
+   globalThis.__prcLifecycle=async()=>{throw Error(code);};
+   await assert.rejects(lifecycle.invokeLifecycleCommand(page,'recover-bootstrap',{}),error=>{
+    assert.deepEqual(lifecycleFailure({stage:'team_bootstrap',index:0,error}),{stage:'team_bootstrap',browserIndex:0,failureCode:code});return true;
+   });
+  }
+  globalThis.__prcLifecycle=async(command,arg)=>({command,count:arg.count});
+  assert.deepEqual(await lifecycle.invokeLifecycleCommand(page,'read',{count:4}),{command:'read',count:4});
+ }finally{if(previous===undefined)delete globalThis.__prcLifecycle;else globalThis.__prcLifecycle=previous;}
+});
+test('browser lifecycle never transports arbitrary error messages or stacks',async()=>{
+ const previous=globalThis.__prcLifecycle,seen=[];
+ const page={evaluate:async(fn,arg)=>{const result=await fn(arg);seen.push(result);return result;}};
+ try{
+  assert.equal(typeof lifecycle.invokeLifecycleCommand,'function');
+  for(const message of ['secret@example.test token=abc','team_vault_locked Bearer secret','page.evaluate: team_vault_locked']){
+   globalThis.__prcLifecycle=async()=>{throw Error(message);};
+   await assert.rejects(lifecycle.invokeLifecycleCommand(page,'recover-bootstrap',{}),{message:'unknown_failure'});
+   assert.equal(JSON.stringify(seen.at(-1)).includes(message),false);
+  }
+ }finally{if(previous===undefined)delete globalThis.__prcLifecycle;else globalThis.__prcLifecycle=previous;}
+});
 test('diagnostic keeps failed rechecks in the same profile and closes it before opening the next',async()=>{
  assert.equal(typeof diagnostic.runSequentialDiagnosticProfiles,'function');
  const events=[];
@@ -93,4 +122,10 @@ test('account mismatch exposes only expected, other-approved or unknown classifi
  f.args.approvedEmails=[f.args.email];assert.equal((await inspectBrowserLifecycleDiagnostic(f.args,f.deps)).accountMatch,'unknown');
  assert.deepEqual(redactedEvidence({phase:'diagnostic_metadata',accountMatch:'other_approved'}),{phase:'diagnostic_metadata',accountMatch:'other_approved'});
  assert.throws(()=>redactedEvidence({phase:'diagnostic_metadata',accountMatch:'secret@example.test'}));
+});
+
+test('preserved-session GUI permits authentication only and denies vault initialization before continuation admission',()=>{
+ assert.equal(typeof diagnostic.continuationLoginRequestAllowed,'function');const origin='https://cloud.pastfly.ru',allowed=diagnostic.continuationLoginRequestAllowed;
+ for(const [path,method] of [['/','GET'],['/app.js','GET'],['/app.js?v=196','GET'],['/styles.css?v=196','GET'],['/styles.css','GET'],['/v1/me','GET'],['/v1/device-trust','GET'],['/v1/auth/login','POST']])assert.equal(allowed(origin+path,method,origin),true);
+ for(const [url,method] of [[origin+'/v1/teams/x/vaults/y','PUT'],[origin+'/v1/teams','POST'],[origin+'/v1/auth/register','POST'],[origin+'/v1/device-trust','POST'],[origin+'/v1/auth/logout','POST'],[origin+'/v1/teams','GET'],['https://evil.test/app.js','GET'],[origin+'/v1/auth/login?redirect=x','POST']])assert.equal(allowed(url,method,origin),false);
 });
