@@ -36,10 +36,10 @@ function validateInitialized(v,partial,accounts){
  const tuples=rows=>rows.map(r=>Object.fromEntries(recipientKeys.map(k=>[k,r[k]]))).sort((a,b)=>a.deviceID.localeCompare(b.deviceID));
  if(!equal(tuples(v.requiredRecipients),tuples(v.wrappers))||!v.requiredRecipients.some(r=>r.deviceID===owner.deviceID))fail('initialized_recovery_recipients_changed');
 }
-export async function readInitializedRecoveryLink({config,configPath,runDirectory}){
+async function readInitializedRecovery({config,configPath,runDirectory},historical=false){
  validateRunConfig(config);await assertProtectedDirectory(dirname(runDirectory));await assertProtectedDirectory(runDirectory);
  const bytes=await readProtectedBytes(join(runDirectory,'initialized-recovery.json')),manifest=JSON.parse(bytes),configBytes=await readProtectedBytes(configPath);
- if(!exact(manifest,['version','evidenceClass','parentRunDirectory','parentConfigPath','parentFiles','parentClaimSHA256','configIdentitySHA256','deployment','runnerHashes','initialized'])||manifest.version!==1||manifest.evidenceClass!==initializedRecoveryEvidenceClass||manifest.configIdentitySHA256!==continuationConfigIdentity(config)||!equal(manifest.runnerHashes,await initializedRecoveryRunnerHashes())||!equal(JSON.parse(configBytes),config))fail('initialized_recovery_source_mismatch');
+ if(!exact(manifest,['version','evidenceClass','parentRunDirectory','parentConfigPath','parentFiles','parentClaimSHA256','configIdentitySHA256','deployment','runnerHashes','initialized'])||manifest.version!==1||manifest.evidenceClass!==initializedRecoveryEvidenceClass||manifest.configIdentitySHA256!==continuationConfigIdentity(config)||!(historical?exact(manifest.runnerHashes,Object.keys(await initializedRecoveryRunnerHashes()))&&Object.values(manifest.runnerHashes).every(v=>hash.test(v)):equal(manifest.runnerHashes,await initializedRecoveryRunnerHashes()))||!equal(JSON.parse(configBytes),config))fail('initialized_recovery_source_mismatch');
  const deployment=manifest.deployment;
  if(!exact(deployment,['sourceSHA','moduleHashesSHA256','imageDigest','controllerSHA256'])||deployment.sourceSHA!==config.expectedSourceSHA||deployment.moduleHashesSHA256!==digest(config.moduleHashes)||!/^sha256:[a-f0-9]{64}$/.test(deployment.imageDigest)||!hash.test(deployment.controllerSHA256))fail('initialized_recovery_source_mismatch');
  const parentDirectory=manifest.parentRunDirectory;await assertProtectedDirectory(dirname(parentDirectory));await assertProtectedDirectory(parentDirectory);
@@ -57,6 +57,12 @@ export async function readInitializedRecoveryLink({config,configPath,runDirector
  validateInitialized(manifest.initialized,parent.partial,accounts);
  const lockDirectories=[parent.originalRunDirectory,parent.predecessorDirectory,parentDirectory,runDirectory];if(new Set(lockDirectories).size!==4)fail('initialized_recovery_history_changed');
  return {manifest,manifestSHA256:sha(bytes),configSHA256:sha(configBytes),config:structuredClone(config),configPath,runDirectory,parentDirectory,parentConfig,parent,baseline,profiles,accounts,successor,initialized:structuredClone(manifest.initialized),lockDirectories,admission:parent.consumed};
+}
+export async function readInitializedRecoveryLink(options){return readInitializedRecovery(options);}
+// Only already consumed admissions may use old, independently pinned runner bytes.
+export async function readHistoricalInitializedRecovery(options){
+ const link=await readInitializedRecovery(options,true);
+ return {...link,consumed:await assertInitializedRecoveryClaim({link,runDirectory:options.runDirectory})};
 }
 export function createInitializedRecoveryRequest({config,link,launchNonce,processID,identities}){
  if(!equal(config,link.config)||!uuid.test(launchNonce)||!uuid.test(processID)||!Array.isArray(identities)||identities.length!==2||identities.some((v,i)=>!diagnosticProfileReady(v)||['accountID','deviceID','rootFingerprint','publicKeyFingerprint'].some(k=>v[k]!==link.accounts[i][k])))fail('initialized_recovery_identity_mismatch');

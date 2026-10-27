@@ -295,3 +295,86 @@ test('initialized admission accepts every existing required owner wrapper, inclu
  const proof=structuredClone(f.proof);proof.initialized=structuredClone(link.initialized);proof.observedAt=new Date().toISOString();proof.successorBaseline.observedAt=proof.observedAt;for(const k of ['launchNonce','checkpointID','checkpointSHA256'])proof.operator[k]=request[k];
  assert.equal(f.a.validateInitializedRecoveryProof(proof,request,f.baseline).initialized.wrappers.length,2);
 });
+
+test('uploaded continuation retains strict initialized revision-one history and immutable expiry',async t=>{
+ const f=await initializedFixture(t),uploaded=await import('../scripts/staging-uploaded-bootstrap-continuation.mjs');
+ for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ await f.a.claimInitializedRecovery(f);
+ assert.equal((await f.a.readHistoricalInitializedRecovery(f)).consumed.request.initialized.revision,1);
+ assert.throws(()=>uploaded.assertUploadedInterval({startsAt:'2020-01-01T00:00:00.000Z',endsAt:'2020-01-02T00:00:00.000Z'}),/uploaded_authorization_expired/);
+ const m=structuredClone(f.manifest);m.initialized.revision=2;await write(join(f.runDirectory,'initialized-recovery.json'),m);
+ await assert.rejects(f.a.readHistoricalInitializedRecovery(f));
+});
+
+async function uploadedFixture(t){
+ const f=await initializedFixture(t);for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}await f.a.claimInitializedRecovery(f);for(const dir of f.link.lockDirectories)await rm(join(dir,'runner.lock'),{recursive:true});
+ const parent=f.runDirectory,parentConfigPath=f.configPath,nonce=f.request.launchNonce;
+ const evidence=[{phase:'session_gate',testSessionMode:'PRESERVE_TRUSTED_STATE',launchNonce:nonce,outcome:'PASS'},{phase:'initialized_empty_browser_verified',outcome:'PASS',sha256:f.request.checkpointSHA256},{phase:'stopped_without_acceptance',stage:'team_bootstrap',browserIndex:0,launchNonce:nonce,outcome:'DENIED',failureCode:'legacy_roundtrip_failed'}];
+ for(const [name,value]of Object.entries({'owner.json':{version:1,runID:f.config.runID,sourceSHA:f.config.expectedSourceSHA},'baseline.json':f.baseline,'journal.json':{version:1,completed:[],pending:null,processes:[],baseline:f.baseline},'evidence.json':evidence}))await write(join(parent,name),value);
+ const runDirectory=join(f.dir,'uploaded'),current=config(f.config.runID,'e');await mkdir(runDirectory,{mode:0o700});const configPath=join(runDirectory,'config.json');await write(configPath,current);
+ const parentFiles={};for(const name of ['config.json','owner.json','journal.json','evidence.json','baseline.json','initialized-recovery.json','initialized-recovery-admission.json'])parentFiles[name]=sha(await readFile(join(parent,name)));
+ const uploaded={...f.initialized,revision:2,revisionCount:2,migrationCount:0,v2WrapperCount:0,revisionHistory:{revision1EnvelopeSHA256:f.initialized.envelopeSHA256,revision1RowSHA256:'a'.repeat(64),revision2RowSHA256:'b'.repeat(64)}};
+ const expectedFixture={shapeVersion:1,documentSHA256:'c'.repeat(64),records:['credential','forwarding','host','snippet'].map(type=>({id:id(),type,canonicalSHA256:'d'.repeat(64)})).sort((a,b)=>a.id.localeCompare(b.id))};
+ const observation={version:1,evidenceClass:f.manifest.evidenceClass,launchNonce:nonce,processID:f.request.processID,checkpointSHA256:f.request.checkpointSHA256,observation:{envelopeSHA256:f.initialized.envelopeSHA256,serverRevision:1,vaultID:f.initialized.created.vaults[0].vaultID}};
+ const diagnostic={diagnosticOnly:true,readOnly:true,decryptedDocumentsEqual:true,localDocumentSHA256:expectedFixture.documentSHA256,remoteDocumentSHA256:expectedFixture.documentSHA256,remoteRevision:2,keyGeneration:1,rotationRequired:false,recordCount:4,tombstoneCount:0,teamID:uploaded.created.teamID,vaultID:uploaded.created.vaults[0].vaultID,deviceID:f.identities[0].deviceID,observedAt:new Date().toISOString()};
+ const artifacts={};for(const [name,value]of Object.entries({initializedObservation:observation,diagnosis:diagnostic,records:{...diagnostic,records:expectedFixture.records},uploaded})){const path=join(parent,name+'.json');await write(path,value);artifacts[name]={path,sha256:sha(await readFile(path))};}
+ const a=await import('../scripts/staging-uploaded-bootstrap-continuation.mjs'),manifest={version:1,evidenceClass:a.uploadedContinuationEvidenceClass,parentRunDirectory:parent,parentConfigPath,parentFiles,parentClaimSHA256:sha(await readFile(join(f.parent,'initialized-bootstrap-recovery-claim.json'))),configIdentitySHA256:continuation.continuationConfigIdentity(current),deployment:{sourceSHA:current.expectedSourceSHA,moduleHashesSHA256:digest(current.moduleHashes),imageDigest:'sha256:'+'e'.repeat(64),controllerSHA256:'e'.repeat(64)},runnerHashes:await a.uploadedContinuationRunnerHashes(),uploaded,expectedFixture,artifacts};
+ await write(join(runDirectory,'uploaded-continuation.json'),manifest);
+ const result={...f,a,config:current,configPath,runDirectory,parent,parentConfigPath,manifest,uploaded,expectedFixture};const link=await a.readUploadedContinuationLink(result),request=a.createUploadedContinuationRequest({...result,link,launchNonce:id(),processID:id(),identities:f.identities}),observedAt=new Date().toISOString(),b=request.successorBaseline;
+ const proof={operator:{...Object.fromEntries(['version','runID','origin','sourceSHA','launchNonce','phase','checkpointID','checkpointSHA256'].map(k=>[k,request[k]])),ordinary:f.baseline,outbox:null},evidenceClass:manifest.evidenceClass,deployment:manifest.deployment,observedAt,uploaded:structuredClone(uploaded),successorBaseline:{authorizationSHA256:b.authorizationSHA256,approvalID:b.approvalID,originalSnapshotSHA256:b.originalSnapshotSHA256,observedSnapshotSHA256:b.successorSnapshotSHA256,scopeSHA256:b.scopeSHA256,observedAt}};
+ return {...result,link,request,proof};
+}
+test('uploaded successor validates exact consumed history and claims exclusively across all five locks',async t=>{
+ const f=await uploadedFixture(t);assert.equal(f.link.lockDirectories.length,5);assert.deepEqual(f.a.validateUploadedContinuationProof(f.proof,f.request,f.baseline),f.proof);
+ await assert.rejects(f.a.claimUploadedContinuation(f),/uploaded_continuation_lock_required/);
+ for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ const oldClaimPath=join(f.link.parent.parentDirectory,'initialized-bootstrap-recovery-claim.json'),oldClaim=await readFile(oldClaimPath);
+ await f.a.claimUploadedContinuation(f);assert.deepEqual(await f.a.assertUploadedContinuationClaim(f),{request:f.request,proof:f.proof});await assert.rejects(f.a.claimUploadedContinuation(f),/uploaded_continuation_already_claimed/);assert.deepEqual(await readFile(oldClaimPath),oldClaim);
+});
+test('uploaded successor rejects history/source/fixture/admission mutations, no expected-list adaptation',async t=>{
+ const f=await uploadedFixture(t),path=join(f.runDirectory,'uploaded-continuation.json');
+ for(const mutate of [m=>m.parentClaimSHA256='0'.repeat(64),m=>m.configIdentitySHA256='0'.repeat(64),m=>m.runnerHashes['scripts/staging-uploaded-bootstrap-continuation.mjs']='0'.repeat(64),m=>m.uploaded.revision=1,m=>m.uploaded.revisionHistory.revision1EnvelopeSHA256='0'.repeat(64),m=>m.uploaded.revisionCount=3,m=>m.uploaded.migrationCount=1,m=>m.uploaded.v2WrapperCount=1,m=>m.uploaded.grantCount=1,m=>m.uploaded.invitationCount=1,m=>m.uploaded.vaultCount=2,m=>m.uploaded.ownerTrust.revoked=true,m=>m.uploaded.requiredRecipients=[],m=>m.expectedFixture.documentSHA256='0'.repeat(64),m=>m.expectedFixture.records[0].id=id(),m=>m.expectedFixture.records.reverse(),m=>m.artifacts.initializedObservation.sha256='0'.repeat(64)]){
+  const m=structuredClone(f.manifest);mutate(m);await write(path,m);await assert.rejects(f.a.readUploadedContinuationLink(f));
+ }
+ await write(path,f.manifest);
+ for(const [name,binding]of Object.entries(f.manifest.artifacts)){const original=await readFile(binding.path);await write(binding.path,{tampered:name});await assert.rejects(f.a.readUploadedContinuationLink(f));await writeFile(binding.path,original);}
+ const old=await readFile(join(f.parent,'initialized-recovery-admission.json'));await write(join(f.parent,'initialized-recovery-admission.json'),{});await assert.rejects(f.a.readUploadedContinuationLink(f));await writeFile(join(f.parent,'initialized-recovery-admission.json'),old);
+ await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});
+});
+test('uploaded proof rejects changed actual graph, baseline, nonce, timestamp and encrypted history',async t=>{
+ const f=await uploadedFixture(t);
+ for(const mutate of [p=>p.uploaded.envelopeSHA256='0'.repeat(64),p=>p.uploaded.inventorySHA256='0'.repeat(64),p=>p.uploaded.revisionHistory.revision2RowSHA256='0'.repeat(64),p=>p.uploaded.wrappers[0].wrapperSHA256='0'.repeat(64),p=>p.deployment.sourceSHA='a'.repeat(40),p=>p.operator.launchNonce=id(),p=>p.operator.checkpointSHA256='0'.repeat(64),p=>p.successorBaseline.observedSnapshotSHA256='0'.repeat(64),p=>p.observedAt=new Date(Date.parse(f.request.requestedAt)-1).toISOString(),p=>p.observedAt=f.request.successorBaseline.interval.endsAt]){const proof=structuredClone(f.proof);mutate(proof);assert.throws(()=>f.a.validateUploadedContinuationProof(proof,f.request,f.baseline));}
+});
+test('uploaded expired admission cannot claim; a consumed claim remains retained after expiry',async t=>{
+ const f=await uploadedFixture(t);for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ await f.a.claimUploadedContinuation(f);const path=join(f.parent,'uploaded-bootstrap-continuation-claim.json'),before=await readFile(path);
+ t.mock.timers.enable({apis:['Date'],now:Date.parse(f.link.successor.binding.interval.endsAt)});
+ assert.throws(()=>f.a.createUploadedContinuationRequest({...f,launchNonce:id(),processID:id(),identities:f.identities}),/uploaded_authorization_expired/);await assert.rejects(f.a.claimUploadedContinuation(f),/uploaded_authorization_expired/);assert.deepEqual(await readFile(path),before);
+});
+
+test('uploaded expiry after a fresh valid proof leaves no new claim or admission',async t=>{
+ const f=await uploadedFixture(t);for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ f.a.validateUploadedContinuationProof(f.proof,f.request,f.baseline);t.mock.timers.enable({apis:['Date'],now:Date.parse(f.link.successor.binding.interval.endsAt)});
+ await assert.rejects(f.a.claimUploadedContinuation(f),/uploaded_authorization_expired/);
+ await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});await assert.rejects(readFile(join(f.runDirectory,'uploaded-continuation-admission.json')),{code:'ENOENT'});
+});
+test('uploaded runner refuses inherited locks or missing manifest and releases ancestors without claiming',{timeout:10000},async t=>{
+ preserveSessionMode(t);const previous=process.env.PLAYWRIGHT_MODULE;delete process.env.PLAYWRIGHT_MODULE;t.after(()=>{if(previous===undefined)delete process.env.PLAYWRIGHT_MODULE;else process.env.PLAYWRIGHT_MODULE=previous;});const f=await uploadedFixture(t),{runStagingBrowserLifecycle,acquireLifecycleLock}=await import('./browser/staging-real-lifecycle.mjs');
+ const lock=join(f.parent,'runner.lock');await acquireLifecycleLock(lock);await assert.rejects(runStagingBrowserLifecycle({...f,phase:'continue-uploaded-bootstrap'}),/runner_already_active/);await rm(lock,{recursive:true});
+ for(const dir of f.link.lockDirectories.slice(0,-1))await assert.rejects(readFile(join(dir,'runner.lock','owner.json')),{code:'ENOENT'});
+ await assert.rejects(runStagingBrowserLifecycle({...f,phase:'continue-uploaded-bootstrap'}),/real_phase_failed/);
+ const evidence=JSON.parse(await readFile(join(f.runDirectory,'evidence.json')));assert.equal(evidence.at(-1).phase,'stopped_without_acceptance');assert.equal(evidence.some(e=>['process_started','owner_input_pending','uploaded_bootstrap_admitted'].includes(e.phase)),false);
+ await assert.rejects(readFile(join(f.runDirectory,'uploaded-continuation-admission.json')),{code:'ENOENT'});
+ await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});
+ for(const dir of f.link.lockDirectories)await assert.rejects(readFile(join(dir,'runner.lock','owner.json')),{code:'ENOENT'});
+ await rm(join(f.runDirectory,'uploaded-continuation.json'));await assert.rejects(runStagingBrowserLifecycle({...f,phase:'continue-uploaded-bootstrap'}),/uploaded_continuation_manifest_required/);
+});
+
+test('uploaded admission ordering leaves actual exclusive claim absent on inspection failure and claims only after success',async t=>{
+ const f=await uploadedFixture(t),{inspectThenClaimUploaded}=await import('./browser/staging-real-lifecycle.mjs');
+ for(const dir of f.link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{pid:process.pid});}
+ const events=[],claim=async()=>{events.push('claim');return f.a.claimUploadedContinuation(f);};
+ await assert.rejects(inspectThenClaimUploaded({interval:f.link.successor.binding.interval,inspect:async()=>{events.push('denied');throw Error('uploaded_bootstrap_changed');},claim}),/uploaded_bootstrap_changed/);
+ assert.deepEqual(events,['denied']);await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});await assert.rejects(readFile(join(f.runDirectory,'uploaded-continuation-admission.json')),{code:'ENOENT'});
+ await inspectThenClaimUploaded({interval:f.link.successor.binding.interval,inspect:async()=>{events.push('verified');},claim});assert.deepEqual(events,['denied','verified','claim']);assert.deepEqual(await f.a.assertUploadedContinuationClaim(f),{request:f.request,proof:f.proof});
+});

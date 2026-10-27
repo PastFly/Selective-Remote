@@ -14,6 +14,8 @@ import {readRecoveryLink,createRecoveryRequest,validateRecoveryProof,claimRecove
 
 import {readInitializedRecoveryLink,createInitializedRecoveryRequest,validateInitializedRecoveryProof,claimInitializedRecovery,assertInitializedRecoveryClaim,assertInitializedRecoveryUnclaimed,initializedRecoveryEvidenceClass} from '../../scripts/staging-initialized-bootstrap-recovery.mjs';
 
+import {readUploadedContinuationLink,createUploadedContinuationRequest,validateUploadedContinuationProof,claimUploadedContinuation,assertUploadedContinuationClaim,assertUploadedContinuationUnclaimed,uploadedContinuationEvidenceClass,assertUploadedInterval} from '../../scripts/staging-uploaded-bootstrap-continuation.mjs';
+
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
 
@@ -104,6 +106,158 @@ export async function stagingInitializedBootstrapGuard({installOnly=false,...opt
  return inspect(options);
 }
 
+export async function stagingUploadedBootstrapContinuation({installOnly=false,...options}={}){
+ const run=async({client,team,keys,trust,pin,origin,identity,userID,runID,uploaded:initialized,expectedFixture,interval,storage,memberEmail,inspectOnly=false,verifyLegacy=globalThis.__prcVerifyLegacyRoundtrip})=>{
+  const fail=()=>{throw Error('uploaded_bootstrap_changed');};
+  const canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v);
+  const equal=(a,b)=>canonical(a)===canonical(b),digest=async value=>[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical(value))))].map(b=>b.toString(16).padStart(2,'0')).join('');
+  const checkTime=()=>{const now=new Date().toISOString();if(!interval||!Number.isFinite(Date.parse(interval.startsAt))||!Number.isFinite(Date.parse(interval.endsAt))||now<interval.startsAt||now>=interval.endsAt)throw Error('uploaded_authorization_expired');};
+  checkTime();let stageCreated=structuredClone(initialized.created),emptyRevision=0,invitationID=null;
+  const inspect=async()=>{
+  checkTime();
+  const created=initialized?.created,item=created?.vaults?.[0],saved=await storage('created');
+  if(!created||created.actorUserID!==userID||created.actorDeviceID!==identity.deviceID||created.vaults.length!==1||item?.name!==`TEST-ONLY-CODEX-${runID}-populated`||!equal(saved,stageCreated))fail();
+  const current=(await client.listTeams()).find(t=>t.id===created.teamID),scope={type:'team',teamID:created.teamID,vaultID:item.vaultID};
+  if((await client.listTeams()).filter(t=>t.role==='owner').length!==1||!current||current.name!==`TEST-ONLY-CODEX-${runID}-team`||current.role!=='owner'||current.membershipID!==initialized.membershipID||current.membershipEpoch!==1||initialized.membershipEpoch!==1)fail();
+  const vaults=await client.listSharedVaults(created.teamID);if(vaults.length!==stageCreated.vaults.length||!stageCreated.vaults.every(v=>vaults.some(a=>a.id===v.vaultID&&a.name===v.name))||(await client.getTeamDeviceAdmissionPolicy(created.teamID)).automaticDeviceAdmission!==true)fail();
+  const members=await client.listTeamMembers(created.teamID);
+  if(members.length!==1||members[0].id!==initialized.membershipID||members[0].epoch!==1||members[0].userID!==userID||members[0].role!=='owner')fail();
+  const invitations=await client.listTeamInvitations(created.teamID);if(invitationID?invitations.length!==1||invitations[0].id!==invitationID:invitations.length!==0)fail();
+  if(stageCreated.vaults.length===2){const e=await client.getTeamVault({type:'team',teamID:created.teamID,vaultID:stageCreated.vaults[1].vaultID});if(e.revision!==emptyRevision||e.keyGeneration!==1||e.rotationRequired!==false||emptyRevision===0&&['envelopeVersion','ciphertext','nonce','authTag','contentHash','wrapper'].some(k=>e[k]!==null))fail();}
+  const expectedTrust=initialized.ownerTrust,snapshot=await client.deviceTrustSnapshot();
+  if(expectedTrust.accountID!==userID||expectedTrust.deviceID!==identity.deviceID||expectedTrust.publicKeyFingerprint!==await keys.teamDevicePublicKeyFingerprint(identity.publicKey)||pin?.rootFingerprint!==expectedTrust.rootFingerprint||snapshot.state!=='ROOT_PUBLISHED'||snapshot.rootFingerprint!==expectedTrust.rootFingerprint||snapshot.custodianDeviceID!==identity.deviceID)fail();
+  const directory=await trust.verifySignedDeviceDirectory({rootPublicKey:snapshot.rootPublicKey,checkpoint:snapshot.checkpoint,accountID:userID});
+  const next=trust.advancePinnedTrust(pin,{endpoint:origin,accountID:userID,rootFingerprint:snapshot.rootFingerprint,highWater:directory.version,checkpointDigest:directory.checkpointDigest});
+  const entry=snapshot.checkpoint.payload.entries.find(v=>v.deviceID===identity.deviceID),certificate=snapshot.certificates.find(v=>v.payload?.deviceID===identity.deviceID&&v.payload.keyVersion===entry?.keyVersion);
+  if(!certificate||await digest(snapshot.checkpoint)!==expectedTrust.signedDirectorySHA256||await digest(certificate)!==expectedTrust.certificateSHA256)fail();
+  const verified=await trust.verifyDeviceForWrapping({rootPublicKey:snapshot.rootPublicKey,certificate,checkpoint:snapshot.checkpoint,trust:next,expectedDeviceID:identity.deviceID});
+  if(!equal(verified.publicKey,identity.publicKey))fail();
+  const recipients=(await client.listTeamKeyDevices(scope)).devices,tuples=rows=>rows.map(({membershipID,membershipEpoch,deviceID})=>({membershipID,membershipEpoch,deviceID})).sort((a,b)=>a.deviceID.localeCompare(b.deviceID));
+  if(!recipients.every(r=>r.hasWrapper===true)||!equal(tuples(recipients),tuples(initialized.requiredRecipients)))fail();
+  const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+  if(remote.revision!==2||remote.keyGeneration!==1||remote.rotationRequired!==false||remote.envelopeVersion!==1||!remote.wrapper||!cached||cached.deviceID!==identity.deviceID||cached.localRevision!==5||cached.serverRevision!==2||cached.syncedLocalRevision!==5||cached.keyGeneration!==1||!equal(cached.scope,scope))fail();
+  const envelope={baseRevision:1,keyGeneration:1,envelopeVersion:remote.envelopeVersion,ciphertext:remote.ciphertext,nonce:remote.nonce,authTag:remote.authTag,contentHash:remote.contentHash};
+  const wrapper=initialized.wrappers.find(v=>v.deviceID===identity.deviceID);
+  if(!wrapper||await digest(envelope)!==initialized.envelopeSHA256||await digest(remote.wrapper)!==wrapper.wrapperSHA256||!equal(cached.wrapper,remote.wrapper)||remote.wrapper.membershipID!==initialized.membershipID||remote.wrapper.membershipEpoch!==1)fail();
+
+  const key=await keys.unwrapTeamVaultKeyForDevice({privateKey:identity.privateKey,wrapper:remote.wrapper,...scope,keyGeneration:1,deviceID:identity.deviceID});
+  const document=await keys.decryptTeamVaultPayload({vaultKey:key,envelope,scope});
+  const uuid=/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+  if(!document||Object.keys(document).sort().join(',')!=='records,schemaVersion,tombstones'||document.schemaVersion!==1||document.records.length!==4||document.tombstones.length||expectedFixture.shapeVersion!==1||await digest(document)!==expectedFixture.documentSHA256)fail();
+  const bindings=await Promise.all(document.records.map(async r=>({id:r.id,type:r.type,canonicalSHA256:await digest(r)})));bindings.sort((a,b)=>a.id.localeCompare(b.id));
+  if(!equal(bindings,expectedFixture.records)||new Set(bindings.map(r=>r.id)).size!==4||!equal(bindings.map(r=>r.type).sort(),['credential','forwarding','host','snippet']))fail();
+  for(const r of document.records){
+   if(!uuid.test(r.id)||!equal(r.version,{[identity.deviceID]:1}))fail();
+   let expected;
+   if(r.type==='host')expected={title:'TEST-ONLY-CODEX Host',address:'synthetic.invalid',connectionType:'ssh',port:22,username:'synthetic',folder:'Acceptance/Nested'};
+   if(r.type==='credential'){if(!uuid.test(r.data.secret))fail();expected={title:'TEST-ONLY-CODEX Credential',username:'synthetic',secret:r.data.secret};}
+   if(r.type==='snippet')expected={title:'TEST-ONLY-CODEX Snippet',body:'printf test-only',folder:'Acceptance/Nested'};
+   if(r.type==='forwarding'){
+    const config={id:r.id,connection:{kind:'custom',host:'synthetic.invalid',username:'synthetic',port:22},rule:{id:r.id,name:'TEST-ONLY-CODEX Forwarding',kind:'local',bindAddress:'127.0.0.1',sourcePort:19090,destinationHost:'127.0.0.1',destinationPort:19091}};
+    expected={title:'TEST-ONLY-CODEX Forwarding',destination:'127.0.0.1:19091',kind:'local',configuration:btoa(canonical(config)).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'')};
+   }
+   if(!equal(r.data,expected))fail();
+  }
+  const controller=team.createTeamVaultController({repository:team.createIndexedDBTeamVaultRepository(scope),identity,scope});
+  try{
+   const local=await controller.unlock(),state=await controller.syncState();if(!equal(local,document)||state.dirty||state.serverRevision!==2)fail();
+   const legacy=await verifyLegacy({team,identity,scope,controller,cached,remote,expectedRecordCount:4});
+   const records=bindings.map(r=>({id:r.id,type:r.type,digest:r.canonicalSHA256})),secrets=[];
+   for(const r of document.records.filter(r=>r.type==='credential'))secrets.push({resourceID:r.id,sha256:[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(r.data.secret)))].map(b=>b.toString(16).padStart(2,'0')).join('')});
+   checkTime();return {legacy,expected:{records,secrets}};
+  }finally{controller.lock();}
+  };
+  const first=await inspect(),populatedID=initialized.created.vaults[0].vaultID;
+  if(await storage('legacy:'+populatedID)||await storage('expected:'+populatedID))fail();
+  checkTime();if(inspectOnly)return {documentSHA256:expectedFixture.documentSHA256,serverRevision:2,localRevision:5};
+  await storage('legacy:'+populatedID,first.legacy);checkTime();await storage('expected:'+populatedID,first.expected);
+  await inspect();checkTime();
+  const name=`TEST-ONLY-CODEX-${runID}-empty`,vault=await client.createSharedVault({teamID:stageCreated.teamID,name,idempotencyKey:`prc:${runID}:empty`});
+  stageCreated.vaults.push({vaultID:vault.id,name,attemptID:crypto.randomUUID()});await storage('created',stageCreated);checkTime();
+  const scope={type:'team',teamID:stageCreated.teamID,vaultID:vault.id},emptyRepository=team.createIndexedDBTeamVaultRepository(scope);if(await emptyRepository.load())fail();checkTime();
+  const controller=team.createTeamVaultController({repository:emptyRepository,identity,scope});
+  // The ordinary product initializer is the only writer. No populated controller
+  // mutation method or upload is reachable through this transport.
+  let putCount=0;
+  const emptyClient={session:()=>client.session(),getTeamVault:async s=>{if(!equal(s,scope))fail();return client.getTeamVault(s);},listTeamKeyDevices:async s=>{if(!equal(s,scope))fail();return client.listTeamKeyDevices(s);},putTeamVault:async(s,envelope,key)=>{if(!equal(s,scope)||putCount||envelope.baseRevision!==0||envelope.keyGeneration!==1)fail();await inspect();checkTime();putCount++;return client.putTeamVault(s,envelope,key);}};
+  try{
+   await inspect();checkTime();const result=await team.synchronizeTeamVault({client:emptyClient,controller,role:'owner'});checkTime();
+   if(result.status!=='initialized'||result.revision!==1||putCount!==1)fail();emptyRevision=1;
+   const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+   const legacy=await verifyLegacy({team,identity,scope,controller,cached,remote,expectedRecordCount:0});checkTime();
+   await storage('legacy:'+vault.id,legacy);checkTime();await storage('expected:'+vault.id,{records:[],secrets:[]});
+  }finally{controller.lock();}
+  await inspect();checkTime();const invite=await client.inviteTeamMember({teamID:stageCreated.teamID,email:memberEmail,role:'editor',idempotencyKey:`prc:${runID}:invite`});invitationID=invite.id;
+  await inspect();checkTime();return {...stageCreated,invitationID};
+ };
+ if(installOnly){globalThis.__prcContinueUploadedBootstrap=run;return;}
+ return run(options);
+}
+
+
+// Preclaim page setup deliberately avoids lifecycle/IndexedDB repository creation.
+// Existing records are read with readonly transactions; missing databases abort
+// upgrades. Dependencies are injectable only for local tests, like diagnostics.
+export async function inspectUploadedBrowser({origin,runID,email,moduleHashes,uploaded,expectedFixture,interval,account,failureCodes},dependencies=null){
+ try{
+  let client,team,keys,trust,readRecord;
+  if(dependencies)({client,team,keys,trust,readRecord}=dependencies);
+  else{
+   if(location.origin!==origin||location.protocol!=='https:')throw Error('real_origin_required');
+   for(const [path,expected]of Object.entries(moduleHashes)){
+    const response=await fetch(path,{cache:'no-store',credentials:'same-origin'});if(!response.ok)throw Error('deployed_module_unavailable');
+    const actual=[...new Uint8Array(await crypto.subtle.digest('SHA-256',await response.arrayBuffer()))].map(b=>b.toString(16).padStart(2,'0')).join('');if(actual!==expected)throw Error('deployed_module_mismatch');
+   }
+   const sync=await import('/vault-sync.js');team=await import('/team-vault-sync.js');keys=await import('/team-vault-crypto.js');trust=await import('/device-trust-v1.js');
+   client=sync.createAuthenticatedVaultClient({fetchValue:async(path,options={})=>{const url=new URL(path,origin);if((options.method??'GET')!=='GET'||url.origin!==origin)throw Error('readonly_storage_required');return fetch(url,options);}});
+   readRecord=async(name,store,key)=>{
+    if(typeof indexedDB.databases!=='function')throw Error('readonly_storage_required');
+    if(!(await indexedDB.databases()).some(db=>db.name===name))return null;
+    const db=await new Promise((resolve,reject)=>{const r=indexedDB.open(name);r.onupgradeneeded=()=>{r.transaction.abort();reject(Error('readonly_storage_required'));};r.onsuccess=()=>resolve(r.result);r.onerror=r.onblocked=()=>reject(Error('readonly_storage_required'));});
+    try{return await new Promise((resolve,reject)=>{const tx=db.transaction(store,'readonly'),r=tx.objectStore(store).get(key);let value;r.onsuccess=()=>{value=r.result??null;};tx.oncomplete=()=>resolve(value);tx.onerror=tx.onabort=()=>reject(Error('readonly_storage_required'));});}finally{db.close();}
+   };
+  }
+  const user=await client.restoreSession(),deviceID=client.deviceID();
+  if(user.id!==account.accountID||user.email.toLowerCase()!==email.toLowerCase()||deviceID!==account.deviceID)throw Error('preserved_identity_changed');
+  const identity=await readRecord('selective-remote-cloud','local-vault','team-device-key:'+deviceID);
+  if(!identity||identity.deviceID!==deviceID||await keys.teamDevicePublicKeyFingerprint(identity.publicKey)!==account.publicKeyFingerprint)throw Error('preserved_identity_changed');
+  const recordKey=origin+'|'+user.id,pin=await readRecord('selective-remote-device-trust-v1','records','pin:'+recordKey),root=await readRecord('selective-remote-device-trust-v1','records','root:'+recordKey),snapshot=await client.deviceTrustSnapshot();
+  if(!pin||!root||pin.rootFingerprint!==account.rootFingerprint||root.accountID!==user.id||root.endpoint!==origin||root.publicKey!==snapshot.rootPublicKey)throw Error('product_trust_required');
+  const readonlyTeam={...team,createIndexedDBTeamVaultRepository:scope=>({load:()=>readRecord('selective-remote-cloud','local-vault',`team-vault:${scope.teamID}:${scope.vaultID}`),save:async()=>{throw Error('readonly_storage_required');},remove:async()=>{throw Error('readonly_storage_required');}})};
+  const storage=async function(key){if(arguments.length!==1)throw Error('readonly_storage_required');return readRecord('selective-remote-real-'+runID,'run',key);};
+  const result=await globalThis.__prcContinueUploadedBootstrap({client,team:readonlyTeam,keys,trust,pin,origin,identity,userID:user.id,runID,uploaded,expectedFixture,interval,storage,inspectOnly:true});
+  return {outcome:'PASS',...result};
+ }catch(error){return {outcome:'DENIED',failureCode:failureCodes.includes(error?.message)?error.message:'unknown_failure'};}
+}
+
+// This ordering is shared by the actual admission and production-crypto tests.
+export async function inspectThenClaimUploaded({interval,inspect,claim}){
+ assertUploadedInterval(interval);await inspect();assertUploadedInterval(interval);return claim();
+}
+
+// Separate encryptions use fresh nonces; verify authenticated content, not ciphertext equality.
+export async function stagingLegacyRoundtripGuard({installOnly=false,...options}={}){
+ const verify=async({team,identity,scope,controller,cached,remote,expectedRecordCount})=>{
+  const fail=()=>{throw Error('legacy_roundtrip_failed');},canonical=value=>JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.keys(v).sort().map(k=>[k,v[k]])):v),equal=(a,b)=>canonical(a)===canonical(b);
+  let local,downloaded;
+  try{
+   const state=await controller.syncState(),document=controller.document();
+   if(![0,4].includes(expectedRecordCount)||state.dirty||!cached||!remote||!equal(controller.scope,scope)||!equal(cached.scope,scope)||!equal(remote.scope,scope)
+    ||remote.id!==scope.vaultID||remote.teamID!==scope.teamID||cached.deviceID!==identity.deviceID||remote.rotationRequired!==false
+    ||remote.revision!==state.serverRevision||cached.serverRevision!==state.serverRevision||remote.keyGeneration!==state.keyGeneration||cached.keyGeneration!==state.keyGeneration
+    ||cached.localRevision!==state.localRevision||cached.syncedLocalRevision!==cached.localRevision||!equal(cached.wrapper,remote.wrapper)||document.records.length!==expectedRecordCount)fail();
+   const memory=initial=>{let value=structuredClone(initial);return {load:async()=>structuredClone(value),save:async next=>{value=structuredClone(next);}};};
+   local=team.createTeamVaultController({repository:memory(cached),identity,scope});
+   downloaded=team.createTeamVaultController({repository:memory(null),identity,scope});
+   if(!equal(await local.unlock(),document)||!equal(await downloaded.importRemote(remote),document)
+    ||!equal(await controller.syncState(),state)||!equal(controller.document(),document))fail();
+   return {envelope:{baseRevision:remote.revision-1,keyGeneration:remote.keyGeneration,envelopeVersion:remote.envelopeVersion,ciphertext:remote.ciphertext,nonce:remote.nonce,authTag:remote.authTag,contentHash:remote.contentHash},wrapper:structuredClone(remote.wrapper),keyGeneration:remote.keyGeneration,revision:remote.revision};
+  }catch{fail();}finally{local?.lock();downloaded?.lock();}
+ };
+ if(installOnly){globalThis.__prcVerifyLegacyRoundtrip=verify;return;}
+ return verify(options);
+}
+
 export async function invokeLifecycleCommand(page,command,arg={}){
  // Classify in the page before the browser transport adds its prefix/stack.
  // Unknown messages never cross this boundary as diagnostic content.
@@ -115,9 +269,18 @@ export async function invokeLifecycleCommand(page,command,arg={}){
  return result.value;
 }
 
-export async function openContinuationLoginPage(profile,origin){
+// Human pauses consume the same immutable window; returning from a prompt is
+// never new authorization.
+export async function waitForLifecycleOperator(terminal,text,interval=null){
+ if(interval)assertUploadedInterval(interval);
+ const answer=await terminal.question(text);
+ if(interval)assertUploadedInterval(interval);
+ return answer;
+}
+
+export async function openContinuationLoginPage(profile,origin,interval=null){
  await profile.context.unroute('**/*');
- await profile.context.route('**/*',route=>continuationLoginRequestAllowed(route.request().url(),route.request().method(),origin)?route.continue():route.abort());
+ await profile.context.route('**/*',route=>{if(interval&&!['GET','HEAD','OPTIONS'].includes(route.request().method())){try{assertUploadedInterval(interval);}catch{return route.abort();}}return continuationLoginRequestAllowed(route.request().url(),route.request().method(),origin)?route.continue():route.abort();});
  await profile.page.goto(origin,{waitUntil:'domcontentloaded'});
 }
 
@@ -131,7 +294,7 @@ export async function openLifecycleExecutionPage(context,origin){
 
 // This function is serialized into the actual page. Only public results cross
 // the Playwright boundary; all keys, legacy bodies and records stay here.
-export async function installBrowserLifecycle({origin,runID,email,moduleHashes}){
+export async function installBrowserLifecycle({origin,runID,email,moduleHashes,uploadedInterval=null}){
  if(location.origin!==origin||location.protocol!=='https:')throw Error('real_origin_required');
  for(const [path,expected] of Object.entries(moduleHashes)){
   const response=await fetch(path,{cache:'no-store',credentials:'same-origin'});
@@ -145,6 +308,7 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes})
  const equal=(a,b)=>migration.canonicalMigrationJSON(a)===migration.canonicalMigrationJSON(b),fail=code=>{throw Error(code);};
  let lastAuthorization=null,dropCommit=false,dropped=false,failReadback=false;
  const client=sync.createAuthenticatedVaultClient({fetchValue:async(path,options={})=>{
+  if(uploadedInterval&&!['GET','HEAD','OPTIONS'].includes((options.method??'GET').toUpperCase())){const now=new Date().toISOString();if(now<uploadedInterval.startsAt||now>=uploadedInterval.endsAt)fail('uploaded_authorization_expired');}
   const headers=new Headers(options.headers);if(headers.has('authorization'))lastAuthorization=headers.get('authorization');
   const response=await fetch(path,options);
   if(dropCommit&&/\/publication\/operations\/[^/]+\/commit$/.test(path)&&response.ok){dropCommit=false;dropped=true;await response.arrayBuffer();throw new TypeError('deliberately_lost_actual_response');}
@@ -302,6 +466,7 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes})
   if(command==='inspect-initialized-bootstrap'){
    const state=await actor(true);return globalThis.__prcInspectInitializedBootstrap({client,team,keys,trust,pin:state.pin,origin,identity,userID:user.id,runID,initialized:arg.initialized,storage,observationOnly:true});
   }
+  if(command==='continue-uploaded-bootstrap'){const state=await actor(true);return globalThis.__prcContinueUploadedBootstrap({client,team,keys,trust,pin:state.pin,origin,identity,userID:user.id,runID,storage,...arg});}
   if(command==='bootstrap'||command==='recover-bootstrap'||command==='recover-initialized-bootstrap'){
    const actorState=await actor(true);let created;
    const initialized=command==='recover-initialized-bootstrap';
@@ -327,9 +492,9 @@ export async function installBrowserLifecycle({origin,runID,email,moduleHashes})
      else await team.synchronizeTeamVault({client,controller,role:'owner'});
      if(kind==='populated')for(const r of globalThis.__prcCreateV1Records())await controller.upsert(r);
      await team.synchronizeTeamVault({client,controller,role:'owner'});
-     const remote=await client.getTeamVault(scope),state=await controller.syncState(),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
-     if(state.dirty||remote.revision!==state.serverRevision||controller.document().records.length!==(kind==='populated'?4:0)||['ciphertext','nonce','authTag','contentHash'].some(k=>remote[k]!==cached.envelope[k]))fail('legacy_roundtrip_failed');
-     await storage('legacy:'+vault.id,{envelope:cached.envelope,wrapper:remote.wrapper,keyGeneration:remote.keyGeneration,revision:remote.revision});
+     const remote=await client.getTeamVault(scope),cached=await team.createIndexedDBTeamVaultRepository(scope).load();
+     const legacy=await globalThis.__prcVerifyLegacyRoundtrip({team,identity,scope,controller,cached,remote,expectedRecordCount:kind==='populated'?4:0});
+     await storage('legacy:'+vault.id,legacy);
      const document=controller.document(),records=await Promise.all(document.records.map(async r=>({id:r.id,type:r.type,digest:await migration.migrationHash(r)}))),secrets=[];
      for(const r of document.records.filter(r=>r.type==='credential'))secrets.push({resourceID:r.id,sha256:[...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(r.data.secret)))].map(b=>b.toString(16).padStart(2,'0')).join('')});
      await storage('expected:'+vault.id,{records,secrets});
@@ -714,6 +879,21 @@ async function exists(path){try{await lstat(path);return true;}catch(error){if(e
 // lock as well as the new run lock, and never rewrite the failed run's evidence.
 export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}){
  if(phase==='diagnose-bootstrap')return diagnoseStagingBrowserLifecycle({configPath,runDirectory});
+ const uploaded=await exists(join(runDirectory,'uploaded-continuation.json'));
+ if(uploaded){
+  if(process.env.TEST_SESSION_MODE!=='PRESERVE_TRUSTED_STATE'||await exists(join(runDirectory,'continuation.json'))||await exists(join(runDirectory,'recovery.json'))||await exists(join(runDirectory,'initialized-recovery.json')))throw Error('uploaded_continuation_preserved_session_required');
+  const config=validateRunConfig(await readProtectedJSON(configPath)),before=await readUploadedContinuationLink({config,configPath,runDirectory}),locks=[];
+  assertUploadedInterval(before.successor.binding.interval);
+  try{
+   for(const directory of before.lockDirectories.slice(0,-1)){const lock=join(directory,'runner.lock');await acquireLifecycleLock(lock);locks.push(lock);}
+   const link=await readUploadedContinuationLink({config,configPath,runDirectory});if(link.manifestSHA256!==before.manifestSHA256)throw Error('uploaded_continuation_history_changed');
+   const starting=phase==='continue-uploaded-bootstrap';if(!starting&&phase==='bootstrap')throw Error('uploaded_continuation_no_replay');let admission;
+   if(starting)await assertUploadedContinuationUnclaimed(link);else{admission=await assertUploadedContinuationClaim({link,runDirectory});await assertContinuationRunBaseline({link,runDirectory});}
+   assertUploadedInterval(link.successor.binding.interval);
+   return await runLifecycleCore({configPath,runDirectory,phase:starting?'bootstrap':phase,recovery:{link,starting,admission,uploaded:true}});
+  }finally{for(const lock of locks.reverse())await rm(lock,{recursive:true});}
+ }
+ if(phase==='continue-uploaded-bootstrap')throw Error('uploaded_continuation_manifest_required');
  const initialized=await exists(join(runDirectory,'initialized-recovery.json'));
  if(initialized){
   if(process.env.TEST_SESSION_MODE!=='PRESERVE_TRUSTED_STATE'||await exists(join(runDirectory,'continuation.json'))||await exists(join(runDirectory,'recovery.json')))throw Error('initialized_recovery_preserved_session_required');
@@ -754,36 +934,52 @@ export async function runStagingBrowserLifecycle({configPath,runDirectory,phase}
 }
 
 async function admitContinuation({config,configPath,runDirectory,link,chromium,terminal,emit,pause,launchNonce,processID,recovery=false}){
- const initialized=recovery==='initialized',evidenceClass=initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass,prefix=initialized?'initialized-recovery':recovery?'recovery':'continuation',previousLaunchNonce=recovery?link.admission.request.launchNonce:link.originalLaunchNonce;
+ const uploaded=recovery==='uploaded',initialized=recovery==='initialized',evidenceClass=uploaded?uploadedContinuationEvidenceClass:initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass,prefix=uploaded?'uploaded-continuation':initialized?'initialized-recovery':recovery?'recovery':'continuation',previousLaunchNonce=recovery?link.admission.request.launchNonce:link.originalLaunchNonce;
+ const checkTime=()=>{if(uploaded)assertUploadedInterval(link.successor.binding.interval);};
+ checkTime();
  const readonly=async profile=>{
   await profile.context.unroute('**/*');await profile.context.route('**/*',route=>diagnosticRequestAllowed(route.request().url(),route.request().method(),config.origin)?route.continue():route.abort());
  };
  const identities=await runContinuationReadiness({
   open:async index=>{const browser=await launchLifecycleBrowser({chromium,profile:link.profiles[index]});try{await readonly(browser);for(const p of browser.context.pages())await p.close();browser.page=await browser.context.newPage();await emit({phase:'process_started',browserIndex:index,pid:browser.pid,processID,launchNonce,outcome:'PASS'});return browser;}catch(error){await browser.close();throw error;}},
   inspect:async(profile,index)=>{await readonly(profile);await profile.page.goto(config.origin+'/healthz',{waitUntil:'domcontentloaded'});const result=await profile.page.evaluate(inspectBrowserLifecycleDiagnostic,{...config,email:config.emails[index],approvedEmails:config.emails,failureCodes:lifecycleDiagnosticCodes});await emit({phase:'continuation_readiness',browserIndex:index,launchNonce,...result});return result;},
-  showGUI:profile=>openContinuationLoginPage(profile,config.origin),
-  prompt:async index=>{await emit({phase:'owner_input_pending',browserIndex:index,outcome:'PENDING'});const answer=await terminal.question(`Existing TEST profile ${index}: sign into its approved account using its existing trusted device identity. Do not register or change device trust. Enter rechecks; q quits. Never type credentials here.\n`);return /^(q|quit|exit)$/i.test(answer.trim())?'quit':'recheck';},
+  showGUI:profile=>openContinuationLoginPage(profile,config.origin,uploaded?link.successor.binding.interval:null),
+  prompt:async index=>{await emit({phase:'owner_input_pending',browserIndex:index,outcome:'PENDING'});const answer=await waitForLifecycleOperator(terminal,`Existing TEST profile ${index}: sign into its approved account using its existing trusted device identity. Do not register or change device trust. Enter rechecks; q quits. Never type credentials here.\n`,uploaded?link.successor.binding.interval:null);checkTime();return /^(q|quit|exit)$/i.test(answer.trim())?'quit':'recheck';},
   close:async(profile,index)=>{await profile.close();await emit({phase:'process_closed',browserIndex:index,pid:profile.pid,processID,launchNonce,outcome:'PASS'});},
  });
- const request=(initialized?createInitializedRecoveryRequest:recovery?createRecoveryRequest:createContinuationRequest)({config,link,launchNonce,processID,identities});
+ const request=(uploaded?createUploadedContinuationRequest:initialized?createInitializedRecoveryRequest:recovery?createRecoveryRequest:createContinuationRequest)({config,link,launchNonce,processID,identities});
  await writeContinuationExclusive(join(runDirectory,prefix+'-request-'+launchNonce+'.json'),request);
  await emit({phase:prefix+'_operator_proof_pending',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,checkpointID:request.checkpointID,checkpointSHA256:request.checkpointSHA256,outcome:'PENDING'});
  await pause('Root must publish the exact protected '+prefix+'-proof-'+launchNonce+'.json from fresh read-only server verification against the unchanged linked ordinary snapshot and approved interval. Recovery also requires the exact retained partial graph and actual same-device sign-in admission/audit. Never copy expected hashes as observations or claim an observed registration response.');
- const proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));(initialized?validateInitializedRecoveryProof:recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
- const current=await(initialized?readInitializedRecoveryLink:recovery?readRecoveryLink:readContinuationLink)({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error(prefix+'_original_changed');
- await(initialized?claimInitializedRecovery:recovery?claimRecovery:claimContinuation)({link:current,request,proof,runDirectory});
- await emit({phase:initialized?'initialized_empty_bootstrap_admitted':recovery?'partial_bootstrap_admitted':'continuation_registration_admitted',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
+ const proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));(uploaded?validateUploadedContinuationProof:initialized?validateInitializedRecoveryProof:recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
+ const current=await(uploaded?readUploadedContinuationLink:initialized?readInitializedRecoveryLink:recovery?readRecoveryLink:readContinuationLink)({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error(prefix+'_original_changed');
+ if(uploaded){
+  await inspectThenClaimUploaded({interval:current.successor.binding.interval,inspect:async()=>{
+   const browser=await launchLifecycleBrowser({chromium,profile:current.profiles[0]});
+   try{
+    await browser.context.route('**/*',route=>route.request().method()==='GET'&&new URL(route.request().url()).origin===config.origin?route.continue():route.abort());
+    const page=await openLifecycleExecutionPage(browser.context,config.origin);
+    await emit({phase:'process_started',browserIndex:0,pid:browser.pid,processID,launchNonce,outcome:'PASS'});
+    await page.evaluate(stagingLegacyRoundtripGuard,{installOnly:true});await page.evaluate(stagingUploadedBootstrapContinuation,{installOnly:true});
+    const result=await page.evaluate(inspectUploadedBrowser,{...config,email:config.emails[0],uploaded:proof.uploaded,expectedFixture:request.expectedFixture,interval:request.successorBaseline.interval,account:request.accounts[0],failureCodes:lifecycleDiagnosticCodes});
+    if(result.outcome!=='PASS')throw Error(lifecycleDiagnosticCodes.includes(result.failureCode)?result.failureCode:'unknown_failure');
+    checkTime();await emit({phase:'uploaded_preclaim_browser_verified',evidenceClass,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
+   }finally{await browser.close();await emit({phase:'process_closed',browserIndex:0,pid:browser.pid,processID,launchNonce,outcome:'PASS'});}
+  },claim:()=>claimUploadedContinuation({link:current,request,proof,runDirectory})});
+ }else await(initialized?claimInitializedRecovery:recovery?claimRecovery:claimContinuation)({link:current,request,proof,runDirectory});
+ checkTime();
+ await emit({phase:uploaded?'uploaded_bootstrap_admitted':initialized?'initialized_empty_bootstrap_admitted':recovery?'partial_bootstrap_admitted':'continuation_registration_admitted',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,sha256:request.checkpointSHA256,outcome:'PASS'});
  return {request,proof};
 }
 
 async function runLifecycleCore({configPath,runDirectory,phase,continuation=null,recovery=null}){
  const config=validateRunConfig(await readProtectedJSON(configPath)),mode=process.env.TEST_SESSION_MODE;
  const linked=continuation??recovery,recoveryStart=recovery?.starting===true,continuationStart=continuation?.starting===true||recoveryStart;let continuationAdmission=linked?.admission;
- const linkedEvidenceClass=recovery?.initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass;
+ const linkedEvidenceClass=recovery?.uploaded?uploadedContinuationEvidenceClass:recovery?.initialized?initializedRecoveryEvidenceClass:recovery?recoveryEvidenceClass:continuationEvidenceClass;
  if(!isAbsolute(runDirectory))throw Error('invalid_real_phase');
  let existing=false;try{await lstat(runDirectory);existing=true;}catch(error){if(error.code!=='ENOENT')throw error;}
  if(continuationStart){
-  for(const name of ['owner.json','journal.json','evidence.json','baseline.json','scope.json','continuation-admission.json','recovery-admission.json','initialized-recovery-admission.json'])if(await exists(join(runDirectory,name)))throw Error('continuation_fresh_link_required');
+  for(const name of ['owner.json','journal.json','evidence.json','baseline.json','scope.json','continuation-admission.json','recovery-admission.json','initialized-recovery-admission.json','uploaded-continuation-admission.json'])if(await exists(join(runDirectory,name)))throw Error('continuation_fresh_link_required');
   if(config.approvedVaultIDs.length)throw Error('continuation_partial_scope');
   await writeContinuationExclusive(join(runDirectory,'owner.json'),{version:1,runID:config.runID,sourceSHA:config.expectedSourceSHA});
   await writeContinuationExclusive(join(runDirectory,'baseline.json'),linked.link.baseline);
@@ -803,7 +999,8 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
  const contexts=[],terminal=createInterface({input:process.stdin,output:process.stdout}),launchNonce=randomUUID(),processID=randomUUID(),evidence=(await readProtectedJSON(join(runDirectory,'evidence.json'))).map(redactedEvidence);
  const emit=async value=>{const checked=redactedEvidence(value);evidence.push(checked);process.stdout.write(JSON.stringify(checked)+'\n');await save(join(runDirectory,'evidence.json'),evidence);};
  const persist=()=>save(join(runDirectory,'journal.json'),journal);
- const pause=async text=>{await emit({phase:'owner_input_pending',outcome:'PENDING'});await terminal.question(text+' Press Enter after the visible GUI/action is complete. Never enter credentials here.\n');};
+ const checkTime=()=>{if(recovery?.uploaded)assertUploadedInterval(recovery.link.successor.binding.interval);};
+ const pause=async text=>{checkTime();await emit({phase:'owner_input_pending',outcome:'PENDING'});await waitForLifecycleOperator(terminal,text+' Press Enter after the visible GUI/action is complete. Never enter credentials here.\n',recovery?.uploaded?recovery.link.successor.binding.interval:null);checkTime();};
  let baseline,diagnosticStage='lifecycle_operation',diagnosticIndex;
  const checkpoint=async(result={})=>{
   if(!baseline)baseline=validateOrdinaryBaseline(await readProtectedJSON(join(runDirectory,'baseline.json')));
@@ -819,7 +1016,7 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
   await save(join(runDirectory,'pending-checkpoint.json'),pending);
   await emit({phase:'operator_checkpoint_pending',checkpointID:pending.checkpointID,checkpointSHA256:pending.checkpointSHA256,launchNonce,outcome:'PENDING'});
   await pause('Root must run the actual ordinary-data verifier and required exact-operation outbox query, then create the exclusive protected proof for this checkpoint. Protocol BEFORE/AFTER also requires the bound negative-invariant sidecar; BEFORE capture must precede any protocol probes.');
-  const proof=await readProtectedJSON(join(runDirectory,`operator-proof-${pending.checkpointID}-${launchNonce}.json`));validateOperatorProof(proof,pending,baseline);
+  const proof=await readProtectedJSON(join(runDirectory,`operator-proof-${pending.checkpointID}-${launchNonce}.json`));validateOperatorProof(proof,pending,baseline);checkTime();
   if(['protocol-before','protocol-negatives'].includes(phase)){
    const negative=await readProtectedJSON(join(runDirectory,`negative-invariant-${pending.checkpointID}-${launchNonce}.json`));
    validateNegativeInvariantProof(negative,pending,phase==='protocol-before'?'BEFORE':'AFTER',journal.negativeBefore??null);
@@ -831,13 +1028,13 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
  try{
   if(!process.env.PLAYWRIGHT_MODULE||process.env.CHROMIUM_PATH&&process.env.CHROMIUM_PATH!==EDGE)throw Error('headed_edge_required');
   const {chromium}=await import(pathToFileURL(process.env.PLAYWRIGHT_MODULE));
-  if(continuationStart)continuationAdmission=await admitContinuation({config,configPath,runDirectory,link:linked.link,chromium,terminal,emit,pause,launchNonce,processID,recovery:recoveryStart?(recovery.initialized?'initialized':true):false});
+  if(continuationStart)continuationAdmission=await admitContinuation({config,configPath,runDirectory,link:linked.link,chromium,terminal,emit,pause,launchNonce,processID,recovery:recoveryStart?(recovery.uploaded?'uploaded':recovery.initialized?'initialized':true):false});
   const pages=[],guiPages=[],registered=[],{indexes,authenticated}=lifecycleBrowserPlan(phase,pendingResume);
   for(const index of indexes){
    diagnosticStage='browser_launch';diagnosticIndex=index;
    const profile=linked&&index<2?linked.link.profiles[index]:join(runDirectory,'edge-'+index);if(!pendingResume&&(!linked&&phase==='bootstrap'||phase==='enroll'&&index===2))try{await mkdir(profile,{mode:0o700});}catch(error){if(error.code!=='EEXIST'||phase==='bootstrap')throw error;await assertProtectedDirectory(profile);}
    const browser=await launchLifecycleBrowser({chromium,profile});contexts.push(browser);await emit({phase:'process_started',pid:browser.pid,processID,launchNonce,outcome:'PASS'});
-   const context=browser.context;await context.route('**/*',route=>{const url=new URL(route.request().url());return url.origin===config.origin&&(phase!=='restart-offline'||!url.pathname.startsWith('/v1/'))?route.continue():route.abort();});
+   const context=browser.context;await context.route('**/*',route=>{const url=new URL(route.request().url());if(recovery?.uploaded&&!['GET','HEAD','OPTIONS'].includes(route.request().method())){try{checkTime();}catch{return route.abort();}}return url.origin===config.origin&&(phase!=='restart-offline'||!url.pathname.startsWith('/v1/'))?route.continue():route.abort();});
    const page=await openLifecycleExecutionPage(context,config.origin);pages[index]=page;
    if(phase==='bootstrap'&&!pendingResume&&!continuationStart){
     const anonymous=await page.evaluate(async()=>{const r=await fetch('/v1/me',{credentials:'same-origin',cache:'no-store'});return r.status===401;});if(!anonymous)throw Error('fresh_anonymous_session_required');
@@ -868,10 +1065,12 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
    for(const i of authenticated){
     diagnosticStage='browser_fixture_install';diagnosticIndex=i;
     await pages[i].evaluate(stagingV1Records,{installOnly:true});
+    await pages[i].evaluate(stagingLegacyRoundtripGuard,{installOnly:true});
     await pages[i].evaluate(stagingPartialBootstrapGuard,{installOnly:true});
+    if(recovery?.uploaded)await pages[i].evaluate(stagingUploadedBootstrapContinuation,{installOnly:true});
     if(recovery?.initialized)await pages[i].evaluate(stagingInitializedBootstrapGuard,{installOnly:true});
     diagnosticStage='browser_lifecycle_install';
-    await pages[i].evaluate(installBrowserLifecycle,{...config,email:config.emails[i===0?0:1]});
+    await pages[i].evaluate(installBrowserLifecycle,{...config,email:config.emails[i===0?0:1],...(recovery?.uploaded?{uploadedInterval:recovery.link.successor.binding.interval}:{})});
     if(phase!=='bootstrap'&&!(phase==='enroll'&&i===2)){
      const actual=await invoke(i,'identity',{custodian:i<2}),expected=i===0?state.owner:i===1?state.member:state.extra;
      if(actual.accountID!==expected.accountID||actual.deviceID!==expected.deviceID||actual.publicKeyFingerprint!==expected.publicKeyFingerprint||actual.publicPin.rootFingerprint!==expected.publicPin.rootFingerprint)throw Error('preserved_identity_changed');
@@ -898,7 +1097,7 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
     if(continuationStart){assertContinuationIdentity(owner,continuationAdmission.request.accounts[0]);assertContinuationIdentity(member,continuationAdmission.request.accounts[1]);}
     diagnosticStage='team_bootstrap';diagnosticIndex=0;
     if(recoveryStart&&recovery.initialized){const observation=await invoke(0,'inspect-initialized-bootstrap',{initialized:continuationAdmission.proof.initialized});await writeContinuationExclusive(join(runDirectory,'initialized-browser-observation-'+launchNonce+'.json'),{version:1,evidenceClass:initializedRecoveryEvidenceClass,launchNonce,processID,checkpointSHA256:continuationAdmission.request.checkpointSHA256,observation});await emit({phase:'initialized_empty_browser_verified',evidenceClass:initializedRecoveryEvidenceClass,sha256:continuationAdmission.request.checkpointSHA256,outcome:'PASS'});}
-    const created=await invoke(0,recoveryStart?(recovery.initialized?'recover-initialized-bootstrap':'recover-bootstrap'):'bootstrap',{memberEmail:config.emails[1],...(recoveryStart?(recovery.initialized?{initialized:continuationAdmission.proof.initialized,interval:continuationAdmission.request.successorBaseline.interval}:{partial:recovery.link.partial}):{})});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
+    const created=await invoke(0,recoveryStart?(recovery.uploaded?'continue-uploaded-bootstrap':recovery.initialized?'recover-initialized-bootstrap':'recover-bootstrap'):'bootstrap',{memberEmail:config.emails[1],...(recoveryStart?(recovery.uploaded?{uploaded:continuationAdmission.proof.uploaded,expectedFixture:continuationAdmission.request.expectedFixture,interval:continuationAdmission.request.successorBaseline.interval}:recovery.initialized?{initialized:continuationAdmission.proof.initialized,interval:continuationAdmission.request.successorBaseline.interval}:{partial:recovery.link.partial}):{})});state={...created,owner,member,expected:{},current:{},activeVaultIDs:[],enrollments:{}};await saveState();
     diagnosticStage='lifecycle_operation';diagnosticIndex=undefined;
     const invitationGUI=await contexts[1].context.newPage();
     try{await invitationGUI.goto(config.origin,{waitUntil:'domcontentloaded'});await pause('Accept the genuine Team invitation in the secondary account app window.');}
@@ -961,7 +1160,7 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
     await readAll();await nativeGate();await emit({phase:'revoked_restart_denied',...await pages[2].evaluate(installRevokedBrowserProbes,{origin:config.origin,runID:config.runID,accountID:state.extra.accountID,deviceID:state.extra.deviceID,teamID:state.teamID,vaultID:populated().vaultID,current:state.current[populated().vaultID]}),outcome:'DENIED'});await pause('Root completes native separate-process offline/HTTPS gate on exact current generation and independent server reload/older isolated restore/fence checks. These are separate evidence, never Browser PASS.');await checkpoint();
    }else throw Error('unhandled_phase');
   }
-  journal.completed.push(phase);journal.processes.push({phase,processID,launchNonce,pids:contexts.map(c=>c.pid)});await persist();await emit({phase:'phase_completed',outcome:'PASS',launchNonce,processID,...(linked?{evidenceClass:linkedEvidenceClass}:{})});
+  checkTime();journal.completed.push(phase);journal.processes.push({phase,processID,launchNonce,pids:contexts.map(c=>c.pid)});await persist();checkTime();await emit({phase:'phase_completed',outcome:'PASS',launchNonce,processID,...(linked?{evidenceClass:linkedEvidenceClass}:{})});
  }catch(error){await emit({phase:'stopped_without_acceptance',outcome:'DENIED',launchNonce,...lifecycleFailure({stage:diagnosticStage,index:diagnosticIndex,error})});throw Error('real_phase_failed');}
  finally{terminal.close();for(const context of contexts){await context.close();await emit({phase:'process_closed',pid:context.pid,processID,launchNonce,outcome:'PASS'});}await rm(lock,{recursive:true});}
 }
