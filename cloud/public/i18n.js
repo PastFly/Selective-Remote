@@ -513,7 +513,7 @@
     "Допустить устройство участника?": "Approve member device?",
     "Доступ не отозван: проверьте полномочия и правило последнего Owner.": "Access was not revoked. Check permissions and the last-Owner rule.",
     "Доступ отозван.": "Access revoked.",
-    "Если аккаунт существует, ссылка для смены пароля уже отправлена.": "If the account exists, a password reset link has been sent.",
+    "Если адрес подходит для восстановления, проверьте почту и папку «Спам». Если письмо не пришло, повторите запрос позже.": "If this address is eligible for recovery, check your email and spam folder. If no message arrives, try again later.",
     "Завершить ротацию ключа?": "Complete key rotation?",
     "Загружаем зашифрованную Team-ревизию…": "Loading the encrypted Team revision…",
     "Записей этого типа пока нет.": "There are no records of this type yet.",

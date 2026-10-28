@@ -14,7 +14,7 @@ import {readRecoveryLink,createRecoveryRequest,validateRecoveryProof,claimRecove
 
 import {readInitializedRecoveryLink,createInitializedRecoveryRequest,validateInitializedRecoveryProof,claimInitializedRecovery,assertInitializedRecoveryClaim,assertInitializedRecoveryUnclaimed,initializedRecoveryEvidenceClass} from '../../scripts/staging-initialized-bootstrap-recovery.mjs';
 
-import {readUploadedContinuationLink,createUploadedContinuationRequest,validateUploadedContinuationProof,claimUploadedContinuation,assertUploadedContinuationClaim,assertUploadedContinuationUnclaimed,uploadedContinuationEvidenceClass,assertUploadedInterval} from '../../scripts/staging-uploaded-bootstrap-continuation.mjs';
+import {readUploadedContinuationLink,createUploadedContinuationRequest,validateUploadedContinuationProof,claimUploadedContinuation,assertUploadedContinuationClaim,assertUploadedContinuationUnclaimed,uploadedContinuationEvidenceClass,assertUploadedInterval,revalidateUploadedSuccessorAfterLocks} from '../../scripts/staging-uploaded-bootstrap-continuation.mjs';
 
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
@@ -996,6 +996,10 @@ async function runLifecycleCore({configPath,runDirectory,phase,continuation=null
  if(phase==='bootstrap'&&existing&&!pendingResume&&!continuationStart)throw Error('incomplete_bootstrap_requires_operator_recovery');
  if(!continuationStart)validateLifecyclePhase(phase,mode,journal.completed,{pendingResume});
  const lock=join(runDirectory,'runner.lock');await acquireLifecycleLock(lock);
+ if(recovery?.uploaded&&recovery.link.renewalContext){
+  try{const fresh=await revalidateUploadedSuccessorAfterLocks({config,configPath,runDirectory,link:recovery.link});if(recoveryStart)await assertUploadedContinuationUnclaimed(fresh);else await assertUploadedContinuationClaim({link:fresh,runDirectory});}
+  catch(error){await rm(lock,{recursive:true});throw error;}
+ }
  const contexts=[],terminal=createInterface({input:process.stdin,output:process.stdout}),launchNonce=randomUUID(),processID=randomUUID(),evidence=(await readProtectedJSON(join(runDirectory,'evidence.json'))).map(redactedEvidence);
  const emit=async value=>{const checked=redactedEvidence(value);evidence.push(checked);process.stdout.write(JSON.stringify(checked)+'\n');await save(join(runDirectory,'evidence.json'),evidence);};
  const persist=()=>save(join(runDirectory,'journal.json'),journal);

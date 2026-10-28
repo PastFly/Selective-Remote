@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,createHash} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,symlink,lstat,rename} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {canonicalMigrationJSON} from '../public/vault-v2-migration.js';
@@ -377,4 +377,93 @@ test('uploaded admission ordering leaves actual exclusive claim absent on inspec
  await assert.rejects(inspectThenClaimUploaded({interval:f.link.successor.binding.interval,inspect:async()=>{events.push('denied');throw Error('uploaded_bootstrap_changed');},claim}),/uploaded_bootstrap_changed/);
  assert.deepEqual(events,['denied']);await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});await assert.rejects(readFile(join(f.runDirectory,'uploaded-continuation-admission.json')),{code:'ENOENT'});
  await inspectThenClaimUploaded({interval:f.link.successor.binding.interval,inspect:async()=>{events.push('verified');},claim});assert.deepEqual(events,['denied','verified','claim']);assert.deepEqual(await f.a.assertUploadedContinuationClaim(f),{request:f.request,proof:f.proof});
+});
+
+async function uploadedRenewalFixture(t){
+ const f=await uploadedFixture(t),old=f.runDirectory,requestName='uploaded-continuation-request-'+f.request.launchNonce+'.json';
+ const evidence=[];for(const [browserIndex,identity]of f.identities.entries()){const pid=2147483647;evidence.push({phase:'process_started',browserIndex,pid,processID:f.request.processID,launchNonce:f.request.launchNonce,outcome:'PASS'},{...identity,phase:'continuation_readiness',stage:'diagnostic_trust',browserIndex,launchNonce:f.request.launchNonce},{phase:'process_closed',browserIndex,pid,processID:f.request.processID,launchNonce:f.request.launchNonce,outcome:'PASS'});}
+ evidence.push({phase:'uploaded-continuation_operator_proof_pending',evidenceClass:f.manifest.evidenceClass,runID:f.config.runID,expectedSourceSHA:f.config.expectedSourceSHA,previousLaunchNonce:f.link.admission.request.launchNonce,launchNonce:f.request.launchNonce,checkpointID:f.request.checkpointID,checkpointSHA256:f.request.checkpointSHA256,outcome:'PENDING'},{phase:'owner_input_pending',outcome:'PENDING'});
+ for(const [name,value]of Object.entries({'owner.json':{version:1,runID:f.config.runID,sourceSHA:f.config.expectedSourceSHA},'baseline.json':f.baseline,'journal.json':{version:1,completed:[],pending:null,processes:[],baseline:f.baseline},'evidence.json':evidence,[requestName]:f.request}))await write(join(old,name),value);
+ const names=['config.json','owner.json','journal.json','baseline.json','evidence.json','uploaded-continuation.json',requestName],predecessorFiles={};for(const n of names)predecessorFiles[n]=sha(await readFile(join(old,n)));
+ const originalLockDirectories=[...f.link.lockDirectories],archiveRoot=join(f.dir,'archived-locks');await mkdir(archiveRoot,{mode:0o700});const entries=[];
+ const meta=s=>({dev:s.dev,ino:s.ino,uid:s.uid,gid:s.gid,mode:s.mode&0o777,nlink:s.nlink,size:s.size});
+ for(const [i,dir]of originalLockDirectories.entries()){
+  const from=join(dir,'runner.lock'),to=join(archiveRoot,String(i)+'-runner.lock');await mkdir(from,{mode:0o700});await write(join(from,'owner.json'),{version:1,pid:2147483647,processID:id()});const ownerSHA256=sha(await readFile(join(from,'owner.json'))),directory=meta(await lstat(from)),owner=meta(await lstat(join(from,'owner.json')));await rename(from,to);entries.push({originalDirectory:from,archiveDirectory:to,ownerSHA256,directory,owner});
+ }
+ t.mock.timers.enable({apis:['Date'],now:Date.parse(f.link.successor.binding.interval.endsAt)+1000});
+ const capturedAt=new Date().toISOString(),archivePath=join(archiveRoot,'attestation.json'),archive={version:1,kind:'VERIFIED_STALE_LOCK_ARCHIVE',archivedAt:capturedAt,entries};await write(archivePath,archive);
+ const runDirectory=join(f.dir,'uploaded-renewal'),current=config(f.config.runID,'f');await mkdir(runDirectory,{mode:0o700});const configPath=join(runDirectory,'config.json');await write(configPath,current);
+ const manifest={...structuredClone(f.manifest),configIdentitySHA256:continuation.continuationConfigIdentity(current),deployment:{sourceSHA:current.expectedSourceSHA,moduleHashesSHA256:digest(current.moduleHashes),imageDigest:'sha256:'+'f'.repeat(64),controllerSHA256:'f'.repeat(64)},runnerHashes:await f.a.uploadedSuccessorRunnerHashes()};
+ const sourceSnapshot=join(f.link.parent.parent.predecessorDirectory,'ordinary-successor-snapshot.json');const raw=await readFile(sourceSnapshot);assert.equal(sha(raw),f.baseline.sha256);
+ for(const n of ['ordinary-original-snapshot.json','ordinary-successor-snapshot.json'])await writeFile(join(runDirectory,n),raw,{mode:0o600});
+ const capturePath=join(runDirectory,'capture-observation.json'),capture={version:1,kind:'READ_ONLY_UPLOADED_SUCCESSOR_CAPTURE',capturedAt,readOnly:true,deployment:f.manifest.deployment,previousSnapshotSHA256:f.baseline.sha256,snapshotSHA256:f.baseline.sha256,scopeSHA256:f.link.successor.binding.scopeSHA256,uploadedSHA256:digest(f.uploaded),fixtureSHA256:digest(f.expectedFixture),testInventorySHA256:'9'.repeat(64)};await write(capturePath,capture);
+ const renewal={version:1,capturedAt,predecessorRunDirectory:old,predecessorConfigPath:f.configPath,predecessorFiles,requestName,archive:{path:archivePath,sha256:sha(json(archive))},capture:{path:capturePath,sha256:sha(json(capture))}};
+ const recoveryContext={kind:'UPLOADED_UNCLAIMED_SUCCESSOR',predecessorRunDirectory:old,predecessorFilesSHA256:digest(predecessorFiles),parentClaimSHA256:manifest.parentClaimSHA256,predecessorAuthorizationSHA256:f.link.successor.binding.authorizationSHA256,predecessorSnapshotSHA256:f.baseline.sha256,uploadedSHA256:digest(f.uploaded),fixtureSHA256:digest(f.expectedFixture),archiveSHA256:renewal.archive.sha256,captureSHA256:renewal.capture.sha256,capturedAt};
+ const failedComparisons=[{path:capturePath,sha256:renewal.capture.sha256}],authorization={version:1,kind:'OWNER_AUTHORIZED_SUCCESSOR_ORDINARY_BASELINE',approved:true,approvalID:id(),approvedAt:capturedAt,interval:{startsAt:capturedAt,endsAt:new Date(Date.now()+3600000).toISOString()},originalRunID:f.config.runID,originalSourceSHA:f.config.expectedSourceSHA,successorRunID:current.runID,successorSourceSHA:current.expectedSourceSHA,configIdentitySHA256:manifest.configIdentitySHA256,originalFiles:predecessorFiles,deployment:manifest.deployment,runnerHashes:manifest.runnerHashes,originalSnapshotSHA256:f.baseline.sha256,successorSnapshotSHA256:f.baseline.sha256,failedComparisons,recoveryContext};await write(join(runDirectory,'ordinary-successor-authorization.json'),authorization);
+ renewal.successorBaseline={version:1,originalSnapshot:{name:'ordinary-original-snapshot.json',sha256:f.baseline.sha256},successorSnapshot:{name:'ordinary-successor-snapshot.json',sha256:f.baseline.sha256},ownerAuthorization:{name:'ordinary-successor-authorization.json',sha256:sha(json(authorization))},failedComparisons};manifest.renewal=renewal;await write(join(runDirectory,'uploaded-continuation.json'),manifest);
+ return {...f,config:current,configPath,runDirectory,manifest,old,oldConfig:f.config,oldConfigPath:f.configPath,oldLink:f.link,oldRequest:f.request,archive,archivePath,authorization,capture,capturePath,recoveryContext};
+}
+test('explicit uploaded renewal accepts actual fresh same-SHA capture while historical interval remains expired',async t=>{
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f);assert.equal(link.lockDirectories.length,6);assert.deepEqual(link.renewalContext,f.recoveryContext);assert.equal(link.baseline.sha256,f.baseline.sha256);assert.notEqual(link.successor.binding.approvalID,f.oldLink.successor.binding.approvalID);
+ const request=f.a.createUploadedContinuationRequest({...f,link,launchNonce:id(),processID:id()});assert.deepEqual(request.renewalContext,f.recoveryContext);assert.equal(request.successorBaseline.interval.startsAt,f.capture.capturedAt);
+ assert.throws(()=>f.a.createUploadedContinuationRequest({...f,config:f.oldConfig,link:f.oldLink,launchNonce:id(),processID:id()}),/uploaded_authorization_expired/);
+ for(const entry of f.archive.entries)assert.equal(sha(await readFile(join(entry.archiveDirectory,'owner.json'))),entry.ownerSHA256);
+});
+function uploadedRenewalProof(f,link,request){
+ const proof=structuredClone(f.proof),observedAt=new Date().toISOString(),b=request.successorBaseline;proof.deployment=request.deployment;proof.observedAt=observedAt;proof.operator.ordinary=link.baseline;for(const k of ['sourceSHA','launchNonce','checkpointID','checkpointSHA256'])proof.operator[k]=request[k];proof.successorBaseline={authorizationSHA256:b.authorizationSHA256,approvalID:b.approvalID,originalSnapshotSHA256:b.originalSnapshotSHA256,observedSnapshotSHA256:b.successorSnapshotSHA256,scopeSHA256:b.scopeSHA256,observedAt};return proof;
+}
+test('renewed run revalidates protected history only after all six ordinary locks and before browser',async t=>{
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f),options={...f,link};
+ assert.equal(typeof f.a.revalidateUploadedSuccessorAfterLocks,'function');
+ await assert.rejects(f.a.revalidateUploadedSuccessorAfterLocks(options),/lock_required/);
+ for(const dir of link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{version:1,pid:process.pid,processID:id()});}
+ assert.equal((await f.a.revalidateUploadedSuccessorAfterLocks(options)).manifestSHA256,link.manifestSHA256);
+ const old=join(f.old,'evidence.json');await write(old,[]);await assert.rejects(f.a.revalidateUploadedSuccessorAfterLocks(options));
+});
+test('renewed request proof and one original claim slot bind active authority and retain archive',async t=>{
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f),request=f.a.createUploadedContinuationRequest({...f,link,launchNonce:id(),processID:id()}),proof=uploadedRenewalProof(f,link,request);
+ f.a.validateUploadedContinuationProof(proof,request,link.baseline);for(const dir of link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{version:1,pid:process.pid,processID:id()});}
+ await f.a.claimUploadedContinuation({...f,link,request,proof});const fresh=await f.a.readUploadedContinuationLink(f);assert.deepEqual(await f.a.assertUploadedContinuationClaim({...f,link:fresh}),{request,proof});await assert.rejects(f.a.claimUploadedContinuation({...f,link,request,proof}),/already_claimed/);
+ for(const e of f.archive.entries)assert.equal(sha(await readFile(join(e.archiveDirectory,'owner.json'))),e.ownerSHA256);
+ const changed=structuredClone(request);changed.renewalContext.captureSHA256='1'.repeat(64);const {checkpointSHA256,...body}=changed;changed.checkpointSHA256=digest(body);await assert.rejects(f.a.claimUploadedContinuation({...f,link,request:changed,proof}));
+});
+test('renewal denies changed interrupted bytes, old proof or scope, completed state and live archive owner',async t=>{
+ const f=await uploadedRenewalFixture(t),path=join(f.runDirectory,'uploaded-continuation.json');
+ for(const edit of [m=>m.renewal.predecessorFiles['evidence.json']='0'.repeat(64),m=>m.renewal.capture.sha256='0'.repeat(64),m=>m.renewal.archive.sha256='0'.repeat(64),m=>m.renewal.predecessorRunDirectory=f.runDirectory,m=>m.runnerHashes['scripts/staging-uploaded-successor.mjs']='0'.repeat(64)]){const m=structuredClone(f.manifest);edit(m);await write(path,m);await assert.rejects(f.a.readUploadedContinuationLink(f));}await write(path,f.manifest);
+ for(const n of ['scope.json','uploaded-continuation-admission.json','uploaded-continuation-proof-'+f.oldRequest.launchNonce+'.json']){await write(join(f.old,n),{});await assert.rejects(f.a.readUploadedContinuationLink(f));await rm(join(f.old,n));}
+ const ownerPath=join(f.archive.entries[0].archiveDirectory,'owner.json'),before=await readFile(ownerPath);await write(ownerPath,{version:1,pid:process.pid,processID:id()});await assert.rejects(f.a.readUploadedContinuationLink(f));await writeFile(ownerPath,before);
+ const journal=join(f.old,'journal.json'),raw=await readFile(journal);await write(journal,{version:1,completed:['bootstrap'],pending:null,processes:[],baseline:f.baseline});await assert.rejects(f.a.readUploadedContinuationLink(f));await writeFile(journal,raw);
+ await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});
+});
+test('new interval expiration after fresh proof creates no claim and leaves archived locks intact',async t=>{
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f),request=f.a.createUploadedContinuationRequest({...f,link,launchNonce:id(),processID:id()}),proof=uploadedRenewalProof(f,link,request);
+ for(const dir of link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{version:1,pid:process.pid,processID:id()});}
+ t.mock.timers.setTime(Date.parse(link.successor.binding.interval.endsAt));await assert.rejects(f.a.claimUploadedContinuation({...f,link,request,proof}),/expired/);await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});for(const e of f.archive.entries)assert.equal(sha(await readFile(join(e.archiveDirectory,'owner.json'))),e.ownerSHA256);
+});
+async function resealRenewalFixture(f){
+ const r=f.manifest.renewal;r.archive.sha256=sha(await readFile(r.archive.path));r.capture.sha256=sha(await readFile(r.capture.path));
+ for(const name of Object.keys(r.predecessorFiles))r.predecessorFiles[name]=sha(await readFile(name==='config.json'?r.predecessorConfigPath:join(r.predecessorRunDirectory,name)));
+ Object.assign(f.authorization.recoveryContext,{predecessorFilesSHA256:digest(r.predecessorFiles),archiveSHA256:r.archive.sha256,captureSHA256:r.capture.sha256});f.authorization.originalFiles=r.predecessorFiles;
+ await write(join(f.runDirectory,'ordinary-successor-authorization.json'),f.authorization);r.successorBaseline.ownerAuthorization.sha256=sha(json(f.authorization));await write(join(f.runDirectory,'uploaded-continuation.json'),f.manifest);
+}
+test('self-consistent rehashed renewal cannot reuse old approval or widen authorized interval',async t=>{
+ const f=await uploadedRenewalFixture(t),saved=structuredClone(f.authorization);
+ for(const edit of [a=>a.approved=false,a=>a.approvalID=f.oldLink.successor.binding.approvalID,a=>a.interval.startsAt=new Date(Date.parse(f.capture.capturedAt)+1).toISOString(),a=>a.interval.endsAt=new Date(Date.parse(f.capture.capturedAt)+86400001).toISOString(),a=>a.recoveryContext.predecessorAuthorizationSHA256='0'.repeat(64)]){f.authorization=structuredClone(saved);edit(f.authorization);await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f));}
+});
+test('self-consistent interrupted journal or request change is rejected beyond raw hash checks',async t=>{
+ const f=await uploadedRenewalFixture(t),journal=join(f.old,'journal.json'),raw=await readFile(journal);await write(journal,{version:1,completed:['bootstrap'],pending:null,processes:[],baseline:f.baseline});await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f));await writeFile(journal,raw);
+ const requestPath=join(f.old,f.manifest.renewal.requestName),request=structuredClone(f.oldRequest);request.expectedFixture.documentSHA256='0'.repeat(64);const {checkpointSHA256,...body}=request;request.checkpointSHA256=digest(body);await write(requestPath,request);await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f));
+});
+test('self-consistent archive with live owner PID is denied without deleting any lock',async t=>{
+ const f=await uploadedRenewalFixture(t),entry=f.archive.entries[0],path=join(entry.archiveDirectory,'owner.json');await write(path,{version:1,pid:process.pid,processID:id()});const s=await lstat(path);entry.owner={dev:s.dev,ino:s.ino,uid:s.uid,gid:s.gid,mode:s.mode&0o777,nlink:s.nlink,size:s.size};entry.ownerSHA256=sha(await readFile(path));await write(f.archivePath,f.archive);await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f));assert.equal(JSON.parse(await readFile(path)).pid,process.pid);
+});
+test('renewal uses standard ancestor lock exclusion and never opens a browser on collision',{timeout:10000},async t=>{
+ preserveSessionMode(t);const previous=process.env.PLAYWRIGHT_MODULE;delete process.env.PLAYWRIGHT_MODULE;t.after(()=>{if(previous===undefined)delete process.env.PLAYWRIGHT_MODULE;else process.env.PLAYWRIGHT_MODULE=previous;});
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f),{acquireLifecycleLock,runStagingBrowserLifecycle}=await import('./browser/staging-real-lifecycle.mjs');
+ const lock=join(link.lockDirectories[0],'runner.lock');await acquireLifecycleLock(lock);const held=await readFile(join(lock,'owner.json'));await assert.rejects(runStagingBrowserLifecycle({...f,phase:'continue-uploaded-bootstrap'}),/runner_already_active/);assert.deepEqual(await readFile(join(lock,'owner.json')),held);await assert.rejects(readFile(join(f.runDirectory,'owner.json')),{code:'ENOENT'});for(const entry of f.archive.entries)assert.equal(sha(await readFile(join(entry.archiveDirectory,'owner.json'))),entry.ownerSHA256);
+});
+
+test('rehashed interrupted readiness must retain diagnostic-trust custodian semantics',async t=>{
+ const f=await uploadedRenewalFixture(t),path=join(f.old,'evidence.json'),original=JSON.parse(await readFile(path));
+ for(const patch of [{stage:'diagnostic_session'},{rootStatus:'ADMITTED'},{rootStatus:'UNKNOWN'},{stage:undefined}]){const evidence=structuredClone(original);Object.assign(evidence[1],patch);await write(path,evidence);await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f),/uploaded_successor_invalid/);}
 });

@@ -4224,6 +4224,10 @@ export function registrationAcceptedMessage() {
   return "Проверьте почту. Если для этого адреса требуется подтверждение, мы отправим дальнейшие инструкции.";
 }
 
+export function passwordResetAcceptedMessage() {
+  return "Если адрес подходит для восстановления, проверьте почту и папку «Спам». Если письмо не пришло, повторите запрос позже.";
+}
+
 // Capture the old controller before any asynchronous logout response can switch accounts.
 export async function completeBrowserSessionLogout({ client, vault, clearView, restoreView, documentValue = null,
   isCurrent = () => client.session() === null }) {
@@ -4598,7 +4602,7 @@ export async function initializeCloudAccount({
     try {
       await client.requestPasswordReset(recoveryFormAccount.elements.email.value);
       recoveryFormAccount.reset();
-      setAccountMessage("Если аккаунт существует, ссылка для смены пароля уже отправлена.", "success");
+      setAccountMessage(passwordResetAcceptedMessage(), "success");
     } catch {
       setAccountMessage("Не удалось запросить восстановление. Повторите позже.", "error");
     } finally {
