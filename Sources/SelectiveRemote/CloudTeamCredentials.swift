@@ -1085,14 +1085,18 @@ struct SelectiveRemoteTeamCredentialsView: View {
     ) {
         guard !isOrganizing else { return }
         isOrganizing = true
+        let pendingDelivery = Result { try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: resolvedDeviceID()) }
         Task { @MainActor in
             defer { isOrganizing = false }
             do {
-                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let delivery = try pendingDelivery.get()
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let url = delivery.endpoint
                 let identity = try await identityManager.identity(
                     endpoint: url,
-                    deviceID: resolvedDeviceID()
+                    deviceID: delivery.deviceID
                 )
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
                 let service = try SelectiveRemoteTeamCredentialMutationService()
                 let snapshot = try await service.organize(
                     credential,
@@ -1101,16 +1105,18 @@ struct SelectiveRemoteTeamCredentialsView: View {
                     endpoint: url,
                     identity: identity
                 )
-                store.replaceVault(with: snapshot)
-                selectedCredentialID = SelectiveRemoteTeamCredentialMaterializer.scopedID(
-                    teamID: credential.teamID,
-                    vaultID: credential.vaultID,
-                    recordID: credential.recordID
-                )
-                feedback = UpdateLocalization.text(
-                    ru: "Папка и теги синхронизированы",
-                    en: "Folder and tags synchronized"
-                )
+                try delivery.commit(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID()) {
+                    store.replaceVault(with: snapshot)
+                    selectedCredentialID = SelectiveRemoteTeamCredentialMaterializer.scopedID(
+                        teamID: credential.teamID,
+                        vaultID: credential.vaultID,
+                        recordID: credential.recordID
+                    )
+                    feedback = UpdateLocalization.text(
+                        ru: "Папка и теги синхронизированы",
+                        en: "Folder and tags synchronized"
+                    )
+                }
             } catch {
                 feedback = error.localizedDescription
             }

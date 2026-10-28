@@ -1322,14 +1322,18 @@ struct SelectiveRemoteTeamSnippetsView: View {
         guard !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: context.teamID, vaultID: context.vaultID) else { SelectiveRemotePublicationPresentation.shared.showReadOnly(); return }
         guard !isMutating else { return }
         isMutating = true
+        let pendingDelivery = Result { try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: resolvedDeviceID()) }
         Task { @MainActor in
             defer { isMutating = false }
             do {
-                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let delivery = try pendingDelivery.get()
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let url = delivery.endpoint
                 let identity = try await identityManager.identity(
                     endpoint: url,
-                    deviceID: resolvedDeviceID()
+                    deviceID: delivery.deviceID
                 )
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
                 let service = try SelectiveRemoteTeamSnippetMutationService()
                 let snapshot = try await service.apply(
                     change,
@@ -1337,23 +1341,25 @@ struct SelectiveRemoteTeamSnippetsView: View {
                     endpoint: url,
                     identity: identity
                 )
-                store.replaceVault(with: snapshot)
-                if let selectedRecordID {
-                    selectedSnippetID = SelectiveRemoteTeamSnippetMaterializer.scopedID(
-                        teamID: context.teamID,
-                        vaultID: context.vaultID,
-                        recordID: selectedRecordID
+                try delivery.commit(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID()) {
+                    store.replaceVault(with: snapshot)
+                    if let selectedRecordID {
+                        selectedSnippetID = SelectiveRemoteTeamSnippetMaterializer.scopedID(
+                            teamID: context.teamID,
+                            vaultID: context.vaultID,
+                            recordID: selectedRecordID
+                        )
+                    } else {
+                        selectedSnippetID = nil
+                    }
+                    mutationMessage = .init(
+                        text: UpdateLocalization.text(
+                            ru: "Зашифрованная ревизия Team Vault синхронизирована.",
+                            en: "The encrypted Team Vault revision was synchronized."
+                        ),
+                        isError: false
                     )
-                } else {
-                    selectedSnippetID = nil
                 }
-                mutationMessage = .init(
-                    text: UpdateLocalization.text(
-                        ru: "Зашифрованная ревизия Team Vault синхронизирована.",
-                        en: "The encrypted Team Vault revision was synchronized."
-                    ),
-                    isError: false
-                )
             } catch {
                 mutationMessage = .init(text: error.localizedDescription, isError: true)
             }

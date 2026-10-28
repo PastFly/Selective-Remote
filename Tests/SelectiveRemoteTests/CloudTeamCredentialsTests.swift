@@ -172,6 +172,62 @@ struct CloudTeamCredentialsTests {
         #expect(!source.contains("KeychainService"))
     }
 
+    @MainActor
+    @Test("A late manual Team result cannot repopulate projections after session invalidation", .timeLimit(.minutes(1)))
+    func lateManualResultCannotUndoSessionCleanup() async throws {
+        let endpoint = "https://team-manual-delivery.example.invalid"
+        let delivery = try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: Self.deviceID)
+        let store = SelectiveRemoteTeamCredentialStore()
+        let snapshot = try Self.snapshot(records: [Self.credentialRecord()])
+        store.replace(with: [snapshot])
+        let barrier = TeamManualDeliveryBarrier()
+        var presentedSuccess = false
+        let pending = Task { @MainActor in
+            await barrier.suspend()
+            try delivery.commit(currentEndpoint: endpoint, currentDeviceID: Self.deviceID) {
+                store.replaceVault(with: snapshot)
+                presentedSuccess = true
+            }
+        }
+        await barrier.waitUntilSuspended()
+        SelectiveRemotePublicationLifecycle.invalidate(endpoint: delivery.endpoint)
+        store.clear()
+        await barrier.resume()
+        switch await pending.result {
+        case .success: Issue.record("A retired Team mutation must not reach the projection store")
+        case let .failure(error): #expect(error is CancellationError)
+        }
+        #expect(store.credentials.isEmpty)
+        #expect(store.synchronizedVaultCount == 0)
+        #expect(!presentedSuccess)
+    }
+
+    @MainActor
+    @Test("Current Team delivery permits synchronous UI callbacks without holding the lifecycle lock", .timeLimit(.minutes(1)))
+    func currentManualDeliveryDoesNotLockUICallbacks() throws {
+        let endpoint = "https://team-manual-callback.example.invalid"
+        let delivery = try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: Self.deviceID)
+        let store = SelectiveRemoteTeamCredentialStore()
+        let snapshot = try Self.snapshot(records: [Self.credentialRecord()])
+        let expectedEpoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: delivery.endpoint)
+        try delivery.commit(currentEndpoint: endpoint, currentDeviceID: Self.deviceID) {
+            store.replaceVault(with: snapshot)
+            // A published-property observer may inspect session lifecycle synchronously.
+            #expect(SelectiveRemotePublicationLifecycle.epoch(endpoint: delivery.endpoint) == expectedEpoch)
+        }
+        #expect(store.credentials.count == 1)
+        #expect(throws: CancellationError.self) {
+            try delivery.commit(currentEndpoint: endpoint, currentDeviceID: UUID()) {
+                Issue.record("Device replacement must deny old delivery even in the same endpoint epoch")
+            }
+        }
+        #expect(throws: CancellationError.self) {
+            try delivery.commit(currentEndpoint: "https://another-team-endpoint.example.invalid", currentDeviceID: Self.deviceID) {
+                Issue.record("Endpoint replacement must deny old delivery")
+            }
+        }
+    }
+
     private static func credentialRecord() throws -> SelectiveRemoteVaultRecord {
         try credentialRecord(id: credentialID, index: nil)
     }
@@ -252,4 +308,23 @@ struct CloudTeamCredentialsTests {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
     }
+}
+
+private actor TeamManualDeliveryBarrier {
+    private var suspended = false
+    private var arrival: CheckedContinuation<Void, Never>?
+    private var release: CheckedContinuation<Void, Never>?
+    func suspend() async {
+        suspended = true
+        await withCheckedContinuation { continuation in
+            release = continuation
+            arrival?.resume()
+            arrival = nil
+        }
+    }
+    func waitUntilSuspended() async {
+        if suspended { return }
+        await withCheckedContinuation { arrival = $0 }
+    }
+    func resume() { release?.resume(); release = nil }
 }

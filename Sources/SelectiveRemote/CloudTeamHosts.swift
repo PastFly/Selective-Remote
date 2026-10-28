@@ -2,6 +2,35 @@ import CryptoKit
 import Foundation
 import SwiftUI
 
+/// Binds a manual UI result to the endpoint/session that initiated it.
+/// Both the check and projection commit run synchronously on MainActor. A later
+/// logout cleanup therefore runs after this commit; no lifecycle lock is held
+/// while @Published properties notify observers.
+@MainActor
+struct SelectiveRemoteTeamMutationDelivery {
+    let endpoint: URL
+    let deviceID: UUID
+    private let epoch: UUID
+
+    init(endpoint: String, deviceID: UUID) throws {
+        self.deviceID = deviceID
+        self.endpoint = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+        self.epoch = SelectiveRemotePublicationLifecycle.epoch(endpoint: self.endpoint)
+    }
+
+    func check(currentEndpoint: String, currentDeviceID: UUID) throws {
+        guard !Task.isCancelled, currentDeviceID == deviceID,
+              try SelectiveRemoteCloudEndpoint.normalized(currentEndpoint) == endpoint,
+              SelectiveRemotePublicationLifecycle.epoch(endpoint: endpoint) == epoch
+        else { throw CancellationError() }
+    }
+
+    func commit(currentEndpoint: String, currentDeviceID: UUID, _ update: () -> Void) throws {
+        try check(currentEndpoint: currentEndpoint, currentDeviceID: currentDeviceID)
+        update()
+    }
+}
+
 struct SelectiveRemoteTeamVaultMaterializedSnapshot: Equatable, Sendable {
     let teamID: UUID
     let teamName: String
@@ -2491,10 +2520,13 @@ struct SelectiveRemoteTeamHostsView: View {
         guard !SelectiveRemotePublicationPresentation.shared.isPublished(teamID: context.teamID, vaultID: context.vaultID) else { SelectiveRemotePublicationPresentation.shared.showReadOnly(); return }
         guard !isMutating else { return }
         isMutating = true
+        let pendingDelivery = Result { try SelectiveRemoteTeamMutationDelivery(endpoint: endpoint, deviceID: resolvedDeviceID()) }
         Task { @MainActor in
             defer { isMutating = false }
             do {
-                let url = try SelectiveRemoteCloudEndpoint.normalized(endpoint)
+                let delivery = try pendingDelivery.get()
+                try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                let url = delivery.endpoint
                 let outcome = try await AccessMoveDecision.perform(
                     changesAncestry: changesAncestry,
                     decide: {
@@ -2505,8 +2537,9 @@ struct SelectiveRemoteTeamHostsView: View {
                         )
                     },
                     persist: {
-                        let deviceID = resolvedDeviceID()
-                        let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
+                        try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
+                        let identity = try await identityManager.identity(endpoint: url, deviceID: delivery.deviceID)
+                        try delivery.check(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID())
                         let service = try SelectiveRemoteTeamHostMutationService()
                         return try await service.apply(change, to: context, endpoint: url, identity: identity)
                     }
@@ -2518,23 +2551,25 @@ struct SelectiveRemoteTeamHostsView: View {
                     mutationMessage = .init(text: explanation, isError: true)
                     return
                 }
-                store.replaceVault(with: snapshot)
-                if let selectedRecordID {
-                    selectedHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
-                        teamID: context.teamID,
-                        vaultID: context.vaultID,
-                        recordID: selectedRecordID
+                try delivery.commit(currentEndpoint: endpoint, currentDeviceID: resolvedDeviceID()) {
+                    store.replaceVault(with: snapshot)
+                    if let selectedRecordID {
+                        selectedHostID = SelectiveRemoteTeamHostMaterializer.scopedID(
+                            teamID: context.teamID,
+                            vaultID: context.vaultID,
+                            recordID: selectedRecordID
+                        )
+                    } else {
+                        selectedHostID = nil
+                    }
+                    mutationMessage = .init(
+                        text: UpdateLocalization.text(
+                            ru: "Зашифрованная Team Vault ревизия синхронизирована.",
+                            en: "The encrypted Team Vault revision was synchronized."
+                        ),
+                        isError: false
                     )
-                } else {
-                    selectedHostID = nil
                 }
-                mutationMessage = .init(
-                    text: UpdateLocalization.text(
-                        ru: "Зашифрованная Team Vault ревизия синхронизирована.",
-                        en: "The encrypted Team Vault revision was synchronized."
-                    ),
-                    isError: false
-                )
             } catch {
                 mutationMessage = .init(text: error.localizedDescription, isError: true)
             }
