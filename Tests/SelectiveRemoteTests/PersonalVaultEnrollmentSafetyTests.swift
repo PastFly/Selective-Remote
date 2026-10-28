@@ -4,7 +4,7 @@ import Foundation
 import Testing
 @testable import SelectiveRemote
 
-@Suite("Personal Vault enrollment preserves existing ciphertext")
+@Suite("Personal Vault enrollment preserves existing ciphertext", .serialized)
 struct PersonalVaultEnrollmentSafetyTests {
     private static let oldPassword = "old synthetic password long enough"
     private static let newPassword = "new synthetic password long enough"
@@ -30,6 +30,8 @@ struct PersonalVaultEnrollmentSafetyTests {
         remoteEmpty: Bool = false
     ) async throws -> (
         enrollment: SelectiveRemotePersonalVaultAccountEnrollment,
+        client: SelectiveRemoteCloudAPIClient,
+        session: SelectiveRemoteCloudSessionBinding,
         http: PasswordResetMemoryHTTP,
         keys: PasswordResetMemoryKeys,
         original: SelectiveRemoteVaultDocument,
@@ -61,14 +63,14 @@ struct PersonalVaultEnrollmentSafetyTests {
         )
         // Model a successful authentication after a server password reset. The server auth
         // transaction itself is separately covered by cloud/tests/service.test.mjs:416.
-        let user = try await client.login(
+        let login = try await client.loginWithSession(
             endpoint: endpoint, email: "synthetic@example.invalid", password: password,
             device: .init(id: deviceID, name: "Synthetic Mac", platform: "macos", appVersion: "0.32-test", publicKey: nil)
         )
-        #expect(user.id == accountID)
+        #expect(login.user.id == accountID)
         return (
             SelectiveRemotePersonalVaultAccountEnrollment(client: client, keyStore: keys),
-            http, keys, original, snippet(id: localSnippetID, title: "Local-only synthetic record")
+            client, login.session, http, keys, original, snippet(id: localSnippetID, title: "Local-only synthetic record")
         )
     }
 
@@ -80,7 +82,7 @@ struct PersonalVaultEnrollmentSafetyTests {
             var rejected = false
             do {
                 _ = try await f.enrollment.enrollOrCreate(
-                    endpoint: Self.endpoint, deviceID: Self.deviceID, password: Self.newPassword,
+                    endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
                     profiles: [], snippets: hasLocalData ? [f.local] : [], forwarding: []
                 )
             } catch {
@@ -100,7 +102,7 @@ struct PersonalVaultEnrollmentSafetyTests {
     func unchangedPasswordDoesNotReplace() async throws {
         let f = try await Self.fixture(password: Self.oldPassword)
         let revision = try await f.enrollment.enrollOrCreate(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, password: Self.oldPassword,
+            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
             profiles: [], snippets: [f.local], forwarding: []
         )
         let uploads = await f.http.uploadedEnvelopes()
@@ -118,7 +120,7 @@ struct PersonalVaultEnrollmentSafetyTests {
         var rejected = false
         do {
             _ = try await f.enrollment.enrollOrCreate(
-                endpoint: Self.endpoint, deviceID: Self.deviceID, password: Self.oldPassword,
+                endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.oldPassword,
                 profiles: [], snippets: [f.local], forwarding: []
             )
         } catch {
@@ -130,11 +132,99 @@ struct PersonalVaultEnrollmentSafetyTests {
         #expect(f.keys.saveCount == 0)
     }
 
+    // Exercise the actual session-bound boundaries explicitly, so the switch occurs
+    // after GET/PUT has returned. No HTTP-response hook, sleeps, or reentrant store callbacks.
+    @Test("A completed empty GET cannot authorize PUT after a different account signs in")
+    func accountChangeAfterEmptyGetCannotUpload() async throws {
+        let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
+        let remote = try await f.client.personalVault(endpoint: Self.endpoint, session: f.session)
+        #expect(remote.revision == 0)
+        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+            f.original, recoveryPhrase: SelectiveRemotePersonalVaultCrypto.accountPassphrase(Self.newPassword), baseRevision: 0
+        )
+        try await Self.signInToSecondAccount(f.client)
+        var rejected = false
+        do {
+            _ = try await f.client.putPersonalVault(endpoint: Self.endpoint, envelope: setup.envelope, session: f.session)
+        } catch { rejected = true }
+        let uploads = await f.http.uploadedEnvelopes()
+        #expect(rejected)
+        #expect(uploads.isEmpty)
+        #expect(f.keys.saveCount == 0)
+    }
+
+    @Test("A completed PUT cannot authorize material persistence after a different account signs in")
+    func accountChangeAfterUploadCannotSaveMaterial() async throws {
+        let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
+        let remote = try await f.client.personalVault(endpoint: Self.endpoint, session: f.session)
+        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+            f.original, recoveryPhrase: SelectiveRemotePersonalVaultCrypto.accountPassphrase(Self.newPassword), baseRevision: remote.revision
+        )
+        let upload = try await f.client.putPersonalVault(endpoint: Self.endpoint, envelope: setup.envelope, session: f.session)
+        #expect(upload.revision == 1)
+        let material = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: remote.id, vaultKey: setup.vaultKey, wrappedKey: setup.envelope.wrappedKey,
+            revision: upload.revision, documentHash: Data(SHA256.hash(data: try f.original.encoded()))
+        )
+        try await Self.signInToSecondAccount(f.client)
+        var rejected = false
+        do {
+            try await f.client.savePersonalVaultMaterial(material, session: f.session, deviceID: Self.deviceID, keyStore: f.keys, replacing: nil)
+        } catch { rejected = true }
+        let uploads = await f.http.uploadedEnvelopes()
+        #expect(uploads.count == 1)
+        #expect(rejected)
+        #expect(f.keys.saveCount == 0)
+        #expect(f.keys.savedMaterial == nil)
+    }
+
+    @Test("An expected empty key slot cannot overwrite material installed in the same session")
+    func initialNilExpectationRejectsCompetingMaterial() async throws {
+        let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
+        let initiallyExpected = try f.keys.material(endpoint: Self.endpoint, deviceID: Self.deviceID)
+        #expect(initiallyExpected == nil)
+        let setup = try SelectiveRemotePersonalVaultCrypto.createSetup(
+            f.original, recoveryPhrase: SelectiveRemotePersonalVaultCrypto.accountPassphrase(Self.newPassword), baseRevision: 0
+        )
+        let documentHash = Data(SHA256.hash(data: try f.original.encoded()))
+        let competing = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: Self.vaultID, vaultKey: setup.vaultKey, wrappedKey: setup.envelope.wrappedKey,
+            revision: 2, documentHash: documentHash
+        )
+        let late = try SelectiveRemotePersonalVaultKeyMaterial(
+            vaultID: Self.vaultID, vaultKey: setup.vaultKey, wrappedKey: setup.envelope.wrappedKey,
+            revision: 1, documentHash: documentHash
+        )
+        // A competing completion wins first, without changing account, token, or epoch.
+        try await f.client.savePersonalVaultMaterial(
+            competing, session: f.session, deviceID: Self.deviceID, keyStore: f.keys, replacing: initiallyExpected
+        )
+        try await f.client.checkSession(f.session)
+        var rejected = false
+        do {
+            try await f.client.savePersonalVaultMaterial(
+                late, session: f.session, deviceID: Self.deviceID, keyStore: f.keys, replacing: initiallyExpected
+            )
+        } catch is CancellationError { rejected = true }
+        #expect(rejected)
+        #expect(f.keys.savedMaterial == competing)
+        #expect(f.keys.saveCount == 1)
+        try await f.client.checkSession(f.session)
+    }
+
+    private static func signInToSecondAccount(_ client: SelectiveRemoteCloudAPIClient) async throws {
+        let login = try await client.loginWithSession(
+            endpoint: endpoint, email: "second@example.invalid", password: newPassword,
+            device: .init(id: PasswordResetMemoryHTTP.secondDeviceID, name: "Second synthetic Mac", platform: "macos", appVersion: "0.32-test", publicKey: nil)
+        )
+        #expect(login.user.id == UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
+    }
+
     @Test("First enrollment still uploads local data to an empty remote Vault")
     func emptyRemoteEnrollment() async throws {
         let f = try await Self.fixture(password: Self.newPassword, remoteEmpty: true)
         let revision = try await f.enrollment.enrollOrCreate(
-            endpoint: Self.endpoint, deviceID: Self.deviceID, password: Self.newPassword,
+            endpoint: Self.endpoint, deviceID: Self.deviceID, session: f.session, password: Self.newPassword,
             profiles: [], snippets: [f.local], forwarding: []
         )
         let uploads = await f.http.uploadedEnvelopes()
@@ -183,7 +273,8 @@ private actor PasswordResetMemoryHTTP {
     private let revision: Int
     private var uploads: [SelectiveRemotePersonalVaultEnvelope] = []
     private var paths: [String] = []
-    private let token = String(repeating: "s", count: 43)
+    static let secondDeviceID = UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!
+    private var token = String(repeating: "s", count: 43)
 
     init(envelope: SelectiveRemotePersonalVaultEnvelope, vaultID: UUID, accountID: UUID, deviceID: UUID, acceptedPassword: String, revision: Int) {
         self.envelope = envelope
@@ -206,10 +297,17 @@ private actor PasswordResetMemoryHTTP {
             guard body?["password"] as? String == acceptedPassword else {
                 throw PasswordResetReproError.invalidSyntheticLogin
             }
+            let second = body?["email"] as? String == "second@example.invalid"
+            let loginDeviceID = second ? Self.secondDeviceID : deviceID
+            let requestDevice = body?["device"] as? [String: Any]
+            guard (requestDevice?["id"] as? String)?.lowercased() == loginDeviceID.uuidString.lowercased() else {
+                throw PasswordResetReproError.invalidSyntheticLogin
+            }
+            token = String(repeating: second ? "t" : "s", count: 43)
             return try response(request, json: [
                 "token": token,
-                "user": ["id": accountID.uuidString.lowercased(), "email": "synthetic@example.invalid", "username": "synthetic", "displayName": "Synthetic", "createdAt": "2026-10-09T00:00:00.000Z"],
-                "deviceID": deviceID.uuidString.lowercased()
+                "user": ["id": second ? "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" : accountID.uuidString.lowercased(), "email": second ? "second@example.invalid" : "synthetic@example.invalid", "username": "synthetic", "displayName": "Synthetic", "createdAt": "2026-10-09T00:00:00.000Z"],
+                "deviceID": loginDeviceID.uuidString.lowercased()
             ])
         case ("GET", "/v1/vault"):
             #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(token)")

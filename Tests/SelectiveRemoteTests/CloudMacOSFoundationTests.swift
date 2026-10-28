@@ -85,6 +85,67 @@ struct CloudMacOSFoundationTests {
         #expect(store.token(for: endpoint) == nil)
     }
 
+    @Test("Logout with an empty store rejects a pending successful login response", .timeLimit(.minutes(1)))
+    func logoutBeforeLoginResponseCannotRestoreSession() async throws {
+        let endpoint = URL(string: "https://pending-login-logout.example.invalid")!
+        let deviceID = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        let barrier = CloudLoginResponseBarrier()
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                guard request.httpMethod == "POST", request.url?.path == "/v1/auth/login" else {
+                    Issue.record("Empty-session logout must not send an HTTP request")
+                    return Self.response(request, status: 500, json: nil)
+                }
+                await barrier.suspendResponse()
+                return Self.response(request, status: 200, json: [
+                    "token": String(repeating: "p", count: 43),
+                    "user": ["id": "66666666-6666-4666-8666-666666666666", "email": "pending@example.invalid", "username": "pending", "displayName": "Pending", "createdAt": "2026-10-28T00:00:00.000Z"],
+                    "deviceID": deviceID.uuidString.lowercased()
+                ])
+            },
+            publicationStore: { throw CancellationError() }
+        )
+        let pending = Task {
+            try await client.loginWithSession(
+                endpoint: endpoint, email: "pending@example.invalid", password: "synthetic-password",
+                device: .init(id: deviceID, name: "Synthetic Mac", platform: "macos", appVersion: "test", publicKey: nil)
+            )
+        }
+        await barrier.waitForRequest()
+        #expect(store.token(for: endpoint) == nil)
+        do { try await client.logout(endpoint: endpoint) }
+        catch { Issue.record("Empty-session logout should succeed: \(error)") }
+        #expect(store.token(for: endpoint) == nil)
+        await barrier.resumeResponse()
+        switch await pending.result {
+        case .success: Issue.record("A login response started before logout must not restore the session")
+        case let .failure(error): #expect(error is CancellationError)
+        }
+        #expect(store.token(for: endpoint) == nil)
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+    }
+
+    @Test("Logout removes an invalid raw token without a network request")
+    func logoutClearsInvalidRawTokenLocally() async throws {
+        let endpoint = URL(string: "https://invalid-token-logout.example.invalid")!
+        let store = SelectiveRemoteCloudMemoryTokenStore()
+        store.saveToken("invalid-short-token", for: endpoint)
+        let client = SelectiveRemoteCloudAPIClient(
+            tokenStore: store,
+            dataLoader: { request in
+                Issue.record("Invalid raw token must not be sent to the logout endpoint")
+                return Self.response(request, status: 500, json: nil)
+            },
+            publicationStore: { throw CancellationError() }
+        )
+        #expect(await client.hasStoredSession(endpoint: endpoint) == false)
+        do { try await client.logout(endpoint: endpoint) }
+        catch { Issue.record("Logout must clear invalid local credentials: \(error)") }
+        #expect(store.token(for: endpoint) == nil)
+    }
+
     @Test("native Team management creates Teams, invitations and Shared Vaults")
     func nativeTeamManagement() async throws {
         let endpoint = try SelectiveRemoteCloudEndpoint.normalized("https://cloud.example.invalid")
@@ -1953,5 +2014,30 @@ struct CloudSecureEnvelopeModelTests {
         )
         #expect(decoded.sessionToken == "token")
         #expect(decoded.personalVaultKeyMaterials.isEmpty)
+    }
+}
+
+// Two explicit continuation handshakes: request entered and response released.
+// No sleeps, polling, real HTTP, token-store callbacks, or Keychain.
+private actor CloudLoginResponseBarrier {
+    private var entered = false
+    private var enteredWaiter: CheckedContinuation<Void, Never>?
+    private var responseWaiter: CheckedContinuation<Void, Never>?
+
+    func suspendResponse() async {
+        entered = true
+        await withCheckedContinuation { continuation in
+            responseWaiter = continuation
+            enteredWaiter?.resume()
+            enteredWaiter = nil
+        }
+    }
+    func waitForRequest() async {
+        if entered { return }
+        await withCheckedContinuation { enteredWaiter = $0 }
+    }
+    func resumeResponse() {
+        responseWaiter?.resume()
+        responseWaiter = nil
     }
 }

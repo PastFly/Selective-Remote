@@ -6,6 +6,36 @@ import Testing
 @Suite("Personal Vault remote revision checks", .serialized)
 @MainActor
 struct PersonalVaultAutoSyncCheckTests {
+    @Test("Changing accounts immediately before an upload cannot write into the new account", .timeLimit(.minutes(1)))
+    func accountChangeImmediatelyBeforeUploadIsDenied() async throws {
+        let putRequests = PersonalCheckRequests()
+        let fixture = try PersonalCheckFixture(remoteRevision: 5, verifyAuthorization: false, uploadResponse: { request, remote, _ in
+            putRequests.record()
+            let response = try #require(HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil))
+            return (try remote.acknowledge(request), response)
+        })
+        let readsAfterGet = PersonalCheckRequests()
+        let endpoint = Self.endpoint
+        let tokens = fixture.tokens
+        let requests = fixture.requests
+        fixture.keys.onRead = {
+            guard requests.count == 1 else { return }
+            readsAfterGet.record()
+            if readsAfterGet.count == 2 {
+                SelectiveRemotePublicationLifecycle.invalidate(endpoint: endpoint)
+                tokens.saveToken(String(repeating: "n", count: 43), for: endpoint)
+            }
+        }
+        let task = await fixture.sync.schedule(
+            endpoint: Self.endpoint, deviceID: Self.deviceID, profiles: [],
+            snippets: [Self.localSnippet], forwarding: [], sshKeys: []
+        )
+        await task.value
+        #expect(readsAfterGet.count >= 2)
+        #expect(putRequests.count == 0)
+        #expect(fixture.keys.saveCount == 0)
+    }
+
     @Test("A checked unchanged revision confirms Personal alongside a confirmed Team")
     func unchangedRevisionConfirmsPersonal() async throws {
         let fixture = try PersonalCheckFixture(remoteRevision: 5)
@@ -465,8 +495,9 @@ private struct PersonalCheckFixture {
     let keys: PersonalCheckKeyStore
     let requests: PersonalCheckRequests
     let remote: PersonalCheckRemote
+    let tokens: SelectiveRemoteCloudMemoryTokenStore
 
-    init(remoteRevision: Int,
+    init(remoteRevision: Int, verifyAuthorization: Bool = true,
          prerequisite: PersonalCheckPrerequisite = .available,
          beforeResponse: (@Sendable (PersonalCheckKeyStore) async -> Void)? = nil,
          uploadResponse: (@Sendable (URLRequest, PersonalCheckRemote, PersonalCheckKeyStore) async throws -> (Data, URLResponse))? = nil) throws {
@@ -506,7 +537,9 @@ private struct PersonalCheckFixture {
         let client = SelectiveRemoteCloudAPIClient(tokenStore: tokens, dataLoader: { request in
             requests.record()
             #expect(request.url?.path == "/v1/vault")
-            #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(String(repeating: "t", count: 43))")
+            if verifyAuthorization {
+                #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer \(String(repeating: "t", count: 43))")
+            }
             if request.httpMethod == "PUT", let uploadResponse {
                 return try await uploadResponse(request, remote, keys)
             }
@@ -521,6 +554,7 @@ private struct PersonalCheckFixture {
         self.keys = keys
         self.requests = requests
         self.remote = remote
+        self.tokens = tokens
         self.sync = SelectiveRemotePersonalVaultAutoSync(client: client, keyStore: keys)
     }
 }
@@ -590,7 +624,11 @@ private final class PersonalCheckKeyStore: SelectiveRemotePersonalVaultKeyStore,
     init(_ material: SelectiveRemotePersonalVaultKeyMaterial?) { stored = material }
     var value: SelectiveRemotePersonalVaultKeyMaterial? { lock.withLock { stored } }
     var saveCount: Int { lock.withLock { saves } }
-    func material(endpoint: URL, deviceID: UUID) -> SelectiveRemotePersonalVaultKeyMaterial? { value }
+    var onRead: (@Sendable () -> Void)?
+    func material(endpoint: URL, deviceID: UUID) -> SelectiveRemotePersonalVaultKeyMaterial? {
+        onRead?()
+        return value
+    }
     func save(_ material: SelectiveRemotePersonalVaultKeyMaterial, endpoint: URL, deviceID: UUID) {
         lock.withLock { stored = material; saves += 1 }
     }

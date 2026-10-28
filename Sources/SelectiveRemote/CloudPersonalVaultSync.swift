@@ -582,8 +582,8 @@ enum SelectiveRemotePersonalVaultCrypto {
 }
 
 extension SelectiveRemoteCloudAPIClient {
-    func personalVault(endpoint: URL) async throws -> SelectiveRemoteCloudPersonalVault {
-        let (data, response) = try await authorizedResponse(endpoint: endpoint, path: "v1/vault")
+    func personalVault(endpoint: URL, session: SelectiveRemoteCloudSessionBinding? = nil) async throws -> SelectiveRemoteCloudPersonalVault {
+        let (data, response) = try await authorizedResponse(endpoint: endpoint, path: "v1/vault", session: session)
         guard (200..<300).contains(response.statusCode),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == [
@@ -651,14 +651,16 @@ extension SelectiveRemoteCloudAPIClient {
 
     func putPersonalVault(
         endpoint: URL,
-        envelope: SelectiveRemotePersonalVaultEnvelope
+        envelope: SelectiveRemotePersonalVaultEnvelope,
+        session: SelectiveRemoteCloudSessionBinding
     ) async throws -> SelectiveRemoteCloudPersonalVaultWriteResult {
         let body = try JSONEncoder().encode(envelope)
         let (data, response) = try await authorizedResponse(
             endpoint: endpoint,
             path: "v1/vault",
             method: "PUT",
-            body: body
+            body: body,
+            session: session
         )
         guard response.statusCode == 200 || response.statusCode == 409,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

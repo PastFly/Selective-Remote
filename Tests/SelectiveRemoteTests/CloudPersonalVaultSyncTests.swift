@@ -149,7 +149,8 @@ struct CloudPersonalVaultSyncTests {
         #expect(envelope.ciphertext == "_6EgI6n9B0jBmtE23AmHSXKpLQ7x-_HFjCZsp5ms2VO4UQ_1wpaCNzedjjmLM8O6fJKXcJEiEGh9_ieRYNDjfG4MGZ2XeedxmDStAy0iFPs2bqemOV0RrQ2CzfDG6zvEdwLP5kCQwzmHHXff5EaanuL2VmEe_HyBVlXy5TUX6er8mK5oqeugtjYUx_eFd4oC8g508mcybOGKDM9fUleqBWWGK9watV9fQQBHcCrRx0a3_39mhrztZPgdhYBd8cgNgVSQkbb-uKR-wdDDJmSiqICNqFD2QgNcRlwMAwcOS44AJ-6R3xNMdm9w")
         #expect(envelope.authTag == "1IYkH8A_1_UG7ELGr1DBqQ")
         #expect(envelope.contentHash == "H2eTTOL2LATd622JBSfi6-vwew2LdNCo8v1kSoVshyk")
-        #expect(try await client.putPersonalVault(endpoint: endpoint, envelope: envelope)
+        let session = try await client.sessionBinding(endpoint: endpoint)
+        #expect(try await client.putPersonalVault(endpoint: endpoint, envelope: envelope, session: session)
             == .init(conflict: false, revision: 1))
     }
 

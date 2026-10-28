@@ -10,12 +10,28 @@ enum SelectiveRemotePublicationLifecycle {
         lock.withLock { if let value = epochs[endpoint.absoluteString] { return value }; let value = UUID(); epochs[endpoint.absoluteString] = value; return value }
     }
     static func invalidate(endpoint: URL) { lock.withLock { epochs[endpoint.absoluteString] = UUID(); authenticationLosses.removeValue(forKey: endpoint.absoluteString) } }
-    static func loseAuthentication(endpoint: URL, expectedEpoch: UUID) throws {
+    static func withCurrent<T>(endpoint: URL, expectedEpoch: UUID, _ operation: () throws -> T) throws -> T {
+        try lock.withLock {
+            guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
+            return try operation()
+        }
+    }
+    static func transitionIfCurrent<T>(endpoint: URL, expectedEpoch: UUID, _ operation: (UUID) throws -> T) throws -> T {
+        try lock.withLock {
+            guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
+            let next = UUID()
+            epochs[endpoint.absoluteString] = next
+            authenticationLosses.removeValue(forKey: endpoint.absoluteString)
+            return try operation(next)
+        }
+    }
+    static func loseAuthentication(endpoint: URL, expectedEpoch: UUID, _ operation: () throws -> Void) throws {
         try lock.withLock {
             guard epochs[endpoint.absoluteString] == expectedEpoch else { throw CancellationError() }
             let retired = UUID()
             epochs[endpoint.absoluteString] = retired
             authenticationLosses[endpoint.absoluteString] = (expectedEpoch, retired)
+            try operation()
         }
     }
     static func authenticationLossEpoch(endpoint: URL, requestEpoch: UUID) -> UUID? {

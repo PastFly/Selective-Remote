@@ -31,6 +31,7 @@ struct CloudSettingsView: View {
     @State private var errorMessage: String?
     @State private var accountPhase = AccountPhase.signedOut
     @State private var accountUser: SelectiveRemoteCloudUser?
+    @State private var accountSession: SelectiveRemoteCloudSessionBinding?
     @State private var teams: [SelectiveRemoteCloudTeam] = []
     @State private var vaultsByTeam: [UUID: [SelectiveRemoteCloudSharedVault]] = [:]
     @State private var accountErrorMessage: String?
@@ -587,7 +588,11 @@ struct CloudSettingsView: View {
         guard await client.hasStoredSession(endpoint: url) else { return }
         accountPhase = .restoring
         do {
-            accountUser = try await client.currentUser(endpoint: url)
+            let session = try await client.sessionBinding(endpoint: url)
+            let user = try await client.currentUser(endpoint: url)
+            try await client.checkSession(session)
+            accountSession = session
+            accountUser = user
             SyncPresentationStore.shared.invalidateSession()
             accountPhase = .signedIn
             await loadInventory(endpoint: url)
@@ -610,12 +615,14 @@ struct CloudSettingsView: View {
             do {
                 let deviceID = resolvedDeviceID()
                 let identity = try await identityManager.identity(endpoint: url, deviceID: deviceID)
-                accountUser = try await client.login(
+                let signedIn = try await client.loginWithSession(
                     endpoint: url,
                     email: email,
                     password: password,
                     device: .thisMac(id: deviceID, publicKey: identity.publicKey)
                 )
+                accountUser = signedIn.user
+                accountSession = signedIn.session
                 SyncPresentationStore.shared.invalidateSession()
                 accountEndpoint = url.absoluteString
                 var enrollmentError: String?
@@ -636,6 +643,7 @@ struct CloudSettingsView: View {
                     _ = try await enrollment.enrollOrCreate(
                         endpoint: url,
                         deviceID: deviceID,
+                        session: signedIn.session,
                         password: password,
                         profiles: model.profiles,
                         snippets: TerminalCommandHistoryStore.shared.templates(),
@@ -646,6 +654,7 @@ struct CloudSettingsView: View {
                 } catch {
                     enrollmentError = error.localizedDescription
                 }
+                try await client.checkSession(signedIn.session)
                 accountPhase = .signedIn
                 showsAccountSheet = false
                 await loadInventory(endpoint: url)
@@ -655,7 +664,7 @@ struct CloudSettingsView: View {
                 )
                 if enrollmentError == nil {
                     do {
-                        try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID)
+                        try await applyInitialPersonalVaultDownload(endpoint: url, deviceID: deviceID, session: signedIn.session)
                         await loadInventory(endpoint: url)
                     } catch {
                         enrollmentError = error.localizedDescription
@@ -711,11 +720,14 @@ struct CloudSettingsView: View {
         else { return }
         Task { @MainActor in
             do {
+                let session = try await client.sessionBinding(endpoint: url)
                 let refreshedUser = try await client.currentUser(endpoint: url)
+                try await client.checkSession(session)
                 if refreshedUser.id != accountUser.id {
                     SyncPresentationStore.shared.invalidateSession()
                 }
                 self.accountUser = refreshedUser
+                self.accountSession = session
                 await loadInventory(endpoint: url)
             } catch {
                 if error as? SelectiveRemoteCloudError == .authenticationRequired {
@@ -802,11 +814,12 @@ struct CloudSettingsView: View {
     }
 
     @MainActor
-    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID) async throws {
+    private func applyInitialPersonalVaultDownload(endpoint url: URL, deviceID: UUID, session: SelectiveRemoteCloudSessionBinding) async throws {
         guard var material = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID),
               material.requiresInitialDownload == true
         else { return }
-        let remote = try await client.personalVault(endpoint: url)
+        let expectedMaterial = material
+        let remote = try await client.personalVault(endpoint: url, session: session)
         guard remote.id == material.vaultID, remote.revision == material.revision,
               let envelope = remote.envelope
         else { throw SelectiveRemotePersonalVaultError.invalidEnvelope }
@@ -823,13 +836,18 @@ struct CloudSettingsView: View {
         guard plan.canApply else {
             throw SelectiveRemotePersonalVaultImportError.conflicts(plan.conflictIDs)
         }
-        try KeychainService.savePasswords(plan.credentials)
-        model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
-        model.profiles.append(contentsOf: plan.profiles)
-        model.independentPortForwards.append(contentsOf: plan.forwarding)
-        history.importTemplates(plan.snippets)
         material.requiresInitialDownload = false
-        try personalVaultKeyStore.save(material, endpoint: url, deviceID: deviceID)
+        _ = try session.commitPersonalVault(
+            tokenStore: client.tokenStore, keyStore: personalVaultKeyStore, deviceID: deviceID,
+            expected: expectedMaterial, material: material
+        ) {
+            try KeychainService.savePasswords(plan.credentials)
+            model.sshKeys.append(contentsOf: try SelectiveRemotePersonalVaultSSHKeyStore.install(plan.sshKeys))
+            model.profiles.append(contentsOf: plan.profiles)
+            model.independentPortForwards.append(contentsOf: plan.forwarding)
+            history.importTemplates(plan.snippets)
+            return true
+        }
     }
 
     @MainActor
@@ -838,6 +856,7 @@ struct CloudSettingsView: View {
         accountEndpoint = url.absoluteString
         accountPhase = .signedOut
         accountUser = nil
+        accountSession = nil
         teams = []
         vaultsByTeam = [:]
         personalVaultRevision = nil
@@ -968,7 +987,9 @@ struct CloudSettingsView: View {
         guard recoveryPhrase == personalVaultRecoveryConfirmation,
               (16...1_024).contains(recoveryPhrase.precomposedStringWithCanonicalMapping.utf8.count),
               let url = try? SelectiveRemoteCloudEndpoint.normalized(endpoint),
-              accountUser != nil
+              accountUser != nil,
+              let session = accountSession,
+              session.endpoint == url
         else {
             personalVaultMessage = SelectiveRemotePersonalVaultError.invalidRecoveryPhrase.localizedDescription
             personalVaultMessageIsError = true
@@ -980,7 +1001,9 @@ struct CloudSettingsView: View {
         personalVaultMessageIsError = false
         Task { @MainActor in
             do {
-                let remote = try await client.personalVault(endpoint: url)
+                let deviceID = resolvedDeviceID()
+                let expectedMaterial = try personalVaultKeyStore.material(endpoint: url, deviceID: deviceID)
+                let remote = try await client.personalVault(endpoint: url, session: session)
                 guard remote.revision == 0 else {
                     throw SelectiveRemotePersonalVaultError.remoteVaultNotEmpty(remote.revision)
                 }
@@ -990,7 +1013,7 @@ struct CloudSettingsView: View {
                     credentials: credentials,
                     snippets: TerminalCommandHistoryStore.shared.templates(),
                     forwarding: model.independentPortForwards,
-                    deviceID: resolvedDeviceID()
+                    deviceID: deviceID
                 )
                 let setup = try await Task.detached(priority: .userInitiated) {
                     try SelectiveRemotePersonalVaultCrypto.createSetup(
@@ -999,7 +1022,7 @@ struct CloudSettingsView: View {
                         baseRevision: 0
                     )
                 }.value
-                let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope)
+                let result = try await client.putPersonalVault(endpoint: url, envelope: setup.envelope, session: session)
                 guard !result.conflict else {
                     throw SelectiveRemotePersonalVaultError.uploadConflict(result.revision)
                 }
@@ -1012,7 +1035,7 @@ struct CloudSettingsView: View {
                     documentHash: documentHash,
                     includesCredentials: !credentials.isEmpty
                 )
-                try personalVaultKeyStore.save(material, endpoint: url, deviceID: resolvedDeviceID())
+                try await client.savePersonalVaultMaterial(material, session: session, deviceID: deviceID, keyStore: personalVaultKeyStore, replacing: expectedMaterial)
                 personalVaultAutoSyncConfigured = true
                 personalVaultRevision = result.revision
                 personalVaultMessage = UpdateLocalization.text(
