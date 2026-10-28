@@ -14,7 +14,7 @@ import {readRecoveryLink,createRecoveryRequest,validateRecoveryProof,claimRecove
 
 import {readInitializedRecoveryLink,createInitializedRecoveryRequest,validateInitializedRecoveryProof,claimInitializedRecovery,assertInitializedRecoveryClaim,assertInitializedRecoveryUnclaimed,initializedRecoveryEvidenceClass} from '../../scripts/staging-initialized-bootstrap-recovery.mjs';
 
-import {readUploadedContinuationLink,createUploadedContinuationRequest,validateUploadedContinuationProof,claimUploadedContinuation,assertUploadedContinuationClaim,assertUploadedContinuationUnclaimed,uploadedContinuationEvidenceClass,assertUploadedInterval,revalidateUploadedSuccessorAfterLocks} from '../../scripts/staging-uploaded-bootstrap-continuation.mjs';
+import {readUploadedContinuationLink,createUploadedContinuationRequest,validateUploadedContinuationProof,claimUploadedContinuation,assertUploadedContinuationClaim,assertUploadedContinuationUnclaimed,uploadedContinuationEvidenceClass,assertUploadedInterval,revalidateUploadedSuccessorAfterLocks,completeUploadedContinuationObservation} from '../../scripts/staging-uploaded-bootstrap-continuation.mjs';
 
 const EDGE='/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge';
 async function save(path,value){const next=path+'.next-'+randomUUID();await writeFile(next,JSON.stringify(value)+'\n',{mode:0o600,flag:'wx'});await rename(next,path);}
@@ -950,8 +950,14 @@ async function admitContinuation({config,configPath,runDirectory,link,chromium,t
  const request=(uploaded?createUploadedContinuationRequest:initialized?createInitializedRecoveryRequest:recovery?createRecoveryRequest:createContinuationRequest)({config,link,launchNonce,processID,identities});
  await writeContinuationExclusive(join(runDirectory,prefix+'-request-'+launchNonce+'.json'),request);
  await emit({phase:prefix+'_operator_proof_pending',evidenceClass,runID:config.runID,expectedSourceSHA:config.expectedSourceSHA,previousLaunchNonce,launchNonce,checkpointID:request.checkpointID,checkpointSHA256:request.checkpointSHA256,outcome:'PENDING'});
- await pause('Root must publish the exact protected '+prefix+'-proof-'+launchNonce+'.json from fresh read-only server verification against the unchanged linked ordinary snapshot and approved interval. Recovery also requires the exact retained partial graph and actual same-device sign-in admission/audit. Never copy expected hashes as observations or claim an observed registration response.');
- const proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));(uploaded?validateUploadedContinuationProof:initialized?validateInitializedRecoveryProof:recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
+ let proof;
+ if(uploaded&&link.renewalContext){
+  proof=await completeUploadedContinuationObservation({config,configPath,runDirectory,link,request,pause});
+ }else{
+  await pause('Root must publish the exact protected '+prefix+'-proof-'+launchNonce+'.json from fresh read-only server verification against the unchanged linked ordinary snapshot and approved interval. Recovery also requires the exact retained partial graph and actual same-device sign-in admission/audit. Never copy expected hashes as observations or claim an observed registration response.');
+  proof=await readProtectedJSON(join(runDirectory,prefix+'-proof-'+launchNonce+'.json'));
+ }
+ (uploaded?validateUploadedContinuationProof:initialized?validateInitializedRecoveryProof:recovery?validateRecoveryProof:validateContinuationProof)(proof,request,link.baseline);
  const current=await(uploaded?readUploadedContinuationLink:initialized?readInitializedRecoveryLink:recovery?readRecoveryLink:readContinuationLink)({config,configPath,runDirectory});if(current.manifestSHA256!==link.manifestSHA256||current.configSHA256!==link.configSHA256)throw Error(prefix+'_original_changed');
  if(uploaded){
   await inspectThenClaimUploaded({interval:current.successor.binding.interval,inspect:async()=>{

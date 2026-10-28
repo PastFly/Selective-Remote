@@ -1,5 +1,5 @@
 // One consumed initialized attempt whose populated upload completed; no replay or renewal.
-import {readFile,lstat} from 'node:fs/promises';
+import {readFile,lstat,open} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {canonicalMigrationJSON} from '../public/vault-v2-migration.js';
@@ -102,6 +102,76 @@ export async function revalidateUploadedSuccessorAfterLocks({config,configPath,r
  if(fresh.manifestSHA256!==link.manifestSHA256||fresh.configSHA256!==link.configSHA256)fail('uploaded_continuation_history_changed');
  inInterval(fresh.successor.binding);return fresh;
 }
+// Only the live lock-owning runner converts independent observation facts into a proof.
+// An external process never receives permission to impersonate that owner.
+export function createUploadedContinuationObservationProof({request,observation:o,baseline}){
+ inInterval(request.successorBaseline);
+ if(!request.renewalContext||!exact(o,['version','checkpointSHA256','configSHA256','deployment','discoveryOnly','ordinary','accounts','observedAt','uploaded','successorBaseline'])
+  ||o.version!==1||o.discoveryOnly!==false||o.checkpointSHA256!==request.checkpointSHA256||o.configSHA256!==request.configSHA256
+  ||!equal(o.deployment,request.deployment)||!equal(o.uploaded,request.uploaded)||!Array.isArray(o.accounts)||o.accounts.length!==2
+  ||o.accounts.some((a,i)=>!a||a.disabled!==false||Object.keys(request.accounts[i]).some(k=>!equal(a[k],request.accounts[i][k]))))fail('uploaded_observation_mismatch');
+ const keys=['version','runID','origin','sourceSHA','launchNonce','phase','checkpointID','checkpointSHA256'];
+ return validateUploadedContinuationProof({operator:{...Object.fromEntries(keys.map(k=>[k,request[k]])),ordinary:o.ordinary,outbox:null},evidenceClass:request.evidenceClass,deployment:o.deployment,observedAt:o.observedAt,uploaded:o.uploaded,successorBaseline:o.successorBaseline},request,baseline);
+}
+const lockMetadata=s=>({dev:s.dev,ino:s.ino,uid:s.uid,gid:s.gid,mode:s.mode&0o777,nlink:s.nlink,size:s.size,mtimeMs:s.mtimeMs,ctimeMs:s.ctimeMs});
+async function uploadedObservationLocks(link){
+ if(!link.renewalContext||link.lockDirectories.length!==6)fail('uploaded_observation_locks_required');
+ const values=[];
+ for(const dir of link.lockDirectories){
+  const lock=join(dir,'runner.lock'),path=join(lock,'owner.json');await assertProtectedDirectory(lock);
+  const before=lockMetadata(await lstat(path)),bytes=await readProtectedBytes(path),after=lockMetadata(await lstat(path)),owner=JSON.parse(bytes);
+  if(!equal(before,after)||!exact(owner,['version','pid','processID'])||owner.version!==1||owner.pid!==process.pid||!uuid.test(owner.processID))fail('uploaded_observation_owner_changed');
+  values.push({path,directory:lockMetadata(await lstat(lock)),owner:after,sha256:sha(bytes)});
+ }
+ return values;
+}
+async function writeUploadedObservationExclusive(path,bytes,guard,interval){
+ await guard();assertUploadedInterval(interval);
+ const file=await open(path,'wx',0o600);
+ try{await guard();assertUploadedInterval(interval);await file.writeFile(bytes);assertUploadedInterval(interval);await file.sync();assertUploadedInterval(interval);}
+ finally{await file.close();}
+ assertUploadedInterval(interval);const directory=await open(dirname(path),'r');
+ try{assertUploadedInterval(interval);await directory.sync();assertUploadedInterval(interval);}finally{await directory.close();}
+ await guard();assertUploadedInterval(interval);
+}
+export async function completeUploadedContinuationObservation({config,configPath,runDirectory,link,request,pause}){
+ if(!link.renewalContext||typeof pause!=='function')fail('uploaded_observation_renewal_required');
+ request=structuredClone(request);config=structuredClone(config);
+ const interval=link.successor.binding.interval;assertUploadedInterval(interval);
+ const requestPath=join(runDirectory,'uploaded-continuation-request-'+request.launchNonce+'.json'),requestBytes=Buffer.from(JSON.stringify(request)+'\n');
+ const owners=await uploadedObservationLocks(link);let observedBytes;
+ const observationPath=join(runDirectory,'uploaded-continuation-observation-'+request.launchNonce+'.json');
+ const guard=async()=>{
+  assertUploadedInterval(interval);
+  if(!equal(await uploadedObservationLocks(link),owners))fail('uploaded_observation_owner_changed');
+  const fresh=await revalidateUploadedSuccessorAfterLocks({config,configPath,runDirectory,link});
+  assertRequestLink(fresh,request);
+  const {checkpointSHA256,...body}=request;
+  if(request.version!==1||request.phase!=='continue-uploaded-bootstrap'||request.evidenceClass!==uploadedContinuationEvidenceClass
+   ||!['launchNonce','processID','checkpointID'].every(k=>uuid.test(request[k]))||!timestamp(request.requestedAt)
+   ||request.requestedAt<interval.startsAt||request.requestedAt>=interval.endsAt||request.requestedAt>new Date().toISOString()
+   ||request.operationID!==null||request.expectedDeltaCount!==null||checkpointSHA256!==digest(body)
+   ||fresh.configSHA256!==request.configSHA256||!equal(fresh.lockDirectories,link.lockDirectories)
+   ||!(await readProtectedBytes(requestPath)).equals(requestBytes)
+   ||sha(await readProtectedBytes(configPath))!==request.configSHA256
+   ||sha(await readProtectedBytes(join(runDirectory,'uploaded-continuation.json')))!==request.manifestSHA256)fail('uploaded_observation_request_changed');
+  if(observedBytes&&!(await readProtectedBytes(observationPath)).equals(observedBytes))fail('uploaded_observation_changed');
+  await assertUploadedContinuationUnclaimed(fresh);
+  if(!equal(await uploadedObservationLocks(fresh),owners))fail('uploaded_observation_owner_changed');
+  assertUploadedInterval(interval);return fresh;
+ };
+ const handoff=Buffer.from(JSON.stringify({request,config})+'\n');
+ await writeUploadedObservationExclusive(join(runDirectory,'uploaded-continuation-handoff-'+request.launchNonce+'.json'),handoff,guard,interval);
+ await guard();assertUploadedInterval(interval);
+ await pause('Root must save the exact protected uploaded-continuation-observation-'+request.launchNonce+'.json from the independent read-only server observer. The runner will validate those raw facts and write the proof while it still owns all six locks. Never substitute expected facts for observed data.');
+ await guard();assertUploadedInterval(interval);
+ observedBytes=await readProtectedBytes(observationPath);
+ const fresh=await guard(),proof=createUploadedContinuationObservationProof({request,observation:JSON.parse(observedBytes),baseline:fresh.baseline});
+ const bytes=Buffer.from(JSON.stringify(proof)+'\n');
+ await writeUploadedObservationExclusive(join(runDirectory,'uploaded-continuation-proof-'+request.launchNonce+'.json'),bytes,guard,interval);
+ await guard();assertUploadedInterval(interval);return proof;
+}
+
 export async function claimUploadedContinuation({link,request,proof,runDirectory}){
  if(runDirectory!==link.runDirectory)fail('uploaded_continuation_claim_mismatch');
  for(const dir of link.lockDirectories){let owner;try{owner=await readProtectedJSON(join(dir,'runner.lock','owner.json'));}catch{fail('uploaded_continuation_lock_required');}if(owner.pid!==process.pid)fail('uploaded_continuation_lock_required');}

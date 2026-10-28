@@ -467,3 +467,66 @@ test('rehashed interrupted readiness must retain diagnostic-trust custodian sema
  const f=await uploadedRenewalFixture(t),path=join(f.old,'evidence.json'),original=JSON.parse(await readFile(path));
  for(const patch of [{stage:'diagnostic_session'},{rootStatus:'ADMITTED'},{rootStatus:'UNKNOWN'},{stage:undefined}]){const evidence=structuredClone(original);Object.assign(evidence[1],patch);await write(path,evidence);await resealRenewalFixture(f);await assert.rejects(f.a.readUploadedContinuationLink(f),/uploaded_successor_invalid/);}
 });
+
+async function ownedUploadedObservationFixture(t){
+ const f=await uploadedRenewalFixture(t),link=await f.a.readUploadedContinuationLink(f),request=f.a.createUploadedContinuationRequest({...f,link,launchNonce:id(),processID:id()});
+ await write(join(f.runDirectory,'uploaded-continuation-request-'+request.launchNonce+'.json'),request);
+ for(const dir of link.lockDirectories){await mkdir(join(dir,'runner.lock'),{mode:0o700});await write(join(dir,'runner.lock','owner.json'),{version:1,pid:process.pid,processID:id()});}
+ const proof=uploadedRenewalProof(f,link,request),observation={version:1,checkpointSHA256:request.checkpointSHA256,configSHA256:request.configSHA256,deployment:request.deployment,discoveryOnly:false,ordinary:link.baseline,accounts:request.accounts.map(a=>({...a,disabled:false})),observedAt:proof.observedAt,uploaded:request.uploaded,successorBaseline:proof.successorBaseline};
+ return {...f,link,request,observation,handoffPath:join(f.runDirectory,'uploaded-continuation-handoff-'+request.launchNonce+'.json'),observationPath:join(f.runDirectory,'uploaded-continuation-observation-'+request.launchNonce+'.json'),proofPath:join(f.runDirectory,'uploaded-continuation-proof-'+request.launchNonce+'.json')};
+}
+test('runner-owned uploaded observation writes exact handoff and validated proof without any claim',async t=>{
+ const f=await ownedUploadedObservationFixture(t);let pauses=0;
+ assert.equal(typeof f.a.completeUploadedContinuationObservation,'function');
+ const proof=await f.a.completeUploadedContinuationObservation({...f,pause:async()=>{pauses++;assert.deepEqual(JSON.parse(await readFile(f.handoffPath)),{request:f.request,config:f.config});await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});await write(f.observationPath,f.observation);}});
+ assert.equal(pauses,1);assert.deepEqual(JSON.parse(await readFile(f.proofPath)),proof);f.a.validateUploadedContinuationProof(proof,f.request,f.link.baseline);
+ for(const p of [join(f.parent,'uploaded-bootstrap-continuation-claim.json'),join(f.runDirectory,'uploaded-continuation-admission.json'),join(f.runDirectory,'scope.json')])await assert.rejects(readFile(p),{code:'ENOENT'});
+ const raw=await readFile(f.proofPath);await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>{throw Error('must not replay');}}),{code:'EEXIST'});assert.deepEqual(await readFile(f.proofPath),raw);
+});
+test('runner-owned uploaded observation rejects mismatched remote facts before proof creation',async t=>{
+ const f=await ownedUploadedObservationFixture(t);
+ assert.equal(typeof f.a.createUploadedContinuationObservationProof,'function');
+ for(const change of [o=>o.discoveryOnly=true,o=>o.checkpointSHA256='0'.repeat(64),o=>o.configSHA256='0'.repeat(64),o=>o.deployment.imageDigest='sha256:'+'0'.repeat(64),o=>o.accounts[0].disabled=true,o=>o.uploaded.revision=3,o=>o.ordinary.sha256='0'.repeat(64),o=>o.successorBaseline.observedSnapshotSHA256='0'.repeat(64),o=>o.observedAt=new Date(Date.parse(f.request.requestedAt)-1).toISOString(),o=>o.extra=true]){
+  const observation=structuredClone(f.observation);change(observation);assert.throws(()=>f.a.createUploadedContinuationObservationProof({request:f.request,observation,baseline:f.link.baseline}));
+ }
+ await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});
+});
+test('runner-owned uploaded observation requires all six self-PID locks, not an arbitrary live owner',async t=>{
+ const f=await ownedUploadedObservationFixture(t),ownerPath=join(f.runDirectory,'runner.lock','owner.json');await write(ownerPath,{version:1,pid:process.ppid,processID:id()});
+ assert.equal(typeof f.a.completeUploadedContinuationObservation,'function');
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>{throw Error('must not pause');}}),/lock|owner/);
+ await assert.rejects(readFile(f.handoffPath),{code:'ENOENT'});await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});
+});
+test('runner-owned uploaded observation rejects same-byte lock inode replacement during operator wait',async t=>{
+ const f=await ownedUploadedObservationFixture(t),ownerPath=join(f.link.lockDirectories[0],'runner.lock','owner.json'),raw=await readFile(ownerPath);
+ assert.equal(typeof f.a.completeUploadedContinuationObservation,'function');
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>{await write(f.observationPath,f.observation);await writeFile(ownerPath+'.new',raw,{mode:0o600});await rename(ownerPath+'.new',ownerPath);}}),/lock|owner/);
+ await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});assert.deepEqual(await readFile(ownerPath),raw);assert(await readFile(f.handoffPath));
+});
+test('runner-owned uploaded observation rejects changed raw request after pause',async t=>{
+ const f=await ownedUploadedObservationFixture(t);
+ assert.equal(typeof f.a.completeUploadedContinuationObservation,'function');
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>{await write(f.observationPath,f.observation);await writeFile(join(f.runDirectory,'uploaded-continuation-request-'+f.request.launchNonce+'.json'),JSON.stringify(f.request,null,2)+'\n',{mode:0o600});}}),/request|changed/);
+ await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});
+});
+test('runner-owned uploaded observation expiry after pause retains evidence and creates no proof or claim',async t=>{
+ const f=await ownedUploadedObservationFixture(t);
+ assert.equal(typeof f.a.completeUploadedContinuationObservation,'function');
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>{await write(f.observationPath,f.observation);t.mock.timers.setTime(Date.parse(f.link.successor.binding.interval.endsAt));}}),/expired/);
+ assert(await readFile(f.handoffPath));assert(await readFile(f.observationPath));await assert.rejects(readFile(f.proofPath),{code:'ENOENT'});await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});
+});
+
+test('runner-owned uploaded observation rechecks raw facts after awaited proof open before writing',async t=>{
+ const f=await ownedUploadedObservationFixture(t),fs=(await import('node:fs/promises')).default,{syncBuiltinESMExports}=await import('node:module'),original=fs.open;
+ t.mock.method(fs,'open',async function(path,...args){const handle=await original(path,...args);if(path===f.proofPath)await write(f.observationPath,{...f.observation,checkpointSHA256:'0'.repeat(64)});return handle;});syncBuiltinESMExports();
+ t.after(()=>{fs.open=original;syncBuiltinESMExports();});
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>write(f.observationPath,f.observation)}),/observation_changed/);
+ assert.equal((await lstat(f.proofPath)).size,0);await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});
+});
+test('runner-owned uploaded observation expiry during actual proof fsync retains partial evidence without success',async t=>{
+ const f=await ownedUploadedObservationFixture(t),fs=(await import('node:fs/promises')).default,{syncBuiltinESMExports}=await import('node:module'),original=fs.open;
+ t.mock.method(fs,'open',async function(path,...args){const handle=await original(path,...args);if(path===f.proofPath){const sync=handle.sync.bind(handle);handle.sync=async()=>{await sync();t.mock.timers.setTime(Date.parse(f.link.successor.binding.interval.endsAt));};}return handle;});syncBuiltinESMExports();
+ t.after(()=>{fs.open=original;syncBuiltinESMExports();});
+ await assert.rejects(f.a.completeUploadedContinuationObservation({...f,pause:async()=>write(f.observationPath,f.observation)}),/expired/);
+ assert((await lstat(f.proofPath)).size>0);await assert.rejects(readFile(join(f.parent,'uploaded-bootstrap-continuation-claim.json')),{code:'ENOENT'});await assert.rejects(readFile(join(f.runDirectory,'uploaded-continuation-admission.json')),{code:'ENOENT'});
+});
